@@ -19,6 +19,7 @@ import {
 import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getPeriodSummary } from "@/lib/data/period-summary";
+import { getDictionary } from "@/lib/i18n";
 import { num } from "@/lib/money";
 import {
   nextPeriod,
@@ -41,6 +42,7 @@ export default async function BudgetsPage({
 }) {
   const params = await searchParams;
   const context = await getAppContext();
+  const t = getDictionary(context.language).budgets;
 
   const requested = parsePeriodKey(
     typeof params.period === "string" ? params.period : undefined,
@@ -88,8 +90,8 @@ export default async function BudgetsPage({
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Budgets"
-        description="Set per pay period. The overall budget drives safe to spend; category budgets track where it goes."
+        title={t.title}
+        description={t.description}
         actions={
           <ActionButton
             action={copyPreviousBudgetsAction}
@@ -101,7 +103,7 @@ export default async function BudgetsPage({
             size="sm"
           >
             <Copy className="size-3.5" />
-            Copy last period
+            {t.copyLastPeriod}
           </ActionButton>
         }
       />
@@ -122,14 +124,14 @@ export default async function BudgetsPage({
         </Button>
         {!isCurrent ? (
           <Button asChild variant="ghost" size="sm">
-            <Link href="/budgets">Back to now</Link>
+            <Link href="/budgets">{t.backToNow}</Link>
           </Button>
         ) : null}
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Overall budget</CardTitle>
+          <CardTitle>{t.overallBudget}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
           <div className="space-y-4">
@@ -140,13 +142,14 @@ export default async function BudgetsPage({
               categoryId={null}
               amount={overallRow ? num(overallRow.amount) : null}
               currency={overallRow?.currency ?? context.displayCurrency}
-              label="Overall budget for this period"
+              label={t.overallBudgetForPeriod}
+              locale={context.language}
               size="lg"
             />
             <p className="text-xs text-muted-foreground">
               {summary.overallBudget === null
-                ? `No overall budget set. Category budgets total ${formatMoney(summary.categoryBudgetTotal, summary.currency)} and are used instead.`
-                : "Clear the field to remove the overall budget."}
+                ? t.noOverallSet(formatMoney(summary.categoryBudgetTotal, summary.currency))
+                : t.clearToRemove}
             </p>
             <div className="space-y-2">
               <Meter
@@ -160,25 +163,30 @@ export default async function BudgetsPage({
                 }
               />
               <p className="text-xs text-muted-foreground">
-                {formatMoney(summary.spent, summary.currency)} spent of{" "}
-                {formatMoney(summary.periodBudget, summary.currency)}
+                {t.spentOf(
+                  formatMoney(summary.spent, summary.currency),
+                  formatMoney(summary.periodBudget, summary.currency),
+                )}
               </p>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4 border-t border-border/70 pt-4 lg:grid-cols-1 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
             <Stat
-              label="Committed"
+              label={t.committed}
               value={formatMoney(summary.committed, summary.currency)}
-              hint={`${summary.committedItems.length} recurring item${summary.committedItems.length === 1 ? "" : "s"} still to come`}
+              hint={t.recurringStillToCome(summary.committedItems.length)}
             />
             <Stat
-              label="Safe to spend"
+              label={t.safeToSpend}
               value={formatMoney(summary.safeToSpend, summary.currency)}
               hint={
                 isCurrent
-                  ? `${formatMoney(summary.safeToSpendPerDay, summary.currency)} a day for ${summary.daysRemaining} day${summary.daysRemaining === 1 ? "" : "s"}`
-                  : "for the whole period"
+                  ? t.perDay(
+                      formatMoney(summary.safeToSpendPerDay, summary.currency),
+                      summary.daysRemaining,
+                    )
+                  : t.forWholePeriod
               }
               valueClassName={
                 summary.safeToSpend < 0 ? "text-[var(--critical)]" : undefined
@@ -193,10 +201,10 @@ export default async function BudgetsPage({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Category</TableHead>
-                <TableHead className="hidden sm:table-cell">Progress</TableHead>
-                <TableHead className="text-right">Spent</TableHead>
-                <TableHead className="text-right">Budget</TableHead>
+                <TableHead>{t.colCategory}</TableHead>
+                <TableHead className="hidden sm:table-cell">{t.colProgress}</TableHead>
+                <TableHead className="text-right">{t.colSpent}</TableHead>
+                <TableHead className="text-right">{t.colBudget}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -223,7 +231,7 @@ export default async function BudgetsPage({
                         </div>
                       ) : (
                         <span className="text-xs text-muted-foreground">
-                          no budget
+                          {t.noBudget}
                         </span>
                       )}
                     </TableCell>
@@ -238,7 +246,8 @@ export default async function BudgetsPage({
                         categoryId={category.id}
                         amount={budgetDisplay}
                         currency={budget?.currency ?? context.displayCurrency}
-                        label={`${category.name} budget`}
+                        label={t.categoryBudgetAria(category.name)}
+                        locale={context.language}
                       />
                     </TableCell>
                   </TableRow>
@@ -247,7 +256,7 @@ export default async function BudgetsPage({
               {uncategorized ? (
                 <TableRow>
                   <TableCell className="text-sm text-muted-foreground">
-                    Uncategorized
+                    {t.uncategorized}
                   </TableCell>
                   <TableCell className="hidden sm:table-cell" />
                   <TableCell className="figure text-right text-sm">

@@ -1,7 +1,7 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
-import { isLocale } from "@/lib/i18n";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { previousPeriod, type PayPeriodCode } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { budgetSchema, firstError, formObject } from "@/lib/validation";
@@ -22,6 +22,7 @@ export async function saveBudgetAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).budgets;
   const parsed = budgetSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
@@ -33,7 +34,7 @@ export async function saveBudgetAction(
   if (amount === null) {
     if (existing) await prisma.budget.delete({ where: { id: existing.id } });
     revalidateApp();
-    return done("Budget cleared");
+    return done(t.budgetCleared);
   }
 
   if (existing) {
@@ -48,7 +49,7 @@ export async function saveBudgetAction(
   }
 
   revalidateApp();
-  return done("Budget saved");
+  return done(t.budgetSaved);
 }
 
 export async function copyPreviousBudgetsAction(
@@ -56,11 +57,14 @@ export async function copyPreviousBudgetsAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).budgets;
   const year = Number(formData.get("year"));
   const month = Number(formData.get("month"));
   const period = String(formData.get("period") ?? "") as PayPeriodCode;
   if (!Number.isInteger(year) || !Number.isInteger(month) || !"AB".includes(period)) {
-    return fail("Pick a period first");
+    return fail(t.pickPeriodFirst);
   }
 
   const source = previousPeriod({ year, month, period });
@@ -72,7 +76,7 @@ export async function copyPreviousBudgetsAction(
   ]);
 
   if (sourceBudgets.length === 0) {
-    return fail("The previous period has no budget to copy");
+    return fail(t.noBudgetToCopy);
   }
 
   const existingKeys = new Set(
@@ -83,7 +87,7 @@ export async function copyPreviousBudgetsAction(
   );
 
   if (toCreate.length === 0) {
-    return fail("This period already has every budget from last period");
+    return fail(t.everyBudgetAlreadyCopied);
   }
 
   await prisma.budget.createMany({
@@ -98,7 +102,5 @@ export async function copyPreviousBudgetsAction(
   });
 
   revalidateApp();
-  return done(
-    `Copied ${toCreate.length} budget${toCreate.length === 1 ? "" : "s"} forward`,
-  );
+  return done(t.copiedForward(toCreate.length));
 }

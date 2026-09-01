@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { saveBudgetAction } from "@/server/actions/budgets";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,7 @@ export function BudgetAmountForm({
   amount,
   currency,
   label,
+  locale,
   size = "sm",
 }: {
   year: number;
@@ -30,17 +32,19 @@ export function BudgetAmountForm({
   amount: number | null;
   currency: string;
   label: string;
+  locale: Locale;
   size?: "sm" | "lg";
 }) {
+  const t = getDictionary(locale).budgets;
   const [state, formAction, pending] = useActionState(saveBudgetAction, null);
   const handled = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (!state || state.at === handled.current) return;
     handled.current = state.at;
-    if (state.ok) toast.success(state.message ?? "Saved");
+    if (state.ok) toast.success(state.message ?? t.budgetSaved);
     else if (state.error) toast.error(state.error);
-  }, [state]);
+  }, [state, t.budgetSaved]);
 
   return (
     <form
@@ -81,7 +85,7 @@ export function BudgetAmountForm({
         variant="ghost"
         size={size === "lg" ? "icon-sm" : "icon-xs"}
         disabled={pending}
-        aria-label={`Save ${label}`}
+        aria-label={t.saveAria(label)}
       >
         <Check className="size-3.5" />
       </Button>

@@ -272,6 +272,39 @@ export const en = {
     accountAdded: "Account added",
     accountDeleted: "Account deleted",
   },
+  budgets: {
+    title: "Budgets",
+    description:
+      "Set per pay period. The overall budget drives safe to spend; category budgets track where it goes.",
+    copyLastPeriod: "Copy last period",
+    backToNow: "Back to now",
+    overallBudget: "Overall budget",
+    overallBudgetForPeriod: "Overall budget for this period",
+    noOverallSet: (total: string) =>
+      `No overall budget set. Category budgets total ${total} and are used instead.`,
+    clearToRemove: "Clear the field to remove the overall budget.",
+    spentOf: (spent: string, total: string) => `${spent} spent of ${total}`,
+    committed: "Committed",
+    recurringStillToCome: (n: number) =>
+      `${n} recurring item${n === 1 ? "" : "s"} still to come`,
+    safeToSpend: "Safe to spend",
+    perDay: (amount: string, days: number) => `${amount} a day for ${days} day${days === 1 ? "" : "s"}`,
+    forWholePeriod: "for the whole period",
+    colCategory: "Category",
+    colProgress: "Progress",
+    colSpent: "Spent",
+    colBudget: "Budget",
+    noBudget: "no budget",
+    uncategorized: "Uncategorized",
+    categoryBudgetAria: (name: string) => `${name} budget`,
+    saveAria: (label: string) => `Save ${label}`,
+    budgetCleared: "Budget cleared",
+    budgetSaved: "Budget saved",
+    pickPeriodFirst: "Pick a period first",
+    noBudgetToCopy: "The previous period has no budget to copy",
+    everyBudgetAlreadyCopied: "This period already has every budget from last period",
+    copiedForward: (n: number) => `Copied ${n} budget${n === 1 ? "" : "s"} forward`,
+  },
 };
 
 export type Dictionary = typeof en;
