@@ -30,6 +30,8 @@ import {
   type PeriodRef,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
+import type { paydayConfirmSchema } from "@/lib/validation";
+import type { z } from "zod";
 
 import { getAccountBalances } from "@/lib/data/accounts";
 import { getPeriodSummary, type CommittedItem } from "@/lib/data/period-summary";
@@ -414,4 +416,309 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     includedCarryover,
     daysRemainingInPlanPeriod: daysRemainingInPeriod(context.today, plan),
   };
+}
+
+/**
+ * AppContext plus the buffer-planning settings confirmPaydayCheckin needs
+ * (bufferPercent/bufferFloorAmount/bufferFloorCurrency). AppContext itself
+ * intentionally omits these - they're not needed by most pages. Kept as
+ * explicit inputs (rather than confirmPaydayCheckin calling getSettings()
+ * itself) so the function's only dependencies are its two parameters, both
+ * directly constructible by a caller with no request scope (e.g. Task 14's
+ * scripts/verify-domain.ts). The server action wrapper builds this by
+ * spreading the AppContext it already has with fields off the same
+ * `settings` row it fetches for locale/dictionary purposes.
+ */
+export interface ConfirmPaydayCheckinContext extends AppContext {
+  bufferPercent: number;
+  bufferFloorAmount: number;
+  bufferFloorCurrency: string;
+}
+
+export type ConfirmPaydayCheckinResult =
+  | { ok: true }
+  | { ok: false; reason: "no_active_accounts" }
+  | { ok: false; reason: "deficit_not_acknowledged" }
+  | { ok: false; reason: "zero_buffer_not_acknowledged" };
+
+/**
+ * Confirms one pay period's payday check-in atomically: reconciled income
+ * transactions, balance snapshots, the check-in row itself, plan-allocation
+ * audit rows, and the essential/flexible category Budget rows. Never creates
+ * actual expense transactions or GoalContribution rows - see the financial
+ * integrity rules in this plan's Global Constraints. Every "recommended"
+ * figure is recomputed here from live data; only the user's edited "planned"
+ * values are trusted from the client payload.
+ *
+ * Plain function (no "use server", no requireAuth()/cookies()) so it's
+ * directly callable from a bare Node/tsx script as well as from the
+ * "use server" action wrapper in src/server/actions/payday.ts - see that
+ * file for the auth/form-parsing/localized-message layer around this.
+ */
+export async function confirmPaydayCheckin(
+  input: z.infer<typeof paydayConfirmSchema>,
+  context: ConfirmPaydayCheckinContext,
+): Promise<ConfirmPaydayCheckinResult> {
+  const planRef: PeriodRef = { year: input.year, month: input.month, period: input.period };
+  const plan = periodInfo(planRef);
+
+  const [liveAccounts, planSummary, allGoals, essentialCategories, flexibleCategories, carryover] =
+    await Promise.all([
+      getAccountBalances(context, { status: "ACTIVE" }),
+      getPeriodSummary(plan, context),
+      listGoals(context),
+      prisma.category.findMany({
+        where: { kind: "EXPENSE", isEssentialFixed: true, isSubscriptionDefault: false, isSavingsDefault: false },
+      }),
+      prisma.category.findMany({
+        where: { kind: "EXPENSE", isEssentialFixed: false, isSubscriptionDefault: false, isSavingsDefault: false },
+      }),
+      getAvailableCarryover(planRef, context),
+    ]);
+  const liveAccountById = new Map(liveAccounts.map((a) => [a.id, a]));
+  const essentialById = new Map(essentialCategories.map((c) => [c.id, c]));
+  const flexibleById = new Map(flexibleCategories.map((c) => [c.id, c]));
+  const [essentialSuggestions, flexibleSuggestions] = await Promise.all([
+    getCategorySuggestions(planRef, essentialCategories, context),
+    getCategorySuggestions(planRef, flexibleCategories, context),
+  ]);
+
+  const accountInputs = input.accounts.filter((a) => liveAccountById.has(a.accountId));
+  if (accountInputs.length === 0) return { ok: false, reason: "no_active_accounts" };
+
+  const totalIncome = round2(
+    accountInputs.reduce((sum, a) => {
+      const account = liveAccountById.get(a.accountId)!;
+      return sum + convert(a.incomeEntered, account.currency, context.displayCurrency, context.rates);
+    }, 0),
+  );
+
+  const subscriptionItems = planSummary.committedItems.filter((i) => i.kind === "SUBSCRIPTION");
+  const contributionItems = planSummary.committedItems.filter((i) => i.kind === "CONTRIBUTION");
+  const subscriptionsTotal = round2(subscriptionItems.reduce((sum, i) => sum + i.amount, 0));
+  const contributionsTotal = round2(contributionItems.reduce((sum, i) => sum + i.amount, 0));
+
+  const goalById = new Map(allGoals.map((g) => [g.id, g]));
+  const goalInputs = input.goals.filter((g) => {
+    const goal = goalById.get(g.goalId);
+    return Boolean(goal && goal.targetDate && !goal.achievedAt);
+  });
+  const goalPlanTotal = round2(
+    goalInputs.reduce((sum, g) => {
+      const goal = goalById.get(g.goalId)!;
+      return sum + convert(g.plannedAmount, goal.currency, context.displayCurrency, context.rates);
+    }, 0),
+  );
+
+  const essentialInputs = input.essentialCategories.filter((c) => essentialById.has(c.categoryId));
+  const essentialFixedTotal = round2(essentialInputs.reduce((sum, c) => sum + c.plannedAmount, 0));
+  const flexibleInputs = input.flexibleCategories.filter((c) => flexibleById.has(c.categoryId));
+  const flexibleTotal = round2(flexibleInputs.reduce((sum, c) => sum + c.plannedAmount, 0));
+
+  const bufferFloor = round2(
+    convert(context.bufferFloorAmount, context.bufferFloorCurrency, context.displayCurrency, context.rates),
+  );
+  const recommendedBuffer = defaultProtectedBuffer(totalIncome, context.bufferPercent, bufferFloor);
+
+  const available = availableForFlexibleCategories({
+    income: totalIncome,
+    includedCarryover: input.includedCarryover,
+    subscriptions: subscriptionsTotal,
+    recurringContributions: contributionsTotal,
+    goalPlan: goalPlanTotal,
+    essentialFixed: essentialFixedTotal,
+    buffer: input.buffer,
+  });
+
+  const needsDeficitAck = available < 0 || flexibleTotal > Math.max(0, available);
+  if (needsDeficitAck && !input.acknowledgedDeficit) {
+    return { ok: false, reason: "deficit_not_acknowledged" };
+  }
+  if (input.buffer <= 0 && !input.acknowledgedZeroBuffer) {
+    return { ok: false, reason: "zero_buffer_not_acknowledged" };
+  }
+
+  const checkinDate = context.today;
+
+  await prisma.$transaction(async (tx) => {
+    const existingCheckin = await tx.paydayCheckin.findFirst({
+      where: { year: planRef.year, month: planRef.month, period: planRef.period },
+    });
+    const checkin = existingCheckin
+      ? await tx.paydayCheckin.update({
+          where: { id: existingCheckin.id },
+          data: {
+            checkinDate,
+            currency: context.displayCurrency,
+            totalIncome,
+            includedCarryover: input.includedCarryover,
+            protectedBuffer: input.buffer,
+            status: "CONFIRMED",
+          },
+        })
+      : await tx.paydayCheckin.create({
+          data: {
+            year: planRef.year,
+            month: planRef.month,
+            period: planRef.period,
+            checkinDate,
+            currency: context.displayCurrency,
+            totalIncome,
+            includedCarryover: input.includedCarryover,
+            protectedBuffer: input.buffer,
+            status: "CONFIRMED",
+          },
+        });
+
+    for (const accountInput of accountInputs) {
+      const account = liveAccountById.get(accountInput.accountId)!;
+      const difference = round2(accountInput.reportedBalance - account.balance);
+      const existingSnapshot = await tx.paydayAccountSnapshot.findFirst({
+        where: { paydayCheckinId: checkin.id, accountId: account.id },
+      });
+
+      let incomeTransactionId = existingSnapshot?.incomeTransactionId ?? null;
+      if (accountInput.incomeEntered > 0) {
+        if (incomeTransactionId) {
+          await tx.transaction.update({
+            where: { id: incomeTransactionId },
+            data: { date: checkinDate, amount: accountInput.incomeEntered, note: accountInput.incomeNote },
+          });
+        } else {
+          const created = await tx.transaction.create({
+            data: {
+              date: checkinDate,
+              amount: accountInput.incomeEntered,
+              currency: account.currency,
+              type: "INCOME",
+              accountId: account.id,
+              note: accountInput.incomeNote,
+              source: "PAYDAY_CHECKIN",
+            },
+          });
+          incomeTransactionId = created.id;
+        }
+      } else if (incomeTransactionId) {
+        await tx.transaction.delete({ where: { id: incomeTransactionId } });
+        incomeTransactionId = null;
+      }
+
+      const snapshotData = {
+        expectedLedgerBalance: account.balance,
+        reportedBalance: accountInput.reportedBalance,
+        difference,
+        incomeEntered: accountInput.incomeEntered,
+        incomeNote: accountInput.incomeNote,
+        incomeTransactionId,
+        currency: account.currency,
+      };
+      if (existingSnapshot) {
+        await tx.paydayAccountSnapshot.update({ where: { id: existingSnapshot.id }, data: snapshotData });
+      } else {
+        await tx.paydayAccountSnapshot.create({
+          data: { paydayCheckinId: checkin.id, accountId: account.id, ...snapshotData },
+        });
+      }
+    }
+
+    await tx.paydayPlanAllocation.deleteMany({ where: { paydayCheckinId: checkin.id } });
+
+    const allocationRows = [
+      ...subscriptionItems.map((item) => ({
+        paydayCheckinId: checkin.id,
+        type: "SUBSCRIPTION" as const,
+        recurringItemId: item.id,
+        recommendedAmount: item.nativeAmount,
+        plannedAmount: item.nativeAmount,
+        currency: item.currency,
+        basis: "recurring_item",
+      })),
+      ...contributionItems.map((item) => ({
+        paydayCheckinId: checkin.id,
+        type: "RECURRING_CONTRIBUTION" as const,
+        recurringItemId: item.id,
+        recommendedAmount: item.nativeAmount,
+        plannedAmount: item.nativeAmount,
+        currency: item.currency,
+        basis: "recurring_item",
+      })),
+      ...goalInputs.map((g) => {
+        const goal = goalById.get(g.goalId)!;
+        return {
+          paydayCheckinId: checkin.id,
+          type: "GOAL" as const,
+          goalId: goal.id,
+          recommendedAmount: goal.perPeriod ?? 0,
+          plannedAmount: g.plannedAmount,
+          currency: goal.currency,
+          basis: "roadmap",
+        };
+      }),
+      ...essentialInputs.map((c) => ({
+        paydayCheckinId: checkin.id,
+        type: "ESSENTIAL_CATEGORY" as const,
+        categoryId: c.categoryId,
+        recommendedAmount: essentialSuggestions.get(c.categoryId)?.amount ?? 0,
+        plannedAmount: c.plannedAmount,
+        currency: context.displayCurrency,
+        basis: essentialSuggestions.get(c.categoryId)?.basis ?? "none",
+      })),
+      ...flexibleInputs.map((c) => ({
+        paydayCheckinId: checkin.id,
+        type: "FLEXIBLE_CATEGORY" as const,
+        categoryId: c.categoryId,
+        recommendedAmount: flexibleSuggestions.get(c.categoryId)?.amount ?? 0,
+        plannedAmount: c.plannedAmount,
+        currency: context.displayCurrency,
+        basis: flexibleSuggestions.get(c.categoryId)?.basis ?? "none",
+      })),
+      {
+        paydayCheckinId: checkin.id,
+        type: "BUFFER" as const,
+        recommendedAmount: recommendedBuffer,
+        plannedAmount: input.buffer,
+        currency: context.displayCurrency,
+        basis: "buffer_formula",
+      },
+      {
+        paydayCheckinId: checkin.id,
+        type: "CARRYOVER" as const,
+        recommendedAmount: carryover.amount,
+        plannedAmount: input.includedCarryover,
+        currency: context.displayCurrency,
+        basis: carryover.basis,
+      },
+    ];
+    await tx.paydayPlanAllocation.createMany({ data: allocationRows });
+
+    for (const categoryInput of [...essentialInputs, ...flexibleInputs]) {
+      const existingBudget = await tx.budget.findFirst({
+        where: {
+          year: planRef.year,
+          month: planRef.month,
+          period: planRef.period,
+          categoryId: categoryInput.categoryId,
+        },
+      });
+      if (existingBudget) {
+        await tx.budget.update({
+          where: { id: existingBudget.id },
+          data: { amount: categoryInput.plannedAmount, currency: context.displayCurrency },
+        });
+      } else {
+        await tx.budget.create({
+          data: {
+            year: planRef.year,
+            month: planRef.month,
+            period: planRef.period,
+            categoryId: categoryInput.categoryId,
+            amount: categoryInput.plannedAmount,
+            currency: context.displayCurrency,
+          },
+        });
+      }
+    }
+  });
+
+  return { ok: true };
 }
