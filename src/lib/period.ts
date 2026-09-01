@@ -39,6 +39,14 @@ export interface PeriodInfo extends PeriodRef {
 
 export const PERIOD_A_LAST_DAY = 15;
 
+/** True on the 15th or the actual last calendar day of the month (Feb/leap-year safe). */
+export function isPaydayDate(date: Date): boolean {
+  const day = startOfDay(date);
+  const dayOfMonth = day.getUTCDate();
+  const lastDay = daysInMonth(day.getUTCFullYear(), day.getUTCMonth() + 1);
+  return dayOfMonth === PERIOD_A_LAST_DAY || dayOfMonth === lastDay;
+}
+
 /** Which pay period a date falls into, with that month's real start/end dates. */
 export function periodForDate(date: Date): PeriodInfo {
   const day = startOfDay(date);

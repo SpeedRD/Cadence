@@ -28,10 +28,16 @@ import {
 } from "../src/lib/date";
 import {
   daysRemainingInPeriod,
+  isPaydayDate,
   periodForDate,
   periodsRemaining,
   periodSeries,
 } from "../src/lib/period";
+import {
+  availableForFlexibleCategories,
+  defaultProtectedBuffer,
+  scaleFlexibleSuggestions,
+} from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
 
 const prisma = new PrismaClient({
@@ -492,6 +498,58 @@ async function main() {
   const wiredAverage = await getHistoricalMonthlyAverage(wiringContext);
   eq("sufficient reflects whether the wired months meet the minimum", wiredAverage.sufficient, expectedWindows.length >= MIN_HISTORICAL_MONTHS);
   eq("monthsUsed matches the wired window count", wiredAverage.monthsUsed, expectedWindows.length);
+
+  console.log("\n== payday planner (pure) ==");
+  eq("the 15th is a payday date", isPaydayDate(civilDate(2026, 8, 15)), true);
+  eq("Aug 31 is a payday date", isPaydayDate(civilDate(2026, 8, 31)), true);
+  eq("Feb 28 2026 (non-leap) is a payday date", isPaydayDate(civilDate(2026, 2, 28)), true);
+  eq("Feb 29 2024 (leap) is a payday date", isPaydayDate(civilDate(2024, 2, 29)), true);
+  eq("Feb 28 2024 (leap, not last day) is not a payday date", isPaydayDate(civilDate(2024, 2, 28)), false);
+  eq("the 16th is not a payday date", isPaydayDate(civilDate(2026, 8, 16)), false);
+  eq("the 1st is not a payday date", isPaydayDate(civilDate(2026, 8, 1)), false);
+
+  eq("buffer = 10% of income when that beats the floor", defaultProtectedBuffer(50000, 10, 2000), 5000);
+  eq("buffer falls back to the floor when 10% of income is smaller", defaultProtectedBuffer(1000, 10, 2000), 2000);
+  eq("zero income still yields the floor, never zero", defaultProtectedBuffer(0, 10, 2000), 2000);
+
+  eq(
+    "available flexible money follows the exact formula",
+    availableForFlexibleCategories({
+      income: 40000,
+      includedCarryover: 2000,
+      subscriptions: 3000,
+      recurringContributions: 5000,
+      goalPlan: 6000,
+      essentialFixed: 8000,
+      buffer: 4000,
+    }),
+    16000,
+  );
+  eq(
+    "a shortfall shows as a negative amount, not zero",
+    availableForFlexibleCategories({
+      income: 10000,
+      includedCarryover: 0,
+      subscriptions: 3000,
+      recurringContributions: 5000,
+      goalPlan: 6000,
+      essentialFixed: 0,
+      buffer: 2000,
+    }),
+    -6000,
+  );
+
+  const suggestions = [
+    { id: "groceries", suggested: 6000 },
+    { id: "dining", suggested: 3000 },
+    { id: "shopping", suggested: 1000 },
+  ];
+  const fits = scaleFlexibleSuggestions(suggestions, 20000);
+  eq("suggestions that already fit pass through unscaled", fits.map((s) => s.scaled).join(","), "6000,3000,1000");
+  const scaled = scaleFlexibleSuggestions(suggestions, 5000);
+  eq("over-budget suggestions scale down proportionally", scaled.map((s) => s.scaled).join(","), "3000,1500,500");
+  const deficit = scaleFlexibleSuggestions(suggestions, -500);
+  eq("a deficit scales every suggestion to zero, never negative", deficit.every((s) => s.scaled === 0), true);
 
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
