@@ -8,6 +8,8 @@
  * time matters is deciding what "today" is, which uses APP_TIMEZONE.
  */
 
+import type { Dictionary } from "@/lib/i18n";
+
 export const MONTHS_SHORT = [
   "Jan",
   "Feb",
@@ -166,11 +168,15 @@ export function formatDayMonth(date: Date): string {
 }
 
 /** "in 3 days" / "today" / "5 days ago" */
-export function formatRelativeDays(from: Date, to: Date): string {
+export function formatRelativeDays(
+  from: Date,
+  to: Date,
+  common: Pick<Dictionary["common"], "today" | "tomorrow" | "yesterday" | "inDays" | "daysAgo">,
+): string {
   const diff = daysBetween(from, to);
-  if (diff === 0) return "today";
-  if (diff === 1) return "tomorrow";
-  if (diff === -1) return "yesterday";
-  if (diff > 0) return `in ${diff} days`;
-  return `${Math.abs(diff)} days ago`;
+  if (diff === 0) return common.today;
+  if (diff === 1) return common.tomorrow;
+  if (diff === -1) return common.yesterday;
+  if (diff > 0) return common.inDays(diff);
+  return common.daysAgo(Math.abs(diff));
 }

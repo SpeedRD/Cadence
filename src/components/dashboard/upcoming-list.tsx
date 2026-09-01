@@ -17,11 +17,13 @@ export function UpcomingList({
   today,
   displayCurrency,
   t,
+  common,
 }: {
   items: UpcomingItem[];
   today: Date;
   displayCurrency: string;
   t: Dictionary["dashboard"];
+  common: Dictionary["common"];
 }) {
   return (
     <ul className="divide-y divide-border/70">
@@ -44,7 +46,7 @@ export function UpcomingList({
               <p className="truncate text-sm">{item.name}</p>
               <p className="text-[0.6875rem] text-muted-foreground">
                 {formatDayMonth(item.nextDate)} ·{" "}
-                {formatRelativeDays(today, item.nextDate)}
+                {formatRelativeDays(today, item.nextDate, common)}
                 {isContribution ? t.contributionSuffix : ""}
               </p>
             </div>

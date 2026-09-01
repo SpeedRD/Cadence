@@ -25,6 +25,11 @@ export const es = {
     source: "Fuente",
     uncategorized: "Sin categoría",
     nothingToDelete: "Nada que eliminar",
+    today: "hoy",
+    tomorrow: "mañana",
+    yesterday: "ayer",
+    inDays: (n: number) => `en ${n} días`,
+    daysAgo: (n: number) => `hace ${n} días`,
     accountTypeLabels: {
       CHECKING: "Corriente",
       SAVINGS: "Ahorros",

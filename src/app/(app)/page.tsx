@@ -73,6 +73,7 @@ export default async function DashboardPage() {
                   today={context.today}
                   displayCurrency={context.displayCurrency}
                   t={t}
+                  common={getDictionary(context.language).common}
                 />
               )}
             </CardContent>

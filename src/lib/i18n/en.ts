@@ -23,6 +23,11 @@ export const en = {
     source: "Source",
     uncategorized: "Uncategorized",
     nothingToDelete: "Nothing to delete",
+    today: "today",
+    tomorrow: "tomorrow",
+    yesterday: "yesterday",
+    inDays: (n: number) => `in ${n} days`,
+    daysAgo: (n: number) => `${n} days ago`,
     accountTypeLabels: {
       CHECKING: "Checking",
       SAVINGS: "Savings",

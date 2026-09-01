@@ -78,7 +78,7 @@ export function RecurringList({
               <p className="text-[0.6875rem] text-muted-foreground">
                 {labelFor(common.frequencyLabels, row.frequency)} · {t.nextLabel}{" "}
                 {formatDate(row.nextDate)}
-                {row.active ? ` (${formatRelativeDays(today, row.nextDate)})` : ""}
+                {row.active ? ` (${formatRelativeDays(today, row.nextDate, common)})` : ""}
                 {row.categoryName ? ` · ${row.categoryName}` : ""}
               </p>
             </div>
