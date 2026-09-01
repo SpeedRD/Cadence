@@ -17,6 +17,7 @@ export default async function ImportPage() {
   const [accounts, categories] = await Promise.all([
     prisma.account.findMany({
       orderBy: { name: "asc" },
+      where: { status: "ACTIVE" },
       select: { id: true, name: true, currency: true },
     }),
     prisma.category.findMany({

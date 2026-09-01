@@ -301,6 +301,22 @@ export const es = {
     accountUpdated: "Cuenta actualizada",
     accountAdded: "Cuenta agregada",
     accountDeleted: "Cuenta eliminada",
+    accountArchived: "Cuenta archivada",
+    accountRestored: "Cuenta restaurada",
+    accountNoLongerExists: "Esa cuenta ya no existe",
+    archiveAccount: "Archivar cuenta",
+    restoreAccount: "Restaurar cuenta",
+    archiveAccountTitle: (name: string) => `¿Archivar ${name}?`,
+    archiveAccountDescription:
+      "Su historial se mantiene intacto donde ya aparece - solo deja de aparecer al elegir una cuenta para algo nuevo.",
+    archiveInstead: "Archívala en su lugar - tiene historial financiero que conservar.",
+    deletePermanently: "Eliminar permanentemente",
+    activeTab: "Activas",
+    archivedTab: "Archivadas",
+    noArchivedAccountsTitle: "No hay cuentas archivadas",
+    noArchivedAccountsDescription:
+      "Las cuentas que archives conservan su historial completo y aparecen aquí.",
+    archivedBadge: "Archivada",
   },
   budgets: {
     title: "Presupuestos",

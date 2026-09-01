@@ -54,6 +54,7 @@ export default async function TransactionsPage({
   const [accounts, categories, result, totals] = await Promise.all([
     prisma.account.findMany({
       orderBy: { name: "asc" },
+      where: { status: "ACTIVE" },
       select: { id: true, name: true, currency: true },
     }),
     prisma.category.findMany({

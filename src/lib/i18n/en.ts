@@ -298,6 +298,22 @@ export const en = {
     accountUpdated: "Account updated",
     accountAdded: "Account added",
     accountDeleted: "Account deleted",
+    accountArchived: "Account archived",
+    accountRestored: "Account restored",
+    accountNoLongerExists: "That account no longer exists",
+    archiveAccount: "Archive account",
+    restoreAccount: "Restore account",
+    archiveAccountTitle: (name: string) => `Archive ${name}?`,
+    archiveAccountDescription:
+      "Its history stays intact everywhere it already appears - it just stops showing up when picking an account for something new.",
+    archiveInstead: "Archive it instead - it has financial history to keep.",
+    deletePermanently: "Delete permanently",
+    activeTab: "Active",
+    archivedTab: "Archived",
+    noArchivedAccountsTitle: "No archived accounts",
+    noArchivedAccountsDescription:
+      "Accounts you archive keep their full history and show up here.",
+    archivedBadge: "Archived",
   },
   budgets: {
     title: "Budgets",

@@ -4,12 +4,13 @@ import { prisma } from "@/lib/prisma";
 import { balanceSign } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
-import type { AccountType } from "@/generated/prisma/enums";
+import type { AccountStatus, AccountType } from "@/generated/prisma/enums";
 
 export interface AccountBalance {
   id: string;
   name: string;
   type: AccountType;
+  status: AccountStatus;
   currency: string;
   createdAt: Date;
   /** In the account's own currency. */
@@ -19,16 +20,27 @@ export interface AccountBalance {
   transactionCount: number;
 }
 
+export type AccountStatusFilter = "ACTIVE" | "ARCHIVED" | "ALL";
+
 /**
  * Balances are aggregated in SQL per (account, type, currency, direction) and
  * converted afterwards, so a foreign-currency transaction lands in the account's
  * own currency. Transfers net to zero across their two legs.
+ *
+ * Defaults to active accounts only - the dynamic "active accounts" list the
+ * payday check-in and every "pick an account" selector must use. Pass
+ * { status: "ARCHIVED" } or { status: "ALL" } for historical/admin views.
  */
 export async function getAccountBalances(
   context: AppContext,
+  options: { status?: AccountStatusFilter } = {},
 ): Promise<AccountBalance[]> {
+  const status = options.status ?? "ACTIVE";
   const [accounts, groups, counts] = await Promise.all([
-    prisma.account.findMany({ orderBy: { name: "asc" } }),
+    prisma.account.findMany({
+      where: status === "ALL" ? undefined : { status },
+      orderBy: { name: "asc" },
+    }),
     prisma.transaction.groupBy({
       by: ["accountId", "type", "currency", "transferDirection"],
       _sum: { amount: true },
@@ -57,6 +69,7 @@ export async function getAccountBalances(
       id: account.id,
       name: account.name,
       type: account.type,
+      status: account.status,
       currency: account.currency,
       createdAt: account.createdAt,
       balance: round2(balance),

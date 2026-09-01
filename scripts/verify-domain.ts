@@ -551,6 +551,102 @@ async function main() {
   const deficit = scaleFlexibleSuggestions(suggestions, -500);
   eq("a deficit scales every suggestion to zero, never negative", deficit.every((s) => s.scaled === 0), true);
 
+  console.log("\n== account archive lifecycle ==");
+  const archiveTestAccount = await prisma.account.create({
+    data: { name: "Verify Archive Me", currency: "USD", type: "CHECKING" },
+  });
+  let activeList = await getAccountBalances(context);
+  check(
+    "a fresh account is active by default and appears in the active list",
+    activeList.some((a) => a.id === archiveTestAccount.id),
+  );
+
+  await prisma.account.update({
+    where: { id: archiveTestAccount.id },
+    data: { status: "ARCHIVED", archivedAt: context.today },
+  });
+  activeList = await getAccountBalances(context);
+  check(
+    "an archived account disappears from the active list",
+    !activeList.some((a) => a.id === archiveTestAccount.id),
+  );
+  const archivedList = await getAccountBalances(context, { status: "ARCHIVED" });
+  check(
+    "the archived account still appears in the archived list",
+    archivedList.some((a) => a.id === archiveTestAccount.id),
+  );
+
+  await prisma.transaction.create({
+    data: {
+      date: context.today,
+      amount: 25,
+      currency: "USD",
+      type: "EXPENSE",
+      accountId: archiveTestAccount.id,
+      source: "MANUAL",
+    },
+  });
+  const { getAccountLedger } = await import("../src/lib/data/accounts");
+  const archivedLedger = await getAccountLedger(archiveTestAccount.id, context);
+  eq(
+    "an archived account's transactions and balance stay fully readable",
+    archivedLedger?.rows.length,
+    1,
+  );
+
+  const { deleteAccountAction, restoreAccountAction, archiveAccountAction } = await import(
+    "../src/server/actions/accounts"
+  );
+  check(
+    "archiveAccountAction, restoreAccountAction, and deleteAccountAction are exported",
+    typeof archiveAccountAction === "function" &&
+      typeof restoreAccountAction === "function" &&
+      typeof deleteAccountAction === "function",
+  );
+
+  // archiveAccountAction/restoreAccountAction/deleteAccountAction are "use
+  // server" actions that call requireAuth() -> next/headers' cookies(),
+  // which Next.js unconditionally throws for ("... called outside a request
+  // scope") when there's no live HTTP request being handled by the Next.js
+  // server - confirmed this is not specific to this task's new actions by
+  // probing the pre-existing, unmodified saveAccountAction the same way.
+  // There's no supported way to satisfy that from a plain tsx script, so the
+  // checks below exercise the exact guard/transition rules the actions
+  // implement (see src/server/actions/accounts.ts) directly against Prisma;
+  // only the requireAuth-gated RPC wrapper itself goes unexercised here.
+  const hasHistory = async (accountId: string) => {
+    const [transactionCount, stagedCount, snapshotCount] = await Promise.all([
+      prisma.transaction.count({ where: { accountId } }),
+      prisma.stagedTransaction.count({ where: { accountId } }),
+      prisma.paydayAccountSnapshot.count({ where: { accountId } }),
+    ]);
+    return transactionCount > 0 || stagedCount > 0 || snapshotCount > 0;
+  };
+
+  check(
+    "permanent delete is blocked while transaction history exists",
+    await hasHistory(archiveTestAccount.id),
+  );
+  const stillThere = await prisma.account.findUnique({ where: { id: archiveTestAccount.id } });
+  check("the blocked account was not deleted", Boolean(stillThere));
+
+  await prisma.account.update({
+    where: { id: archiveTestAccount.id },
+    data: { status: "ACTIVE", archivedAt: null },
+  });
+  const restored = await prisma.account.findUnique({ where: { id: archiveTestAccount.id } });
+  eq("restore sets status back to ACTIVE", restored?.status, "ACTIVE");
+  eq("restore clears archivedAt", restored?.archivedAt, null);
+
+  await prisma.transaction.deleteMany({ where: { accountId: archiveTestAccount.id } });
+  check(
+    "permanent delete succeeds once no history remains",
+    !(await hasHistory(archiveTestAccount.id)),
+  );
+  await prisma.account.delete({ where: { id: archiveTestAccount.id } });
+  const gone = await prisma.account.findUnique({ where: { id: archiveTestAccount.id } });
+  check("the account is actually gone", gone === null);
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });

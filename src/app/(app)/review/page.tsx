@@ -35,6 +35,7 @@ export default async function ReviewPage({
     listStagedTransactions({ includeReviewed: showReviewed }),
     prisma.account.findMany({
       orderBy: { name: "asc" },
+      where: { status: "ACTIVE" },
       select: { id: true, name: true, currency: true },
     }),
     prisma.category.findMany({
