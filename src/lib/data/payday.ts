@@ -332,9 +332,13 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     goals.reduce((sum, g) => sum + convert(g.plannedAmount, g.currency, context.displayCurrency, context.rates), 0),
   );
 
-  const essentialSuggestions = await getCategorySuggestions(planRef, essentialCategoryRows, context);
+  const suggestionsByCategory = await getCategorySuggestions(
+    planRef,
+    [...essentialCategoryRows, ...flexibleCategoryRows],
+    context,
+  );
   const essentialCategories: PaydayCategoryDraft[] = essentialCategoryRows.map((category) => {
-    const suggestion = essentialSuggestions.get(category.id) ?? { amount: 0, basis: "none" as const };
+    const suggestion = suggestionsByCategory.get(category.id) ?? { amount: 0, basis: "none" as const };
     const existingAlloc = existingAllocationByKey.get(`ESSENTIAL_CATEGORY:${category.id}`);
     return {
       categoryId: category.id,
@@ -360,7 +364,6 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       ? carryover.amount
       : 0;
 
-  const flexibleSuggestions = await getCategorySuggestions(planRef, flexibleCategoryRows, context);
   const available = availableForFlexibleCategories({
     income: totalIncome,
     includedCarryover,
@@ -371,12 +374,12 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     buffer: plannedBuffer,
   });
   const scaled = scaleFlexibleSuggestions(
-    flexibleCategoryRows.map((c) => ({ id: c.id, suggested: flexibleSuggestions.get(c.id)?.amount ?? 0 })),
+    flexibleCategoryRows.map((c) => ({ id: c.id, suggested: suggestionsByCategory.get(c.id)?.amount ?? 0 })),
     available,
   );
   const scaledById = new Map(scaled.map((s) => [s.id, s.scaled]));
   const flexibleCategories: PaydayCategoryDraft[] = flexibleCategoryRows.map((category) => {
-    const suggestion = flexibleSuggestions.get(category.id) ?? { amount: 0, basis: "none" as const };
+    const suggestion = suggestionsByCategory.get(category.id) ?? { amount: 0, basis: "none" as const };
     const existingAlloc = existingAllocationByKey.get(`FLEXIBLE_CATEGORY:${category.id}`);
     const scaledAmount = scaledById.get(category.id) ?? 0;
     return {
