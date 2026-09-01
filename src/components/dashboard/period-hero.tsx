@@ -7,15 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { formatDayMonth } from "@/lib/date";
+import type { Dictionary } from "@/lib/i18n";
 
 import type { PeriodSummary } from "@/lib/data/period-summary";
 
 export function PeriodHero({
   summary,
   elapsed,
+  t,
 }: {
   summary: PeriodSummary;
   elapsed: number;
+  t: Dictionary["dashboard"];
 }) {
   const { period, currency } = summary;
   const used = summary.periodBudget > 0 ? summary.spent / summary.periodBudget : 0;
@@ -27,12 +30,12 @@ export function PeriodHero({
           <div className="space-y-3">
             <div className="flex items-baseline justify-between gap-3">
               <p className="eyebrow">
-                Period {period.period} · {period.longLabel}
+                {t.periodPrefix} {period.period} · {period.longLabel}
               </p>
               <p className="text-xs text-muted-foreground">
                 {summary.daysRemaining === 0
-                  ? "closed"
-                  : `${summary.daysRemaining} of ${period.totalDays} days left`}
+                  ? t.closed
+                  : t.daysLeftOfTotal(summary.daysRemaining, period.totalDays)}
               </p>
             </div>
             <PeriodRail totalDays={period.totalDays} elapsed={elapsed} />
@@ -44,15 +47,15 @@ export function PeriodHero({
 
           {summary.hasBudget ? (
             <div className="space-y-2">
-              <p className="eyebrow">Safe to spend per day</p>
+              <p className="eyebrow">{t.safeToSpendPerDay}</p>
               <p className="figure text-5xl leading-none font-medium">
                 {formatMoney(summary.safeToSpendPerDay, currency)}
               </p>
               <p className="text-sm text-muted-foreground">
                 {summary.safeToSpend >= 0 ? (
                   <>
-                    <Money amount={summary.safeToSpend} currency={currency} /> left
-                    for the rest of this period
+                    <Money amount={summary.safeToSpend} currency={currency} />{" "}
+                    {t.leftForRest}
                   </>
                 ) : (
                   <>
@@ -61,20 +64,19 @@ export function PeriodHero({
                       currency={currency}
                       className="text-[var(--critical)]"
                     />{" "}
-                    over the plan for this period
+                    {t.overThePlan}
                   </>
                 )}
               </p>
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="eyebrow">Safe to spend per day</p>
+              <p className="eyebrow">{t.safeToSpendPerDay}</p>
               <p className="text-sm text-muted-foreground">
-                Set a budget for this period and Cadence works out what you can
-                spend each day after committed outflows.
+                {t.setBudgetPrompt}
               </p>
               <Button asChild size="sm">
-                <Link href="/budgets">Set this period&rsquo;s budget</Link>
+                <Link href="/budgets">{t.setPeriodBudget}</Link>
               </Button>
             </div>
           )}
@@ -83,11 +85,11 @@ export function PeriodHero({
         <div className="grid gap-5 border-t border-border/70 pt-5 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
           <div className="space-y-2">
             <div className="flex items-baseline justify-between gap-2">
-              <p className="eyebrow">Spent</p>
+              <p className="eyebrow">{t.spent}</p>
               <p className="text-xs text-muted-foreground tnum">
                 {summary.periodBudget > 0
-                  ? `${Math.round(used * 100)}% of budget`
-                  : "no budget"}
+                  ? t.percentOfBudget(Math.round(used * 100))
+                  : t.noBudget}
               </p>
             </div>
             <p className="figure text-2xl">
@@ -103,29 +105,27 @@ export function PeriodHero({
               }
             />
             <p className="text-xs text-muted-foreground">
-              of {formatMoney(summary.periodBudget, currency)} budgeted
+              {t.ofBudgeted(formatMoney(summary.periodBudget, currency))}
             </p>
           </div>
 
           <dl className="grid grid-cols-2 gap-4 lg:grid-cols-1">
             <div className="space-y-1">
-              <dt className="eyebrow">Committed</dt>
+              <dt className="eyebrow">{t.committed}</dt>
               <dd className="figure text-base">
                 {formatMoney(summary.committed, currency)}
               </dd>
               <p className="text-[0.6875rem] text-muted-foreground">
-                {summary.committedItems.length} item
-                {summary.committedItems.length === 1 ? "" : "s"} due before{" "}
-                {formatDayMonth(period.end)}
+                {t.itemsDueBefore(summary.committedItems.length, formatDayMonth(period.end))}
               </p>
             </div>
             <div className="space-y-1">
-              <dt className="eyebrow">Income</dt>
+              <dt className="eyebrow">{t.income}</dt>
               <dd className="figure text-base">
                 {formatMoney(summary.income, currency)}
               </dd>
               <p className="text-[0.6875rem] text-muted-foreground">
-                logged this period
+                {t.loggedThisPeriod}
               </p>
             </div>
           </dl>

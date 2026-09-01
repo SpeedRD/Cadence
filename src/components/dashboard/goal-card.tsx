@@ -4,15 +4,18 @@ import { Meter } from "@/components/meter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { formatDate } from "@/lib/date";
+import type { Dictionary } from "@/lib/i18n";
 
 import type { GoalSummary } from "@/lib/data/goals";
 
 export function GoalCard({
   goal,
   displayCurrency,
+  t,
 }: {
   goal: GoalSummary;
   displayCurrency: string;
+  t: Dictionary["dashboard"];
 }) {
   const showConverted = goal.currency !== displayCurrency;
 
@@ -37,7 +40,7 @@ export function GoalCard({
           </div>
           <Meter value={goal.progress} max={1} status="accent" />
           <p className="text-xs text-muted-foreground">
-            of {formatMoney(goal.targetAmount, goal.currency)}
+            {t.of(formatMoney(goal.targetAmount, goal.currency))}
             {showConverted
               ? ` · ${formatMoney(goal.displaySaved, displayCurrency)} of ${formatMoney(goal.displayTarget, displayCurrency)}`
               : ""}
@@ -45,28 +48,28 @@ export function GoalCard({
         </div>
 
         {goal.achievedAt ? (
-          <p className="text-xs text-[var(--good)]">Reached</p>
+          <p className="text-xs text-[var(--good)]">{t.reached}</p>
         ) : goal.targetDate && goal.perPeriod !== null ? (
           <p className="text-xs text-muted-foreground">
             <span className="text-foreground figure">
               {formatMoney(goal.perPeriod, goal.currency)}
             </span>{" "}
-            per pay period ·{" "}
+            {t.perPayPeriod} ·{" "}
             {goal.periodsLeft === 0
-              ? "due this period"
-              : `${goal.periodsLeft} periods to ${formatDate(goal.targetDate)}`}
+              ? t.dueThisPeriod
+              : t.periodsTo(goal.periodsLeft!, formatDate(goal.targetDate))}
           </p>
         ) : goal.pacePerPeriod ? (
           <p className="text-xs text-muted-foreground">
-            Pace{" "}
+            {t.pace}{" "}
             <span className="text-foreground figure">
               {formatMoney(goal.pacePerPeriod, goal.currency)}
             </span>{" "}
-            per period
-            {goal.projectedEnd ? ` · on track for ${formatDate(goal.projectedEnd)}` : ""}
+            {t.perPeriod}
+            {goal.projectedEnd ? ` · ${t.onTrackFor(formatDate(goal.projectedEnd))}` : ""}
           </p>
         ) : (
-          <p className="text-xs text-muted-foreground">No contributions yet</p>
+          <p className="text-xs text-muted-foreground">{t.noContributionsYet}</p>
         )}
       </CardContent>
     </Card>

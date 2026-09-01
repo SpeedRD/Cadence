@@ -2,6 +2,7 @@ import { PiggyBank, Repeat } from "lucide-react";
 
 import { formatMoney } from "@/lib/currency";
 import { formatDayMonth, formatRelativeDays } from "@/lib/date";
+import type { Dictionary } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 import type { UpcomingItem } from "@/lib/data/dashboard";
@@ -15,10 +16,12 @@ export function UpcomingList({
   items,
   today,
   displayCurrency,
+  t,
 }: {
   items: UpcomingItem[];
   today: Date;
   displayCurrency: string;
+  t: Dictionary["dashboard"];
 }) {
   return (
     <ul className="divide-y divide-border/70">
@@ -42,7 +45,7 @@ export function UpcomingList({
               <p className="text-[0.6875rem] text-muted-foreground">
                 {formatDayMonth(item.nextDate)} ·{" "}
                 {formatRelativeDays(today, item.nextDate)}
-                {isContribution ? " · contribution" : ""}
+                {isContribution ? t.contributionSuffix : ""}
               </p>
             </div>
             <div className="text-right">

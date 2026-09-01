@@ -82,6 +82,45 @@ export const en = {
     entriesMustMatch: "Both entries must match",
     pinDoesNotMatch: "That PIN doesn't match",
   },
+  dashboard: {
+    goalsHeading: "Goals",
+    allGoals: "All goals",
+    noGoalsTitle: "No goals yet",
+    noGoalsDescription:
+      "Track something you are saving towards and Cadence works out what each pay period needs to carry.",
+    createGoal: "Create a goal",
+    nextDays: (n: number) => `Next ${n} days`,
+    nothingDue: "Nothing due in the next week.",
+    periodPrefix: "Period",
+    closed: "closed",
+    daysLeftOfTotal: (remaining: number, total: number) =>
+      `${remaining} of ${total} days left`,
+    safeToSpendPerDay: "Safe to spend per day",
+    leftForRest: "left for the rest of this period",
+    overThePlan: "over the plan for this period",
+    setBudgetPrompt:
+      "Set a budget for this period and Cadence works out what you can spend each day after committed outflows.",
+    setPeriodBudget: "Set this period's budget",
+    spent: "Spent",
+    percentOfBudget: (pct: number) => `${pct}% of budget`,
+    noBudget: "no budget",
+    ofBudgeted: (amount: string) => `of ${amount} budgeted`,
+    committed: "Committed",
+    itemsDueBefore: (count: number, date: string) =>
+      `${count} item${count === 1 ? "" : "s"} due before ${date}`,
+    income: "Income",
+    loggedThisPeriod: "logged this period",
+    of: (amount: string) => `of ${amount}`,
+    reached: "Reached",
+    dueThisPeriod: "due this period",
+    periodsTo: (n: number, date: string) => `${n} periods to ${date}`,
+    perPayPeriod: "per pay period",
+    pace: "Pace",
+    perPeriod: "per period",
+    onTrackFor: (date: string) => `on track for ${date}`,
+    noContributionsYet: "No contributions yet",
+    contributionSuffix: " · contribution",
+  },
 };
 
 export type Dictionary = typeof en;

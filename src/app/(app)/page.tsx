@@ -8,12 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAppContext } from "@/lib/data/context";
 import { getDashboardData, UPCOMING_WINDOW_DAYS } from "@/lib/data/dashboard";
+import { getDictionary } from "@/lib/i18n";
 import { daysElapsedInPeriod } from "@/lib/period";
 
 export const metadata = { title: "Dashboard - Cadence" };
 
 export default async function DashboardPage() {
   const context = await getAppContext();
+  const t = getDictionary(context.language).dashboard;
   const { summary, upcoming, goals } = await getDashboardData(context);
   const elapsed = daysElapsedInPeriod(context.today, context.currentPeriod);
   const activeGoals = goals.filter((goal) => !goal.achievedAt);
@@ -21,23 +23,23 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <PeriodHero summary={summary} elapsed={elapsed} />
+      <PeriodHero summary={summary} elapsed={elapsed} t={t} />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="space-y-3">
           <div className="flex items-baseline justify-between gap-3">
-            <h2 className="text-base font-semibold">Goals</h2>
+            <h2 className="text-base font-semibold">{t.goalsHeading}</h2>
             <Button asChild variant="ghost" size="xs">
-              <Link href="/goals">All goals</Link>
+              <Link href="/goals">{t.allGoals}</Link>
             </Button>
           </div>
           {shownGoals.length === 0 ? (
             <EmptyState
-              title="No goals yet"
-              description="Track something you are saving towards and Cadence works out what each pay period needs to carry."
+              title={t.noGoalsTitle}
+              description={t.noGoalsDescription}
               action={
                 <Button asChild size="sm">
-                  <Link href="/goals">Create a goal</Link>
+                  <Link href="/goals">{t.createGoal}</Link>
                 </Button>
               }
             />
@@ -48,6 +50,7 @@ export default async function DashboardPage() {
                   key={goal.id}
                   goal={goal}
                   displayCurrency={context.displayCurrency}
+                  t={t}
                 />
               ))}
             </div>
@@ -57,18 +60,19 @@ export default async function DashboardPage() {
         <section>
           <Card size="sm">
             <CardHeader>
-              <CardTitle>Next {UPCOMING_WINDOW_DAYS} days</CardTitle>
+              <CardTitle>{t.nextDays(UPCOMING_WINDOW_DAYS)}</CardTitle>
             </CardHeader>
             <CardContent>
               {upcoming.length === 0 ? (
                 <p className="py-2 text-sm text-muted-foreground">
-                  Nothing due in the next week.
+                  {t.nothingDue}
                 </p>
               ) : (
                 <UpcomingList
                   items={upcoming}
                   today={context.today}
                   displayCurrency={context.displayCurrency}
+                  t={t}
                 />
               )}
             </CardContent>
