@@ -18,7 +18,14 @@ import {
   parseCsv,
   parseDateWithFormat,
 } from "../src/lib/csv";
-import { civilDate, toISODate } from "../src/lib/date";
+import {
+  appTimeZone,
+  civilDate,
+  civilDateInZone,
+  DEFAULT_APP_TIMEZONE,
+  formatDate,
+  toISODate,
+} from "../src/lib/date";
 import {
   daysRemainingInPeriod,
   periodForDate,
@@ -45,6 +52,54 @@ function eq(name: string, actual: unknown, expected: unknown) {
 }
 
 async function main() {
+  console.log("\n== APP_TIMEZONE / business date ==");
+  const SD = "America/Santo_Domingo";
+  eq(
+    "9pm Aug 31 in Santo Domingo is still Aug 31",
+    toISODate(civilDateInZone(new Date("2026-09-01T01:00:00.000Z"), SD)),
+    "2026-08-31",
+  );
+  eq(
+    "midnight Santo Domingo rolls the business date to Sep 1",
+    toISODate(civilDateInZone(new Date("2026-09-01T04:00:00.000Z"), SD)),
+    "2026-09-01",
+  );
+  eq(
+    "23:59 local on the 14th is still period A (Aug 14)",
+    toISODate(civilDateInZone(new Date("2026-08-15T03:59:00.000Z"), SD)),
+    "2026-08-14",
+  );
+  eq(
+    "local midnight on the 15th starts period A's last day",
+    periodForDate(civilDateInZone(new Date("2026-08-15T04:00:00.000Z"), SD)).period,
+    "A",
+  );
+  eq(
+    "23:59 local on the 15th is still period A",
+    periodForDate(civilDateInZone(new Date("2026-08-16T03:59:00.000Z"), SD)).period,
+    "A",
+  );
+  eq(
+    "local midnight on the 16th rolls into period B",
+    periodForDate(civilDateInZone(new Date("2026-08-16T04:00:00.000Z"), SD)).period,
+    "B",
+  );
+  eq(
+    "a stored civil date for Aug 31 renders as Aug 31",
+    formatDate(civilDate(2026, 8, 31)),
+    "Aug 31, 2026",
+  );
+
+  const savedAppTimezone = process.env.APP_TIMEZONE;
+  delete process.env.APP_TIMEZONE;
+  eq("APP_TIMEZONE missing falls back to America/Santo_Domingo", appTimeZone(), DEFAULT_APP_TIMEZONE);
+  process.env.APP_TIMEZONE = "Not/A_Real_Zone";
+  eq("APP_TIMEZONE invalid falls back to America/Santo_Domingo", appTimeZone(), DEFAULT_APP_TIMEZONE);
+  process.env.APP_TIMEZONE = "America/Santo_Domingo";
+  eq("APP_TIMEZONE valid is used as-is", appTimeZone(), "America/Santo_Domingo");
+  if (savedAppTimezone === undefined) delete process.env.APP_TIMEZONE;
+  else process.env.APP_TIMEZONE = savedAppTimezone;
+
   console.log("\n== pay periods ==");
   const aug15 = periodForDate(civilDate(2026, 8, 15));
   eq("Aug 15 is period A", aug15.period, "A");

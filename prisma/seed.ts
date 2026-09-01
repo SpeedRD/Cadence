@@ -4,8 +4,12 @@ import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "../src/generated/prisma/client";
 
+// Runs via the Prisma CLI (`prisma db seed`), same as migrations - prefer the
+// session-capable DIRECT_URL, falling back to DATABASE_URL for local dev.
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL ?? "" }),
+  adapter: new PrismaPg({
+    connectionString: process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? "",
+  }),
 });
 
 /**

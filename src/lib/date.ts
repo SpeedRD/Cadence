@@ -52,21 +52,47 @@ export function startOfDay(date: Date): Date {
   );
 }
 
-/** Today's calendar day in APP_TIMEZONE (defaults to UTC), as UTC midnight. */
-export function today(): Date {
-  const timeZone = process.env.APP_TIMEZONE || "UTC";
+export const DEFAULT_APP_TIMEZONE = "America/Santo_Domingo";
+
+function isValidTimeZone(timeZone: string): boolean {
   try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date());
-    const [year, month, day] = parts.split("-").map(Number);
-    return civilDate(year, month, day);
+    new Intl.DateTimeFormat("en-CA", { timeZone });
+    return true;
   } catch {
-    return startOfDay(new Date());
+    return false;
   }
+}
+
+/**
+ * The app's business timezone: APP_TIMEZONE if set to a valid IANA zone,
+ * otherwise DEFAULT_APP_TIMEZONE. This is the single source of truth for
+ * "what timezone is Cadence's business logic in" - every place that needs it
+ * (today(), display formatting, the settings page) should call this rather
+ * than reading process.env.APP_TIMEZONE directly, so a missing or malformed
+ * value can never silently fall through to the runtime's own timezone (UTC
+ * on Vercel).
+ */
+export function appTimeZone(): string {
+  const configured = process.env.APP_TIMEZONE;
+  if (configured && isValidTimeZone(configured)) return configured;
+  return DEFAULT_APP_TIMEZONE;
+}
+
+/** The civil calendar day `instant` falls on in `timeZone`, as UTC midnight. */
+export function civilDateInZone(instant: Date, timeZone: string): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(instant);
+  const [year, month, day] = parts.split("-").map(Number);
+  return civilDate(year, month, day);
+}
+
+/** Today's calendar day in APP_TIMEZONE (defaults to America/Santo_Domingo), as UTC midnight. */
+export function today(): Date {
+  return civilDateInZone(new Date(), appTimeZone());
 }
 
 /** "YYYY-MM-DD" for a UTC-midnight date. */

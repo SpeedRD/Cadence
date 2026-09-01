@@ -25,13 +25,28 @@ ready to use.
 
 ### Environment variables
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | yes | PostgreSQL connection string. Read by both Next.js and the Prisma CLI from `.env`. |
-| `SESSION_SECRET` | yes in production | HMAC key for the session cookie. `openssl rand -hex 32`. Changing it signs everyone out. |
-| `APP_TIMEZONE` | no | IANA timezone used to decide what "today" is when resolving pay periods. Defaults to `UTC`. |
+All of these are server-only - never add a `NEXT_PUBLIC_` prefix to any of
+them, since that would expose the value to the browser.
 
-Phase 2A (email ingestion) needs several more - see [PHASE2.md](./PHASE2.md).
+| Variable | Required for | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | core app runtime | PostgreSQL connection string read by the Next.js app (`src/lib/prisma.ts`). Local dev: your Postgres instance. Production: the Supabase transaction-mode pooler, port 6543, `?pgbouncer=true`. |
+| `DIRECT_URL` | Prisma CLI (migrate/seed/studio) | Session-capable connection for DDL. Not needed against a plain local Postgres instance (`prisma7.config.ts` falls back to `DATABASE_URL`). Production: the Supabase session-mode pooler, port 5432. |
+| `SESSION_SECRET` | core app runtime | HMAC key for the session cookie. `openssl rand -hex 32`. Changing it signs everyone out. |
+| `APP_TIMEZONE` | core app runtime | IANA timezone used to decide what "today" is when resolving pay periods. Defaults to `America/Santo_Domingo`. |
+
+Vercel's serverless runtime always runs in UTC regardless of project region -
+Cadence never relies on that for business dates. `APP_TIMEZONE` (read via
+`appTimeZone()` in `src/lib/date.ts`) is the only authoritative source for
+"today" and pay-period boundaries, so it must be set on the **Production**
+environment in Vercel, not just Preview/Development - see step 6 in
+[DEPLOY.md](./DEPLOY.md).
+
+Phase 2A (email ingestion: `GOOGLE_CLIENT_ID`/`SECRET`, `MICROSOFT_CLIENT_ID`/`SECRET`,
+`ANTHROPIC_API_KEY`, `OAUTH_ENCRYPTION_KEY`) and Vercel Cron (`CRON_SECRET`)
+need several more - see [PHASE2.md](./PHASE2.md).
+
+See [DEPLOY.md](./DEPLOY.md) for moving production to Supabase.
 
 ### Scripts
 
@@ -55,10 +70,11 @@ DATABASE_URL="postgres://…/scratch" npx tsx scripts/verify-domain.ts
 
 ## Deploying to Vercel
 
-Import the repo, set `DATABASE_URL` and `SESSION_SECRET` in project settings, and
-deploy — no custom server or build-command changes needed (`npm run build` already
-runs `prisma generate`). Run `npm run db:migrate` against the production database
-once before the first deploy.
+Import the repo, set `DATABASE_URL`, `DIRECT_URL`, and `SESSION_SECRET` in project
+settings, and deploy — no custom server or build-command changes needed (`npm run
+build` already runs `prisma generate`). Run `npm run db:migrate` against the
+production database once before the first deploy. See [DEPLOY.md](./DEPLOY.md) for
+the Supabase-specific version of this.
 
 ## How it works
 

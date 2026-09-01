@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { CURRENCIES, CURRENCY_LABELS, formatRate } from "@/lib/currency";
+import { appTimeZone } from "@/lib/date";
 import { getAppContext } from "@/lib/data/context";
 import { logoutAction } from "@/server/actions/auth";
 import { recalculateGoalsAction } from "@/server/actions/settings";
@@ -21,7 +22,7 @@ export const metadata = { title: "Settings - Cadence" };
 
 export default async function SettingsPage() {
   const context = await getAppContext();
-  const timezone = process.env.APP_TIMEZONE || "UTC";
+  const timezone = appTimeZone();
 
   return (
     <div className="space-y-5">
