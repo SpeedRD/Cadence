@@ -1,52 +1,139 @@
 # Cadence
 
-A single-user personal finance app built around a twice-monthly pay rhythm. Every
-month is two budgeting periods — **A: 1st–15th** and **B: 16th–end of month** — and
-budgets, "safe to spend" and goal roadmaps are all computed per period rather than
-per calendar month.
+Cadence is a single-user personal finance dashboard built around a twice-monthly pay
+cycle instead of the generic calendar month. Budgets, safe-to-spend, and goal
+roadmaps are all computed per pay period — **Period A: 1st–15th** and **Period B:
+16th–end of month** — so the numbers match how you actually get paid.
 
-Next.js (App Router) · TypeScript strict · Tailwind + shadcn/ui · Prisma 7 + PostgreSQL.
+## Preview
 
-## Setup
+![Cadence dashboard showing the current pay period, safe-to-spend view, and goals summary](screenshots/Screenshot%202026-08-31%20at%209.37.13%20PM.png)
+
+## Why Cadence
+
+Most budgeting apps assume one paycheck a month. Cadence assumes two, and builds
+everything else around that:
+
+- Twice-monthly budgeting, split cleanly at the 1st–15th and 16th–end boundaries
+- A safe-to-spend-per-day figure that accounts for budget, spending so far, and
+  upcoming committed outflows
+- Savings goals with a per-pay-period contribution roadmap, not just a single target
+- Multi-currency support (USD, DOP, EUR) with cached USD-based exchange rates
+- Manual entry and CSV import as the baseline, with optional Gmail/Outlook
+  review-based automation on top
+- A single-user, privacy-conscious design — no multi-tenant accounts, no
+  auto-posting of anything without review
+
+## Features
+
+**Pay-period budgeting and safe-to-spend** — Set an overall budget per period, or
+let it fall back to the sum of category budgets. Safe-to-spend subtracts what's
+already spent and what's still committed (recurring items due before period end),
+then divides by days remaining.
+
+**Transactions and CSV import** — Manual entry, plus CSV import with date-format
+selection for bank exports that don't use ISO dates.
+
+**Accounts and transfers** — Track balances across checking, savings, cash, and
+other account types. Transfers are linked debit/credit rows that move balances
+without counting as income or expense.
+
+**Recurring subscriptions and investment contributions** — Track bills and
+recurring savings/investment contributions separately; both factor into
+safe-to-spend for the period they fall in.
+
+**Savings goals** — Target amount, optional target date, and a roadmap of what each
+pay period needs to carry to hit it.
+
+**Multi-currency** — Every account and transaction can use USD, DOP, or EUR; all
+figures convert to your chosen display currency using cached exchange rates.
+
+**Email review queue** — Connect Gmail and/or Outlook to have transactional emails
+parsed into a staged queue. Nothing becomes a real transaction until you approve it.
+
+**Reports** — Current-period spending by category, and a six-pay-period trend view.
+
+**Security / PIN gate** — Single PIN-protected session; every route except login is
+protected server-side.
+
+## Screenshots
+
+<!-- Screenshots live in screenshots/ and should be refreshed after meaningful UI changes. -->
+
+### Dashboard and budgeting
+
+![Cadence dashboard for the current pay period, showing safe-to-spend and an empty goals panel](screenshots/Screenshot%202026-08-31%20at%209.37.13%20PM.png)
+
+![Budgets page with an overall budget field and a per-category budget table](screenshots/Screenshot%202026-08-31%20at%209.38.01%20PM.png)
+
+The overall budget drives safe-to-spend; category budgets are tracked independently
+and used as a fallback when no overall budget is set.
+
+### Transactions and review queue
+
+![Transactions page with search, account/category/type/source filters, and a CSV import button](screenshots/Screenshot%202026-08-31%20at%209.37.30%20PM.png)
+
+![Review queue for staged transactions pulled from connected email accounts](screenshots/Screenshot%202026-08-31%20at%209.37.42%20PM.png)
+
+Staged email items sit in the review queue until you approve, edit, or reject them.
+
+### Accounts, recurring items, and goals
+
+![Accounts page prompting the user to add their first account](screenshots/Screenshot%202026-08-31%20at%209.37.53%20PM.png)
+
+![Recurring page showing separate panels for subscriptions and recurring contributions](screenshots/Screenshot%202026-08-31%20at%209.38.11%20PM.png)
+
+![Goals page prompting the user to create their first savings goal](screenshots/Screenshot%202026-08-31%20at%209.38.21%20PM.png)
+
+### Reports and settings
+
+![Reports page showing spending by category for the current period and a six-pay-period trend chart](screenshots/Screenshot%202026-08-31%20at%209.38.42%20PM.png)
+
+![Settings page showing display currency, cached exchange rates, goal recalculation, and email connections](screenshots/Screenshot%202026-08-31%20at%209.38.53%20PM.png)
+
+## How it works
+
+1. Create the accounts you actually use (checking, savings, cash, etc.).
+2. Enter transactions manually, import a CSV, or connect Gmail/Outlook for
+   automated candidate detection.
+3. Review any email-derived items on `/review` — approve, edit, or reject each one.
+4. Set a budget (overall and/or per category) for the current pay period.
+5. Add recurring subscriptions and recurring investment/savings contributions.
+6. Create savings goals and follow their per-pay-period roadmap.
+
+Email-extracted items are never written as transactions automatically — every one
+passes through the review queue first.
+
+## Tech stack
+
+| Area | Technology |
+| --- | --- |
+| Frontend | Next.js 16, React 19, TypeScript |
+| Styling | Tailwind CSS, shadcn/ui |
+| Database | PostgreSQL / Supabase |
+| ORM | Prisma 7 |
+| Email ingestion | Gmail API, Microsoft Graph, Claude structured extraction |
+| Deployment | Vercel |
+| Scheduling | Vercel Cron |
+
+## Getting started
 
 Requires Node 20.19+ and a PostgreSQL database (Supabase works — use the direct or
 session-pooler connection string).
 
 ```bash
+git clone <this-repository>
+cd FinanceApp
 npm install                 # runs `prisma generate` afterwards
-cp .env.example .env        # then fill in DATABASE_URL and SESSION_SECRET
+cp .env.example .env.local   # then fill in DATABASE_URL and SESSION_SECRET
 npm run db:migrate          # applies prisma/migrations to the database
 npm run db:seed             # inserts the default categories
 npm run dev
 ```
 
-Open http://localhost:3000, choose a 4–6 digit PIN on first run, and the app is
-ready to use.
-
-### Environment variables
-
-All of these are server-only - never add a `NEXT_PUBLIC_` prefix to any of
-them, since that would expose the value to the browser.
-
-| Variable | Required for | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | core app runtime | PostgreSQL connection string read by the Next.js app (`src/lib/prisma.ts`). Local dev: your Postgres instance. Production: the Supabase transaction-mode pooler, port 6543, `?pgbouncer=true`. |
-| `DIRECT_URL` | Prisma CLI (migrate/seed/studio) | Session-capable connection for DDL. Not needed against a plain local Postgres instance (`prisma7.config.ts` falls back to `DATABASE_URL`). Production: the Supabase session-mode pooler, port 5432. |
-| `SESSION_SECRET` | core app runtime | HMAC key for the session cookie. `openssl rand -hex 32`. Changing it signs everyone out. |
-| `APP_TIMEZONE` | core app runtime | IANA timezone used to decide what "today" is when resolving pay periods. Defaults to `America/Santo_Domingo`. |
-
-Vercel's serverless runtime always runs in UTC regardless of project region -
-Cadence never relies on that for business dates. `APP_TIMEZONE` (read via
-`appTimeZone()` in `src/lib/date.ts`) is the only authoritative source for
-"today" and pay-period boundaries, so it must be set on the **Production**
-environment in Vercel, not just Preview/Development - see step 6 in
-[DEPLOY.md](./DEPLOY.md).
-
-Phase 2A (email ingestion: `GOOGLE_CLIENT_ID`/`SECRET`, `MICROSOFT_CLIENT_ID`/`SECRET`,
-`ANTHROPIC_API_KEY`, `OAUTH_ENCRYPTION_KEY`) and Vercel Cron (`CRON_SECRET`)
-need several more - see [PHASE2.md](./PHASE2.md).
-
-See [DEPLOY.md](./DEPLOY.md) for moving production to Supabase.
+Open `http://localhost:3000`, choose a 4–6 digit PIN on first run, and the app is
+ready to use. Email automation (Gmail/Outlook) is optional — see
+[PHASE2.md](./PHASE2.md) for that setup.
 
 ### Scripts
 
@@ -60,90 +147,67 @@ See [DEPLOY.md](./DEPLOY.md) for moving production to Supabase.
 | `npm run db:seed` | Seeds the default categories (idempotent) |
 | `npm run db:studio` | Prisma Studio |
 
-`scripts/verify-domain.ts` exercises the domain rules end to end (pay-period maths,
-safe to spend, transfers, currency conversion, CSV parsing, goal caching, the budget
-uniqueness rules). It writes and then deletes rows, so point it at a scratch database:
+## Environment variables
 
-```bash
-DATABASE_URL="postgres://…/scratch" npx tsx scripts/verify-domain.ts
-```
+Values must never be committed — `.env*` is gitignored except `.env.example`.
+`APP_TIMEZONE` should be set to `America/Santo_Domingo` (its default), since that's
+the authoritative source for "today" and pay-period boundaries.
 
-## Deploying to Vercel
+| Variable | Required for | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | Core app | Runtime PostgreSQL connection string |
+| `DIRECT_URL` | Core app (CLI) | Session-capable connection used by the Prisma CLI for migrations/seeding |
+| `SESSION_SECRET` | Core app | Signs the session cookie |
+| `APP_TIMEZONE` | Core app | IANA timezone for resolving pay periods; defaults to `America/Santo_Domingo` |
+| `OAUTH_ENCRYPTION_KEY` | Email automation | Encrypts stored OAuth tokens at rest |
+| `CRON_SECRET` | Email automation | Bearer token required by the ingestion cron route |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Email automation | Gmail OAuth |
+| `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Email automation | Outlook OAuth |
+| `ANTHROPIC_API_KEY` | Email automation | Parses transactional emails into structured data |
 
-Import the repo, set `DATABASE_URL`, `DIRECT_URL`, and `SESSION_SECRET` in project
-settings, and deploy — no custom server or build-command changes needed (`npm run
-build` already runs `prisma generate`). Run `npm run db:migrate` against the
-production database once before the first deploy. See [DEPLOY.md](./DEPLOY.md) for
-the Supabase-specific version of this.
+Full setup for the email-automation variables (Google Cloud Console and Azure app
+registration steps) is in [PHASE2.md](./PHASE2.md).
 
-## How it works
+## Deployment
 
-**Auth.** A `Settings` singleton stores a bcrypt hash of the PIN. Signing in sets an
-httpOnly, signed session cookie. `src/proxy.ts` (Next 16's renamed middleware) blocks
-every route except `/login`, and each protected page and server action calls
-`requireAuth()` as well.
+Production runs on Vercel with a Supabase PostgreSQL database. The app connects at
+runtime through the pooled (transaction-mode) connection string, while Prisma
+migrations use the documented direct/session connection. Environment-variable
+changes in Vercel only take effect on the next deploy — redeploy after updating
+them. See [DEPLOY.md](./DEPLOY.md) for the full Supabase migration walkthrough.
 
-**Pay periods.** `src/lib/period.ts` maps any date to its period with that month's real
-start and end dates (28/29/30/31), and provides days-remaining, period arithmetic and
-period series used by budgets, goals and reports.
+## Current limitations
 
-**Safe to spend.**
+- Email ingestion supports Gmail and Outlook only; PayPal ingestion is intentionally
+  not included.
+- Email-derived transactions are staged for review and never become real
+  transactions automatically.
+- A mailbox's first sync may need several runs to catch up, since ingestion caps
+  each run at a limited batch per mailbox.
+- No direct bank synchronization.
+- No native mobile app; the responsive web app works from mobile browsers.
+- The bundled Vercel Cron schedule runs the ingestion route once daily; the
+  in-app "Sync now" button can be used any time in between.
 
-```
-committedOutflows = active recurring items (subscriptions + contributions)
-                    with nextDate between today and the end of the period
-safeToSpend       = periodBudget − spentSoFar − committedOutflows
-perDay            = max(0, safeToSpend / daysRemainingInPeriod)
-```
+## Project status
 
-`periodBudget` is the overall budget for the period, falling back to the sum of the
-category budgets when no overall budget is set. `spentSoFar` counts expense rows only.
-Once a recurring item's date passes it is rolled forward to its next occurrence (no
-transaction is created), which is what stops a past due date from being counted as
-still committed.
+Cadence is an actively used personal project and version-one foundation. Manual
+tracking, CSV import, budgets, goals, and reviewed Gmail/Outlook ingestion are all
+implemented. It is not a public or commercial service — see
+[PHASE2.md](./PHASE2.md) for what's built on top of the base app, and the note at
+the bottom of that file for what's intentionally not built yet.
 
-**Transfers** are two linked `Transaction` rows — a debit on the source account and a
-credit on the destination — written in one database transaction and sharing a
-`transferId`. They are excluded from income, expenses, budgets and safe-to-spend, and
-only move account balances. Deleting either side removes both.
+## Security notes
 
-**Currency.** USD-based rates from `open.er-api.com` are cached in `ExchangeRate` for
-24 hours. Cross rates are derived through USD (`amount / rate[from] * rate[to]`), so a
-pair like EUR→DOP works without a stored EUR→DOP rate. If the rate service is
-unreachable the last known rates are used and flagged as stale on the Settings page.
+- Access is gated behind a single PIN; every route except `/login` requires an
+  authenticated session.
+- Gmail and Outlook connections request read-only scopes.
+- Emails are parsed into a staged review queue — nothing is written as a real
+  transaction without explicit approval.
+- Never commit `.env*` files; `.env.example` is the only one tracked in git.
+- Cadence is a personal tracking tool, not professional financial advice or a
+  bank-grade financial institution.
 
-**Budgets** are keyed to `(year, month, period, categoryId)`, where a null `categoryId`
-is the overall budget for that period.
+## License
 
-**Goals.** `GoalContribution` rows are the source of truth; `Goal.savedAmount` is a
-cached total rebuilt after every write and re-buildable at any time from
-Settings → *Recalculate goal totals*.
-
-**Email ingestion (Phase 2A).** Connected Gmail/Outlook mailboxes are polled for
-transactional emails, parsed by Claude into `StagedTransaction` rows, and reviewed
-on `/review` before becoming real transactions. Full setup and details in
-[PHASE2.md](./PHASE2.md).
-
-## Layout
-
-```
-prisma/          schema, migrations, seed
-src/app/         routes: dashboard, transactions (+ CSV import), review,
-                 accounts, budgets, recurring, goals, reports,
-                 settings (+ connections), login
-                 api/auth/{gmail,outlook}/  OAuth start + callback routes
-                 api/cron/ingest/           email ingestion trigger
-src/components/  UI: shadcn primitives in ui/, feature components alongside
-src/lib/         domain logic (period, currency, rates, csv, auth), plus
-                 data/ for read queries, email/ + oauth/ + llm/ for ingestion
-src/server/      server actions (all writes)
-src/proxy.ts     route protection
-vercel.json      Vercel Cron schedule for /api/cron/ingest
-```
-
-## Phase 2B and beyond
-
-PayPal API ingestion (using the same `StagedTransaction` review queue and
-`(source, externalId)` dedup Phase 2A already exercises), email notifications,
-multi-user support, and recurring-item auto-detection from transaction history
-(`RecurringItem.detectedFrom`) are not built yet.
+Private personal project — no license has been specified yet.
