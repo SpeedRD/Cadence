@@ -155,6 +155,65 @@ export const settingsSchema = z.object({
   displayCurrency: currency,
 });
 
+export const paydayConfirmSchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100),
+  month: z.coerce.number().int().min(1).max(12),
+  period: z.enum(["A", "B"]),
+  accounts: z
+    .array(
+      z.object({
+        accountId: z.string().trim().min(1),
+        reportedBalance: z.number(),
+        incomeEntered: z.number().min(0),
+        incomeNote: z.string().max(200).nullable(),
+      }),
+    )
+    .min(1, "Add at least one active account"),
+  goals: z.array(
+    z.object({
+      goalId: z.string().trim().min(1),
+      plannedAmount: z.number().min(0),
+    }),
+  ),
+  essentialCategories: z.array(
+    z.object({
+      categoryId: z.string().trim().min(1),
+      plannedAmount: z.number().min(0),
+    }),
+  ),
+  flexibleCategories: z.array(
+    z.object({
+      categoryId: z.string().trim().min(1),
+      plannedAmount: z.number().min(0),
+    }),
+  ),
+  buffer: z.number().min(0),
+  includedCarryover: z.number(),
+  acknowledgedDeficit: z.boolean(),
+  acknowledgedZeroBuffer: z.boolean(),
+});
+
+export const planningPreferencesSchema = z.object({
+  bufferPercent: z.coerce.number().int().min(0).max(100),
+  bufferFloorAmount: z
+    .string()
+    .trim()
+    .transform((value, ctx) => {
+      const parsed = Number(value.replace(/,/g, ""));
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        ctx.addIssue({ code: "custom", message: "Enter 0 or more" });
+        return z.NEVER;
+      }
+      return Math.round(parsed * 100) / 100;
+    }),
+  bufferFloorCurrency: currency,
+  carryoverIncludedByDefault: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => value === "on" || value === "true"),
+});
+
 const rawDescriptionText = z
   .string()
   .trim()
@@ -209,6 +268,7 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Keep the description under 200 characters":
     "Mantén la descripción en menos de 200 caracteres",
   "Pick an account before approving": "Elige una cuenta antes de aprobar",
+  "Add at least one active account": "Agrega al menos una cuenta activa",
   "Check the form and try again": "Revisa el formulario e intenta de nuevo",
 };
 
