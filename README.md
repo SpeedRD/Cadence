@@ -7,7 +7,7 @@ roadmaps are all computed per pay period — **Period A: 1st–15th** and **Peri
 
 ## Preview
 
-![Cadence dashboard showing the current pay period, safe-to-spend view, and goals summary](screenshots/Screenshot%202026-08-31%20at%209.37.13%20PM.png)
+![Cadence dashboard showing the current pay period, safe-to-spend view, and goals summary](screenshots/Screenshot%202026-08-31%20at%209.37.13%E2%80%AFPM.png)
 
 ## Why Cadence
 
@@ -62,34 +62,34 @@ protected server-side.
 
 ### Dashboard and budgeting
 
-![Cadence dashboard for the current pay period, showing safe-to-spend and an empty goals panel](screenshots/Screenshot%202026-08-31%20at%209.37.13%20PM.png)
+![Cadence dashboard for the current pay period, showing safe-to-spend and an empty goals panel](screenshots/Screenshot%202026-08-31%20at%209.37.13%E2%80%AFPM.png)
 
-![Budgets page with an overall budget field and a per-category budget table](screenshots/Screenshot%202026-08-31%20at%209.38.01%20PM.png)
+![Budgets page with an overall budget field and a per-category budget table](screenshots/Screenshot%202026-08-31%20at%209.38.01%E2%80%AFPM.png)
 
 The overall budget drives safe-to-spend; category budgets are tracked independently
 and used as a fallback when no overall budget is set.
 
 ### Transactions and review queue
 
-![Transactions page with search, account/category/type/source filters, and a CSV import button](screenshots/Screenshot%202026-08-31%20at%209.37.30%20PM.png)
+![Transactions page with search, account/category/type/source filters, and a CSV import button](screenshots/Screenshot%202026-08-31%20at%209.37.30%E2%80%AFPM.png)
 
-![Review queue for staged transactions pulled from connected email accounts](screenshots/Screenshot%202026-08-31%20at%209.37.42%20PM.png)
+![Review queue for staged transactions pulled from connected email accounts](screenshots/Screenshot%202026-08-31%20at%209.37.42%E2%80%AFPM.png)
 
 Staged email items sit in the review queue until you approve, edit, or reject them.
 
 ### Accounts, recurring items, and goals
 
-![Accounts page prompting the user to add their first account](screenshots/Screenshot%202026-08-31%20at%209.37.53%20PM.png)
+![Accounts page prompting the user to add their first account](screenshots/Screenshot%202026-08-31%20at%209.37.53%E2%80%AFPM.png)
 
-![Recurring page showing separate panels for subscriptions and recurring contributions](screenshots/Screenshot%202026-08-31%20at%209.38.11%20PM.png)
+![Recurring page showing separate panels for subscriptions and recurring contributions](screenshots/Screenshot%202026-08-31%20at%209.38.11%E2%80%AFPM.png)
 
-![Goals page prompting the user to create their first savings goal](screenshots/Screenshot%202026-08-31%20at%209.38.21%20PM.png)
+![Goals page prompting the user to create their first savings goal](screenshots/Screenshot%202026-08-31%20at%209.38.21%E2%80%AFPM.png)
 
 ### Reports and settings
 
-![Reports page showing spending by category for the current period and a six-pay-period trend chart](screenshots/Screenshot%202026-08-31%20at%209.38.42%20PM.png)
+![Reports page showing spending by category for the current period and a six-pay-period trend chart](screenshots/Screenshot%202026-08-31%20at%209.38.42%E2%80%AFPM.png)
 
-![Settings page showing display currency, cached exchange rates, goal recalculation, and email connections](screenshots/Screenshot%202026-08-31%20at%209.38.53%20PM.png)
+![Settings page showing display currency, cached exchange rates, goal recalculation, and email connections](screenshots/Screenshot%202026-08-31%20at%209.38.53%E2%80%AFPM.png)
 
 ## How it works
 
