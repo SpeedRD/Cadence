@@ -42,7 +42,7 @@ export function GoalCard({
           <p className="text-xs text-muted-foreground">
             {t.of(formatMoney(goal.targetAmount, goal.currency))}
             {showConverted
-              ? ` · ${formatMoney(goal.displaySaved, displayCurrency)} of ${formatMoney(goal.displayTarget, displayCurrency)}`
+              ? ` · ${formatMoney(goal.displaySaved, displayCurrency)} ${t.of(formatMoney(goal.displayTarget, displayCurrency))}`
               : ""}
           </p>
         </div>
