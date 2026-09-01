@@ -81,6 +81,41 @@ export async function getAccountBalances(
   });
 }
 
+export async function archiveAccount(accountId: string): Promise<void> {
+  await prisma.account.update({
+    where: { id: accountId },
+    data: { status: "ARCHIVED", archivedAt: new Date() },
+  });
+}
+
+export async function restoreAccount(accountId: string): Promise<void> {
+  await prisma.account.update({
+    where: { id: accountId },
+    data: { status: "ACTIVE", archivedAt: null },
+  });
+}
+
+export type DeleteAccountResult = { ok: true } | { ok: false; reason: "has_history" };
+
+/**
+ * Permanent deletion is only safe when the account has no financial history at
+ * all - transactions (including both legs of a transfer, since a transfer leg
+ * is a Transaction row on this account), staged items awaiting review, and
+ * payday check-in snapshots. Anything else must be archived instead.
+ */
+export async function deleteAccountIfSafe(accountId: string): Promise<DeleteAccountResult> {
+  const [transactionCount, stagedCount, snapshotCount] = await Promise.all([
+    prisma.transaction.count({ where: { accountId } }),
+    prisma.stagedTransaction.count({ where: { accountId } }),
+    prisma.paydayAccountSnapshot.count({ where: { accountId } }),
+  ]);
+  if (transactionCount > 0 || stagedCount > 0 || snapshotCount > 0) {
+    return { ok: false, reason: "has_history" };
+  }
+  await prisma.account.delete({ where: { id: accountId } });
+  return { ok: true };
+}
+
 export interface AccountLedgerRow {
   id: string;
   date: Date;

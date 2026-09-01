@@ -552,6 +552,9 @@ async function main() {
   eq("a deficit scales every suggestion to zero, never negative", deficit.every((s) => s.scaled === 0), true);
 
   console.log("\n== account archive lifecycle ==");
+  const { archiveAccount, restoreAccount, deleteAccountIfSafe, getAccountLedger } = await import(
+    "../src/lib/data/accounts"
+  );
   const archiveTestAccount = await prisma.account.create({
     data: { name: "Verify Archive Me", currency: "USD", type: "CHECKING" },
   });
@@ -561,10 +564,20 @@ async function main() {
     activeList.some((a) => a.id === archiveTestAccount.id),
   );
 
-  await prisma.account.update({
-    where: { id: archiveTestAccount.id },
-    data: { status: "ARCHIVED", archivedAt: context.today },
-  });
+  // archiveAccountAction/restoreAccountAction/deleteAccountAction (in
+  // src/server/actions/accounts.ts) are "use server" actions gated by
+  // requireAuth() -> next/headers' cookies(), which Next.js throws for
+  // ("... called outside a request scope") whenever there's no live HTTP
+  // request being handled by the Next.js server - confirmed this isn't
+  // specific to this task's new actions by probing the pre-existing,
+  // unmodified saveAccountAction the same way. There's no supported way to
+  // satisfy that from a plain tsx script, so the guard/transition rules live
+  // in plain, non-"use server" functions here in src/lib/data/accounts.ts
+  // (archiveAccount/restoreAccount/deleteAccountIfSafe) that the actions
+  // delegate to. The checks below call those real functions directly, so
+  // this still exercises the actual guard logic end to end - only the
+  // requireAuth-gated RPC wrapper itself goes unexercised by this script.
+  await archiveAccount(archiveTestAccount.id);
   activeList = await getAccountBalances(context);
   check(
     "an archived account disappears from the active list",
@@ -586,7 +599,6 @@ async function main() {
       source: "MANUAL",
     },
   });
-  const { getAccountLedger } = await import("../src/lib/data/accounts");
   const archivedLedger = await getAccountLedger(archiveTestAccount.id, context);
   eq(
     "an archived account's transactions and balance stay fully readable",
@@ -604,46 +616,22 @@ async function main() {
       typeof deleteAccountAction === "function",
   );
 
-  // archiveAccountAction/restoreAccountAction/deleteAccountAction are "use
-  // server" actions that call requireAuth() -> next/headers' cookies(),
-  // which Next.js unconditionally throws for ("... called outside a request
-  // scope") when there's no live HTTP request being handled by the Next.js
-  // server - confirmed this is not specific to this task's new actions by
-  // probing the pre-existing, unmodified saveAccountAction the same way.
-  // There's no supported way to satisfy that from a plain tsx script, so the
-  // checks below exercise the exact guard/transition rules the actions
-  // implement (see src/server/actions/accounts.ts) directly against Prisma;
-  // only the requireAuth-gated RPC wrapper itself goes unexercised here.
-  const hasHistory = async (accountId: string) => {
-    const [transactionCount, stagedCount, snapshotCount] = await Promise.all([
-      prisma.transaction.count({ where: { accountId } }),
-      prisma.stagedTransaction.count({ where: { accountId } }),
-      prisma.paydayAccountSnapshot.count({ where: { accountId } }),
-    ]);
-    return transactionCount > 0 || stagedCount > 0 || snapshotCount > 0;
-  };
-
+  const blockedDelete = await deleteAccountIfSafe(archiveTestAccount.id);
   check(
     "permanent delete is blocked while transaction history exists",
-    await hasHistory(archiveTestAccount.id),
+    blockedDelete.ok === false,
   );
   const stillThere = await prisma.account.findUnique({ where: { id: archiveTestAccount.id } });
   check("the blocked account was not deleted", Boolean(stillThere));
 
-  await prisma.account.update({
-    where: { id: archiveTestAccount.id },
-    data: { status: "ACTIVE", archivedAt: null },
-  });
+  await restoreAccount(archiveTestAccount.id);
   const restored = await prisma.account.findUnique({ where: { id: archiveTestAccount.id } });
   eq("restore sets status back to ACTIVE", restored?.status, "ACTIVE");
   eq("restore clears archivedAt", restored?.archivedAt, null);
 
   await prisma.transaction.deleteMany({ where: { accountId: archiveTestAccount.id } });
-  check(
-    "permanent delete succeeds once no history remains",
-    !(await hasHistory(archiveTestAccount.id)),
-  );
-  await prisma.account.delete({ where: { id: archiveTestAccount.id } });
+  const cleanDelete = await deleteAccountIfSafe(archiveTestAccount.id);
+  check("permanent delete succeeds once no history remains", cleanDelete.ok === true);
   const gone = await prisma.account.findUnique({ where: { id: archiveTestAccount.id } });
   check("the account is actually gone", gone === null);
 
