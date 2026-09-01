@@ -76,6 +76,12 @@ function DialogContent({
             >
               <XIcon
               />
+              {/* Intentionally left in English: this is a generic shadcn-style UI
+                  primitive rendered by every Dialog/FormDialog/ConfirmDelete in the
+                  app. Threading a locale/translated string through here would mean
+                  prop-drilling into every call site for one screen-reader-only
+                  label; not worth it for this rollout. Revisit if this file ever
+                  gains other localized strings. */}
               <span className="sr-only">Close</span>
             </Button>
           </DialogPrimitive.Close>

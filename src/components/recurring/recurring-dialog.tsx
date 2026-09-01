@@ -125,6 +125,7 @@ export function RecurringDialog({
             name="categoryId"
             categories={categories}
             defaultValue={values.categoryId ?? "none"}
+            common={common}
           />
         </Field>
       </div>

@@ -65,6 +65,7 @@ export function TransferDialog({
             name="fromAccountId"
             accounts={accounts}
             defaultValue={values.fromAccountId ?? accounts[0]?.id}
+            common={common}
           />
         </Field>
         <Field label={t.to}>
@@ -72,6 +73,7 @@ export function TransferDialog({
             name="toAccountId"
             accounts={accounts}
             defaultValue={values.toAccountId ?? accounts[1]?.id}
+            common={common}
           />
         </Field>
       </div>

@@ -193,6 +193,7 @@ export function formObject(formData: FormData): Record<string, string> {
 const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Pick a date": "Elige una fecha",
   "Enter a valid date": "Ingresa una fecha válida",
+  "Enter an amount": "Ingresa un monto",
   "Enter an amount greater than 0": "Ingresa un monto mayor que 0",
   "Keep notes under 500 characters": "Mantén las notas en menos de 500 caracteres",
   "Use 4 to 6 digits": "Usa de 4 a 6 dígitos",

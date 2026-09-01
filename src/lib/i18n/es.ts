@@ -25,6 +25,9 @@ export const es = {
     source: "Fuente",
     uncategorized: "Sin categoría",
     nothingToDelete: "Nada que eliminar",
+    pickAnAccount: "Elige una cuenta",
+    pickACategory: "Elige una categoría",
+    noCategory: "Sin categoría",
     today: "hoy",
     tomorrow: "mañana",
     yesterday: "ayer",
@@ -310,7 +313,8 @@ export const es = {
     pickPeriodFirst: "Elige primero un periodo",
     noBudgetToCopy: "El periodo anterior no tiene presupuesto para copiar",
     everyBudgetAlreadyCopied: "Este periodo ya tiene todos los presupuestos del periodo anterior",
-    copiedForward: (n: number) => `Se copiaron ${n} presupuesto${n === 1 ? "" : "s"}`,
+    copiedForward: (n: number) =>
+      `Se ${n === 1 ? "copió" : "copiaron"} ${n} presupuesto${n === 1 ? "" : "s"}`,
   },
   recurring: {
     title: "Recurrentes",
@@ -465,14 +469,15 @@ export const es = {
       "Cadence deja de sincronizar este correo. Las transacciones ya puestas en revisión o aprobadas desde él se conservan.",
     disconnect: "Desconectar",
     connectAccount: (label: string) => `Conectar cuenta de ${label}`,
-    goalsRecalculated: (count: number) => `Se recalcularon ${count} meta${count === 1 ? "" : "s"}`,
+    goalsRecalculated: (count: number) =>
+      `Se ${count === 1 ? "recalculó" : "recalcularon"} ${count} meta${count === 1 ? "" : "s"}`,
     showingIn: (code: string) => `Mostrando montos en ${code}`,
     nothingToDisconnect: "Nada que desconectar",
     connectionNoLongerExists: "Esa conexión ya no existe",
     disconnected: (email: string) => `${email} desconectado`,
     connectFirst: "Conecta primero una cuenta de Gmail o Outlook",
     syncedResult: (accounts: number, staged: number) =>
-      `Se sincronizaron ${accounts} cuenta${accounts === 1 ? "" : "s"} - ${staged} elemento${staged === 1 ? "" : "s"} nuevo${staged === 1 ? "" : "s"} en revisión`,
+      `Se ${accounts === 1 ? "sincronizó" : "sincronizaron"} ${accounts} cuenta${accounts === 1 ? "" : "s"} - ${staged} elemento${staged === 1 ? "" : "s"} nuevo${staged === 1 ? "" : "s"} en revisión`,
   },
   review: {
     title: "Cola de revisión",

@@ -30,7 +30,7 @@ export function AppShell({
           <PeriodRail totalDays={10} elapsed={5} compact className="mb-2.5 w-16" />
           <span className="text-lg font-semibold tracking-tight">Cadence</span>
         </Link>
-        <NavLinks variant="sidebar" />
+        <NavLinks variant="sidebar" locale={context.language} />
         <div className="mt-auto px-5.5 pt-6">
           <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
             {t.shell.paidTwiceAMonth(currentPeriod.period === "A" ? "1-15" : "16-end")}
@@ -67,7 +67,7 @@ export function AppShell({
             </div>
           </div>
           <div className="border-t border-border/70 md:hidden">
-            <NavLinks variant="bar" />
+            <NavLinks variant="bar" locale={context.language} />
           </div>
         </header>
 

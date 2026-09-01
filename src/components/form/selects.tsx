@@ -6,6 +6,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CURRENCIES } from "@/lib/currency";
+import type { Dictionary } from "@/lib/i18n";
 
 export interface Option {
   id: string;
@@ -18,17 +19,19 @@ export function AccountSelect({
   name,
   accounts,
   defaultValue,
-  placeholder = "Pick an account",
+  placeholder,
+  common,
 }: {
   name: string;
   accounts: Option[];
   defaultValue?: string;
   placeholder?: string;
+  common: Pick<Dictionary["common"], "pickAnAccount" | "pickACategory" | "noCategory">;
 }) {
   return (
     <Select name={name} defaultValue={defaultValue}>
       <SelectTrigger className="w-full">
-        <SelectValue placeholder={placeholder} />
+        <SelectValue placeholder={placeholder ?? common.pickAnAccount} />
       </SelectTrigger>
       <SelectContent>
         {accounts.map((account) => (
@@ -49,19 +52,21 @@ export function CategorySelect({
   categories,
   defaultValue,
   includeNone = true,
+  common,
 }: {
   name: string;
   categories: Option[];
   defaultValue?: string;
   includeNone?: boolean;
+  common: Pick<Dictionary["common"], "pickAnAccount" | "pickACategory" | "noCategory">;
 }) {
   return (
     <Select name={name} defaultValue={defaultValue ?? (includeNone ? "none" : undefined)}>
       <SelectTrigger className="w-full">
-        <SelectValue placeholder="Pick a category" />
+        <SelectValue placeholder={common.pickACategory} />
       </SelectTrigger>
       <SelectContent>
-        {includeNone ? <SelectItem value="none">No category</SelectItem> : null}
+        {includeNone ? <SelectItem value="none">{common.noCategory}</SelectItem> : null}
         {categories.map((category) => (
           <SelectItem key={category.id} value={category.id}>
             <span

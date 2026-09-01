@@ -106,6 +106,7 @@ export function TransactionDialog({
             name="accountId"
             accounts={accounts}
             defaultValue={values.accountId ?? accounts[0]?.id}
+            common={common}
           />
         </Field>
         <Field label={common.category}>
@@ -113,6 +114,7 @@ export function TransactionDialog({
             name="categoryId"
             categories={categories}
             defaultValue={values.categoryId ?? "none"}
+            common={common}
           />
         </Field>
       </div>

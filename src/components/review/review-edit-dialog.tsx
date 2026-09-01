@@ -88,6 +88,7 @@ export function ReviewEditDialog({
             name="accountId"
             accounts={accounts}
             defaultValue={row.accountId ?? undefined}
+            common={common}
           />
         </Field>
         <Field label={common.category}>
@@ -95,6 +96,7 @@ export function ReviewEditDialog({
             name="categoryId"
             categories={categories}
             defaultValue={row.suggestedCategoryId ?? "none"}
+            common={common}
           />
         </Field>
       </div>

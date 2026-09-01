@@ -16,6 +16,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
+import { getDictionary, type Locale } from "@/lib/i18n";
 
 interface NavItem {
   href: string;
@@ -24,25 +25,32 @@ interface NavItem {
   exact?: boolean;
 }
 
-const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: Gauge, exact: true },
-  { href: "/transactions", label: "Transactions", icon: Receipt },
-  { href: "/review", label: "Review", icon: Inbox },
-  { href: "/accounts", label: "Accounts", icon: Wallet },
-  { href: "/budgets", label: "Budgets", icon: SlidersHorizontal },
-  { href: "/recurring", label: "Recurring", icon: Repeat },
-  { href: "/goals", label: "Goals", icon: Flag },
-  { href: "/reports", label: "Reports", icon: Coins },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
-
 function isActive(pathname: string, href: string, exact?: boolean) {
   if (exact) return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function NavLinks({ variant }: { variant: "sidebar" | "bar" }) {
+export function NavLinks({
+  variant,
+  locale,
+}: {
+  variant: "sidebar" | "bar";
+  locale: Locale;
+}) {
   const pathname = usePathname();
+  const t = getDictionary(locale).nav;
+
+  const NAV: NavItem[] = [
+    { href: "/", label: t.dashboard, icon: Gauge, exact: true },
+    { href: "/transactions", label: t.transactions, icon: Receipt },
+    { href: "/review", label: t.review, icon: Inbox },
+    { href: "/accounts", label: t.accounts, icon: Wallet },
+    { href: "/budgets", label: t.budgets, icon: SlidersHorizontal },
+    { href: "/recurring", label: t.recurring, icon: Repeat },
+    { href: "/goals", label: t.goals, icon: Flag },
+    { href: "/reports", label: t.reports, icon: Coins },
+    { href: "/settings", label: t.settings, icon: Settings },
+  ];
 
   if (variant === "bar") {
     return (

@@ -5,7 +5,7 @@ import { useActionState, useRef, useState } from "react";
 import { SubmitButton } from "@/components/form/submit-button";
 import { PeriodRail } from "@/components/period-rail";
 import { createPinAction, loginAction } from "@/server/actions/auth";
-import type { Dictionary } from "@/lib/i18n";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const MAX_DIGITS = 6;
@@ -74,11 +74,12 @@ function PinInput({
 
 export function PinGate({
   mode,
-  t,
+  locale,
 }: {
   mode: "create" | "login";
-  t: Dictionary["login"];
+  locale: Locale;
 }) {
+  const t = getDictionary(locale).login;
   const [state, formAction, pending] = useActionState(
     mode === "create" ? createPinAction : loginAction,
     null,

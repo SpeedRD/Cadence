@@ -3,6 +3,8 @@ import { Archivo, IBM_Plex_Mono, Instrument_Sans } from "next/font/google";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
+import { getSettings } from "@/lib/auth";
+import { isLocale } from "@/lib/i18n";
 
 import "./globals.css";
 
@@ -28,10 +30,12 @@ export const metadata: Metadata = {
   description: "Personal finance on your pay rhythm.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const settings = await getSettings();
+  const lang = isLocale(settings.language) ? settings.language : "en";
   return (
     <html
-      lang="en"
+      lang={lang}
       suppressHydrationWarning
       className={`${archivo.variable} ${instrumentSans.variable} ${plexMono.variable} h-full antialiased`}
     >
