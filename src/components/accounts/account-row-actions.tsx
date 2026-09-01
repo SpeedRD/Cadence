@@ -1,7 +1,8 @@
 "use client";
 
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { AccountDialog } from "@/components/accounts/account-dialog";
 import { ConfirmDelete } from "@/components/form/confirm-delete";
@@ -13,7 +14,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getDictionary, type Locale } from "@/lib/i18n";
-import { deleteAccountAction } from "@/server/actions/accounts";
+import {
+  archiveAccountAction,
+  deleteAccountAction,
+  restoreAccountAction,
+} from "@/server/actions/accounts";
 
 export function AccountRowActions({
   account,
@@ -23,6 +28,7 @@ export function AccountRowActions({
     id: string;
     name: string;
     type: string;
+    status: string;
     currency: string;
     transactionCount: number;
   };
@@ -32,6 +38,18 @@ export function AccountRowActions({
   const common = getDictionary(locale).common;
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const isArchived = account.status === "ARCHIVED";
+
+  async function runLifecycleAction(
+    action: (state: null, formData: FormData) => Promise<{ ok: boolean; error?: string; message?: string } | null>,
+    fallbackMessage: string,
+  ) {
+    const form = new FormData();
+    form.set("id", account.id);
+    const result = await action(null, form);
+    if (result?.ok) toast.success(result.message ?? fallbackMessage);
+    else if (result?.error) toast.error(result.error);
+  }
 
   return (
     <>
@@ -42,13 +60,30 @@ export function AccountRowActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setEditing(true)}>
-            <Pencil className="size-3.5" />
-            {common.edit}
-          </DropdownMenuItem>
+          {isArchived ? (
+            <DropdownMenuItem
+              onSelect={() => runLifecycleAction(restoreAccountAction, t.accountRestored)}
+            >
+              <ArchiveRestore className="size-3.5" />
+              {t.restoreAccount}
+            </DropdownMenuItem>
+          ) : (
+            <>
+              <DropdownMenuItem onSelect={() => setEditing(true)}>
+                <Pencil className="size-3.5" />
+                {common.edit}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => runLifecycleAction(archiveAccountAction, t.accountArchived)}
+              >
+                <Archive className="size-3.5" />
+                {t.archiveAccount}
+              </DropdownMenuItem>
+            </>
+          )}
           <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
             <Trash2 className="size-3.5" />
-            {common.delete}
+            {isArchived ? t.deletePermanently : common.delete}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -79,7 +114,7 @@ export function AccountRowActions({
               ? t.transactionsGoWithIt(account.transactionCount)
               : t.noTransactions
           }
-          confirmLabel={common.delete}
+          confirmLabel={isArchived ? t.deletePermanently : common.delete}
           keepLabel={common.keepIt}
           deletedMessage={t.accountDeleted}
         />
