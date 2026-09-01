@@ -7,6 +7,7 @@ import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getPeriodSummary } from "@/lib/data/period-summary";
 import { getSpendingTrend } from "@/lib/data/reports";
+import { getDictionary } from "@/lib/i18n";
 
 export const metadata = { title: "Reports - Cadence" };
 
@@ -14,6 +15,7 @@ const TREND_PERIODS = 6;
 
 export default async function ReportsPage() {
   const context = await getAppContext();
+  const t = getDictionary(context.language).reports;
   const [summary, trend] = await Promise.all([
     getPeriodSummary(context.currentPeriod, context),
     getSpendingTrend(context, TREND_PERIODS),
@@ -26,21 +28,21 @@ export default async function ReportsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Reports"
-        description={`Everything in ${context.displayCurrency}, converted at current rates.`}
+        title={t.title}
+        description={t.description(context.displayCurrency)}
       />
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Spending by category</CardTitle>
+            <CardTitle>{t.spendingByCategory}</CardTitle>
             <CardDescription>{summary.period.longLabel}</CardDescription>
           </CardHeader>
           <CardContent>
             {spendingLines.length === 0 ? (
               <EmptyState
-                title="Nothing spent this period"
-                description="Categorised spending shows up here as soon as you log it."
+                title={t.nothingSpentTitle}
+                description={t.nothingSpentDescription}
               />
             ) : (
               <CategoryBars lines={spendingLines} currency={summary.currency} />
@@ -50,9 +52,9 @@ export default async function ReportsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Last {TREND_PERIODS} pay periods</CardTitle>
+            <CardTitle>{t.lastNPeriods(TREND_PERIODS)}</CardTitle>
             <CardDescription>
-              {formatMoney(average, context.displayCurrency)} average per period
+              {t.averagePerPeriod(formatMoney(average, context.displayCurrency))}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -60,6 +62,7 @@ export default async function ReportsPage() {
               points={trend}
               currency={context.displayCurrency}
               currentKey={context.currentPeriod.key}
+              t={t}
             />
           </CardContent>
         </Card>
@@ -68,16 +71,16 @@ export default async function ReportsPage() {
       <Card>
         <CardContent className="grid gap-6 sm:grid-cols-3">
           <Stat
-            label="This period"
+            label={t.thisPeriod}
             value={formatMoney(summary.spent, summary.currency)}
-            hint={`${spendingLines.length} categor${spendingLines.length === 1 ? "y" : "ies"} touched`}
+            hint={t.categoriesTouched(spendingLines.length)}
           />
           <Stat
-            label={`Across ${TREND_PERIODS} periods`}
+            label={t.acrossNPeriods(TREND_PERIODS)}
             value={formatMoney(trendTotal, context.displayCurrency)}
           />
           <Stat
-            label="Income this period"
+            label={t.incomeThisPeriod}
             value={formatMoney(summary.income, summary.currency)}
           />
         </CardContent>

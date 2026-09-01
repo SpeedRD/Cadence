@@ -2,6 +2,7 @@ import { formatMoney } from "@/lib/currency";
 import { cn } from "@/lib/utils";
 
 import type { TrendPoint } from "@/lib/data/reports";
+import type { Dictionary } from "@/lib/i18n";
 
 /**
  * Spending across the last six pay periods. One series, so no legend; the
@@ -11,10 +12,12 @@ export function TrendChart({
   points,
   currency,
   currentKey,
+  t,
 }: {
   points: TrendPoint[];
   currency: string;
   currentKey: string;
+  t: Dictionary["reports"];
 }) {
   const max = points.reduce((highest, point) => Math.max(highest, point.spent), 0);
   const scale = max > 0 ? max : 1;
@@ -23,7 +26,7 @@ export function TrendChart({
     <div className="space-y-3">
       <div className="flex items-baseline justify-between text-xs text-muted-foreground">
         <span className="figure">{formatMoney(max, currency)}</span>
-        <span>peak period</span>
+        <span>{t.peakPeriod}</span>
       </div>
 
       <div className="flex h-44 items-end gap-2 border-b border-border/70 pb-0">
@@ -35,7 +38,7 @@ export function TrendChart({
               key={point.period.key}
               className="group relative flex h-full flex-1 flex-col justify-end"
               tabIndex={0}
-              aria-label={`${point.period.longLabel}: ${formatMoney(point.spent, currency)} spent`}
+              aria-label={`${point.period.longLabel}: ${t.tooltipOut(formatMoney(point.spent, currency))}`}
             >
               <div
                 className={cn(
@@ -44,10 +47,10 @@ export function TrendChart({
               >
                 <p className="font-medium">{point.period.label}</p>
                 <p className="figure text-muted-foreground">
-                  {formatMoney(point.spent, currency)} out
+                  {t.tooltipOut(formatMoney(point.spent, currency))}
                 </p>
                 <p className="figure text-muted-foreground">
-                  {formatMoney(point.income, currency)} in
+                  {t.tooltipIn(formatMoney(point.income, currency))}
                 </p>
               </div>
               <div

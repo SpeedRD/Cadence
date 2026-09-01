@@ -409,6 +409,22 @@ export const en = {
     contributionRemoved: "Contribution removed",
     contributionNoLongerExists: "That contribution no longer exists",
   },
+  reports: {
+    title: "Reports",
+    description: (code: string) => `Everything in ${code}, converted at current rates.`,
+    spendingByCategory: "Spending by category",
+    nothingSpentTitle: "Nothing spent this period",
+    nothingSpentDescription: "Categorised spending shows up here as soon as you log it.",
+    lastNPeriods: (n: number) => `Last ${n} pay periods`,
+    averagePerPeriod: (amount: string) => `${amount} average per period`,
+    peakPeriod: "peak period",
+    thisPeriod: "This period",
+    categoriesTouched: (n: number) => `${n} categor${n === 1 ? "y" : "ies"} touched`,
+    acrossNPeriods: (n: number) => `Across ${n} periods`,
+    incomeThisPeriod: "Income this period",
+    tooltipOut: (amount: string) => `${amount} out`,
+    tooltipIn: (amount: string) => `${amount} in`,
+  },
 };
 
 export type Dictionary = typeof en;
