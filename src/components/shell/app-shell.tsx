@@ -1,0 +1,78 @@
+import Link from "next/link";
+
+import { NavLinks } from "@/components/shell/nav-links";
+import { CurrencySwitcher } from "@/components/shell/currency-switcher";
+import { LogoutButton } from "@/components/shell/logout-button";
+import { ThemeToggle } from "@/components/shell/theme-toggle";
+import { PeriodRail } from "@/components/period-rail";
+
+import type { AppContext } from "@/lib/data/context";
+import { daysElapsedInPeriod, daysRemainingInPeriod } from "@/lib/period";
+
+export function AppShell({
+  context,
+  children,
+}: {
+  context: AppContext;
+  children: React.ReactNode;
+}) {
+  const { currentPeriod } = context;
+  const remaining = daysRemainingInPeriod(context.today, currentPeriod);
+  const elapsed = daysElapsedInPeriod(context.today, currentPeriod);
+
+  return (
+    <div className="flex min-h-dvh">
+      <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar py-5 md:flex">
+        <Link href="/" className="mb-7 block px-5.5">
+          <PeriodRail totalDays={10} elapsed={5} compact className="mb-2.5 w-16" />
+          <span className="text-lg font-semibold tracking-tight">Cadence</span>
+        </Link>
+        <NavLinks variant="sidebar" />
+        <div className="mt-auto px-5.5 pt-6">
+          <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+            Paid twice a month. Budgets run {currentPeriod.period === "A" ? "1-15" : "16-end"}.
+          </p>
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur">
+          <div className="flex h-14 items-center gap-4 px-4 sm:px-6">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="hidden w-24 sm:block">
+                <PeriodRail
+                  totalDays={currentPeriod.totalDays}
+                  elapsed={elapsed}
+                  compact
+                />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">
+                  {currentPeriod.label}
+                </p>
+                <p className="text-[0.6875rem] text-muted-foreground">
+                  {remaining === 0
+                    ? "Period closed"
+                    : `${remaining} day${remaining === 1 ? "" : "s"} left`}
+                </p>
+              </div>
+            </div>
+
+            <div className="ml-auto flex items-center gap-1">
+              <CurrencySwitcher value={context.displayCurrency} />
+              <ThemeToggle />
+              <LogoutButton />
+            </div>
+          </div>
+          <div className="border-t border-border/70 md:hidden">
+            <NavLinks variant="bar" />
+          </div>
+        </header>
+
+        <main className="mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 sm:px-6 sm:py-8">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}

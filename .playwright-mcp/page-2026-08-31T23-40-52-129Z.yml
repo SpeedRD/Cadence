@@ -1,0 +1,144 @@
+- generic:
+  - generic:
+    - complementary:
+      - link:
+        - /url: /
+        - text: Cadence
+      - navigation:
+        - link:
+          - /url: /
+          - text: Dashboard
+        - link:
+          - /url: /transactions
+          - text: Transactions
+        - link:
+          - /url: /review
+          - text: Review
+        - link:
+          - /url: /accounts
+          - text: Accounts
+        - link:
+          - /url: /budgets
+          - text: Budgets
+        - link:
+          - /url: /recurring
+          - text: Recurring
+        - link:
+          - /url: /goals
+          - text: Goals
+        - link:
+          - /url: /reports
+          - text: Reports
+        - link:
+          - /url: /settings
+          - text: Settings
+      - generic:
+        - paragraph: Paid twice a month. Budgets run 16-end.
+    - generic:
+      - banner:
+        - generic:
+          - generic:
+            - generic:
+              - paragraph: Aug 16-31
+              - paragraph: 1 day left
+          - generic:
+            - button: USD
+            - button
+            - generic:
+              - button
+      - main:
+        - generic:
+          - generic:
+            - generic:
+              - heading [level=1]: Review queue
+              - paragraph: 3 pending items from connected inboxes.
+            - generic:
+              - link:
+                - /url: /review?reviewed=1
+                - text: Show reviewed
+          - generic:
+            - generic:
+              - generic:
+                - text: Gmail
+                - generic: (2)
+            - generic:
+              - generic:
+                - generic:
+                  - table:
+                    - rowgroup:
+                      - row:
+                        - columnheader: Date
+                        - columnheader: Description
+                        - columnheader: Amount
+                        - columnheader: Account
+                        - columnheader: Category
+                        - columnheader: Actions
+                    - rowgroup:
+                      - row:
+                        - cell: 2026-08-20
+                        - cell: Amazon order - office supplies
+                        - cell: $42.50
+                        - cell:
+                          - combobox:
+                            - generic: Pick an account
+                        - cell:
+                          - combobox:
+                            - generic: No category
+                        - cell:
+                          - generic:
+                            - button
+                            - button: Reject
+                            - button: Approve
+                      - row:
+                        - cell: 2026-08-15
+                        - cell: Netflix subscription
+                        - cell: $15.99
+                        - cell:
+                          - combobox [expanded]:
+                            - generic: Pick an account
+                        - cell:
+                          - combobox:
+                            - generic: Subscriptions
+                        - cell:
+                          - generic:
+                            - button
+                            - button: Reject
+                            - button: Approve
+          - generic:
+            - generic:
+              - generic:
+                - text: Outlook
+                - generic: (1)
+            - generic:
+              - generic:
+                - generic:
+                  - table:
+                    - rowgroup:
+                      - row:
+                        - columnheader: Date
+                        - columnheader: Description
+                        - columnheader: Amount
+                        - columnheader: Account
+                        - columnheader: Category
+                        - columnheader: Actions
+                    - rowgroup:
+                      - row:
+                        - cell: 2026-08-22
+                        - cell: Spotify Premium
+                        - cell: €9.99
+                        - cell:
+                          - combobox:
+                            - generic: Pick an account
+                        - cell:
+                          - combobox:
+                            - generic: Subscriptions
+                        - cell:
+                          - generic:
+                            - button
+                            - button: Reject
+                            - button: Approve
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f16e187] [cursor=pointer]
+  - alert
+  - listbox [ref=f16e200]:
+    - option "Checking" [active] [ref=f16e201]

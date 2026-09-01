@@ -1,0 +1,129 @@
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { CURRENCIES } from "@/lib/currency";
+
+export interface Option {
+  id: string;
+  name: string;
+  color?: string | null;
+  currency?: string;
+}
+
+export function AccountSelect({
+  name,
+  accounts,
+  defaultValue,
+  placeholder = "Pick an account",
+}: {
+  name: string;
+  accounts: Option[];
+  defaultValue?: string;
+  placeholder?: string;
+}) {
+  return (
+    <Select name={name} defaultValue={defaultValue}>
+      <SelectTrigger className="w-full">
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {accounts.map((account) => (
+          <SelectItem key={account.id} value={account.id}>
+            {account.name}
+            {account.currency ? (
+              <span className="text-muted-foreground">{account.currency}</span>
+            ) : null}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+export function CategorySelect({
+  name,
+  categories,
+  defaultValue,
+  includeNone = true,
+}: {
+  name: string;
+  categories: Option[];
+  defaultValue?: string;
+  includeNone?: boolean;
+}) {
+  return (
+    <Select name={name} defaultValue={defaultValue ?? (includeNone ? "none" : undefined)}>
+      <SelectTrigger className="w-full">
+        <SelectValue placeholder="Pick a category" />
+      </SelectTrigger>
+      <SelectContent>
+        {includeNone ? <SelectItem value="none">No category</SelectItem> : null}
+        {categories.map((category) => (
+          <SelectItem key={category.id} value={category.id}>
+            <span
+              className="size-2 rounded-full"
+              style={{ backgroundColor: category.color ?? "var(--muted-foreground)" }}
+            />
+            {category.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+export function CurrencySelect({
+  name,
+  defaultValue,
+}: {
+  name: string;
+  defaultValue?: string;
+}) {
+  return (
+    <Select name={name} defaultValue={defaultValue ?? CURRENCIES[0]}>
+      <SelectTrigger className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {CURRENCIES.map((code) => (
+          <SelectItem key={code} value={code}>
+            {code}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+export function EnumSelect({
+  name,
+  options,
+  labels,
+  defaultValue,
+  placeholder,
+}: {
+  name: string;
+  options: readonly string[];
+  labels: Record<string, string>;
+  defaultValue?: string;
+  placeholder?: string;
+}) {
+  return (
+    <Select name={name} defaultValue={defaultValue}>
+      <SelectTrigger className="w-full">
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option} value={option}>
+            {labels[option] ?? option}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}

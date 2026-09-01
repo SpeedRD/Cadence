@@ -1,0 +1,270 @@
+// Cadence - personal finance schema.
+// Money is Decimal(14,2); dates that represent a calendar day are @db.Date.
+// Phase 2A: EmailConnection stores OAuth-connected Gmail/Outlook accounts, and
+// StagedTransaction is now written to by the email ingestion pipeline.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Currencies are plain strings (ISO 4217) rather than an enum so a new one is a
+/// one-line change in src/lib/currency.ts instead of a migration.
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+  CASH
+  OTHER
+}
+
+enum CategoryKind {
+  EXPENSE
+  INCOME
+}
+
+enum TransactionType {
+  EXPENSE
+  INCOME
+  TRANSFER
+}
+
+enum TransactionSource {
+  MANUAL
+  CSV
+  GMAIL
+  OUTLOOK
+  PAYPAL
+}
+
+/// Which leg of a transfer a row is. Null for non-transfer rows.
+enum TransferDirection {
+  OUT
+  IN
+}
+
+enum StagedStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EmailProvider {
+  GMAIL
+  OUTLOOK
+}
+
+enum PayPeriod {
+  A
+  B
+}
+
+enum RecurringFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum RecurringKind {
+  SUBSCRIPTION
+  CONTRIBUTION
+}
+
+/// Singleton row: the PIN gate and app-wide preferences.
+model Settings {
+  id              String   @id @default("singleton")
+  pinHash         String?
+  displayCurrency String   @default("USD")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Account {
+  id                 String              @id @default(cuid())
+  name               String
+  currency           String
+  type               AccountType         @default(CHECKING)
+  createdAt          DateTime            @default(now())
+  transactions       Transaction[]
+  stagedTransactions StagedTransaction[]
+
+  @@index([name])
+}
+
+model Category {
+  id                    String              @id @default(cuid())
+  name                  String              @unique
+  kind                  CategoryKind        @default(EXPENSE)
+  isSubscriptionDefault Boolean             @default(false)
+  color                 String              @default("#7a8590")
+  icon                  String?
+  createdAt             DateTime            @default(now())
+  transactions          Transaction[]
+  budgets               Budget[]
+  recurringItems        RecurringItem[]
+  stagedTransactions    StagedTransaction[]
+
+  @@index([kind])
+}
+
+model Transaction {
+  id                String             @id @default(cuid())
+  date              DateTime           @db.Date
+  amount            Decimal            @db.Decimal(14, 2)
+  currency          String
+  type              TransactionType
+  accountId         String
+  categoryId        String?
+  note              String?
+  source            TransactionSource  @default(MANUAL)
+  /// Identifier from the originating system (Phase 2 dedup). Null for manual/csv.
+  externalId        String?
+  /// Both legs of a transfer share this id.
+  transferId        String?
+  /// OUT on the source leg, IN on the destination leg, null otherwise.
+  transferDirection TransferDirection?
+  createdAt         DateTime           @default(now())
+
+  account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@unique([source, externalId])
+  @@index([date])
+  @@index([accountId, date])
+  @@index([categoryId])
+  @@index([transferId])
+  @@index([type, date])
+}
+
+/// Written by the Phase 2A email ingestion pipeline; reviewed on /review before
+/// becoming a real Transaction.
+model StagedTransaction {
+  id                  String            @id @default(cuid())
+  date                DateTime          @db.Date
+  amount              Decimal           @db.Decimal(14, 2)
+  currency            String
+  rawDescription      String
+  suggestedCategoryId String?
+  /// The account the item will land in on approval. Nullable because
+  /// ingestion cannot know which of the user's accounts an email belongs to -
+  /// the reviewer picks it before approving.
+  accountId           String?
+  source              TransactionSource
+  externalId          String?
+  status              StagedStatus      @default(PENDING)
+  createdAt           DateTime          @default(now())
+  /// When the ingestion pipeline parsed and wrote this row (debugging/audit).
+  parsedAt            DateTime?
+  reviewedAt          DateTime?
+
+  suggestedCategory Category? @relation(fields: [suggestedCategoryId], references: [id], onDelete: SetNull)
+  account           Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  @@unique([source, externalId])
+  @@index([status, date])
+}
+
+/// One row per OAuth-connected mailbox (Gmail or Outlook). Single-user app, so
+/// no owner reference is needed - this is the full set of connected inboxes.
+model EmailConnection {
+  id                   String        @id @default(cuid())
+  provider             EmailProvider
+  emailAddress         String
+  /// AES-256-GCM ciphertext (iv + authTag + data, base64), never the raw token.
+  accessTokenEnc       String
+  refreshTokenEnc      String
+  accessTokenExpiresAt DateTime
+  lastSyncedAt         DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@unique([provider, emailAddress])
+}
+
+/// One row per (year, month, period, category). categoryId null = the overall
+/// budget for that period; a partial unique index in the migration keeps that
+/// row unique, which a plain composite unique cannot do (NULLs are distinct).
+model Budget {
+  id         String    @id @default(cuid())
+  year       Int
+  month      Int
+  period     PayPeriod
+  categoryId String?
+  amount     Decimal   @db.Decimal(14, 2)
+  currency   String
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([year, month, period, categoryId])
+  @@index([year, month, period])
+}
+
+model RecurringItem {
+  id           String             @id @default(cuid())
+  name         String
+  amount       Decimal            @db.Decimal(14, 2)
+  currency     String
+  frequency    RecurringFrequency
+  kind         RecurringKind
+  nextDate     DateTime           @db.Date
+  active       Boolean            @default(true)
+  categoryId   String?
+  note         String?
+  /// Set by Phase 2 auto-detection; unused for now.
+  detectedFrom TransactionSource?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([active, nextDate])
+  @@index([kind])
+}
+
+model Goal {
+  id           String    @id @default(cuid())
+  name         String
+  targetAmount Decimal   @db.Decimal(14, 2)
+  currency     String
+  targetDate   DateTime? @db.Date
+  /// Cached sum of contributions. GoalContribution is the source of truth;
+  /// see recomputeGoalSaved() in src/lib/goals.ts.
+  savedAmount  Decimal   @default(0) @db.Decimal(14, 2)
+  createdAt    DateTime  @default(now())
+  achievedAt   DateTime?
+
+  contributions GoalContribution[]
+}
+
+model GoalContribution {
+  id        String   @id @default(cuid())
+  goalId    String
+  amount    Decimal  @db.Decimal(14, 2)
+  currency  String
+  date      DateTime @db.Date
+  note      String?
+  createdAt DateTime @default(now())
+
+  goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([goalId, date])
+}
+
+/// Raw USD-based rates from open.er-api.com. rate = units of targetCurrency per
+/// 1 baseCurrency. Considered fresh for 24h from fetchedAt.
+model ExchangeRate {
+  id             String   @id @default(cuid())
+  baseCurrency   String
+  targetCurrency String
+  rate           Decimal  @db.Decimal(20, 10)
+  fetchedAt      DateTime
+
+  @@unique([baseCurrency, targetCurrency])
+}

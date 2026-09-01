@@ -1,0 +1,74 @@
+- generic [active] [ref=f18e1]:
+  - generic [ref=f18e2]:
+    - complementary [ref=f18e3]:
+      - link "Cadence" [ref=f18e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f18e16]:
+        - link "Dashboard" [ref=f18e17] [cursor=pointer]:
+          - /url: /
+        - link "Transactions" [ref=f18e22] [cursor=pointer]:
+          - /url: /transactions
+        - link "Review" [ref=f18e27] [cursor=pointer]:
+          - /url: /review
+        - link "Accounts" [ref=f18e32] [cursor=pointer]:
+          - /url: /accounts
+        - link "Budgets" [ref=f18e37] [cursor=pointer]:
+          - /url: /budgets
+        - link "Recurring" [ref=f18e40] [cursor=pointer]:
+          - /url: /recurring
+        - link "Goals" [ref=f18e47] [cursor=pointer]:
+          - /url: /goals
+        - link "Reports" [ref=f18e51] [cursor=pointer]:
+          - /url: /reports
+        - link "Settings" [ref=f18e58] [cursor=pointer]:
+          - /url: /settings
+      - paragraph [ref=f18e64]: Paid twice a month. Budgets run 16-end.
+    - generic [ref=f18e65]:
+      - banner [ref=f18e66]:
+        - generic [ref=f18e67]:
+          - generic [ref=f18e87]:
+            - paragraph [ref=f18e88]: Aug 16-31
+            - paragraph [ref=f18e89]: 1 day left
+          - generic [ref=f18e90]:
+            - button "USD" [ref=f18e91]
+            - button "Toggle light and dark mode" [ref=f18e92]
+            - button "Lock Cadence" [ref=f18e94]
+      - main [ref=f18e95]:
+        - generic [ref=f18e96]:
+          - generic [ref=f18e97]:
+            - generic [ref=f18e98]:
+              - heading "Connections" [level=1] [ref=f18e99]
+              - paragraph [ref=f18e100]: Gmail and Outlook accounts Cadence pulls transactional emails from.
+            - generic [ref=f18e101]:
+              - button "Sync now" [ref=f18e103]
+              - link "Review queue" [ref=f18e104] [cursor=pointer]:
+                - /url: /review
+          - generic [ref=f18e105]:
+            - generic [ref=f18e106]:
+              - generic [ref=f18e107]:
+                - generic [ref=f18e108]: Gmail
+                - generic [ref=f18e109]: Reads receipts, invoices and subscription emails (gmail.readonly).
+              - generic [ref=f18e110]:
+                - list [ref=f18e111]:
+                  - listitem [ref=f18e112]:
+                    - generic [ref=f18e116]:
+                      - paragraph [ref=f18e117]: test@gmail.com
+                      - paragraph [ref=f18e118]: Last synced 2026-08-31 21:37 UTC
+                    - button "Disconnect" [ref=f18e119]
+                - link "Connect Gmail account" [ref=f18e120] [cursor=pointer]:
+                  - /url: /api/auth/gmail/start
+            - generic [ref=f18e121]:
+              - generic [ref=f18e122]:
+                - generic [ref=f18e123]: Outlook
+                - generic [ref=f18e124]: Reads the same kinds of emails via Microsoft Graph (Mail.Read).
+              - generic [ref=f18e125]:
+                - list [ref=f18e126]:
+                  - listitem [ref=f18e127]:
+                    - generic [ref=f18e131]:
+                      - paragraph [ref=f18e132]: test@outlook.com
+                      - paragraph [ref=f18e133]: Never synced
+                    - button "Disconnect" [ref=f18e134]
+                - link "Connect Outlook account" [ref=f18e135] [cursor=pointer]:
+                  - /url: /api/auth/outlook/start
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f18e141] [cursor=pointer]

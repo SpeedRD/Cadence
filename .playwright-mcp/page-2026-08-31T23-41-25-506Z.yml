@@ -1,0 +1,103 @@
+- generic [active] [ref=f17e1]:
+  - generic [ref=f17e2]:
+    - complementary [ref=f17e3]:
+      - link "Cadence" [ref=f17e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f17e16]:
+        - link "Dashboard" [ref=f17e17] [cursor=pointer]:
+          - /url: /
+        - link "Transactions" [ref=f17e22] [cursor=pointer]:
+          - /url: /transactions
+        - link "Review" [ref=f17e27] [cursor=pointer]:
+          - /url: /review
+        - link "Accounts" [ref=f17e32] [cursor=pointer]:
+          - /url: /accounts
+        - link "Budgets" [ref=f17e37] [cursor=pointer]:
+          - /url: /budgets
+        - link "Recurring" [ref=f17e40] [cursor=pointer]:
+          - /url: /recurring
+        - link "Goals" [ref=f17e47] [cursor=pointer]:
+          - /url: /goals
+        - link "Reports" [ref=f17e51] [cursor=pointer]:
+          - /url: /reports
+        - link "Settings" [ref=f17e58] [cursor=pointer]:
+          - /url: /settings
+      - paragraph [ref=f17e64]: Paid twice a month. Budgets run 16-end.
+    - generic [ref=f17e65]:
+      - banner [ref=f17e66]:
+        - generic [ref=f17e67]:
+          - generic [ref=f17e87]:
+            - paragraph [ref=f17e88]: Aug 16-31
+            - paragraph [ref=f17e89]: 1 day left
+          - generic [ref=f17e90]:
+            - button "USD" [ref=f17e91]
+            - button "Toggle light and dark mode" [ref=f17e92]
+            - button "Lock Cadence" [ref=f17e94]
+      - main [ref=f17e95]:
+        - generic [ref=f17e96]:
+          - generic [ref=f17e97]:
+            - generic [ref=f17e98]:
+              - heading "Review queue" [level=1] [ref=f17e99]
+              - paragraph [ref=f17e100]: 1 pending item from connected inboxes.
+            - link "Hide reviewed" [ref=f17e102] [cursor=pointer]:
+              - /url: /review
+          - generic [ref=f17e103]:
+            - generic [ref=f17e105]:
+              - text: Gmail
+              - generic [ref=f17e106]: (2)
+            - table [ref=f17e110]:
+              - rowgroup [ref=f17e111]:
+                - row [ref=f17e112]:
+                  - columnheader "Date" [ref=f17e113]
+                  - columnheader "Description" [ref=f17e114]
+                  - columnheader "Amount" [ref=f17e115]
+                  - columnheader "Account" [ref=f17e116]
+                  - columnheader "Category" [ref=f17e117]
+                  - columnheader "Actions" [ref=f17e118]
+              - rowgroup [ref=f17e119]:
+                - row [ref=f17e120]:
+                  - cell "2026-08-20" [ref=f17e121]
+                  - cell "Amazon order - office supplies" [ref=f17e122]
+                  - cell "$42.50" [ref=f17e123]
+                  - cell "-" [ref=f17e124]
+                  - cell "-" [ref=f17e125]
+                  - cell "Rejected" [ref=f17e126]
+                - row [ref=f17e128]:
+                  - cell "2026-08-15" [ref=f17e129]
+                  - cell "Netflix subscription" [ref=f17e130]
+                  - cell "$15.99" [ref=f17e131]
+                  - cell "Checking" [ref=f17e132]
+                  - cell "Subscriptions" [ref=f17e133]
+                  - cell "Approved" [ref=f17e134]
+          - generic [ref=f17e136]:
+            - generic [ref=f17e138]:
+              - text: Outlook
+              - generic [ref=f17e139]: (1)
+            - table [ref=f17e143]:
+              - rowgroup [ref=f17e144]:
+                - row [ref=f17e145]:
+                  - columnheader "Date" [ref=f17e146]
+                  - columnheader "Description" [ref=f17e147]
+                  - columnheader "Amount" [ref=f17e148]
+                  - columnheader "Account" [ref=f17e149]
+                  - columnheader "Category" [ref=f17e150]
+                  - columnheader "Actions" [ref=f17e151]
+              - rowgroup [ref=f17e152]:
+                - row [ref=f17e153]:
+                  - cell "2026-08-22" [ref=f17e154]
+                  - cell "Spotify Premium - edited" [ref=f17e155]
+                  - cell "€9.99" [ref=f17e156]
+                  - cell [ref=f17e157]:
+                    - combobox [ref=f17e158]:
+                      - generic: Pick an account
+                    - combobox [ref=f17e159]
+                  - cell [ref=f17e160]:
+                    - combobox [ref=f17e161]
+                    - combobox [ref=f17e162]
+                  - cell [ref=f17e163]:
+                    - generic [ref=f17e164]:
+                      - button "Edit" [ref=f17e165]
+                      - button "Reject" [ref=f17e166]
+                      - button "Approve" [ref=f17e167]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f17e173] [cursor=pointer]

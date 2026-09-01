@@ -1,0 +1,32 @@
+- generic [ref=f24e3]:
+  - generic [ref=f24e4]:
+    - generic [ref=f24e6]:
+      - generic [ref=f24e7]: Loading
+      - progressbar [ref=f24e8]
+    - main [ref=f24e15]:
+      - generic [ref=f24e16]:
+        - generic [ref=f24e17]: Sign in with Google
+        - 'heading "Access blocked: Authorization Error" [level=1] [ref=f24e23]'
+      - generic [ref=f24e31]:
+        - generic [ref=f24e32]: The OAuth client was not found.
+        - generic [ref=f24e33]:
+          - text: If you are a developer of this app, see
+          - button "error details" [ref=f24e34] [cursor=pointer]
+          - text: .
+        - generic [ref=f24e35]: "Error 401: invalid_client"
+  - contentinfo [ref=f24e40]:
+    - combobox "Change language English (United States)" [ref=f24e44] [cursor=pointer]:
+      - generic: English (United States)
+    - list [ref=f24e46]:
+      - listitem [ref=f24e47]:
+        - link "Open Google Account Help Center (external, opens in a new window)" [ref=f24e48] [cursor=pointer]:
+          - /url: https://support.google.com/accounts?hl=en-US&p=account_iph
+          - text: Help
+      - listitem [ref=f24e49]:
+        - link "Privacy Policy (external, opens in a new window)" [ref=f24e50] [cursor=pointer]:
+          - /url: https://accounts.google.com/TOS?loc=DO&hl=en-US&privacy=true
+          - text: Privacy
+      - listitem [ref=f24e51]:
+        - link "Google Terms of Service (external, opens in a new window)" [ref=f24e52] [cursor=pointer]:
+          - /url: https://accounts.google.com/TOS?loc=DO&hl=en-US
+          - text: Terms

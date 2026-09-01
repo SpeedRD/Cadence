@@ -1,0 +1,50 @@
+- generic [active] [ref=f21e1]:
+  - generic [ref=f21e2]:
+    - complementary [ref=f21e3]:
+      - link "Cadence" [ref=f21e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f21e16]:
+        - link "Dashboard" [ref=f21e17] [cursor=pointer]:
+          - /url: /
+        - link "Transactions" [ref=f21e22] [cursor=pointer]:
+          - /url: /transactions
+        - link "Review" [ref=f21e27] [cursor=pointer]:
+          - /url: /review
+        - link "Accounts" [ref=f21e32] [cursor=pointer]:
+          - /url: /accounts
+        - link "Budgets" [ref=f21e37] [cursor=pointer]:
+          - /url: /budgets
+        - link "Recurring" [ref=f21e40] [cursor=pointer]:
+          - /url: /recurring
+        - link "Goals" [ref=f21e47] [cursor=pointer]:
+          - /url: /goals
+        - link "Reports" [ref=f21e51] [cursor=pointer]:
+          - /url: /reports
+        - link "Settings" [ref=f21e58] [cursor=pointer]:
+          - /url: /settings
+      - paragraph [ref=f21e64]: Paid twice a month. Budgets run 16-end.
+    - generic [ref=f21e65]:
+      - banner [ref=f21e66]:
+        - generic [ref=f21e67]:
+          - generic [ref=f21e87]:
+            - paragraph [ref=f21e88]: Aug 16-31
+            - paragraph [ref=f21e89]: 1 day left
+          - generic [ref=f21e90]:
+            - button "USD" [ref=f21e91]
+            - button "Toggle light and dark mode" [ref=f21e92]
+            - button "Lock Cadence" [ref=f21e94]
+      - main [ref=f21e95]:
+        - generic [ref=f21e96]:
+          - generic [ref=f21e97]:
+            - generic [ref=f21e98]:
+              - heading "Review queue" [level=1] [ref=f21e99]
+              - paragraph [ref=f21e100]: 0 pending items from connected inboxes.
+            - link "Show reviewed" [ref=f21e102] [cursor=pointer]:
+              - /url: /review?reviewed=1
+          - generic [ref=f21e103]:
+            - paragraph [ref=f21e104]: Add an account first
+            - paragraph [ref=f21e105]: Approving a staged item needs somewhere to put it.
+            - link "Go to accounts" [ref=f21e107] [cursor=pointer]:
+              - /url: /accounts
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f21e113] [cursor=pointer]

@@ -1,0 +1,165 @@
+"use client";
+
+import { MoreHorizontal, Pause, Pencil, Play, Trash2 } from "lucide-react";
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
+
+import { ConfirmDelete } from "@/components/form/confirm-delete";
+import type { Option } from "@/components/form/selects";
+import { RecurringDialog } from "@/components/recurring/recurring-dialog";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { formatMoney } from "@/lib/currency";
+import { formatDate, formatRelativeDays, toISODate } from "@/lib/date";
+import { FREQUENCY_LABELS, labelFor } from "@/lib/labels";
+import {
+  deleteRecurringAction,
+  toggleRecurringAction,
+} from "@/server/actions/recurring";
+import { cn } from "@/lib/utils";
+
+import type { RecurringRow } from "@/lib/data/recurring";
+
+export function RecurringList({
+  rows,
+  categories,
+  displayCurrency,
+  today,
+}: {
+  rows: RecurringRow[];
+  categories: Option[];
+  displayCurrency: string;
+  today: Date;
+}) {
+  const [editing, setEditing] = useState<RecurringRow | null>(null);
+  const [deleting, setDeleting] = useState<RecurringRow | null>(null);
+  const [, startTransition] = useTransition();
+
+  const toggle = (row: RecurringRow) => {
+    startTransition(async () => {
+      const formData = new FormData();
+      formData.set("id", row.id);
+      const result = await toggleRecurringAction(null, formData);
+      if (result?.error) toast.error(result.error);
+      else if (result?.message) toast.success(result.message);
+    });
+  };
+
+  return (
+    <>
+      <ul className="divide-y divide-border/70">
+        {rows.map((row) => (
+          <li
+            key={row.id}
+            className={cn(
+              "flex items-center gap-3 py-3 first:pt-0 last:pb-0",
+              !row.active && "opacity-55",
+            )}
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-sm font-medium">{row.name}</span>
+                {!row.active ? (
+                  <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
+                    paused
+                  </span>
+                ) : null}
+              </div>
+              <p className="text-[0.6875rem] text-muted-foreground">
+                {labelFor(FREQUENCY_LABELS, row.frequency)} · next{" "}
+                {formatDate(row.nextDate)}
+                {row.active ? ` (${formatRelativeDays(today, row.nextDate)})` : ""}
+                {row.categoryName ? ` · ${row.categoryName}` : ""}
+              </p>
+            </div>
+
+            <div className="text-right">
+              <p className="figure text-sm">
+                {formatMoney(row.displayAmount, displayCurrency)}
+              </p>
+              {row.currency !== displayCurrency ? (
+                <p className="figure text-[0.6875rem] text-muted-foreground">
+                  {formatMoney(row.amount, row.currency)}
+                </p>
+              ) : null}
+            </div>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={`Actions for ${row.name}`}
+                >
+                  <MoreHorizontal className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setEditing(row)}>
+                  <Pencil className="size-3.5" />
+                  Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => toggle(row)}>
+                  {row.active ? (
+                    <>
+                      <Pause className="size-3.5" />
+                      Pause
+                    </>
+                  ) : (
+                    <>
+                      <Play className="size-3.5" />
+                      Resume
+                    </>
+                  )}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setDeleting(row)}
+                >
+                  <Trash2 className="size-3.5" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </li>
+        ))}
+      </ul>
+
+      {editing ? (
+        <RecurringDialog
+          categories={categories}
+          open
+          onOpenChange={(next) => !next && setEditing(null)}
+          values={{
+            id: editing.id,
+            name: editing.name,
+            amount: editing.amount,
+            currency: editing.currency,
+            frequency: editing.frequency,
+            kind: editing.kind,
+            nextDate: toISODate(editing.nextDate),
+            categoryId: editing.categoryId ?? "none",
+            note: editing.note,
+            active: editing.active,
+          }}
+        />
+      ) : null}
+
+      {deleting ? (
+        <ConfirmDelete
+          open
+          onOpenChange={(next) => !next && setDeleting(null)}
+          id={deleting.id}
+          action={deleteRecurringAction}
+          title={`Delete ${deleting.name}?`}
+          description="It stops counting against safe to spend straight away."
+        />
+      ) : null}
+    </>
+  );
+}
