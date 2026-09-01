@@ -102,6 +102,9 @@ model Category {
   name                  String              @unique
   kind                  CategoryKind        @default(EXPENSE)
   isSubscriptionDefault Boolean             @default(false)
+  /// Marks the category whose expense transactions count as savings/investing
+  /// rather than lifestyle spending in the monthly pace feature (src/lib/data/monthly.ts).
+  isSavingsDefault      Boolean             @default(false)
   color                 String              @default("#7a8590")
   icon                  String?
   createdAt             DateTime            @default(now())

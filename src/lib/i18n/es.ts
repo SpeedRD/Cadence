@@ -136,6 +136,26 @@ export const es = {
     noContributionsYet: "Aún no hay aportes",
     contributionSuffix: " · aporte",
   },
+  monthlyPace: {
+    title: "Ritmo de gasto mensual",
+    projected: "Proyectado este mes",
+    average: "Tu promedio",
+    dayOfMonth: (elapsed: number, total: number) => `Día ${elapsed} de ${total}`,
+    aboveAverage: (amount: string) => `${amount} por encima de tu promedio`,
+    belowAverage: (amount: string) => `${amount} por debajo de tu promedio`,
+    onPace: "Al ritmo de tu promedio",
+    lifestyle: "Estilo de vida",
+    committed: "Comprometido",
+    savings: "Ahorros e inversión",
+    totalOutflow: "Salida de efectivo total",
+    basedOnMonths: (n: number) =>
+      `Basado en ${n === 1 ? "el último mes completado" : `los últimos ${n} meses completados`}`,
+    insufficientHistoryTitle: "Los promedios mensuales aparecen después de tres meses completados de actividad",
+    insufficientHistoryDescription: (n: number) =>
+      n === 0
+        ? "Cadence necesita algunos meses de actividad para comparar este mes."
+        : `${n} mes${n === 1 ? "" : "es"} completado${n === 1 ? "" : "s"} registrado${n === 1 ? "" : "s"} hasta ahora - sigue registrando para desbloquear la comparación.`,
+  },
   transactions: {
     title: "Transacciones",
     recordsSummary: (total: number, out: string, income: string) =>
@@ -430,6 +450,32 @@ export const es = {
     incomeThisPeriod: "Ingresos este periodo",
     tooltipOut: (amount: string) => `${amount} gastado`,
     tooltipIn: (amount: string) => `${amount} recibido`,
+    monthlySectionTitle: "Gasto mensual",
+    monthlySectionDescription:
+      "Meses calendario, no periodos de pago: una vista de más largo alcance junto a los periodos de arriba.",
+    monthlyTrendTitle: (n: number) =>
+      `${n === 1 ? "El último mes completado" : `Los últimos ${n} meses completados`}`,
+    monthlyAverageSummary: (amount: string, n: number) =>
+      `${amount} de promedio de gasto normal en ${n} mes${n === 1 ? "" : "es"}`,
+    monthlyPeakLabel: "mes pico",
+    monthlyTooltipNormal: (amount: string) => `${amount} gasto normal`,
+    monthlyTooltipSavings: (amount: string) => `${amount} ahorros e inversión`,
+    monthlyCategoryBreakdown: "Promedio mensual de gasto de estilo de vida por categoría",
+    monthlyCommittedAverage: "Promedio mensual de gasto comprometido",
+    monthlyCommittedHint:
+      "Suscripciones activas: cargos reales cuando Cadence puede identificarlos, su monto programado en caso contrario.",
+    monthlySavingsAverage: "Promedio mensual de ahorros e inversión",
+    monthlySavingsHint:
+      "Aportes a metas, aportes recurrentes y gastos de Ahorro/Inversión: se mantienen aparte del gasto normal.",
+    monthlyTotalOutflowAverage: "Promedio de salida de efectivo total",
+    monthlyNormalSpendingNote:
+      "El gasto normal es solo estilo de vida más gasto comprometido. Los ahorros y las inversiones no están incluidos.",
+    monthlyInsufficientTitle:
+      "Los promedios mensuales aparecen después de tres meses completados de actividad",
+    monthlyInsufficientDescription: (n: number) =>
+      n === 0
+        ? "Registra algunos meses de transacciones y aquí aparecerá una vista mensual."
+        : `${n} mes${n === 1 ? "" : "es"} completado${n === 1 ? "" : "s"} registrado${n === 1 ? "" : "s"} hasta ahora.`,
   },
   settingsPage: {
     title: "Ajustes",

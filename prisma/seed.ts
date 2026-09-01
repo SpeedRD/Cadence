@@ -35,6 +35,7 @@ const CATEGORIES = [
     kind: "EXPENSE",
     color: "#2aa3b8",
     icon: "piggy-bank",
+    isSavingsDefault: true,
   },
   { name: "Other", kind: "EXPENSE", color: "#7a8590", icon: "circle-dashed" },
   { name: "Income", kind: "INCOME", color: "#008300", icon: "arrow-down-left" },
@@ -48,6 +49,8 @@ async function main() {
       icon: category.icon,
       isSubscriptionDefault:
         "isSubscriptionDefault" in category ? category.isSubscriptionDefault : false,
+      isSavingsDefault:
+        "isSavingsDefault" in category ? category.isSavingsDefault : false,
     };
     await prisma.category.upsert({
       where: { name: category.name },

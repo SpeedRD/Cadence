@@ -269,6 +269,230 @@ async function main() {
   const summaryAfter = await getPeriodSummary(context.currentPeriod, context);
   eq("a rolled item is no longer committed this period", summaryAfter.committed, 15);
 
+  console.log("\n== monthly spending pace ==");
+  // Clear earlier sections' fixtures that would otherwise leak into these
+  // calculations: getCurrentMonthPace queries active recurring items globally
+  // (not scoped by name), and computeMonthActuals queries Transaction and
+  // GoalContribution globally by date - "Verify Goal" has a contribution
+  // dated in July and one in August that would land inside the windows below.
+  await prisma.recurringItem.deleteMany({ where: { name: { in: ["Verify Netflix", "Verify past due"] } } });
+  await prisma.goal.deleteMany({ where: { name: "Verify Goal" } });
+  const {
+    MIN_HISTORICAL_MONTHS,
+    classifyCompletedMonth,
+    compareToAverage,
+    computeCompletedMonthWindows,
+    getCompletedMonthWindows,
+    getCurrentMonthPace,
+    getHistoricalMonthlyAverage,
+    matchRecurringToTransactions,
+  } = await import("../src/lib/data/monthly");
+  const { daysElapsedInMonth, monthForDate, monthWindow } = await import("../src/lib/month");
+
+  console.log("\n-- month windows (pure) --");
+  eq("Feb 2026 (non-leap) ends on the 28th", toISODate(monthWindow({ year: 2026, month: 2 }).end), "2026-02-28");
+  eq("Feb 2024 (leap) ends on the 29th", toISODate(monthWindow({ year: 2024, month: 2 }).end), "2024-02-29");
+  eq("April ends on the 30th", toISODate(monthWindow({ year: 2026, month: 4 }).end), "2026-04-30");
+  eq("August ends on the 31st", toISODate(monthWindow({ year: 2026, month: 8 }).end), "2026-08-31");
+  eq("days elapsed on the 1st is 1, never 0", daysElapsedInMonth(civilDate(2026, 8, 1)), 1);
+  eq("days elapsed on the 15th", daysElapsedInMonth(civilDate(2026, 8, 15)), 15);
+  eq(
+    "monthForDate composes with the APP_TIMEZONE civil date, not UTC",
+    monthForDate(civilDateInZone(new Date("2026-09-01T01:00:00.000Z"), SD)).key,
+    "2026-08",
+  );
+
+  console.log("\n-- recurring/transaction matching (pure) --");
+  const netflixItem = {
+    id: "item-netflix",
+    name: "Netflix",
+    amount: 15,
+    currency: "USD",
+    categoryId: "cat-subscriptions",
+    kind: "SUBSCRIPTION" as const,
+    frequency: "MONTHLY" as const,
+    nextDate: civilDate(2026, 9, 1),
+  };
+  const spotifyItem = {
+    id: "item-spotify",
+    name: "Spotify Premium",
+    amount: 10,
+    currency: "USD",
+    categoryId: null,
+    kind: "SUBSCRIPTION" as const,
+    frequency: "MONTHLY" as const,
+    nextDate: civilDate(2026, 9, 1),
+  };
+  const byCategory = matchRecurringToTransactions(
+    [netflixItem],
+    [{ id: "tx-1", amount: 15, currency: "USD", categoryId: "cat-subscriptions", note: null }],
+  );
+  check("matches by category + amount + currency", byCategory.matchedTransactionIds.has("tx-1"));
+  const byName = matchRecurringToTransactions(
+    [spotifyItem],
+    [{ id: "tx-2", amount: 10, currency: "USD", categoryId: null, note: "SPOTIFY PREMIUM 08/26" }],
+  );
+  check("matches by normalized note when category can't disambiguate", byName.matchedTransactionIds.has("tx-2"));
+  const wrongCurrency = matchRecurringToTransactions(
+    [netflixItem],
+    [{ id: "tx-3", amount: 15, currency: "EUR", categoryId: "cat-subscriptions", note: null }],
+  );
+  check("currency mismatch never matches", !wrongCurrency.matchedTransactionIds.has("tx-3"));
+  const noDoubleMatch = matchRecurringToTransactions(
+    [netflixItem, { ...spotifyItem, id: "item-spotify-2", categoryId: "cat-subscriptions" }],
+    [{ id: "tx-4", amount: 15, currency: "USD", categoryId: "cat-subscriptions", note: null }],
+  );
+  check(
+    "one transaction satisfies at most one recurring item",
+    noDoubleMatch.matchedTransactionIds.size === 1,
+  );
+
+  console.log("\n-- compareToAverage (pure) --");
+  eq("within tolerance reads as on pace", compareToAverage(102, 100).direction, "onPace");
+  eq("clearly above the average", compareToAverage(150, 100).direction, "above");
+  eq("clearly below the average", compareToAverage(50, 100).direction, "below");
+
+  console.log("\n-- classification: lifestyle vs committed vs savings vs excluded --");
+  const monthlyAccount = await prisma.account.create({
+    data: { name: "Verify Monthly Checking", currency: "USD", type: "CHECKING" },
+  });
+  const subscriptionsCategory = await prisma.category.findFirstOrThrow({ where: { name: "Subscriptions" } });
+  const savingsCategory = await prisma.category.findFirstOrThrow({ where: { name: "Savings/Investment" } });
+  check("the seeded Savings/Investment category is flagged, not name-matched", savingsCategory.isSavingsDefault);
+
+  const julyWindow = monthWindow({ year: 2026, month: 7 });
+  await prisma.transaction.createMany({
+    data: [
+      { date: civilDate(2026, 7, 5), amount: 60, currency: "USD", type: "EXPENSE", accountId: monthlyAccount.id, categoryId: groceries!.id, source: "MANUAL" },
+      { date: civilDate(2026, 7, 6), amount: 12, currency: "USD", type: "EXPENSE", accountId: monthlyAccount.id, source: "MANUAL" },
+      { date: civilDate(2026, 7, 7), amount: 15, currency: "USD", type: "EXPENSE", accountId: monthlyAccount.id, categoryId: subscriptionsCategory.id, note: "Netflix", source: "MANUAL" },
+      { date: civilDate(2026, 7, 8), amount: 25, currency: "USD", type: "EXPENSE", accountId: monthlyAccount.id, categoryId: savingsCategory.id, source: "MANUAL" },
+      { date: civilDate(2026, 7, 9), amount: 500, currency: "USD", type: "INCOME", accountId: monthlyAccount.id, source: "MANUAL" },
+    ],
+  });
+  const julyTransferId = crypto.randomUUID();
+  await prisma.$transaction([
+    prisma.transaction.create({ data: { date: civilDate(2026, 7, 10), amount: 200, currency: "USD", type: "TRANSFER", accountId: monthlyAccount.id, transferId: julyTransferId, transferDirection: "OUT", source: "MANUAL" } }),
+    prisma.transaction.create({ data: { date: civilDate(2026, 7, 10), amount: 200, currency: "USD", type: "TRANSFER", accountId: monthlyAccount.id, transferId: julyTransferId, transferDirection: "IN", source: "MANUAL" } }),
+  ]);
+  const monthlyGoal = await prisma.goal.create({ data: { name: "Verify Monthly Goal", targetAmount: 1000, currency: "USD" } });
+  await prisma.goalContribution.create({ data: { goalId: monthlyGoal.id, amount: 50, currency: "USD", date: civilDate(2026, 7, 11) } });
+  await prisma.recurringItem.createMany({
+    data: [
+      { name: "Verify Netflix Monthly", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 7), active: true, categoryId: subscriptionsCategory.id },
+      { name: "Verify Spotify Monthly", amount: 10, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 25), active: true },
+      { name: "Verify Auto-Invest", amount: 100, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 1), active: true },
+    ],
+  });
+
+  const monthlyContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 7, 31), currentPeriod: periodForDate(civilDate(2026, 7, 31)) };
+  const recurringForMatch = (await prisma.recurringItem.findMany({
+    where: { active: true, kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] }, name: { startsWith: "Verify" } },
+    select: { id: true, name: true, amount: true, currency: true, categoryId: true, kind: true, frequency: true, nextDate: true },
+  })).map((item) => ({ ...item, amount: Number(item.amount) }));
+  const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
+
+  const julyBreakdown = await classifyCompletedMonth(julyWindow, monthlyContext, recurringForMatch, categoryMeta);
+  eq("lifestyle counts groceries + uncategorized expenses", julyBreakdown.lifestyle, 72);
+  eq("committed dedupes the matched Netflix charge (15) + Spotify's scheduled fallback (10)", julyBreakdown.committed, 25);
+  eq(
+    "savings/investing = category expense + goal contribution + unmatched contribution's scheduled fallback",
+    julyBreakdown.savingsInvesting,
+    175,
+  );
+  eq("normal spending excludes savings/investing", julyBreakdown.normalSpending, 97);
+  eq("total outflow = lifestyle + committed + savings", julyBreakdown.totalOutflow, 272);
+  eq(
+    "the $500 income and $200 transfer never inflate any bucket",
+    julyBreakdown.lifestyle + julyBreakdown.committed + julyBreakdown.savingsInvesting,
+    272,
+  );
+
+  console.log("\n-- current-month projection --");
+  await prisma.recurringItem.createMany({
+    data: [
+      { name: "Verify Pace HBO", amount: 8, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 10), active: true },
+      { name: "Verify Pace EuroSub", amount: 20, currency: "EUR", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 25), active: true },
+      { name: "Verify Pace DOPSub", amount: 600, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 25), active: true },
+    ],
+  });
+  await prisma.transaction.createMany({
+    data: [
+      { date: civilDate(2026, 8, 5), amount: 30, currency: "USD", type: "EXPENSE", accountId: monthlyAccount.id, categoryId: groceries!.id, source: "MANUAL" },
+      { date: civilDate(2026, 8, 20), amount: 100, currency: "USD", type: "EXPENSE", accountId: monthlyAccount.id, categoryId: groceries!.id, source: "MANUAL" },
+      { date: civilDate(2026, 8, 3), amount: 15, currency: "USD", type: "EXPENSE", accountId: monthlyAccount.id, categoryId: subscriptionsCategory.id, note: "Netflix", source: "MANUAL" },
+      { date: civilDate(2026, 8, 2), amount: 5, currency: "USD", type: "EXPENSE", accountId: monthlyAccount.id, categoryId: savingsCategory.id, source: "MANUAL" },
+    ],
+  });
+  await prisma.goalContribution.createMany({
+    data: [
+      { goalId: monthlyGoal.id, amount: 20, currency: "USD", date: civilDate(2026, 8, 4) },
+      { goalId: monthlyGoal.id, amount: 30, currency: "USD", date: civilDate(2026, 8, 20) },
+    ],
+  });
+  const paceContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 8, 15), currentPeriod: periodForDate(civilDate(2026, 8, 15)) };
+  const pace = await getCurrentMonthPace(paceContext);
+  eq("current month is August (31 days)", pace.window.totalDays, 31);
+  eq("day 15 of 31 elapsed", pace.daysElapsed, 15);
+  eq("lifestyle so far excludes the future-dated (Aug 20) transaction", pace.lifestyleSpentSoFar, 30);
+  eq("projected lifestyle = (spent so far / days elapsed) * days in month", pace.projectedLifestyle, 62);
+  eq("committed so far is the matched Netflix charge only, no scheduled fallback for the current month", pace.committedSpentSoFar, 15);
+  eq(
+    "still-due excludes items already matched and items whose next date has already passed (HBO), includes EUR/DOP conversions",
+    pace.committedStillDueThisMonth,
+    60,
+  );
+  eq("projected normal spending = projected lifestyle + committed so far + still due", pace.projectedNormalSpending, 137);
+  eq("savings/investing this month is actual only, never projected", pace.savingsInvestingSoFar, 25);
+
+  await prisma.transaction.deleteMany({ where: { accountId: monthlyAccount.id } });
+  await prisma.account.delete({ where: { id: monthlyAccount.id } });
+  await prisma.goalContribution.deleteMany({ where: { goalId: monthlyGoal.id } });
+  await prisma.goal.delete({ where: { id: monthlyGoal.id } });
+  await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify" } } });
+  console.log("  ok   monthly pace fixtures removed");
+
+  console.log("\n-- completed month windows: current month excluded, capped by history, insufficient states (pure) --");
+  // computeCompletedMonthWindows is pure (no DB), so these are exact and don't
+  // depend on whatever real activity already exists in the target database -
+  // getCompletedMonthWindows itself is just this function wired to real dates
+  // (checked against real data below, without hardcoding what that data is).
+  const threeMonths = computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2026, month: 5 }, 6);
+  eq("stops at the first-recorded-activity month instead of inventing zero months", threeMonths.length, 3);
+  eq("oldest included month is the activity month itself", threeMonths[0].key, "2026-05");
+  eq("current month (August) is never included", threeMonths.some((w) => w.key === "2026-08"), false);
+
+  const oneMonth = computeCompletedMonthWindows({ year: 2026, month: 6 }, { year: 2026, month: 5 }, 6);
+  eq("only one completed month exists yet", oneMonth.length, 1);
+  eq("fewer than three completed months would read as insufficient", oneMonth.length < MIN_HISTORICAL_MONTHS, true);
+
+  const zeroMonths = computeCompletedMonthWindows({ year: 2026, month: 5 }, { year: 2026, month: 5 }, 6);
+  eq("no completed months before the first activity's own month has even ended", zeroMonths.length, 0);
+
+  const sixMonths = computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2020, month: 1 }, 6);
+  eq("caps at MAX_HISTORICAL_MONTHS even with years of history", sixMonths.length, 6);
+  eq("uses the most recent six, not the oldest six", sixMonths[0].key, "2026-02");
+  eq("newest completed month is the one right before the current month", sixMonths[5].key, "2026-07");
+
+  eq("no recorded activity at all returns no completed months", computeCompletedMonthWindows({ year: 2026, month: 8 }, null, 6).length, 0);
+
+  console.log("\n-- getCompletedMonthWindows / getHistoricalMonthlyAverage wiring (against real data) --");
+  const wiringContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 8, 20), currentPeriod: periodForDate(civilDate(2026, 8, 20)) };
+  const actualFirstActivity = await prisma.transaction.aggregate({ _min: { date: true } });
+  const expectedWindows = computeCompletedMonthWindows(
+    monthForDate(wiringContext.today),
+    actualFirstActivity._min.date ? monthForDate(actualFirstActivity._min.date) : null,
+  );
+  const wiredWindows = await getCompletedMonthWindows(wiringContext);
+  eq(
+    "getCompletedMonthWindows applies the same boundary logic to the real first-activity date",
+    wiredWindows.map((w) => w.key).join(","),
+    expectedWindows.map((w) => w.key).join(","),
+  );
+  const wiredAverage = await getHistoricalMonthlyAverage(wiringContext);
+  eq("sufficient reflects whether the wired months meet the minimum", wiredAverage.sufficient, expectedWindows.length >= MIN_HISTORICAL_MONTHS);
+  eq("monthsUsed matches the wired window count", wiredAverage.monthsUsed, expectedWindows.length);
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });

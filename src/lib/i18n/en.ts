@@ -134,6 +134,25 @@ export const en = {
     noContributionsYet: "No contributions yet",
     contributionSuffix: " · contribution",
   },
+  monthlyPace: {
+    title: "Monthly spending pace",
+    projected: "Projected this month",
+    average: "Your average",
+    dayOfMonth: (elapsed: number, total: number) => `Day ${elapsed} of ${total}`,
+    aboveAverage: (amount: string) => `${amount} above your average`,
+    belowAverage: (amount: string) => `${amount} below your average`,
+    onPace: "On pace with your average",
+    lifestyle: "Lifestyle",
+    committed: "Committed",
+    savings: "Savings & investing",
+    totalOutflow: "Total cash outflow",
+    basedOnMonths: (n: number) => `Based on the last ${n} completed month${n === 1 ? "" : "s"}`,
+    insufficientHistoryTitle: "Monthly averages appear after three completed months of activity",
+    insufficientHistoryDescription: (n: number) =>
+      n === 0
+        ? "Cadence needs a few months of activity to compare this month against."
+        : `${n} completed month${n === 1 ? "" : "s"} tracked so far - keep logging to unlock the comparison.`,
+  },
   transactions: {
     title: "Transactions",
     recordsSummary: (total: number, out: string, income: string) =>
@@ -427,6 +446,30 @@ export const en = {
     incomeThisPeriod: "Income this period",
     tooltipOut: (amount: string) => `${amount} out`,
     tooltipIn: (amount: string) => `${amount} in`,
+    monthlySectionTitle: "Monthly spending",
+    monthlySectionDescription:
+      "Calendar months, not pay periods - a longer view alongside the periods above.",
+    monthlyTrendTitle: (n: number) => `Last ${n} completed month${n === 1 ? "" : "s"}`,
+    monthlyAverageSummary: (amount: string, n: number) =>
+      `${amount} average normal spending across ${n} month${n === 1 ? "" : "s"}`,
+    monthlyPeakLabel: "peak month",
+    monthlyTooltipNormal: (amount: string) => `${amount} normal spending`,
+    monthlyTooltipSavings: (amount: string) => `${amount} savings & investing`,
+    monthlyCategoryBreakdown: "Average monthly lifestyle spending by category",
+    monthlyCommittedAverage: "Average monthly committed spending",
+    monthlyCommittedHint:
+      "Active subscriptions - actual charges when Cadence can match them, their scheduled amount otherwise.",
+    monthlySavingsAverage: "Average monthly savings & investing",
+    monthlySavingsHint:
+      "Goal contributions, recurring contributions and Savings/Investment spending - kept separate from normal spending.",
+    monthlyTotalOutflowAverage: "Average total cash outflow",
+    monthlyNormalSpendingNote:
+      "Normal spending is lifestyle plus committed spending only. Savings and investing are not included.",
+    monthlyInsufficientTitle: "Monthly averages appear after three completed months of activity",
+    monthlyInsufficientDescription: (n: number) =>
+      n === 0
+        ? "Log a few months of transactions and a monthly view will appear here."
+        : `${n} completed month${n === 1 ? "" : "s"} tracked so far.`,
   },
   settingsPage: {
     title: "Settings",

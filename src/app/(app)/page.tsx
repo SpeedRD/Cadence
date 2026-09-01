@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { GoalCard } from "@/components/dashboard/goal-card";
+import { MonthlyPaceCard } from "@/components/dashboard/monthly-pace-card";
 import { PeriodHero } from "@/components/dashboard/period-hero";
 import { UpcomingList } from "@/components/dashboard/upcoming-list";
 import { EmptyState } from "@/components/stat";
@@ -8,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAppContext } from "@/lib/data/context";
 import { getDashboardData, UPCOMING_WINDOW_DAYS } from "@/lib/data/dashboard";
+import { getMonthlyPace } from "@/lib/data/monthly";
 import { getDictionary } from "@/lib/i18n";
 import { daysElapsedInPeriod } from "@/lib/period";
 
@@ -15,8 +17,12 @@ export const metadata = { title: "Dashboard - Cadence" };
 
 export default async function DashboardPage() {
   const context = await getAppContext();
-  const t = getDictionary(context.language).dashboard;
-  const { summary, upcoming, goals } = await getDashboardData(context);
+  const dictionary = getDictionary(context.language);
+  const t = dictionary.dashboard;
+  const [{ summary, upcoming, goals }, monthlyPace] = await Promise.all([
+    getDashboardData(context),
+    getMonthlyPace(context),
+  ]);
   const elapsed = daysElapsedInPeriod(context.today, context.currentPeriod);
   const activeGoals = goals.filter((goal) => !goal.achievedAt);
   const shownGoals = activeGoals.length > 0 ? activeGoals : goals;
@@ -24,6 +30,12 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-6">
       <PeriodHero summary={summary} elapsed={elapsed} t={t} />
+
+      <MonthlyPaceCard
+        data={monthlyPace}
+        displayCurrency={context.displayCurrency}
+        t={dictionary.monthlyPace}
+      />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="space-y-3">
