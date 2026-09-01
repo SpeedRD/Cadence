@@ -22,6 +22,11 @@ enum AccountType {
   OTHER
 }
 
+enum AccountStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 enum CategoryKind {
   EXPENSE
   INCOME
@@ -39,6 +44,7 @@ enum TransactionSource {
   GMAIL
   OUTLOOK
   PAYPAL
+  PAYDAY_CHECKIN
 }
 
 /// Which leg of a transfer a row is. Null for non-transfer rows.
@@ -77,41 +83,58 @@ enum RecurringKind {
 
 /// Singleton row: the PIN gate and app-wide preferences.
 model Settings {
-  id              String   @id @default("singleton")
-  pinHash         String?
-  displayCurrency String   @default("USD")
-  language        String   @default("en")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                         String    @id @default("singleton")
+  pinHash                    String?
+  displayCurrency            String    @default("USD")
+  language                   String    @default("en")
+  /// Payday planner: default protected buffer = max(bufferPercent% of income, bufferFloorAmount).
+  bufferPercent               Int       @default(10)
+  bufferFloorAmount           Decimal   @default(2000) @db.Decimal(14, 2)
+  bufferFloorCurrency         String    @default("DOP")
+  carryoverIncludedByDefault  Boolean   @default(true)
+  /// The civil date (APP_TIMEZONE) the user last dismissed the auto-opened
+  /// payday check-in prompt, so it doesn't force-open again the same day.
+  checkinPromptDismissedOn    DateTime? @db.Date
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
 }
 
 model Account {
-  id                 String              @id @default(cuid())
+  id                 String                  @id @default(cuid())
   name               String
   currency           String
-  type               AccountType         @default(CHECKING)
-  createdAt          DateTime            @default(now())
+  type               AccountType             @default(CHECKING)
+  status             AccountStatus           @default(ACTIVE)
+  archivedAt         DateTime?
+  createdAt          DateTime                @default(now())
   transactions       Transaction[]
   stagedTransactions StagedTransaction[]
+  paydaySnapshots    PaydayAccountSnapshot[]
 
   @@index([name])
+  @@index([status, name])
 }
 
 model Category {
-  id                    String              @id @default(cuid())
-  name                  String              @unique
-  kind                  CategoryKind        @default(EXPENSE)
-  isSubscriptionDefault Boolean             @default(false)
+  id                    String                 @id @default(cuid())
+  name                  String                 @unique
+  kind                  CategoryKind           @default(EXPENSE)
+  isSubscriptionDefault Boolean                @default(false)
   /// Marks the category whose expense transactions count as savings/investing
   /// rather than lifestyle spending in the monthly pace feature (src/lib/data/monthly.ts).
-  isSavingsDefault      Boolean             @default(false)
-  color                 String              @default("#7a8590")
+  isSavingsDefault      Boolean                @default(false)
+  /// User-configured: this category is essential fixed spending, so the payday
+  /// planner reserves it before flexible category suggestions instead of
+  /// treating it as discretionary. Never inferred from the category's name.
+  isEssentialFixed      Boolean                @default(false)
+  color                 String                 @default("#7a8590")
   icon                  String?
-  createdAt             DateTime            @default(now())
+  createdAt             DateTime               @default(now())
   transactions          Transaction[]
   budgets               Budget[]
   recurringItems        RecurringItem[]
   stagedTransactions    StagedTransaction[]
+  paydayAllocations     PaydayPlanAllocation[]
 
   @@index([kind])
 }
@@ -226,7 +249,8 @@ model RecurringItem {
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
-  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category          Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  paydayAllocations PaydayPlanAllocation[]
 
   @@index([active, nextDate])
   @@index([kind])
@@ -244,7 +268,8 @@ model Goal {
   createdAt    DateTime  @default(now())
   achievedAt   DateTime?
 
-  contributions GoalContribution[]
+  contributions     GoalContribution[]
+  paydayAllocations PaydayPlanAllocation[]
 }
 
 model GoalContribution {
@@ -271,4 +296,93 @@ model ExchangeRate {
   fetchedAt      DateTime
 
   @@unique([baseCurrency, targetCurrency])
+}
+
+enum PaydayCheckinStatus {
+  DRAFT
+  CONFIRMED
+}
+
+enum PaydayAllocationType {
+  SUBSCRIPTION
+  RECURRING_CONTRIBUTION
+  GOAL
+  ESSENTIAL_CATEGORY
+  FLEXIBLE_CATEGORY
+  BUFFER
+  CARRYOVER
+}
+
+/// One row per pay period the user has checked in for. Confirming a check-in
+/// creates its income transactions and snapshots; re-confirming an existing
+/// CONFIRMED row updates it in place rather than duplicating anything - see
+/// confirmPaydayCheckinAction in src/server/actions/payday.ts.
+model PaydayCheckin {
+  id                String              @id @default(cuid())
+  year              Int
+  month             Int
+  period            PayPeriod
+  checkinDate       DateTime            @db.Date
+  currency          String
+  totalIncome       Decimal             @default(0) @db.Decimal(14, 2)
+  includedCarryover Decimal             @default(0) @db.Decimal(14, 2)
+  protectedBuffer   Decimal             @default(0) @db.Decimal(14, 2)
+  status            PaydayCheckinStatus @default(DRAFT)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  snapshots   PaydayAccountSnapshot[]
+  allocations PaydayPlanAllocation[]
+
+  @@unique([year, month, period])
+  @@index([status])
+}
+
+/// A reported-balance-vs-ledger reconciliation snapshot for one account in one
+/// check-in. Never mutates Account/Transaction data - see getAccountBalances
+/// in src/lib/data/accounts.ts for how expectedLedgerBalance is computed.
+model PaydayAccountSnapshot {
+  id                    String   @id @default(cuid())
+  paydayCheckinId       String
+  accountId             String
+  expectedLedgerBalance Decimal  @db.Decimal(14, 2)
+  reportedBalance       Decimal  @db.Decimal(14, 2)
+  difference            Decimal  @db.Decimal(14, 2)
+  incomeEntered         Decimal  @default(0) @db.Decimal(14, 2)
+  incomeNote            String?
+  /// The actual INCOME Transaction created for incomeEntered > 0, if any - so
+  /// re-confirming updates/removes that one row instead of creating another.
+  incomeTransactionId   String?  @unique
+  currency              String
+  createdAt             DateTime @default(now())
+
+  checkin PaydayCheckin @relation(fields: [paydayCheckinId], references: [id], onDelete: Cascade)
+  account Account       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([paydayCheckinId, accountId])
+}
+
+/// Why/how each dollar in a confirmed plan was reserved or suggested - an audit
+/// trail alongside the real Budget rows the plan writes. Never itself an actual
+/// expense, GoalContribution, or transaction.
+model PaydayPlanAllocation {
+  id                String               @id @default(cuid())
+  paydayCheckinId   String
+  type              PaydayAllocationType
+  categoryId        String?
+  goalId            String?
+  recurringItemId   String?
+  recommendedAmount Decimal              @db.Decimal(14, 2)
+  plannedAmount     Decimal              @db.Decimal(14, 2)
+  currency          String
+  basis             String?
+  note              String?
+  createdAt         DateTime             @default(now())
+
+  checkin       PaydayCheckin  @relation(fields: [paydayCheckinId], references: [id], onDelete: Cascade)
+  category      Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  goal          Goal?          @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)
+
+  @@index([paydayCheckinId, type])
 }
