@@ -1,7 +1,7 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
-import { isLocale } from "@/lib/i18n";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import {
   firstError,
@@ -22,14 +22,15 @@ export async function updateStagedAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).review;
   const parsed = stagedEditSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
   const { id, date, amount, currency, rawDescription, accountId, categoryId } =
     parsed.data;
 
   const staged = await prisma.stagedTransaction.findUnique({ where: { id } });
-  if (!staged) return fail("That item no longer exists");
-  if (staged.status !== "PENDING") return fail("This item was already reviewed");
+  if (!staged) return fail(t.itemNoLongerExists);
+  if (staged.status !== "PENDING") return fail(t.alreadyReviewed);
 
   await prisma.stagedTransaction.update({
     where: { id },
@@ -44,7 +45,7 @@ export async function updateStagedAction(
   });
 
   revalidateApp();
-  return done("Saved");
+  return done(t.stagedSaved);
 }
 
 /**
@@ -61,20 +62,21 @@ export async function approveStagedAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).review;
   const parsed = stagedApproveSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
   const { id, date, amount, currency, rawDescription, accountId, categoryId } =
     parsed.data;
 
   const staged = await prisma.stagedTransaction.findUnique({ where: { id } });
-  if (!staged) return fail("That item no longer exists");
-  if (staged.status !== "PENDING") return fail("This item was already reviewed");
+  if (!staged) return fail(t.itemNoLongerExists);
+  if (staged.status !== "PENDING") return fail(t.alreadyReviewed);
 
   const account = await prisma.account.findUnique({
     where: { id: accountId },
     select: { id: true },
   });
-  if (!account) return fail("That account no longer exists");
+  if (!account) return fail(t.accountNoLongerExists);
 
   try {
     await prisma.$transaction([
@@ -110,13 +112,13 @@ export async function approveStagedAction(
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2002"
     ) {
-      return fail("This transaction already exists");
+      return fail(t.transactionAlreadyExists);
     }
     throw error;
   }
 
   revalidateApp();
-  return done("Approved");
+  return done(t.approvedToast);
 }
 
 export async function rejectStagedAction(
@@ -124,12 +126,15 @@ export async function rejectStagedAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).review;
   const id = String(formData.get("id") ?? "").trim();
-  if (!id) return fail("Nothing to reject");
+  if (!id) return fail(t.nothingToReject);
 
   const staged = await prisma.stagedTransaction.findUnique({ where: { id } });
-  if (!staged) return fail("That item no longer exists");
-  if (staged.status !== "PENDING") return fail("This item was already reviewed");
+  if (!staged) return fail(t.itemNoLongerExists);
+  if (staged.status !== "PENDING") return fail(t.alreadyReviewed);
 
   await prisma.stagedTransaction.update({
     where: { id },
@@ -137,5 +142,5 @@ export async function rejectStagedAction(
   });
 
   revalidateApp();
-  return done("Rejected");
+  return done(t.rejectedToast);
 }

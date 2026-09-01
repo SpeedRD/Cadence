@@ -10,6 +10,7 @@ import {
 } from "@/components/form/selects";
 import { Input } from "@/components/ui/input";
 import { toISODate } from "@/lib/date";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { updateStagedAction } from "@/server/actions/review";
 
 import type { StagedRow } from "@/lib/data/staged";
@@ -20,28 +21,32 @@ export function ReviewEditDialog({
   categories,
   open,
   onOpenChange,
+  locale,
 }: {
   row: StagedRow;
   accounts: Option[];
   categories: Option[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  locale: Locale;
 }) {
+  const t = getDictionary(locale).review;
+  const common = getDictionary(locale).common;
   return (
     <FormDialog
-      title="Edit staged item"
-      description="Changes are saved but stay pending until you approve."
+      title={t.editStagedTitle}
+      description={t.editStagedDescription}
       action={updateStagedAction}
-      submitLabel="Save"
-      cancelLabel="Cancel"
-      savedMessage="Saved"
+      submitLabel={common.save}
+      cancelLabel={common.cancel}
+      savedMessage={t.stagedSaved}
       open={open}
       onOpenChange={onOpenChange}
     >
       <input type="hidden" name="id" value={row.id} />
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Date" htmlFor="staged-date">
+        <Field label={common.date} htmlFor="staged-date">
           <Input
             id="staged-date"
             type="date"
@@ -50,12 +55,12 @@ export function ReviewEditDialog({
             required
           />
         </Field>
-        <Field label="Currency">
+        <Field label={common.currency}>
           <CurrencySelect name="currency" defaultValue={row.currency} />
         </Field>
       </div>
 
-      <Field label="Amount" htmlFor="staged-amount">
+      <Field label={common.amount} htmlFor="staged-amount">
         <Input
           id="staged-amount"
           name="amount"
@@ -67,7 +72,7 @@ export function ReviewEditDialog({
         />
       </Field>
 
-      <Field label="Description" htmlFor="staged-description">
+      <Field label={common.description} htmlFor="staged-description">
         <Input
           id="staged-description"
           name="rawDescription"
@@ -78,14 +83,14 @@ export function ReviewEditDialog({
       </Field>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Account">
+        <Field label={common.account}>
           <AccountSelect
             name="accountId"
             accounts={accounts}
             defaultValue={row.accountId ?? undefined}
           />
         </Field>
-        <Field label="Category">
+        <Field label={common.category}>
           <CategorySelect
             name="categoryId"
             categories={categories}

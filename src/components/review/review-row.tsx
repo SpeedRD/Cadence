@@ -17,26 +17,30 @@ import {
 import { TableCell, TableRow } from "@/components/ui/table";
 import { formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { approveStagedAction, rejectStagedAction } from "@/server/actions/review";
 
 import type { StagedRow } from "@/lib/data/staged";
-
-const STATUS_BADGE: Record<string, { label: string; variant: "secondary" | "destructive" }> = {
-  APPROVED: { label: "Approved", variant: "secondary" },
-  REJECTED: { label: "Rejected", variant: "destructive" },
-};
 
 export function ReviewRow({
   row,
   accounts,
   categories,
   onEdit,
+  locale,
 }: {
   row: StagedRow;
   accounts: Option[];
   categories: Option[];
   onEdit: () => void;
+  locale: Locale;
 }) {
+  const t = getDictionary(locale).review;
+  const common = getDictionary(locale).common;
+  const STATUS_BADGE: Record<string, { label: string; variant: "secondary" | "destructive" }> = {
+    APPROVED: { label: t.approved, variant: "secondary" },
+    REJECTED: { label: t.rejected, variant: "destructive" },
+  };
   const [accountId, setAccountId] = useState(row.accountId ?? "");
   const [categoryId, setCategoryId] = useState(row.suggestedCategoryId ?? "none");
   const [pending, startTransition] = useTransition();
@@ -44,7 +48,7 @@ export function ReviewRow({
 
   const approve = () => {
     if (!accountId) {
-      toast.error("Pick an account before approving");
+      toast.error(t.pickAccountFirst);
       return;
     }
     startTransition(async () => {
@@ -58,7 +62,7 @@ export function ReviewRow({
       formData.set("categoryId", categoryId === "none" ? "" : categoryId);
       const result = await approveStagedAction(null, formData);
       if (result?.error) toast.error(result.error);
-      else toast.success(result?.message ?? "Approved");
+      else toast.success(result?.message ?? t.approvedToast);
     });
   };
 
@@ -68,7 +72,7 @@ export function ReviewRow({
       formData.set("id", row.id);
       const result = await rejectStagedAction(null, formData);
       if (result?.error) toast.error(result.error);
-      else toast.success(result?.message ?? "Rejected");
+      else toast.success(result?.message ?? t.rejectedToast);
     });
   };
 
@@ -91,7 +95,7 @@ export function ReviewRow({
         ) : (
           <Select value={accountId} onValueChange={setAccountId}>
             <SelectTrigger size="sm" className="w-full">
-              <SelectValue placeholder="Pick an account" />
+              <SelectValue placeholder={t.pickAnAccount} />
             </SelectTrigger>
             <SelectContent>
               {accounts.map((account) => (
@@ -111,10 +115,10 @@ export function ReviewRow({
         ) : (
           <Select value={categoryId} onValueChange={setCategoryId}>
             <SelectTrigger size="sm" className="w-full">
-              <SelectValue placeholder="Category" />
+              <SelectValue placeholder={common.category} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="none">No category</SelectItem>
+              <SelectItem value="none">{t.noCategory}</SelectItem>
               {categories.map((category) => (
                 <SelectItem key={category.id} value={category.id}>
                   {category.name}
@@ -131,15 +135,15 @@ export function ReviewRow({
           </Badge>
         ) : (
           <div className="flex items-center gap-1.5">
-            <Button variant="ghost" size="icon-xs" aria-label="Edit" onClick={onEdit}>
+            <Button variant="ghost" size="icon-xs" aria-label={t.editAria} onClick={onEdit}>
               <Pencil className="size-3.5" />
             </Button>
             <Button variant="outline" size="sm" disabled={pending} onClick={reject}>
-              Reject
+              {t.reject}
             </Button>
             <Button size="sm" disabled={pending} onClick={approve}>
               {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
-              Approve
+              {t.approve}
             </Button>
           </div>
         )}
