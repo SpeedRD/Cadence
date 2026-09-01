@@ -2,11 +2,13 @@ import Link from "next/link";
 
 import { NavLinks } from "@/components/shell/nav-links";
 import { CurrencySwitcher } from "@/components/shell/currency-switcher";
+import { LanguageSwitcher } from "@/components/shell/language-switcher";
 import { LogoutButton } from "@/components/shell/logout-button";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { PeriodRail } from "@/components/period-rail";
 
 import type { AppContext } from "@/lib/data/context";
+import { getDictionary } from "@/lib/i18n";
 import { daysElapsedInPeriod, daysRemainingInPeriod } from "@/lib/period";
 
 export function AppShell({
@@ -17,6 +19,7 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const { currentPeriod } = context;
+  const t = getDictionary(context.language);
   const remaining = daysRemainingInPeriod(context.today, currentPeriod);
   const elapsed = daysElapsedInPeriod(context.today, currentPeriod);
 
@@ -30,7 +33,7 @@ export function AppShell({
         <NavLinks variant="sidebar" />
         <div className="mt-auto px-5.5 pt-6">
           <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-            Paid twice a month. Budgets run {currentPeriod.period === "A" ? "1-15" : "16-end"}.
+            {t.shell.paidTwiceAMonth(currentPeriod.period === "A" ? "1-15" : "16-end")}
           </p>
         </div>
       </aside>
@@ -51,17 +54,16 @@ export function AppShell({
                   {currentPeriod.label}
                 </p>
                 <p className="text-[0.6875rem] text-muted-foreground">
-                  {remaining === 0
-                    ? "Period closed"
-                    : `${remaining} day${remaining === 1 ? "" : "s"} left`}
+                  {remaining === 0 ? t.shell.periodClosed : t.shell.daysLeft(remaining)}
                 </p>
               </div>
             </div>
 
             <div className="ml-auto flex items-center gap-1">
-              <CurrencySwitcher value={context.displayCurrency} />
-              <ThemeToggle />
-              <LogoutButton />
+              <CurrencySwitcher value={context.displayCurrency} switcherLabel={t.shell.displayCurrencyLabel} />
+              <LanguageSwitcher value={context.language} switcherLabel={t.shell.languageLabel} />
+              <ThemeToggle ariaLabel={t.shell.toggleThemeAria} />
+              <LogoutButton ariaLabel={t.shell.lockCadenceAria} />
             </div>
           </div>
           <div className="border-t border-border/70 md:hidden">

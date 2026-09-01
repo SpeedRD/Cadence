@@ -80,6 +80,7 @@ model Settings {
   id              String   @id @default("singleton")
   pinHash         String?
   displayCurrency String   @default("USD")
+  language        String   @default("en")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }

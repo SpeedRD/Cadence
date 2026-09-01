@@ -12,26 +12,31 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { CURRENCIES, CURRENCY_LABELS } from "@/lib/currency";
-import { updateDisplayCurrencyAction } from "@/server/actions/settings";
+import type { Locale } from "@/lib/i18n";
+import { updateLanguageAction } from "@/server/actions/settings";
 import { cn } from "@/lib/utils";
 
-/** Sets the currency every figure in the app is converted into. */
-export function CurrencySwitcher({
+const LANGUAGES: { code: Locale; label: string }[] = [
+  { code: "en", label: "English" },
+  { code: "es", label: "Español" },
+];
+
+/** Sets the language every label and message in the app renders in. */
+export function LanguageSwitcher({
   value,
   switcherLabel,
 }: {
-  value: string;
+  value: Locale;
   switcherLabel: string;
 }) {
   const [pending, startTransition] = useTransition();
 
-  const select = (code: string) => {
+  const select = (code: Locale) => {
     if (code === value) return;
     startTransition(async () => {
       const formData = new FormData();
-      formData.set("displayCurrency", code);
-      const result = await updateDisplayCurrencyAction(null, formData);
+      formData.set("language", code);
+      const result = await updateLanguageAction(null, formData);
       if (result?.error) toast.error(result.error);
       else if (result?.message) toast.success(result.message);
     });
@@ -41,19 +46,19 @@ export function CurrencySwitcher({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" disabled={pending} className="font-mono">
-          {value}
+          {value.toUpperCase()}
           <ChevronsUpDown className="size-3 opacity-60" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuLabel>{switcherLabel}</DropdownMenuLabel>
-        {CURRENCIES.map((code) => (
+        {LANGUAGES.map(({ code, label }) => (
           <DropdownMenuItem key={code} onSelect={() => select(code)}>
             <Check
               className={cn("size-3.5", code === value ? "opacity-100" : "opacity-0")}
             />
-            <span className="font-mono">{code}</span>
-            <span className="text-muted-foreground">{CURRENCY_LABELS[code]}</span>
+            <span className="font-mono">{code.toUpperCase()}</span>
+            <span className="text-muted-foreground">{label}</span>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

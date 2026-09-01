@@ -5,6 +5,7 @@ import { useActionState, useRef, useState } from "react";
 import { SubmitButton } from "@/components/form/submit-button";
 import { PeriodRail } from "@/components/period-rail";
 import { createPinAction, loginAction } from "@/server/actions/auth";
+import type { Dictionary } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const MAX_DIGITS = 6;
@@ -71,7 +72,13 @@ function PinInput({
   );
 }
 
-export function PinGate({ mode }: { mode: "create" | "login" }) {
+export function PinGate({
+  mode,
+  t,
+}: {
+  mode: "create" | "login";
+  t: Dictionary["login"];
+}) {
   const [state, formAction, pending] = useActionState(
     mode === "create" ? createPinAction : loginAction,
     null,
@@ -91,19 +98,17 @@ export function PinGate({ mode }: { mode: "create" | "login" }) {
           <div className="space-y-1.5">
             <h1 className="text-3xl font-semibold">Cadence</h1>
             <p className="text-sm text-muted-foreground">
-              {mode === "create"
-                ? "Set a PIN to lock this ledger. It stays on this device's session, hashed in your own database."
-                : "Enter your PIN to open the ledger."}
+              {mode === "create" ? t.createSubtitle : t.loginSubtitle}
             </p>
           </div>
         </div>
 
         <form action={formAction} className="space-y-5">
           <div className="space-y-2">
-            <p className="eyebrow">{mode === "create" ? "New PIN" : "PIN"}</p>
+            <p className="eyebrow">{mode === "create" ? t.newPin : t.pin}</p>
             <PinInput
               name="pin"
-              label={mode === "create" ? "New PIN" : "PIN"}
+              label={mode === "create" ? t.newPin : t.pin}
               value={pin}
               onChange={setPin}
               autoFocus
@@ -112,10 +117,10 @@ export function PinGate({ mode }: { mode: "create" | "login" }) {
 
           {mode === "create" ? (
             <div className="space-y-2">
-              <p className="eyebrow">Confirm</p>
+              <p className="eyebrow">{t.confirm}</p>
               <PinInput
                 name="confirm"
-                label="Confirm PIN"
+                label={t.confirmPinAria}
                 value={confirm}
                 onChange={setConfirm}
               />
@@ -129,9 +134,9 @@ export function PinGate({ mode }: { mode: "create" | "login" }) {
           ) : null}
 
           <div className="flex items-center justify-between gap-4 pt-1">
-            <p className="text-xs text-muted-foreground">4 to 6 digits</p>
+            <p className="text-xs text-muted-foreground">{t.digitsHint}</p>
             <SubmitButton pending={pending} className={cn(!ready && "opacity-60")}>
-              {mode === "create" ? "Set PIN and continue" : "Unlock"}
+              {mode === "create" ? t.setPinAndContinue : t.unlock}
             </SubmitButton>
           </div>
         </form>

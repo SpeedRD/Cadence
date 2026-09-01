@@ -2,6 +2,7 @@
 
 import { SETTINGS_ID, requireAuth } from "@/lib/auth";
 import { recomputeAllGoals } from "@/lib/goals";
+import { isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { firstError, formObject, settingsSchema } from "@/lib/validation";
 
@@ -22,6 +23,23 @@ export async function updateDisplayCurrencyAction(
   });
   revalidateApp();
   return done(`Showing amounts in ${parsed.data.displayCurrency}`);
+}
+
+export async function updateLanguageAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const language = String(formData.get("language") ?? "");
+  if (!isLocale(language)) return fail("Unknown language");
+
+  await prisma.settings.upsert({
+    where: { id: SETTINGS_ID },
+    update: { language },
+    create: { id: SETTINGS_ID, language },
+  });
+  revalidateApp();
+  return done(language === "es" ? "Mostrando Cadence en español" : "Showing Cadence in English");
 }
 
 /** Rebuild every Goal.savedAmount from its contributions. */

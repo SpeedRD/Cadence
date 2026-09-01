@@ -151,6 +151,7 @@ async function main() {
   console.log("\n== database invariants ==");
   const context = {
     displayCurrency: "USD" as const,
+    language: "en" as const,
     rates,
     today: civilDate(2026, 8, 20),
     currentPeriod: periodForDate(civilDate(2026, 8, 20)),
