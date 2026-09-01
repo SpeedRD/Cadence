@@ -12,10 +12,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { deleteAccountAction } from "@/server/actions/accounts";
 
 export function AccountRowActions({
   account,
+  locale,
 }: {
   account: {
     id: string;
@@ -24,7 +26,10 @@ export function AccountRowActions({
     currency: string;
     transactionCount: number;
   };
+  locale: Locale;
 }) {
+  const t = getDictionary(locale).accounts;
+  const common = getDictionary(locale).common;
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -32,18 +37,18 @@ export function AccountRowActions({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-xs" aria-label={`Actions for ${account.name}`}>
+          <Button variant="ghost" size="icon-xs" aria-label={t.actionsFor(account.name)}>
             <MoreHorizontal className="size-3.5" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={() => setEditing(true)}>
             <Pencil className="size-3.5" />
-            Edit
+            {common.edit}
           </DropdownMenuItem>
           <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
             <Trash2 className="size-3.5" />
-            Delete
+            {common.delete}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -52,6 +57,7 @@ export function AccountRowActions({
         <AccountDialog
           open
           onOpenChange={(next) => !next && setEditing(false)}
+          locale={locale}
           values={{
             id: account.id,
             name: account.name,
@@ -67,15 +73,15 @@ export function AccountRowActions({
           onOpenChange={(next) => !next && setDeleting(false)}
           id={account.id}
           action={deleteAccountAction}
-          title={`Delete ${account.name}?`}
+          title={t.deleteAccountTitle(account.name)}
           description={
             account.transactionCount > 0
-              ? `Its ${account.transactionCount} transaction${account.transactionCount === 1 ? "" : "s"} go with it, including both sides of any transfers.`
-              : "This account has no transactions."
+              ? t.transactionsGoWithIt(account.transactionCount)
+              : t.noTransactions
           }
-          confirmLabel="Delete"
-          keepLabel="Keep it"
-          deletedMessage="Deleted"
+          confirmLabel={common.delete}
+          keepLabel={common.keepIt}
+          deletedMessage={t.accountDeleted}
         />
       ) : null}
     </>

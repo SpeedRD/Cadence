@@ -4,7 +4,8 @@ import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
 import { CurrencySelect, EnumSelect } from "@/components/form/selects";
 import { Input } from "@/components/ui/input";
-import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABELS } from "@/lib/labels";
+import { getDictionary, type Locale } from "@/lib/i18n";
+import { ACCOUNT_TYPES } from "@/lib/labels";
 import { saveAccountAction } from "@/server/actions/accounts";
 
 export interface AccountFormValues {
@@ -19,47 +20,51 @@ export function AccountDialog({
   trigger,
   open,
   onOpenChange,
+  locale,
 }: {
   values: AccountFormValues;
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  locale: Locale;
 }) {
+  const t = getDictionary(locale).accounts;
+  const common = getDictionary(locale).common;
   const editing = Boolean(values.id);
 
   return (
     <FormDialog
-      title={editing ? "Edit account" : "New account"}
+      title={editing ? t.editAccount : t.newAccountTitle}
       action={saveAccountAction}
-      submitLabel={editing ? "Save changes" : "Add account"}
-      cancelLabel="Cancel"
-      savedMessage="Saved"
+      submitLabel={editing ? t.saveChanges : t.addAccount}
+      cancelLabel={common.cancel}
+      savedMessage={editing ? t.accountUpdated : t.accountAdded}
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}
     >
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
 
-      <Field label="Name" htmlFor="account-name">
+      <Field label={common.name} htmlFor="account-name">
         <Input
           id="account-name"
           name="name"
           defaultValue={values.name ?? ""}
-          placeholder="Everyday checking"
+          placeholder={t.namePlaceholder}
           required
         />
       </Field>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Type">
+        <Field label={common.type}>
           <EnumSelect
             name="type"
             options={ACCOUNT_TYPES}
-            labels={ACCOUNT_TYPE_LABELS}
+            labels={common.accountTypeLabels}
             defaultValue={values.type ?? "CHECKING"}
           />
         </Field>
-        <Field label="Currency">
+        <Field label={common.currency}>
           <CurrencySelect name="currency" defaultValue={values.currency} />
         </Field>
       </div>

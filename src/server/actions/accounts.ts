@@ -1,7 +1,7 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
-import { isLocale } from "@/lib/i18n";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { accountSchema, firstError, formObject } from "@/lib/validation";
 
@@ -14,6 +14,7 @@ export async function saveAccountAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).accounts;
   const parsed = accountSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
@@ -25,7 +26,7 @@ export async function saveAccountAction(
   }
 
   revalidateApp();
-  return done(id ? "Account updated" : "Account added");
+  return done(id ? t.accountUpdated : t.accountAdded);
 }
 
 export async function deleteAccountAction(
@@ -33,8 +34,12 @@ export async function deleteAccountAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).accounts;
+  const common = getDictionary(locale).common;
   const id = String(formData.get("id") ?? "").trim();
-  if (!id) return fail("Nothing to delete");
+  if (!id) return fail(common.nothingToDelete);
 
   await prisma.$transaction(async (tx) => {
     const legs = await tx.transaction.findMany({
@@ -55,5 +60,5 @@ export async function deleteAccountAction(
   });
 
   revalidateApp();
-  return done("Account deleted");
+  return done(t.accountDeleted);
 }

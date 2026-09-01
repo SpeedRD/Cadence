@@ -20,7 +20,8 @@ import { formatMoney } from "@/lib/currency";
 import { getAccountLedger } from "@/lib/data/accounts";
 import { getAppContext } from "@/lib/data/context";
 import { toISODate } from "@/lib/date";
-import { ACCOUNT_TYPE_LABELS, labelFor } from "@/lib/labels";
+import { getDictionary } from "@/lib/i18n";
+import { labelFor } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Account - Cadence" };
@@ -32,6 +33,8 @@ export default async function AccountDetailPage({
 }) {
   const { id } = await params;
   const context = await getAppContext();
+  const t = getDictionary(context.language).accounts;
+  const common = getDictionary(context.language).common;
   const ledger = await getAccountLedger(id, context);
   if (!ledger) notFound();
 
@@ -42,13 +45,13 @@ export default async function AccountDetailPage({
       <Button asChild variant="ghost" size="xs" className="-ml-2">
         <Link href="/accounts">
           <ChevronLeft className="size-3.5" />
-          Accounts
+          {t.accountsBreadcrumb}
         </Link>
       </Button>
 
       <PageHeader
         title={account.name}
-        description={`${labelFor(ACCOUNT_TYPE_LABELS, account.type)} · ${account.currency}`}
+        description={`${labelFor(common.accountTypeLabels, account.type)} · ${account.currency}`}
         actions={
           <AccountDialog
             values={{
@@ -57,10 +60,11 @@ export default async function AccountDetailPage({
               type: account.type,
               currency: account.currency,
             }}
+            locale={context.language}
             trigger={
               <Button variant="outline" size="sm">
                 <Pencil className="size-3.5" />
-                Edit
+                {common.edit}
               </Button>
             }
           />
@@ -70,41 +74,44 @@ export default async function AccountDetailPage({
       <Card>
         <CardContent className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
-            label="Balance"
+            label={t.balance}
             value={formatMoney(ledger.balance, account.currency)}
             hint={
               account.currency !== context.displayCurrency
                 ? formatMoney(ledger.displayBalance, context.displayCurrency)
-                : `${rows.length} transaction${rows.length === 1 ? "" : "s"}`
+                : t.transactionCount(rows.length)
             }
           />
           <Stat
-            label="Income in"
+            label={t.incomeIn}
             value={formatMoney(totals.inflow, account.currency)}
           />
           <Stat
-            label="Spending out"
+            label={t.spendingOut}
             value={formatMoney(totals.outflow, account.currency)}
           />
           <Stat
-            label="Net transfers"
+            label={t.netTransfers}
             value={formatMoney(
               totals.transfersIn - totals.transfersOut,
               account.currency,
               { signDisplay: "always" },
             )}
-            hint={`${formatMoney(totals.transfersIn, account.currency)} in · ${formatMoney(totals.transfersOut, account.currency)} out`}
+            hint={t.inOut(
+              formatMoney(totals.transfersIn, account.currency),
+              formatMoney(totals.transfersOut, account.currency),
+            )}
           />
         </CardContent>
       </Card>
 
       {rows.length === 0 ? (
         <EmptyState
-          title="No activity yet"
-          description="Transactions logged against this account show up here with a running balance."
+          title={t.noActivityTitle}
+          description={t.noActivityDescription}
           action={
             <Button asChild size="sm">
-              <Link href="/transactions">Add a transaction</Link>
+              <Link href="/transactions">{t.addTransaction}</Link>
             </Button>
           }
         />
@@ -115,11 +122,11 @@ export default async function AccountDetailPage({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[104px]">Date</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="hidden md:table-cell">Source</TableHead>
-                    <TableHead className="text-right">Change</TableHead>
-                    <TableHead className="text-right">Balance</TableHead>
+                    <TableHead className="w-[104px]">{common.date}</TableHead>
+                    <TableHead>{common.description}</TableHead>
+                    <TableHead className="hidden md:table-cell">{common.source}</TableHead>
+                    <TableHead className="text-right">{t.colChange}</TableHead>
+                    <TableHead className="text-right">{t.balance}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -133,8 +140,10 @@ export default async function AccountDetailPage({
                           <span className="truncate text-sm">
                             {row.note ??
                               (row.type === "TRANSFER"
-                                ? `Transfer ${row.transferDirection === "OUT" ? "to" : "from"} ${row.counterpartAccountName ?? "another account"}`
-                                : (row.categoryName ?? "Uncategorized"))}
+                                ? row.transferDirection === "OUT"
+                                  ? t.transferTo(row.counterpartAccountName ?? t.anotherAccount)
+                                  : t.transferFrom(row.counterpartAccountName ?? t.anotherAccount)
+                                : (row.categoryName ?? common.uncategorized))}
                           </span>
                           {row.categoryName ? (
                             <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
@@ -154,14 +163,8 @@ export default async function AccountDetailPage({
                         <SourceBadge
                           source={row.source}
                           isTransfer={row.type === "TRANSFER"}
-                          labels={{
-                            MANUAL: "Manual",
-                            CSV: "CSV",
-                            GMAIL: "Gmail",
-                            OUTLOOK: "Outlook",
-                            PAYPAL: "PayPal",
-                          }}
-                          transferLabel="Transfer"
+                          labels={common.sourceLabels}
+                          transferLabel={t.transfer}
                         />
                       </TableCell>
                       <TableCell className="text-right">
