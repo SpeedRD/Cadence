@@ -244,11 +244,11 @@ export const es = {
     colType: "Tipo",
     colActivity: "Actividad",
     colBalance: "Saldo",
-    transactionCount: (n: number) => `${n} transacción${n === 1 ? "" : "es"}`,
+    transactionCount: (n: number) => `${n} ${n === 1 ? "transacción" : "transacciones"}`,
     actionsFor: (name: string) => `Acciones de ${name}`,
     deleteAccountTitle: (name: string) => `¿Eliminar ${name}?`,
     transactionsGoWithIt: (n: number) =>
-      `Sus ${n} transacción${n === 1 ? "" : "es"} se eliminan también, incluidos ambos lados de cualquier transferencia.`,
+      `Sus ${n} ${n === 1 ? "transacción" : "transacciones"} se eliminan también, incluidos ambos lados de cualquier transferencia.`,
     noTransactions: "Esta cuenta no tiene transacciones.",
     editAccount: "Editar cuenta",
     newAccountTitle: "Nueva cuenta",
