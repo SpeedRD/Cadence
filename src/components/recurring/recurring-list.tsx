@@ -158,6 +158,9 @@ export function RecurringList({
           action={deleteRecurringAction}
           title={`Delete ${deleting.name}?`}
           description="It stops counting against safe to spend straight away."
+          confirmLabel="Delete"
+          keepLabel="Keep it"
+          deletedMessage="Deleted"
         />
       ) : null}
     </>

@@ -43,6 +43,8 @@ export function TransferDialog({
       description="Between your own accounts. Transfers never count as income or spending."
       action={saveTransferAction}
       submitLabel={editing ? "Save changes" : "Record transfer"}
+      cancelLabel="Cancel"
+      savedMessage="Saved"
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}

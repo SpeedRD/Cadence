@@ -52,6 +52,8 @@ export function RecurringDialog({
       description="Subscriptions are bills going out. Contributions are money you put into something."
       action={saveRecurringAction}
       submitLabel={editing ? "Save changes" : "Add item"}
+      cancelLabel="Cancel"
+      savedMessage="Saved"
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}

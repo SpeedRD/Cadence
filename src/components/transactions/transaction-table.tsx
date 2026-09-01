@@ -132,6 +132,14 @@ export function TransactionTable({
                   <SourceBadge
                     source={row.source}
                     isTransfer={row.type === "TRANSFER"}
+                    labels={{
+                      MANUAL: "Manual",
+                      CSV: "CSV",
+                      GMAIL: "Gmail",
+                      OUTLOOK: "Outlook",
+                      PAYPAL: "PayPal",
+                    }}
+                    transferLabel="Transfer"
                   />
                 </TableCell>
                 <TableCell>
@@ -223,6 +231,9 @@ export function TransactionTable({
               ? "Both sides of the transfer are removed together."
               : "This cannot be undone."
           }
+          confirmLabel="Delete"
+          keepLabel="Keep it"
+          deletedMessage="Deleted"
         />
       ) : null}
     </>

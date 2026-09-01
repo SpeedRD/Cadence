@@ -2,9 +2,10 @@
 
 import { z } from "zod";
 
-import { requireAuth } from "@/lib/auth";
+import { getSettings, requireAuth } from "@/lib/auth";
 import { CURRENCIES } from "@/lib/currency";
 import { fromISODate } from "@/lib/date";
+import { isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { firstError } from "@/lib/validation";
 
@@ -38,6 +39,8 @@ export async function importTransactionsAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
 
   let payload: unknown;
   try {
@@ -47,7 +50,7 @@ export async function importTransactionsAction(
   }
 
   const parsed = importPayloadSchema.safeParse(payload);
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const account = await prisma.account.findUnique({
     where: { id: parsed.data.accountId },

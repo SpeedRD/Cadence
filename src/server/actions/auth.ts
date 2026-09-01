@@ -20,14 +20,15 @@ export async function createPinAction(
   formData: FormData,
 ): Promise<ActionState> {
   const settings = await getSettings();
-  const t = getDictionary(isLocale(settings.language) ? settings.language : "en").login;
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).login;
 
   if (await isPinConfigured()) {
     return fail(t.pinAlreadySet);
   }
 
   const parsed = pinSchema.safeParse(String(formData.get("pin") ?? ""));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const confirmation = String(formData.get("confirm") ?? "").trim();
   if (parsed.data !== confirmation) return fail(t.entriesMustMatch);
@@ -43,10 +44,11 @@ export async function loginAction(
   formData: FormData,
 ): Promise<ActionState> {
   const settings = await getSettings();
-  const t = getDictionary(isLocale(settings.language) ? settings.language : "en").login;
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).login;
 
   const parsed = pinSchema.safeParse(String(formData.get("pin") ?? ""));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   if (!(await verifyPin(parsed.data))) return fail(t.pinDoesNotMatch);
 

@@ -73,6 +73,9 @@ export function AccountRowActions({
               ? `Its ${account.transactionCount} transaction${account.transactionCount === 1 ? "" : "s"} go with it, including both sides of any transfers.`
               : "This account has no transactions."
           }
+          confirmLabel="Delete"
+          keepLabel="Keep it"
+          deletedMessage="Deleted"
         />
       ) : null}
     </>

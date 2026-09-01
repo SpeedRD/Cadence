@@ -26,6 +26,8 @@ export function ContributionDialog({
       description="Contributions are the source of truth for goal progress."
       action={addContributionAction}
       submitLabel="Log contribution"
+      cancelLabel="Cancel"
+      savedMessage="Saved"
       trigger={trigger}
     >
       <input type="hidden" name="goalId" value={goalId} />

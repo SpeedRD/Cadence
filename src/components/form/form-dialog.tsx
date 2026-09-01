@@ -31,22 +31,26 @@ export function FormDialog({
   description,
   trigger,
   action,
-  submitLabel = "Save",
+  submitLabel,
+  cancelLabel,
   children,
   size = "default",
   open: controlledOpen,
   onOpenChange,
+  savedMessage,
 }: {
   title: string;
   description?: string;
   trigger?: React.ReactNode;
   action: Action;
-  submitLabel?: string;
+  submitLabel: string;
+  cancelLabel: string;
   children: React.ReactNode;
   size?: "default" | "wide";
   /** Controlled mode, for a single dialog shared by many table rows. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  savedMessage: string;
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
@@ -58,9 +62,9 @@ export function FormDialog({
     if (state?.ok && state.at !== handled.current) {
       handled.current = state.at;
       setOpen(false);
-      toast.success(state.message ?? "Saved");
+      toast.success(state.message ?? savedMessage);
     }
-  }, [state, setOpen]);
+  }, [state, setOpen, savedMessage]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -84,7 +88,7 @@ export function FormDialog({
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
-              Cancel
+              {cancelLabel}
             </Button>
             <SubmitButton pending={pending}>{submitLabel}</SubmitButton>
           </DialogFooter>

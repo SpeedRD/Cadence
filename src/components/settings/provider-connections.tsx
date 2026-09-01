@@ -60,6 +60,8 @@ export function ProviderConnections({
                   title={`Disconnect ${connection.emailAddress}?`}
                   description="Cadence stops syncing this mailbox. Transactions already staged or approved from it are kept."
                   confirmLabel="Disconnect"
+                  keepLabel="Keep it"
+                  deletedMessage="Disconnected"
                   trigger={
                     <Button variant="ghost" size="sm">
                       Disconnect

@@ -1,6 +1,7 @@
 "use server";
 
-import { requireAuth } from "@/lib/auth";
+import { getSettings, requireAuth } from "@/lib/auth";
+import { isLocale } from "@/lib/i18n";
 import { previousPeriod, type PayPeriodCode } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { budgetSchema, firstError, formObject } from "@/lib/validation";
@@ -19,8 +20,10 @@ export async function saveBudgetAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
   const parsed = budgetSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const { year, month, period, categoryId, amount, currency } = parsed.data;
   const existing = await prisma.budget.findFirst({

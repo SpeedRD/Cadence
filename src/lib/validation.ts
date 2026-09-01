@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { CURRENCIES } from "@/lib/currency";
 import { fromISODate } from "@/lib/date";
+import type { Locale } from "@/lib/i18n";
 import {
   ACCOUNT_TYPES,
   RECURRING_FREQUENCIES,
@@ -189,6 +190,29 @@ export function formObject(formData: FormData): Record<string, string> {
   return entries;
 }
 
-export function firstError(error: z.ZodError): string {
-  return error.issues[0]?.message ?? "Check the form and try again";
+const VALIDATION_MESSAGES_ES: Record<string, string> = {
+  "Pick a date": "Elige una fecha",
+  "Enter a valid date": "Ingresa una fecha válida",
+  "Enter an amount greater than 0": "Ingresa un monto mayor que 0",
+  "Keep notes under 500 characters": "Mantén las notas en menos de 500 caracteres",
+  "Use 4 to 6 digits": "Usa de 4 a 6 dígitos",
+  "Name the account": "Ponle nombre a la cuenta",
+  "Pick an account": "Elige una cuenta",
+  "Pick a source account": "Elige una cuenta de origen",
+  "Pick a destination account": "Elige una cuenta de destino",
+  "Pick two different accounts": "Elige dos cuentas diferentes",
+  "Enter 0 or more": "Ingresa 0 o más",
+  "Name the item": "Ponle nombre al elemento",
+  "Name the goal": "Ponle nombre a la meta",
+  "Add a description": "Agrega una descripción",
+  "Keep the description under 200 characters":
+    "Mantén la descripción en menos de 200 caracteres",
+  "Pick an account before approving": "Elige una cuenta antes de aprobar",
+  "Check the form and try again": "Revisa el formulario e intenta de nuevo",
+};
+
+export function firstError(error: z.ZodError, locale: Locale = "en"): string {
+  const message = error.issues[0]?.message ?? "Check the form and try again";
+  if (locale === "es") return VALIDATION_MESSAGES_ES[message] ?? message;
+  return message;
 }

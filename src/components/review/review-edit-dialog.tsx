@@ -33,6 +33,8 @@ export function ReviewEditDialog({
       description="Changes are saved but stay pending until you approve."
       action={updateStagedAction}
       submitLabel="Save"
+      cancelLabel="Cancel"
+      savedMessage="Saved"
       open={open}
       onOpenChange={onOpenChange}
     >

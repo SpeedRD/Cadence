@@ -33,6 +33,8 @@ export function GoalDialog({
       description="A target date turns the goal into a per-pay-period number."
       action={saveGoalAction}
       submitLabel={editing ? "Save changes" : "Create goal"}
+      cancelLabel="Cancel"
+      savedMessage="Saved"
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}

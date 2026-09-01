@@ -1,6 +1,7 @@
 "use server";
 
-import { requireAuth } from "@/lib/auth";
+import { getSettings, requireAuth } from "@/lib/auth";
+import { isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { accountSchema, firstError, formObject } from "@/lib/validation";
 
@@ -11,8 +12,10 @@ export async function saveAccountAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
   const parsed = accountSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const { id, ...values } = parsed.data;
   if (id) {

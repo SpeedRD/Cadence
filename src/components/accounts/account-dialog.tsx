@@ -32,6 +32,8 @@ export function AccountDialog({
       title={editing ? "Edit account" : "New account"}
       action={saveAccountAction}
       submitLabel={editing ? "Save changes" : "Add account"}
+      cancelLabel="Cancel"
+      savedMessage="Saved"
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}

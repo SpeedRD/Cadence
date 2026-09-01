@@ -1,6 +1,7 @@
 "use server";
 
-import { requireAuth } from "@/lib/auth";
+import { getSettings, requireAuth } from "@/lib/auth";
+import { isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import {
   firstError,
@@ -19,8 +20,10 @@ export async function updateStagedAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
   const parsed = stagedEditSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
   const { id, date, amount, currency, rawDescription, accountId, categoryId } =
     parsed.data;
 
@@ -56,8 +59,10 @@ export async function approveStagedAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
   const parsed = stagedApproveSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
   const { id, date, amount, currency, rawDescription, accountId, categoryId } =
     parsed.data;
 

@@ -1,7 +1,8 @@
 "use server";
 
-import { requireAuth } from "@/lib/auth";
+import { getSettings, requireAuth } from "@/lib/auth";
 import { recomputeGoalSaved } from "@/lib/goals";
+import { isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import {
   contributionSchema,
@@ -17,8 +18,10 @@ export async function saveGoalAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
   const parsed = goalSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const { id, ...values } = parsed.data;
   if (id) {
@@ -54,8 +57,10 @@ export async function addContributionAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
   const parsed = contributionSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const goal = await prisma.goal.findUnique({
     where: { id: parsed.data.goalId },

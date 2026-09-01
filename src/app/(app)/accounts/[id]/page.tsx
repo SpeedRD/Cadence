@@ -154,6 +154,14 @@ export default async function AccountDetailPage({
                         <SourceBadge
                           source={row.source}
                           isTransfer={row.type === "TRANSFER"}
+                          labels={{
+                            MANUAL: "Manual",
+                            CSV: "CSV",
+                            GMAIL: "Gmail",
+                            OUTLOOK: "Outlook",
+                            PAYPAL: "PayPal",
+                          }}
+                          transferLabel="Transfer"
                         />
                       </TableCell>
                       <TableCell className="text-right">

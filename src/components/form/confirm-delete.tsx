@@ -23,7 +23,9 @@ export function ConfirmDelete({
   title,
   description,
   trigger,
-  confirmLabel = "Delete",
+  confirmLabel,
+  keepLabel,
+  deletedMessage,
   open: controlledOpen,
   onOpenChange,
 }: {
@@ -32,7 +34,9 @@ export function ConfirmDelete({
   title: string;
   description: string;
   trigger?: React.ReactNode;
-  confirmLabel?: string;
+  confirmLabel: string;
+  keepLabel: string;
+  deletedMessage: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
@@ -46,9 +50,9 @@ export function ConfirmDelete({
     if (state?.ok && state.at !== handled.current) {
       handled.current = state.at;
       setOpen(false);
-      toast.success(state.message ?? "Deleted");
+      toast.success(state.message ?? deletedMessage);
     }
-  }, [state, setOpen]);
+  }, [state, setOpen, deletedMessage]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -67,7 +71,7 @@ export function ConfirmDelete({
           ) : null}
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
-              Keep it
+              {keepLabel}
             </Button>
             <SubmitButton pending={pending} variant="destructive">
               {confirmLabel}

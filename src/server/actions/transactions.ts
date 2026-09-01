@@ -2,7 +2,8 @@
 
 import { randomUUID } from "node:crypto";
 
-import { requireAuth } from "@/lib/auth";
+import { getSettings, requireAuth } from "@/lib/auth";
+import { isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import {
   firstError,
@@ -18,8 +19,10 @@ export async function saveTransactionAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
   const parsed = transactionSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const { id, ...values } = parsed.data;
 
@@ -73,8 +76,10 @@ export async function saveTransferAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
   const parsed = transferSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const { transferId, date, amount, currency, fromAccountId, toAccountId, note } =
     parsed.data;

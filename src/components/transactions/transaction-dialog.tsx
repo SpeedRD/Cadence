@@ -50,6 +50,8 @@ export function TransactionDialog({
       }
       action={saveTransactionAction}
       submitLabel={editing ? "Save changes" : "Add transaction"}
+      cancelLabel="Cancel"
+      savedMessage="Saved"
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}

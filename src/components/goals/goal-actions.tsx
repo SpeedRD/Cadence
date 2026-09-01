@@ -76,6 +76,9 @@ export function GoalActions({
               ? "The goal and its contribution history are removed."
               : "Its contribution history goes with it."
           }
+          confirmLabel="Delete"
+          keepLabel="Keep it"
+          deletedMessage="Deleted"
         />
       ) : null}
     </>
@@ -95,6 +98,9 @@ export function ContributionDeleteButton({
       action={deleteContributionAction}
       title="Remove this contribution?"
       description={`${amount} comes back off the goal's progress.`}
+      confirmLabel="Delete"
+      keepLabel="Keep it"
+      deletedMessage="Deleted"
       trigger={
         <Button variant="ghost" size="icon-xs" aria-label="Remove contribution">
           <Trash2 className="size-3.5" />
