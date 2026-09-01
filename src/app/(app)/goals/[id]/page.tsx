@@ -24,6 +24,7 @@ import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getGoalDetail } from "@/lib/data/goals";
 import { formatDate, toISODate } from "@/lib/date";
+import { getDictionary } from "@/lib/i18n";
 
 export const metadata = { title: "Goal - Cadence" };
 
@@ -40,13 +41,15 @@ export default async function GoalDetailPage({
   const { summary, contributions, contributionTotal } = detail;
   const today = toISODate(context.today);
   const drifted = Math.abs(contributionTotal - summary.savedAmount) > 0.005;
+  const t = getDictionary(context.language).goals;
+  const common = getDictionary(context.language).common;
 
   return (
     <div className="space-y-5">
       <Button asChild variant="ghost" size="xs" className="-ml-2">
         <Link href="/goals">
           <ChevronLeft className="size-3.5" />
-          Goals
+          {t.goalsBreadcrumb}
         </Link>
       </Button>
 
@@ -54,8 +57,8 @@ export default async function GoalDetailPage({
         title={summary.name}
         description={
           summary.targetDate
-            ? `Target ${formatDate(summary.targetDate)}`
-            : "No target date - pace is projected from your contributions"
+            ? t.targetDate(formatDate(summary.targetDate))
+            : t.noTargetPaceNote
         }
         actions={
           <>
@@ -64,15 +67,17 @@ export default async function GoalDetailPage({
               goalName={summary.name}
               currency={summary.currency}
               defaultDate={today}
+              locale={context.language}
               trigger={
                 <Button size="sm">
                   <Plus className="size-3.5" />
-                  Log contribution
+                  {t.logContribution}
                 </Button>
               }
             />
             <GoalActions
               redirectAfterDelete
+              locale={context.language}
               goal={{
                 id: summary.id,
                 name: summary.name,
@@ -95,8 +100,10 @@ export default async function GoalDetailPage({
                 {formatMoney(summary.savedAmount, summary.currency)}
               </span>
               <span className="text-sm text-muted-foreground tnum">
-                {Math.round(summary.progress * 100)}% of{" "}
-                {formatMoney(summary.targetAmount, summary.currency)}
+                {t.percentOf(
+                  Math.round(summary.progress * 100),
+                  formatMoney(summary.targetAmount, summary.currency),
+                )}
               </span>
             </div>
             <Meter value={summary.progress} max={1} status="accent" size="lg" />
@@ -104,23 +111,23 @@ export default async function GoalDetailPage({
 
           <div className="grid gap-6 sm:grid-cols-3">
             <Stat
-              label="Still to go"
+              label={t.stillToGo}
               value={formatMoney(summary.remaining, summary.currency)}
-              hint={`${summary.contributionCount} contribution${summary.contributionCount === 1 ? "" : "s"}`}
+              hint={t.contributionCount(summary.contributionCount)}
             />
             {summary.perPeriod !== null ? (
               <Stat
-                label="Per pay period"
+                label={t.perPayPeriodLabel}
                 value={formatMoney(summary.perPeriod, summary.currency)}
                 hint={
                   summary.periodsLeft === 0
-                    ? "due this period"
-                    : `${summary.periodsLeft} periods to the target date`
+                    ? t.dueThisPeriod
+                    : t.periodsToTarget(summary.periodsLeft ?? 0)
                 }
               />
             ) : (
               <Stat
-                label="Pace"
+                label={t.pace}
                 value={
                   summary.pacePerPeriod
                     ? formatMoney(summary.pacePerPeriod, summary.currency)
@@ -128,23 +135,21 @@ export default async function GoalDetailPage({
                 }
                 hint={
                   summary.projectedEnd
-                    ? `on this pace, done around ${formatDate(summary.projectedEnd)}`
-                    : "log a contribution to set a pace"
+                    ? t.doneAround(formatDate(summary.projectedEnd))
+                    : t.logToSetPace
                 }
               />
             )}
             <Stat
-              label={`In ${context.displayCurrency}`}
+              label={t.inCurrency(context.displayCurrency)}
               value={formatMoney(summary.displaySaved, context.displayCurrency)}
-              hint={`of ${formatMoney(summary.displayTarget, context.displayCurrency)}`}
+              hint={t.ofAmount(formatMoney(summary.displayTarget, context.displayCurrency))}
             />
           </div>
 
           {drifted ? (
             <p className="text-xs text-[var(--warning)]">
-              Cached progress does not match the contribution history
-              ({formatMoney(contributionTotal, summary.currency)}). Recalculate
-              from Settings.
+              {t.driftedWarning(formatMoney(contributionTotal, summary.currency))}
             </p>
           ) : null}
         </CardContent>
@@ -152,23 +157,23 @@ export default async function GoalDetailPage({
 
       <Card className="py-0">
         <CardHeader className="pt-4">
-          <CardTitle>Contribution history</CardTitle>
+          <CardTitle>{t.contributionHistory}</CardTitle>
         </CardHeader>
         <CardContent className="px-0 pb-2">
           {contributions.length === 0 ? (
             <div className="px-4 pb-4">
               <EmptyState
-                title="No contributions yet"
-                description="Every amount you log here is the source of truth for this goal's progress."
+                title={t.noContributionsYetTitle}
+                description={t.noContributionsYetDescription}
               />
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[104px]">Date</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="w-[104px]">{common.date}</TableHead>
+                  <TableHead>{common.note}</TableHead>
+                  <TableHead className="text-right">{common.amount}</TableHead>
                   <TableHead className="w-10" />
                 </TableRow>
               </TableHeader>
@@ -186,6 +191,7 @@ export default async function GoalDetailPage({
                     </TableCell>
                     <TableCell>
                       <ContributionDeleteButton
+                        locale={context.language}
                         id={contribution.id}
                         amount={formatMoney(
                           contribution.amount,

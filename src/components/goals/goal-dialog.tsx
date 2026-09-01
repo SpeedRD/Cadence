@@ -4,6 +4,7 @@ import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
 import { CurrencySelect } from "@/components/form/selects";
 import { Input } from "@/components/ui/input";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { saveGoalAction } from "@/server/actions/goals";
 
 export interface GoalFormValues {
@@ -19,40 +20,44 @@ export function GoalDialog({
   trigger,
   open,
   onOpenChange,
+  locale,
 }: {
   values: GoalFormValues;
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  locale: Locale;
 }) {
+  const t = getDictionary(locale).goals;
+  const common = getDictionary(locale).common;
   const editing = Boolean(values.id);
 
   return (
     <FormDialog
-      title={editing ? "Edit goal" : "New goal"}
-      description="A target date turns the goal into a per-pay-period number."
+      title={editing ? t.editGoal : t.newGoal}
+      description={t.goalDialogDescription}
       action={saveGoalAction}
-      submitLabel={editing ? "Save changes" : "Create goal"}
-      cancelLabel="Cancel"
-      savedMessage="Saved"
+      submitLabel={editing ? t.saveChanges : t.createGoal}
+      cancelLabel={common.cancel}
+      savedMessage={editing ? t.goalUpdated : t.goalCreated}
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}
     >
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
 
-      <Field label="Name" htmlFor="goal-name">
+      <Field label={common.name} htmlFor="goal-name">
         <Input
           id="goal-name"
           name="name"
           defaultValue={values.name ?? ""}
-          placeholder="Emergency fund"
+          placeholder={t.namePlaceholder}
           required
         />
       </Field>
 
       <div className="grid grid-cols-[1fr_110px] gap-3">
-        <Field label="Target amount" htmlFor="goal-target">
+        <Field label={t.targetAmount} htmlFor="goal-target">
           <Input
             id="goal-target"
             name="targetAmount"
@@ -63,15 +68,15 @@ export function GoalDialog({
             required
           />
         </Field>
-        <Field label="Currency">
+        <Field label={common.currency}>
           <CurrencySelect name="currency" defaultValue={values.currency} />
         </Field>
       </div>
 
       <Field
-        label="Target date"
+        label={t.targetDateLabel}
         htmlFor="goal-date"
-        hint="Optional. Without one, Cadence projects from your pace."
+        hint={t.targetDateHint}
       >
         <Input
           id="goal-date"

@@ -2,7 +2,7 @@
 
 import { getSettings, requireAuth } from "@/lib/auth";
 import { recomputeGoalSaved } from "@/lib/goals";
-import { isLocale } from "@/lib/i18n";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import {
   contributionSchema,
@@ -20,6 +20,7 @@ export async function saveGoalAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).goals;
   const parsed = goalSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
@@ -33,7 +34,7 @@ export async function saveGoalAction(
   }
 
   revalidateApp();
-  return done(id ? "Goal updated" : "Goal created");
+  return done(id ? t.goalUpdated : t.goalCreated);
 }
 
 export async function deleteGoalAction(
@@ -41,11 +42,15 @@ export async function deleteGoalAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).goals;
+  const common = getDictionary(locale).common;
   const id = String(formData.get("id") ?? "").trim();
-  if (!id) return fail("Nothing to delete");
+  if (!id) return fail(common.nothingToDelete);
   await prisma.goal.delete({ where: { id } });
   revalidateApp();
-  return done("Goal deleted");
+  return done(t.goalDeleted);
 }
 
 /**
@@ -59,6 +64,7 @@ export async function addContributionAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).goals;
   const parsed = contributionSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
@@ -66,7 +72,7 @@ export async function addContributionAction(
     where: { id: parsed.data.goalId },
     select: { id: true, currency: true },
   });
-  if (!goal) return fail("That goal no longer exists");
+  if (!goal) return fail(t.goalNoLongerExists);
 
   await prisma.goalContribution.create({
     data: {
@@ -80,7 +86,7 @@ export async function addContributionAction(
   await recomputeGoalSaved(goal.id);
 
   revalidateApp();
-  return done("Contribution logged");
+  return done(t.contributionLogged);
 }
 
 export async function deleteContributionAction(
@@ -88,16 +94,19 @@ export async function deleteContributionAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).goals;
   const id = String(formData.get("id") ?? "").trim();
   const contribution = await prisma.goalContribution.findUnique({
     where: { id },
     select: { goalId: true },
   });
-  if (!contribution) return fail("That contribution no longer exists");
+  if (!contribution) return fail(t.contributionNoLongerExists);
 
   await prisma.goalContribution.delete({ where: { id } });
   await recomputeGoalSaved(contribution.goalId);
 
   revalidateApp();
-  return done("Contribution removed");
+  return done(t.contributionRemoved);
 }

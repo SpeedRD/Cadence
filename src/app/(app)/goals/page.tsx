@@ -13,6 +13,7 @@ import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { listGoals } from "@/lib/data/goals";
 import { formatDate, toISODate } from "@/lib/date";
+import { getDictionary } from "@/lib/i18n";
 
 export const metadata = { title: "Goals - Cadence" };
 
@@ -20,19 +21,22 @@ export default async function GoalsPage() {
   const context = await getAppContext();
   const goals = await listGoals(context);
   const today = toISODate(context.today);
+  const t = getDictionary(context.language).goals;
+  const common = getDictionary(context.language).common;
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Goals"
-        description="What you are saving towards, and what each pay period has to carry."
+        title={t.title}
+        description={t.description}
         actions={
           <GoalDialog
             values={{ currency: context.displayCurrency }}
+            locale={context.language}
             trigger={
               <Button size="sm">
                 <Plus className="size-3.5" />
-                New goal
+                {t.newGoal}
               </Button>
             }
           />
@@ -41,12 +45,13 @@ export default async function GoalsPage() {
 
       {goals.length === 0 ? (
         <EmptyState
-          title="No goals yet"
-          description="Add a target amount, optionally a date, and log contributions as you make them."
+          title={t.noGoalsTitle}
+          description={t.noGoalsDescription}
           action={
             <GoalDialog
               values={{ currency: context.displayCurrency }}
-              trigger={<Button size="sm">Create your first goal</Button>}
+              locale={context.language}
+              trigger={<Button size="sm">{t.createFirstGoal}</Button>}
             />
           }
         />
@@ -65,13 +70,14 @@ export default async function GoalsPage() {
                     </Link>
                     <p className="text-xs text-muted-foreground">
                       {goal.achievedAt
-                        ? "Reached"
+                        ? t.reached
                         : goal.targetDate
-                          ? `Target ${formatDate(goal.targetDate)}`
-                          : "No target date"}
+                          ? t.targetDate(formatDate(goal.targetDate))
+                          : t.noTargetDate}
                     </p>
                   </div>
                   <GoalActions
+                    locale={context.language}
                     goal={{
                       id: goal.id,
                       name: goal.name,
@@ -90,8 +96,10 @@ export default async function GoalsPage() {
                       {formatMoney(goal.savedAmount, goal.currency)}
                     </span>
                     <span className="text-xs text-muted-foreground tnum">
-                      {Math.round(goal.progress * 100)}% of{" "}
-                      {formatMoney(goal.targetAmount, goal.currency)}
+                      {t.percentOf(
+                        Math.round(goal.progress * 100),
+                        formatMoney(goal.targetAmount, goal.currency),
+                      )}
                     </span>
                   </div>
                   <Meter value={goal.progress} max={1} status="accent" size="lg" />
@@ -100,32 +108,32 @@ export default async function GoalsPage() {
                 <div className="flex items-end justify-between gap-3">
                   <div className="text-xs text-muted-foreground">
                     {goal.achievedAt ? (
-                      <span className="text-[var(--good)]">Fully funded</span>
+                      <span className="text-[var(--good)]">{t.fullyFunded}</span>
                     ) : goal.perPeriod !== null ? (
                       <>
                         <span className="figure text-foreground">
                           {formatMoney(goal.perPeriod, goal.currency)}
                         </span>{" "}
-                        per pay period
+                        {t.perPayPeriod}
                         {goal.periodsLeft !== null
                           ? goal.periodsLeft === 0
-                            ? " · due this period"
-                            : ` · ${goal.periodsLeft} periods left`
+                            ? ` · ${t.dueThisPeriod}`
+                            : ` · ${t.periodsLeft(goal.periodsLeft)}`
                           : ""}
                       </>
                     ) : goal.pacePerPeriod ? (
                       <>
-                        Pace{" "}
+                        {t.pace}{" "}
                         <span className="figure text-foreground">
                           {formatMoney(goal.pacePerPeriod, goal.currency)}
                         </span>{" "}
-                        per period
+                        {t.perPeriod}
                         {goal.projectedEnd
-                          ? ` · ~${formatDate(goal.projectedEnd)}`
+                          ? ` · ${t.onTrackApprox(formatDate(goal.projectedEnd))}`
                           : ""}
                       </>
                     ) : (
-                      `${formatMoney(goal.remaining, goal.currency)} to go`
+                      t.toGo(formatMoney(goal.remaining, goal.currency))
                     )}
                   </div>
                   <ContributionDialog
@@ -133,9 +141,10 @@ export default async function GoalsPage() {
                     goalName={goal.name}
                     currency={goal.currency}
                     defaultDate={today}
+                    locale={context.language}
                     trigger={
                       <Button variant="outline" size="xs">
-                        Add
+                        {common.add}
                       </Button>
                     }
                   />
