@@ -11,7 +11,7 @@ import {
 } from "@/components/form/selects";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { TRANSACTION_TYPE_LABELS } from "@/lib/labels";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { saveTransactionAction } from "@/server/actions/transactions";
 
 export interface TransactionFormValues {
@@ -32,6 +32,7 @@ export function TransactionDialog({
   trigger,
   open,
   onOpenChange,
+  locale,
 }: {
   accounts: Option[];
   categories: Option[];
@@ -39,19 +40,23 @@ export function TransactionDialog({
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  locale: Locale;
 }) {
+  const dictionary = getDictionary(locale);
+  const t = dictionary.transactions;
+  const common = dictionary.common;
   const editing = Boolean(values.id);
 
   return (
     <FormDialog
-      title={editing ? "Edit transaction" : "New transaction"}
+      title={editing ? t.editTransaction : t.newTransaction}
       description={
-        editing ? undefined : "Logged manually - source stays as Manual."
+        editing ? undefined : t.manualDescription
       }
       action={saveTransactionAction}
-      submitLabel={editing ? "Save changes" : "Add transaction"}
-      cancelLabel="Cancel"
-      savedMessage="Saved"
+      submitLabel={editing ? t.saveChanges : t.addTransaction}
+      cancelLabel={common.cancel}
+      savedMessage={editing ? t.transactionUpdated : t.transactionAdded}
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}
@@ -59,15 +64,15 @@ export function TransactionDialog({
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Type">
+        <Field label={common.type}>
           <EnumSelect
             name="type"
             options={["EXPENSE", "INCOME"]}
-            labels={TRANSACTION_TYPE_LABELS}
+            labels={common.transactionTypeLabels}
             defaultValue={values.type ?? "EXPENSE"}
           />
         </Field>
-        <Field label="Date" htmlFor="transaction-date">
+        <Field label={common.date} htmlFor="transaction-date">
           <Input
             id="transaction-date"
             type="date"
@@ -79,7 +84,7 @@ export function TransactionDialog({
       </div>
 
       <div className="grid grid-cols-[1fr_110px] gap-3">
-        <Field label="Amount" htmlFor="transaction-amount">
+        <Field label={common.amount} htmlFor="transaction-amount">
           <Input
             id="transaction-amount"
             name="amount"
@@ -90,20 +95,20 @@ export function TransactionDialog({
             required
           />
         </Field>
-        <Field label="Currency">
+        <Field label={common.currency}>
           <CurrencySelect name="currency" defaultValue={values.currency} />
         </Field>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Account">
+        <Field label={common.account}>
           <AccountSelect
             name="accountId"
             accounts={accounts}
             defaultValue={values.accountId ?? accounts[0]?.id}
           />
         </Field>
-        <Field label="Category">
+        <Field label={common.category}>
           <CategorySelect
             name="categoryId"
             categories={categories}
@@ -112,12 +117,12 @@ export function TransactionDialog({
         </Field>
       </div>
 
-      <Field label="Note" htmlFor="transaction-note">
+      <Field label={common.note} htmlFor="transaction-note">
         <Textarea
           id="transaction-note"
           name="note"
           rows={2}
-          placeholder="What was it for?"
+          placeholder={t.notePlaceholder}
           defaultValue={values.note ?? ""}
         />
       </Field>

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { getSettings, requireAuth } from "@/lib/auth";
 import { CURRENCIES } from "@/lib/currency";
 import { fromISODate } from "@/lib/date";
-import { isLocale } from "@/lib/i18n";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { firstError } from "@/lib/validation";
 
@@ -41,12 +41,13 @@ export async function importTransactionsAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).transactions;
 
   let payload: unknown;
   try {
     payload = JSON.parse(String(formData.get("payload") ?? ""));
   } catch {
-    return fail("Could not read the parsed rows");
+    return fail(t.couldNotReadRows);
   }
 
   const parsed = importPayloadSchema.safeParse(payload);
@@ -56,7 +57,7 @@ export async function importTransactionsAction(
     where: { id: parsed.data.accountId },
     select: { id: true },
   });
-  if (!account) return fail("That account no longer exists");
+  if (!account) return fail(t.accountNoLongerExists);
 
   const categoryIds = [
     ...new Set(
@@ -85,12 +86,10 @@ export async function importTransactionsAction(
     source: "CSV" as const,
   }));
 
-  if (data.some((row) => !row.date)) return fail("A row has an invalid date");
+  if (data.some((row) => !row.date)) return fail(t.invalidDateRow);
 
   const result = await prisma.transaction.createMany({ data });
 
   revalidateApp();
-  return done(
-    `Imported ${result.count} transaction${result.count === 1 ? "" : "s"}`,
-  );
+  return done(t.imported(result.count));
 }

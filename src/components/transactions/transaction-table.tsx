@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/table";
 import { formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { deleteTransactionAction } from "@/server/actions/transactions";
 import { cn } from "@/lib/utils";
 
@@ -65,12 +66,17 @@ export function TransactionTable({
   accounts,
   categories,
   displayCurrency,
+  locale,
 }: {
   rows: TransactionRow[];
   accounts: Option[];
   categories: Option[];
   displayCurrency: string;
+  locale: Locale;
 }) {
+  const dictionary = getDictionary(locale);
+  const t = dictionary.transactions;
+  const common = dictionary.common;
   const [editing, setEditing] = useState<TransactionRow | null>(null);
   const [deleting, setDeleting] = useState<TransactionRow | null>(null);
 
@@ -83,11 +89,11 @@ export function TransactionTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[104px]">Date</TableHead>
-              <TableHead>Description</TableHead>
-              <TableHead className="hidden sm:table-cell">Account</TableHead>
-              <TableHead className="hidden md:table-cell">Source</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
+              <TableHead className="w-[104px]">{t.colDate}</TableHead>
+              <TableHead>{t.colDescription}</TableHead>
+              <TableHead className="hidden sm:table-cell">{t.colAccount}</TableHead>
+              <TableHead className="hidden md:table-cell">{t.colSource}</TableHead>
+              <TableHead className="text-right">{t.colAmount}</TableHead>
               <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
@@ -102,8 +108,10 @@ export function TransactionTable({
                     <span className="truncate text-sm">
                       {row.note ??
                         (row.type === "TRANSFER"
-                          ? `Transfer ${row.transferDirection === "OUT" ? "to" : "from"} ${row.counterpartAccountName ?? "another account"}`
-                          : (row.categoryName ?? "Uncategorized"))}
+                          ? (row.transferDirection === "OUT"
+                              ? t.transferTo(row.counterpartAccountName ?? t.anotherAccount)
+                              : t.transferFrom(row.counterpartAccountName ?? t.anotherAccount))
+                          : (row.categoryName ?? t.uncategorized))}
                     </span>
                     {row.categoryName ? (
                       <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
@@ -132,14 +140,8 @@ export function TransactionTable({
                   <SourceBadge
                     source={row.source}
                     isTransfer={row.type === "TRANSFER"}
-                    labels={{
-                      MANUAL: "Manual",
-                      CSV: "CSV",
-                      GMAIL: "Gmail",
-                      OUTLOOK: "Outlook",
-                      PAYPAL: "PayPal",
-                    }}
-                    transferLabel="Transfer"
+                    labels={common.sourceLabels}
+                    transferLabel={t.transfer}
                   />
                 </TableCell>
                 <TableCell>
@@ -151,7 +153,7 @@ export function TransactionTable({
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        aria-label="Row actions"
+                        aria-label={t.rowActionsAria}
                       >
                         <MoreHorizontal className="size-3.5" />
                       </Button>
@@ -159,14 +161,14 @@ export function TransactionTable({
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onSelect={() => setEditing(row)}>
                         <Pencil className="size-3.5" />
-                        Edit
+                        {common.edit}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         variant="destructive"
                         onSelect={() => setDeleting(row)}
                       >
                         <Trash2 className="size-3.5" />
-                        Delete
+                        {common.delete}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -181,6 +183,7 @@ export function TransactionTable({
         <TransactionDialog
           accounts={accounts}
           categories={categories}
+          locale={locale}
           open
           onOpenChange={(next) => !next && setEditing(null)}
           values={{
@@ -199,6 +202,7 @@ export function TransactionTable({
       {editingTransfer ? (
         <TransferDialog
           accounts={accounts}
+          locale={locale}
           open
           onOpenChange={(next) => !next && setEditing(null)}
           values={{
@@ -225,15 +229,15 @@ export function TransactionTable({
           action={deleteTransactionAction}
           open
           onOpenChange={(next) => !next && setDeleting(null)}
-          title={deleting.transferId ? "Delete this transfer?" : "Delete this transaction?"}
+          title={deleting.transferId ? t.deleteTransferTitle : t.deleteTransactionTitle}
           description={
             deleting.transferId
-              ? "Both sides of the transfer are removed together."
-              : "This cannot be undone."
+              ? t.deleteTransferDescription
+              : t.deleteTransactionDescription
           }
-          confirmLabel="Delete"
-          keepLabel="Keep it"
-          deletedMessage="Deleted"
+          confirmLabel={common.delete}
+          keepLabel={common.keepIt}
+          deletedMessage={common.deleted}
         />
       ) : null}
     </>

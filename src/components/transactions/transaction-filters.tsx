@@ -14,7 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { TRANSACTION_SOURCES, SOURCE_LABELS, TRANSACTION_TYPE_LABELS, TRANSACTION_TYPES } from "@/lib/labels";
+import { getDictionary, type Locale } from "@/lib/i18n";
+import { TRANSACTION_SOURCES, TRANSACTION_TYPES } from "@/lib/labels";
 
 const ALL = "all";
 
@@ -22,11 +23,16 @@ export function TransactionFilters({
   accounts,
   categories,
   values,
+  locale,
 }: {
   accounts: Option[];
   categories: Option[];
   values: Record<string, string | undefined>;
+  locale: Locale;
 }) {
+  const dictionary = getDictionary(locale);
+  const t = dictionary.transactions;
+  const common = dictionary.common;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -60,9 +66,9 @@ export function TransactionFilters({
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search notes"
+          placeholder={t.searchNotes}
           className="h-8 w-44 pl-8"
-          aria-label="Search notes"
+          aria-label={t.searchNotes}
         />
       </form>
 
@@ -71,10 +77,10 @@ export function TransactionFilters({
         onValueChange={(value) => apply({ account: value })}
       >
         <SelectTrigger size="sm" className="w-36">
-          <SelectValue placeholder="Account" />
+          <SelectValue placeholder={t.accountPlaceholder} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={ALL}>All accounts</SelectItem>
+          <SelectItem value={ALL}>{t.allAccounts}</SelectItem>
           {accounts.map((account) => (
             <SelectItem key={account.id} value={account.id}>
               {account.name}
@@ -88,11 +94,11 @@ export function TransactionFilters({
         onValueChange={(value) => apply({ category: value })}
       >
         <SelectTrigger size="sm" className="w-36">
-          <SelectValue placeholder="Category" />
+          <SelectValue placeholder={t.categoryPlaceholder} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={ALL}>All categories</SelectItem>
-          <SelectItem value="none">Uncategorized</SelectItem>
+          <SelectItem value={ALL}>{t.allCategories}</SelectItem>
+          <SelectItem value="none">{t.uncategorized}</SelectItem>
           {categories.map((category) => (
             <SelectItem key={category.id} value={category.id}>
               {category.name}
@@ -106,13 +112,13 @@ export function TransactionFilters({
         onValueChange={(value) => apply({ type: value })}
       >
         <SelectTrigger size="sm" className="w-32">
-          <SelectValue placeholder="Type" />
+          <SelectValue placeholder={t.typePlaceholder} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={ALL}>All types</SelectItem>
+          <SelectItem value={ALL}>{t.allTypes}</SelectItem>
           {TRANSACTION_TYPES.map((type) => (
             <SelectItem key={type} value={type}>
-              {TRANSACTION_TYPE_LABELS[type]}
+              {common.transactionTypeLabels[type]}
             </SelectItem>
           ))}
         </SelectContent>
@@ -123,13 +129,13 @@ export function TransactionFilters({
         onValueChange={(value) => apply({ source: value })}
       >
         <SelectTrigger size="sm" className="w-32">
-          <SelectValue placeholder="Source" />
+          <SelectValue placeholder={t.sourcePlaceholder} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={ALL}>All sources</SelectItem>
+          <SelectItem value={ALL}>{t.allSources}</SelectItem>
           {TRANSACTION_SOURCES.map((source) => (
             <SelectItem key={source} value={source}>
-              {SOURCE_LABELS[source]}
+              {common.sourceLabels[source]}
             </SelectItem>
           ))}
         </SelectContent>
@@ -138,15 +144,15 @@ export function TransactionFilters({
       <div className="flex items-center gap-1.5">
         <Input
           type="date"
-          aria-label="From date"
+          aria-label={t.fromDateAria}
           className="h-8 w-[9.5rem]"
           value={values.from ?? ""}
           onChange={(event) => apply({ from: event.target.value })}
         />
-        <span className="text-xs text-muted-foreground">to</span>
+        <span className="text-xs text-muted-foreground">{t.toSeparator}</span>
         <Input
           type="date"
-          aria-label="To date"
+          aria-label={t.toDateAria}
           className="h-8 w-[9.5rem]"
           value={values.to ?? ""}
           onChange={(event) => apply({ to: event.target.value })}
@@ -163,7 +169,7 @@ export function TransactionFilters({
           }}
         >
           <RotateCcw className="size-3.5" />
-          Clear
+          {t.clear}
         </Button>
       ) : null}
     </div>

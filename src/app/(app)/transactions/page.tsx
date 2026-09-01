@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
+import { getDictionary } from "@/lib/i18n";
 import {
   listTransactions,
   summarizeTransactions,
@@ -36,6 +37,8 @@ export default async function TransactionsPage({
 }) {
   const params = await searchParams;
   const context = await getAppContext();
+  const t = getDictionary(context.language).transactions;
+  const common = getDictionary(context.language).common;
 
   const filters: Filters = {
     accountId: single(params.account),
@@ -78,24 +81,25 @@ export default async function TransactionsPage({
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Transactions"
-        description={`${result.total} record${result.total === 1 ? "" : "s"} · ${formatMoney(totals.expense, context.displayCurrency)} out, ${formatMoney(totals.income, context.displayCurrency)} in`}
+        title={t.title}
+        description={t.recordsSummary(result.total, formatMoney(totals.expense, context.displayCurrency), formatMoney(totals.income, context.displayCurrency))}
         actions={
           <>
             <Button asChild variant="ghost" size="sm">
               <Link href="/transactions/import">
                 <Upload className="size-3.5" />
-                Import CSV
+                {t.importCsv}
               </Link>
             </Button>
             {accounts.length > 1 ? (
               <TransferDialog
                 accounts={accounts}
                 values={{ date: today, currency: context.displayCurrency }}
+                locale={context.language}
                 trigger={
                   <Button variant="outline" size="sm">
                     <ArrowRightLeft className="size-3.5" />
-                    Transfer
+                    {t.transfer}
                   </Button>
                 }
               />
@@ -105,10 +109,11 @@ export default async function TransactionsPage({
                 accounts={accounts}
                 categories={categories}
                 values={{ date: today, currency: context.displayCurrency }}
+                locale={context.language}
                 trigger={
                   <Button size="sm">
                     <Plus className="size-3.5" />
-                    New
+                    {t.new}
                   </Button>
                 }
               />
@@ -120,6 +125,7 @@ export default async function TransactionsPage({
       <TransactionFilters
         accounts={accounts}
         categories={categories}
+        locale={context.language}
         values={{
           account: single(params.account),
           category: single(params.category),
@@ -133,18 +139,18 @@ export default async function TransactionsPage({
 
       {!hasAccounts ? (
         <EmptyState
-          title="Add an account first"
-          description="Transactions belong to an account, so start there."
+          title={t.addAccountFirstTitle}
+          description={t.needAccountDescription}
           action={
             <Button asChild size="sm">
-              <Link href="/accounts">Go to accounts</Link>
+              <Link href="/accounts">{t.goToAccounts}</Link>
             </Button>
           }
         />
       ) : result.rows.length === 0 ? (
         <EmptyState
-          title="Nothing here yet"
-          description="No transactions match these filters."
+          title={t.nothingHereTitle}
+          description={t.noMatchFilters}
         />
       ) : (
         <Card className="py-0">
@@ -154,6 +160,7 @@ export default async function TransactionsPage({
               accounts={accounts}
               categories={categories}
               displayCurrency={context.displayCurrency}
+              locale={context.language}
             />
           </CardContent>
         </Card>
@@ -162,7 +169,7 @@ export default async function TransactionsPage({
       {result.pageCount > 1 ? (
         <div className="flex items-center justify-between text-sm">
           <p className="text-muted-foreground tnum">
-            Page {result.page} of {result.pageCount} · {PAGE_SIZE} per page
+            {t.pageOf(result.page, result.pageCount, PAGE_SIZE)}
           </p>
           <div className="flex gap-2">
             <Button
@@ -172,9 +179,9 @@ export default async function TransactionsPage({
               disabled={result.page <= 1}
             >
               {result.page > 1 ? (
-                <Link href={buildPageHref(result.page - 1)}>Previous</Link>
+                <Link href={buildPageHref(result.page - 1)}>{t.previous}</Link>
               ) : (
-                <span>Previous</span>
+                <span>{t.previous}</span>
               )}
             </Button>
             <Button
@@ -184,9 +191,9 @@ export default async function TransactionsPage({
               disabled={result.page >= result.pageCount}
             >
               {result.page < result.pageCount ? (
-                <Link href={buildPageHref(result.page + 1)}>Next</Link>
+                <Link href={buildPageHref(result.page + 1)}>{t.next}</Link>
               ) : (
-                <span>Next</span>
+                <span>{t.next}</span>
               )}
             </Button>
           </div>

@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 
 import { getSettings, requireAuth } from "@/lib/auth";
-import { isLocale } from "@/lib/i18n";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import {
   firstError,
@@ -21,6 +21,7 @@ export async function saveTransactionAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).transactions;
   const parsed = transactionSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
@@ -28,9 +29,9 @@ export async function saveTransactionAction(
 
   if (id) {
     const existing = await prisma.transaction.findUnique({ where: { id } });
-    if (!existing) return fail("That transaction no longer exists");
+    if (!existing) return fail(t.transactionNoLongerExists);
     if (existing.transferId) {
-      return fail("Edit this transfer from the transfer form");
+      return fail(t.editFromTransferForm);
     }
     await prisma.transaction.update({ where: { id }, data: values });
   } else {
@@ -38,7 +39,7 @@ export async function saveTransactionAction(
   }
 
   revalidateApp();
-  return done(id ? "Transaction updated" : "Transaction added");
+  return done(id ? t.transactionUpdated : t.transactionAdded);
 }
 
 export async function deleteTransactionAction(
@@ -46,11 +47,14 @@ export async function deleteTransactionAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).transactions;
   const id = String(formData.get("id") ?? "").trim();
-  if (!id) return fail("Nothing to delete");
+  if (!id) return fail(t.nothingToDelete);
 
   const existing = await prisma.transaction.findUnique({ where: { id } });
-  if (!existing) return fail("That transaction no longer exists");
+  if (!existing) return fail(t.transactionNoLongerExists);
 
   // Deleting one leg of a transfer removes both, so balances stay consistent.
   if (existing.transferId) {
@@ -62,7 +66,7 @@ export async function deleteTransactionAction(
   }
 
   revalidateApp();
-  return done("Transaction deleted");
+  return done(t.transactionDeleted);
 }
 
 /**
@@ -78,6 +82,7 @@ export async function saveTransferAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).transactions;
   const parsed = transferSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
@@ -86,7 +91,7 @@ export async function saveTransferAction(
 
   if (transferId) {
     const legs = await prisma.transaction.findMany({ where: { transferId } });
-    if (legs.length !== 2) return fail("That transfer no longer exists");
+    if (legs.length !== 2) return fail(t.transferNoLongerExists);
 
     await prisma.$transaction(async (tx) => {
       await tx.transaction.updateMany({
@@ -100,7 +105,7 @@ export async function saveTransferAction(
     });
 
     revalidateApp();
-    return done("Transfer updated");
+    return done(t.transferUpdated);
   }
 
   const newTransferId = randomUUID();
@@ -134,5 +139,5 @@ export async function saveTransferAction(
   });
 
   revalidateApp();
-  return done("Transfer recorded");
+  return done(t.transferRecorded);
 }

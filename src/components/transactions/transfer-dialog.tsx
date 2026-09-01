@@ -9,6 +9,7 @@ import {
 } from "@/components/form/selects";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { saveTransferAction } from "@/server/actions/transactions";
 
 export interface TransferFormValues {
@@ -28,23 +29,28 @@ export function TransferDialog({
   trigger,
   open,
   onOpenChange,
+  locale,
 }: {
   accounts: Option[];
   values: TransferFormValues;
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  locale: Locale;
 }) {
+  const dictionary = getDictionary(locale);
+  const t = dictionary.transactions;
+  const common = dictionary.common;
   const editing = Boolean(values.transferId);
 
   return (
     <FormDialog
-      title={editing ? "Edit transfer" : "Move money"}
-      description="Between your own accounts. Transfers never count as income or spending."
+      title={editing ? t.editTransfer : t.moveMoney}
+      description={t.transferDescription}
       action={saveTransferAction}
-      submitLabel={editing ? "Save changes" : "Record transfer"}
-      cancelLabel="Cancel"
-      savedMessage="Saved"
+      submitLabel={editing ? t.saveChanges : t.recordTransfer}
+      cancelLabel={common.cancel}
+      savedMessage={editing ? t.transferUpdated : t.transferRecorded}
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}
@@ -54,14 +60,14 @@ export function TransferDialog({
       ) : null}
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="From">
+        <Field label={t.from}>
           <AccountSelect
             name="fromAccountId"
             accounts={accounts}
             defaultValue={values.fromAccountId ?? accounts[0]?.id}
           />
         </Field>
-        <Field label="To">
+        <Field label={t.to}>
           <AccountSelect
             name="toAccountId"
             accounts={accounts}
@@ -71,7 +77,7 @@ export function TransferDialog({
       </div>
 
       <div className="grid grid-cols-[1fr_110px_150px] gap-3">
-        <Field label="Amount" htmlFor="transfer-amount">
+        <Field label={common.amount} htmlFor="transfer-amount">
           <Input
             id="transfer-amount"
             name="amount"
@@ -82,10 +88,10 @@ export function TransferDialog({
             required
           />
         </Field>
-        <Field label="Currency">
+        <Field label={common.currency}>
           <CurrencySelect name="currency" defaultValue={values.currency} />
         </Field>
-        <Field label="Date" htmlFor="transfer-date">
+        <Field label={common.date} htmlFor="transfer-date">
           <Input
             id="transfer-date"
             type="date"
@@ -96,12 +102,12 @@ export function TransferDialog({
         </Field>
       </div>
 
-      <Field label="Note" htmlFor="transfer-note">
+      <Field label={common.note} htmlFor="transfer-note">
         <Textarea
           id="transfer-note"
           name="note"
           rows={2}
-          placeholder="Optional"
+          placeholder={common.optional}
           defaultValue={values.note ?? ""}
         />
       </Field>

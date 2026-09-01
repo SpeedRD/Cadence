@@ -35,16 +35,11 @@ import {
 } from "@/lib/csv";
 import { CURRENCIES, formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { importTransactionsAction } from "@/server/actions/import";
 import { cn } from "@/lib/utils";
 
 type SignMode = "signed" | "expenses" | "income";
-
-const SIGN_LABELS: Record<SignMode, string> = {
-  signed: "Signed - negative is spending",
-  expenses: "Every row is spending",
-  income: "Every row is income",
-};
 
 const PREVIEW_ROWS = 8;
 
@@ -69,12 +64,22 @@ export function CsvImporter({
   accounts,
   categories,
   defaultCurrency,
+  locale,
 }: {
   accounts: Option[];
   categories: Option[];
   defaultCurrency: string;
+  locale: Locale;
 }) {
   const router = useRouter();
+  const dictionary = getDictionary(locale);
+  const t = dictionary.transactions;
+  const common = dictionary.common;
+  const SIGN_LABELS: Record<SignMode, string> = {
+    signed: t.signSigned,
+    expenses: t.signExpenses,
+    income: t.signIncome,
+  };
   const [fileName, setFileName] = useState<string | null>(null);
   const [rows, setRows] = useState<string[][]>([]);
   const [hasHeader, setHasHeader] = useState(true);
@@ -97,7 +102,7 @@ export function CsvImporter({
     if (!state || state.at === handled.current) return;
     handled.current = state.at;
     if (state.ok) {
-      toast.success(state.message ?? "Imported");
+      toast.success(state.message ?? common.saved);
       router.push("/transactions");
     } else if (state.error) {
       toast.error(state.error);
@@ -153,7 +158,7 @@ export function CsvImporter({
 
   const columnOptions = Array.from({ length: columnCount }, (_, index) => ({
     value: String(index),
-    label: hasHeader && headerCells[index] ? headerCells[index] : `Column ${index + 1}`,
+    label: hasHeader && headerCells[index] ? headerCells[index] : t.column(index + 1),
   }));
 
   return (
@@ -161,7 +166,7 @@ export function CsvImporter({
       <Card>
         <CardHeader>
           <CardTitle>
-            <StepLabel index="01" title="Pick a file" />
+            <StepLabel index="01" title={t.step1} />
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -187,12 +192,11 @@ export function CsvImporter({
           />
           {fileName ? (
             <p className="text-sm text-muted-foreground">
-              {fileName} · {rows.length} row{rows.length === 1 ? "" : "s"} read
+              {t.rowsRead(fileName, rows.length)}
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">
-              A plain CSV export from your bank. Nothing is written until you
-              review the preview below.
+              {t.csvHint}
             </p>
           )}
         </CardContent>
@@ -203,7 +207,7 @@ export function CsvImporter({
           <Card>
             <CardHeader>
               <CardTitle>
-                <StepLabel index="02" title="Map the columns" />
+                <StepLabel index="02" title={t.step2} />
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -214,26 +218,26 @@ export function CsvImporter({
                   onCheckedChange={setHasHeader}
                 />
                 <Label htmlFor="has-header" className="text-sm">
-                  First row is a header
+                  {t.firstRowHeader}
                 </Label>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="Date column">
+                <Field label={t.dateColumn}>
                   <ColumnSelect
                     options={columnOptions}
                     value={dateColumn}
                     onChange={setDateColumn}
                   />
                 </Field>
-                <Field label="Amount column">
+                <Field label={t.amountColumn}>
                   <ColumnSelect
                     options={columnOptions}
                     value={amountColumn}
                     onChange={setAmountColumn}
                   />
                 </Field>
-                <Field label="Description column">
+                <Field label={t.descriptionColumn}>
                   <ColumnSelect
                     options={columnOptions}
                     value={noteColumn}
@@ -243,7 +247,7 @@ export function CsvImporter({
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Date format" hint="How dates are written in your file">
+                <Field label={t.dateFormat} hint={t.dateFormatHint}>
                   <Select
                     value={dateFormat}
                     onValueChange={(value) => setDateFormat(value as DateFormat)}
@@ -260,7 +264,7 @@ export function CsvImporter({
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field label="Amount convention">
+                <Field label={t.amountConvention}>
                   <Select
                     value={signMode}
                     onValueChange={(value) => setSignMode(value as SignMode)}
@@ -280,7 +284,7 @@ export function CsvImporter({
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="Import into account">
+                <Field label={t.importInto}>
                   <PickerSelect
                     value={accountId}
                     onChange={setAccountId}
@@ -290,7 +294,7 @@ export function CsvImporter({
                     }))}
                   />
                 </Field>
-                <Field label="Currency">
+                <Field label={common.currency}>
                   <PickerSelect
                     value={currency}
                     onChange={setCurrency}
@@ -300,12 +304,12 @@ export function CsvImporter({
                     }))}
                   />
                 </Field>
-                <Field label="Category for every row">
+                <Field label={t.categoryForEveryRow}>
                   <PickerSelect
                     value={categoryId}
                     onChange={setCategoryId}
                     options={[
-                      { value: "none", label: "No category" },
+                      { value: "none", label: t.noCategory },
                       ...categories.map((category) => ({
                         value: category.id,
                         label: category.name,
@@ -320,18 +324,17 @@ export function CsvImporter({
           <Card>
             <CardHeader>
               <CardTitle>
-                <StepLabel index="03" title="Review and import" />
+                <StepLabel index="03" title={t.step3} />
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                <span className="text-foreground">{validRows.length}</span> row
-                {validRows.length === 1 ? "" : "s"} ready
+                {t.rowsReady(validRows.length)}
                 {skipped > 0 ? (
                   <>
                     {" "}
                     · <span className="text-[var(--warning)]">{skipped}</span>{" "}
-                    skipped because the date or amount could not be read
+                    {t.skippedSuffix}
                   </>
                 ) : null}
               </p>
@@ -340,10 +343,10 @@ export function CsvImporter({
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-28">Date</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead className="w-24">Type</TableHead>
-                      <TableHead className="w-32 text-right">Amount</TableHead>
+                      <TableHead className="w-28">{common.date}</TableHead>
+                      <TableHead>{t.colDescription}</TableHead>
+                      <TableHead className="w-24">{common.type}</TableHead>
+                      <TableHead className="w-32 text-right">{common.amount}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -353,13 +356,13 @@ export function CsvImporter({
                         className={cn(!row.valid && "opacity-50")}
                       >
                         <TableCell className="figure text-xs">
-                          {row.date ? toISODate(row.date) : "unreadable"}
+                          {row.date ? toISODate(row.date) : t.unreadable}
                         </TableCell>
                         <TableCell className="max-w-[22rem] truncate text-sm">
                           {row.note || "-"}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
-                          {row.valid ? row.type.toLowerCase() : "skipped"}
+                          {row.valid ? row.type.toLowerCase() : t.skipped}
                         </TableCell>
                         <TableCell className="text-right">
                           <span className="figure text-sm">
@@ -375,15 +378,14 @@ export function CsvImporter({
               </div>
               {parsed.length > PREVIEW_ROWS ? (
                 <p className="text-xs text-muted-foreground">
-                  Showing the first {PREVIEW_ROWS} of {parsed.length} rows.
+                  {t.showingFirst(PREVIEW_ROWS, parsed.length)}
                 </p>
               ) : null}
 
               <form action={formAction} className="flex items-center gap-3">
                 <input type="hidden" name="payload" value={payload} />
                 <SubmitButton pending={pending}>
-                  Import {validRows.length} transaction
-                  {validRows.length === 1 ? "" : "s"}
+                  {t.importCount(validRows.length)}
                 </SubmitButton>
                 {state?.error ? (
                   <span className="text-sm text-destructive">{state.error}</span>
