@@ -15,7 +15,8 @@ const TREND_PERIODS = 6;
 
 export default async function ReportsPage() {
   const context = await getAppContext();
-  const t = getDictionary(context.language).reports;
+  const dictionary = getDictionary(context.language);
+  const t = dictionary.reports;
   const [summary, trend] = await Promise.all([
     getPeriodSummary(context.currentPeriod, context),
     getSpendingTrend(context, TREND_PERIODS),
@@ -45,7 +46,11 @@ export default async function ReportsPage() {
                 description={t.nothingSpentDescription}
               />
             ) : (
-              <CategoryBars lines={spendingLines} currency={summary.currency} />
+              <CategoryBars
+                lines={spendingLines}
+                currency={summary.currency}
+                uncategorizedLabel={dictionary.common.uncategorized}
+              />
             )}
           </CardContent>
         </Card>

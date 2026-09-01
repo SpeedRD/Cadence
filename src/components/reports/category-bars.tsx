@@ -9,9 +9,11 @@ import type { CategoryLine } from "@/lib/data/period-summary";
 export function CategoryBars({
   lines,
   currency,
+  uncategorizedLabel,
 }: {
   lines: CategoryLine[];
   currency: string;
+  uncategorizedLabel: string;
 }) {
   const max = lines.reduce((highest, line) => Math.max(highest, line.spent), 0);
   const total = lines.reduce((sum, line) => sum + line.spent, 0);
@@ -29,7 +31,9 @@ export function CategoryBars({
                   className="size-2 shrink-0 rounded-full"
                   style={{ backgroundColor: line.color }}
                 />
-                <span className="truncate">{line.name}</span>
+                <span className="truncate">
+                  {line.categoryId === null ? uncategorizedLabel : line.name}
+                </span>
               </span>
               <span className="flex shrink-0 items-baseline gap-2">
                 <span className="figure text-sm">
