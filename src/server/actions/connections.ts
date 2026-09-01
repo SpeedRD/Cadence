@@ -3,7 +3,8 @@
 import { decrypt } from "@/lib/crypto";
 import { runIngestion } from "@/lib/ingestion";
 import { revokeGoogleToken } from "@/lib/oauth/google";
-import { requireAuth } from "@/lib/auth";
+import { getSettings, requireAuth } from "@/lib/auth";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
@@ -13,11 +14,14 @@ export async function disconnectEmailAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).settingsPage;
   const id = String(formData.get("id") ?? "").trim();
-  if (!id) return fail("Nothing to disconnect");
+  if (!id) return fail(t.nothingToDisconnect);
 
   const connection = await prisma.emailConnection.findUnique({ where: { id } });
-  if (!connection) return fail("That connection no longer exists");
+  if (!connection) return fail(t.connectionNoLongerExists);
 
   if (connection.provider === "GMAIL") {
     // Best-effort - Google's token revocation has no strict server-side
@@ -28,20 +32,21 @@ export async function disconnectEmailAction(
   await prisma.emailConnection.delete({ where: { id } });
 
   revalidateApp();
-  return done(`Disconnected ${connection.emailAddress}`);
+  return done(t.disconnected(connection.emailAddress));
 }
 
 export async function syncNowAction(
   _previous: ActionState,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).settingsPage;
 
   const hasConnections = (await prisma.emailConnection.count()) > 0;
-  if (!hasConnections) return fail("Connect a Gmail or Outlook account first");
+  if (!hasConnections) return fail(t.connectFirst);
 
   const result = await runIngestion();
   revalidateApp();
-  return done(
-    `Synced ${result.accountsSynced} account${result.accountsSynced === 1 ? "" : "s"} - ${result.staged} new item${result.staged === 1 ? "" : "s"} staged`,
-  );
+  return done(t.syncedResult(result.accountsSynced, result.staged));
 }

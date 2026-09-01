@@ -9,13 +9,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import type { Dictionary } from "@/lib/i18n";
 import { disconnectEmailAction } from "@/server/actions/connections";
 
 import type { ConnectionRow } from "@/lib/data/connections";
 
-function formatSyncedAt(date: Date | null): string {
-  if (!date) return "Never synced";
-  return `Last synced ${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+function formatSyncedAt(date: Date | null, t: Dictionary["settingsPage"]): string {
+  if (!date) return t.neverSynced;
+  return t.lastSynced(date.toISOString().slice(0, 16).replace("T", " "));
 }
 
 export function ProviderConnections({
@@ -23,11 +24,15 @@ export function ProviderConnections({
   description,
   connectHref,
   connections,
+  t,
+  common,
 }: {
   label: string;
   description: string;
   connectHref: string;
   connections: ConnectionRow[];
+  t: Dictionary["settingsPage"];
+  common: Dictionary["common"];
 }) {
   return (
     <Card>
@@ -37,7 +42,7 @@ export function ProviderConnections({
       </CardHeader>
       <CardContent className="space-y-3">
         {connections.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No account connected yet.</p>
+          <p className="text-sm text-muted-foreground">{t.noAccountConnected}</p>
         ) : (
           <ul className="divide-y divide-border/70">
             {connections.map((connection) => (
@@ -51,20 +56,20 @@ export function ProviderConnections({
                     {connection.emailAddress}
                   </p>
                   <p className="text-[0.6875rem] text-muted-foreground">
-                    {formatSyncedAt(connection.lastSyncedAt)}
+                    {formatSyncedAt(connection.lastSyncedAt, t)}
                   </p>
                 </div>
                 <ConfirmDelete
                   id={connection.id}
                   action={disconnectEmailAction}
-                  title={`Disconnect ${connection.emailAddress}?`}
-                  description="Cadence stops syncing this mailbox. Transactions already staged or approved from it are kept."
-                  confirmLabel="Disconnect"
-                  keepLabel="Keep it"
-                  deletedMessage="Disconnected"
+                  title={t.disconnectTitle(connection.emailAddress)}
+                  description={t.disconnectDescription}
+                  confirmLabel={t.disconnect}
+                  keepLabel={common.keepIt}
+                  deletedMessage={t.disconnected(connection.emailAddress)}
                   trigger={
                     <Button variant="ghost" size="sm">
-                      Disconnect
+                      {t.disconnect}
                     </Button>
                   }
                 />
@@ -76,7 +81,7 @@ export function ProviderConnections({
         <Button asChild variant="outline" size="sm">
           <a href={connectHref}>
             <Plug className="size-3.5" />
-            Connect {label} account
+            {t.connectAccount(label)}
           </a>
         </Button>
       </CardContent>

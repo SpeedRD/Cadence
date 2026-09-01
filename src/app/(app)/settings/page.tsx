@@ -15,6 +15,7 @@ import {
 import { CURRENCIES, CURRENCY_LABELS, formatRate } from "@/lib/currency";
 import { appTimeZone } from "@/lib/date";
 import { getAppContext } from "@/lib/data/context";
+import { getDictionary } from "@/lib/i18n";
 import { logoutAction } from "@/server/actions/auth";
 import { recalculateGoalsAction } from "@/server/actions/settings";
 
@@ -23,39 +24,40 @@ export const metadata = { title: "Settings - Cadence" };
 export default async function SettingsPage() {
   const context = await getAppContext();
   const timezone = appTimeZone();
+  const t = getDictionary(context.language).settingsPage;
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Settings"
-        description="A single-user ledger: one PIN, one display currency, one set of rules."
+        title={t.title}
+        description={t.description}
       />
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Display currency</CardTitle>
+            <CardTitle>{t.displayCurrencyTitle}</CardTitle>
             <CardDescription>
-              Every figure in the app is converted into this currency.
+              {t.displayCurrencyDescription}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <DisplayCurrencyForm value={context.displayCurrency} />
+            <DisplayCurrencyForm value={context.displayCurrency} locale={context.language} />
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Exchange rates</CardTitle>
+            <CardTitle>{t.exchangeRates}</CardTitle>
             <CardDescription>
-              USD-based, cached for 24 hours, cross rates derived through USD.
+              {t.exchangeRatesDescription}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <dl className="grid grid-cols-3 gap-2 text-sm">
               {CURRENCIES.map((code) => (
                 <div key={code}>
-                  <dt className="eyebrow">USD to {code}</dt>
+                  <dt className="eyebrow">{t.usdTo(code)}</dt>
                   <dd className="figure">
                     {formatRate(context.rates.rates[code] ?? 1)}
                   </dd>
@@ -64,10 +66,10 @@ export default async function SettingsPage() {
             </dl>
             <p className="text-xs text-muted-foreground">
               {context.rates.fetchedAt
-                ? `Last fetched ${context.rates.fetchedAt.toISOString().slice(0, 16).replace("T", " ")} UTC`
-                : "No rates fetched yet"}
+                ? t.lastFetched(context.rates.fetchedAt.toISOString().slice(0, 16).replace("T", " "))
+                : t.noRatesFetched}
               {context.rates.stale
-                ? " · the rate service was unreachable, using the last known values"
+                ? t.rateServiceUnreachable
                 : ""}
             </p>
           </CardContent>
@@ -75,33 +77,31 @@ export default async function SettingsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Goal progress</CardTitle>
+            <CardTitle>{t.goalProgress}</CardTitle>
             <CardDescription>
-              Goal totals are cached for speed. Contributions are the source of
-              truth - rebuild the cache from them if anything looks off.
+              {t.goalProgressDescription}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <ActionButton action={recalculateGoalsAction} size="sm">
               <RefreshCw className="size-3.5" />
-              Recalculate goal totals
+              {t.recalculateGoalTotals}
             </ActionButton>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Email connections</CardTitle>
+            <CardTitle>{t.emailConnections}</CardTitle>
             <CardDescription>
-              Gmail and Outlook accounts Cadence pulls transactional emails from,
-              staged on /review before they become transactions.
+              {t.emailConnectionsDescription}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Button asChild variant="outline" size="sm">
               <Link href="/settings/connections">
                 <Mail className="size-3.5" />
-                Manage connections
+                {t.manageConnections}
               </Link>
             </Button>
           </CardContent>
@@ -109,17 +109,19 @@ export default async function SettingsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Session</CardTitle>
+            <CardTitle>{t.session}</CardTitle>
             <CardDescription>
-              Pay periods are resolved in {timezone}. Currencies available:{" "}
-              {CURRENCIES.map((code) => CURRENCY_LABELS[code] ?? code).join(", ")}.
+              {t.sessionDescription(
+                timezone,
+                CURRENCIES.map((code) => CURRENCY_LABELS[code] ?? code).join(", "),
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <form action={logoutAction}>
               <Button type="submit" variant="outline" size="sm">
                 <LogOut className="size-3.5" />
-                Lock Cadence
+                {t.lockCadence}
               </Button>
             </form>
           </CardContent>

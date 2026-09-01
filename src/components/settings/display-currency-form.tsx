@@ -5,9 +5,17 @@ import { toast } from "sonner";
 
 import { SubmitButton } from "@/components/form/submit-button";
 import { CurrencySelect } from "@/components/form/selects";
+import { getDictionary, type Locale } from "@/lib/i18n";
 import { updateDisplayCurrencyAction } from "@/server/actions/settings";
 
-export function DisplayCurrencyForm({ value }: { value: string }) {
+export function DisplayCurrencyForm({
+  value,
+  locale,
+}: {
+  value: string;
+  locale: Locale;
+}) {
+  const common = getDictionary(locale).common;
   const [state, formAction, pending] = useActionState(
     updateDisplayCurrencyAction,
     null,
@@ -17,9 +25,9 @@ export function DisplayCurrencyForm({ value }: { value: string }) {
   useEffect(() => {
     if (!state || state.at === handled.current) return;
     handled.current = state.at;
-    if (state.ok) toast.success(state.message ?? "Saved");
+    if (state.ok) toast.success(state.message ?? common.saved);
     else if (state.error) toast.error(state.error);
-  }, [state]);
+  }, [state, common.saved]);
 
   return (
     <form action={formAction} className="flex items-end gap-2">
@@ -27,7 +35,7 @@ export function DisplayCurrencyForm({ value }: { value: string }) {
         <CurrencySelect name="displayCurrency" defaultValue={value} />
       </div>
       <SubmitButton pending={pending} variant="outline">
-        Save
+        {common.save}
       </SubmitButton>
     </form>
   );

@@ -1,8 +1,8 @@
 "use server";
 
-import { SETTINGS_ID, requireAuth } from "@/lib/auth";
+import { SETTINGS_ID, getSettings, requireAuth } from "@/lib/auth";
 import { recomputeAllGoals } from "@/lib/goals";
-import { isLocale } from "@/lib/i18n";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { firstError, formObject, settingsSchema } from "@/lib/validation";
 
@@ -13,8 +13,11 @@ export async function updateDisplayCurrencyAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).settingsPage;
   const parsed = settingsSchema.safeParse(formObject(formData));
-  if (!parsed.success) return fail(firstError(parsed.error));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   await prisma.settings.upsert({
     where: { id: SETTINGS_ID },
@@ -22,7 +25,7 @@ export async function updateDisplayCurrencyAction(
     create: { id: SETTINGS_ID, displayCurrency: parsed.data.displayCurrency },
   });
   revalidateApp();
-  return done(`Showing amounts in ${parsed.data.displayCurrency}`);
+  return done(t.showingIn(parsed.data.displayCurrency));
 }
 
 export async function updateLanguageAction(
@@ -47,7 +50,10 @@ export async function recalculateGoalsAction(
   _previous: ActionState,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).settingsPage;
   const count = await recomputeAllGoals();
   revalidateApp();
-  return done(`Recalculated ${count} goal${count === 1 ? "" : "s"}`);
+  return done(t.goalsRecalculated(count));
 }

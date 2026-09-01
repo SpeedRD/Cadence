@@ -425,6 +425,53 @@ export const en = {
     tooltipOut: (amount: string) => `${amount} out`,
     tooltipIn: (amount: string) => `${amount} in`,
   },
+  settingsPage: {
+    title: "Settings",
+    description: "A single-user ledger: one PIN, one display currency, one set of rules.",
+    displayCurrencyTitle: "Display currency",
+    displayCurrencyDescription: "Every figure in the app is converted into this currency.",
+    exchangeRates: "Exchange rates",
+    exchangeRatesDescription: "USD-based, cached for 24 hours, cross rates derived through USD.",
+    usdTo: (code: string) => `USD to ${code}`,
+    lastFetched: (datetime: string) => `Last fetched ${datetime} UTC`,
+    noRatesFetched: "No rates fetched yet",
+    rateServiceUnreachable: " · the rate service was unreachable, using the last known values",
+    goalProgress: "Goal progress",
+    goalProgressDescription:
+      "Goal totals are cached for speed. Contributions are the source of truth - rebuild the cache from them if anything looks off.",
+    recalculateGoalTotals: "Recalculate goal totals",
+    emailConnections: "Email connections",
+    emailConnectionsDescription:
+      "Gmail and Outlook accounts Cadence pulls transactional emails from, staged on /review before they become transactions.",
+    manageConnections: "Manage connections",
+    session: "Session",
+    sessionDescription: (tz: string, currencies: string) =>
+      `Pay periods are resolved in ${tz}. Currencies available: ${currencies}.`,
+    lockCadence: "Lock Cadence",
+    connectionsTitle: "Connections",
+    connectionsDescription: "Gmail and Outlook accounts Cadence pulls transactional emails from.",
+    syncNow: "Sync now",
+    reviewQueue: "Review queue",
+    connectedTo: (x: string) => `Connected ${x}.`,
+    gmailDescription: "Reads receipts, invoices and subscription emails (gmail.readonly).",
+    outlookDescription: "Reads the same kinds of emails via Microsoft Graph (Mail.Read).",
+    neverSynced: "Never synced",
+    lastSynced: (datetime: string) => `Last synced ${datetime} UTC`,
+    noAccountConnected: "No account connected yet.",
+    disconnectTitle: (email: string) => `Disconnect ${email}?`,
+    disconnectDescription:
+      "Cadence stops syncing this mailbox. Transactions already staged or approved from it are kept.",
+    disconnect: "Disconnect",
+    connectAccount: (label: string) => `Connect ${label} account`,
+    goalsRecalculated: (count: number) => `Recalculated ${count} goal${count === 1 ? "" : "s"}`,
+    showingIn: (code: string) => `Showing amounts in ${code}`,
+    nothingToDisconnect: "Nothing to disconnect",
+    connectionNoLongerExists: "That connection no longer exists",
+    disconnected: (email: string) => `Disconnected ${email}`,
+    connectFirst: "Connect a Gmail or Outlook account first",
+    syncedResult: (accounts: number, staged: number) =>
+      `Synced ${accounts} account${accounts === 1 ? "" : "s"} - ${staged} new item${staged === 1 ? "" : "s"} staged`,
+  },
 };
 
 export type Dictionary = typeof en;

@@ -5,7 +5,9 @@ import { ActionButton } from "@/components/form/action-button";
 import { PageHeader } from "@/components/page-header";
 import { ProviderConnections } from "@/components/settings/provider-connections";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { getAppContext } from "@/lib/data/context";
 import { listConnections } from "@/lib/data/connections";
+import { getDictionary } from "@/lib/i18n";
 import { syncNowAction } from "@/server/actions/connections";
 
 export const metadata = { title: "Connections - Cadence" };
@@ -22,6 +24,9 @@ export default async function ConnectionsPage({
   searchParams: SearchParams;
 }) {
   const params = await searchParams;
+  const context = await getAppContext();
+  const t = getDictionary(context.language).settingsPage;
+  const common = getDictionary(context.language).common;
   const connections = await listConnections();
   const gmail = connections.filter((c) => c.provider === "GMAIL");
   const outlook = connections.filter((c) => c.provider === "OUTLOOK");
@@ -32,16 +37,16 @@ export default async function ConnectionsPage({
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Connections"
-        description="Gmail and Outlook accounts Cadence pulls transactional emails from."
+        title={t.connectionsTitle}
+        description={t.connectionsDescription}
         actions={
           <>
             <ActionButton action={syncNowAction} size="sm">
               <RefreshCw className="size-3.5" />
-              Sync now
+              {t.syncNow}
             </ActionButton>
             <Link href="/review" className="text-sm text-muted-foreground hover:text-foreground">
-              Review queue
+              {t.reviewQueue}
             </Link>
           </>
         }
@@ -49,7 +54,7 @@ export default async function ConnectionsPage({
 
       {connected ? (
         <Alert>
-          <AlertDescription>Connected {connected}.</AlertDescription>
+          <AlertDescription>{t.connectedTo(connected)}</AlertDescription>
         </Alert>
       ) : null}
       {error ? (
@@ -61,15 +66,19 @@ export default async function ConnectionsPage({
       <div className="grid gap-5 lg:grid-cols-2">
         <ProviderConnections
           label="Gmail"
-          description="Reads receipts, invoices and subscription emails (gmail.readonly)."
+          description={t.gmailDescription}
           connectHref="/api/auth/gmail/start"
           connections={gmail}
+          t={t}
+          common={common}
         />
         <ProviderConnections
           label="Outlook"
-          description="Reads the same kinds of emails via Microsoft Graph (Mail.Read)."
+          description={t.outlookDescription}
           connectHref="/api/auth/outlook/start"
           connections={outlook}
+          t={t}
+          common={common}
         />
       </div>
     </div>
