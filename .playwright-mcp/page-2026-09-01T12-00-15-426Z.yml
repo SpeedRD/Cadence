@@ -1,0 +1,144 @@
+- generic:
+  - generic:
+    - complementary:
+      - link:
+        - /url: /
+        - text: Cadence
+      - navigation:
+        - link:
+          - /url: /
+          - text: Panel
+        - link:
+          - /url: /transactions
+          - text: Transacciones
+        - link:
+          - /url: /review
+          - text: Revisión
+        - link:
+          - /url: /accounts
+          - text: Cuentas
+        - link:
+          - /url: /budgets
+          - text: Presupuestos
+        - link:
+          - /url: /recurring
+          - text: Recurrentes
+        - link:
+          - /url: /goals
+          - text: Metas
+        - link:
+          - /url: /reports
+          - text: Informes
+        - link:
+          - /url: /settings
+          - text: Ajustes
+      - generic:
+        - paragraph: Pago dos veces al mes. Los presupuestos van del 1-15.
+    - generic:
+      - banner:
+        - generic:
+          - generic:
+            - generic:
+              - paragraph: Sep 1-15
+              - paragraph: 15 días restantes
+          - generic:
+            - button: USD
+            - button [expanded]: ES
+            - button
+            - generic:
+              - button
+      - main:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - paragraph: Periodo A · September 1-15, 2026
+                    - paragraph: 15 de 15 días restantes
+                  - generic:
+                    - generic: Sep 1
+                    - generic: Sep 15
+                - generic:
+                  - paragraph: Disponible para gastar por día
+                  - paragraph: Define un presupuesto para este periodo y Cadence calcula cuánto puedes gastar cada día después de los compromisos.
+                  - link:
+                    - /url: /budgets
+                    - text: Definir el presupuesto de este periodo
+              - generic:
+                - generic:
+                  - generic:
+                    - paragraph: Gastado
+                    - paragraph: sin presupuesto
+                  - paragraph: $15.50
+                  - paragraph: de $0.00 presupuestado
+                - generic:
+                  - generic:
+                    - term: Comprometido
+                    - definition: $100.00
+                    - paragraph: 1 elemento vence antes de Sep 15
+                  - generic:
+                    - term: Ingresos
+                    - definition: $0.00
+                    - paragraph: registrado este periodo
+          - generic:
+            - generic:
+              - generic: Ritmo de gasto mensual
+              - generic: September 2026
+            - generic:
+              - generic:
+                - generic:
+                  - paragraph: Proyectado este mes
+                  - paragraph: $465.00
+                  - paragraph: Día 1 de 30
+                - generic:
+                  - paragraph: Tu promedio
+                  - paragraph: $0.00
+              - paragraph: $465.00 por encima de tu promedio
+              - generic:
+                - generic:
+                  - term: Estilo de vida
+                  - definition: $465.00
+                - generic:
+                  - term: Comprometido
+                  - definition: $0.00
+                - generic:
+                  - term: Ahorros e inversión
+                  - definition: $0.00
+              - paragraph: Basado en los últimos 6 meses completados · Salida de efectivo total $465.00
+          - generic:
+            - generic:
+              - generic:
+                - heading [level=2]: Metas
+                - link:
+                  - /url: /goals
+                  - text: Todas las metas
+              - generic:
+                - paragraph: Aún no hay metas
+                - paragraph: Registra algo para lo que estás ahorrando y Cadence calcula lo que necesita cada periodo de pago.
+                - generic:
+                  - link:
+                    - /url: /goals
+                    - text: Crear una meta
+            - generic:
+              - generic:
+                - generic: Próximos 7 días
+                - generic:
+                  - list:
+                    - listitem:
+                      - generic:
+                        - paragraph: Fondo de inversión
+                        - paragraph: Sep 1 · hoy · aporte
+                      - generic:
+                        - paragraph: $100.00
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f2e199] [cursor=pointer]
+  - alert
+  - menu "ES" [active] [ref=f2e204]:
+    - generic [ref=f2e205]: Idioma
+    - menuitem "EN English" [ref=f2e206]:
+      - generic [ref=f2e207]: EN
+      - generic [ref=f2e208]: English
+    - menuitem "ES Español" [ref=f2e209]:
+      - generic [ref=f2e210]: ES
+      - generic [ref=f2e211]: Español

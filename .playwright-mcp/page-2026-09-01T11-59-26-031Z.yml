@@ -1,0 +1,181 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - complementary [ref=f1e3]:
+      - link "Cadence" [ref=f1e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f1e16]:
+        - link "Panel" [ref=f1e17] [cursor=pointer]:
+          - /url: /
+        - link "Transacciones" [ref=f1e22] [cursor=pointer]:
+          - /url: /transactions
+        - link "Revisión" [ref=f1e27] [cursor=pointer]:
+          - /url: /review
+        - link "Cuentas" [ref=f1e32] [cursor=pointer]:
+          - /url: /accounts
+        - link "Presupuestos" [ref=f1e37] [cursor=pointer]:
+          - /url: /budgets
+        - link "Recurrentes" [ref=f1e40] [cursor=pointer]:
+          - /url: /recurring
+        - link "Metas" [ref=f1e47] [cursor=pointer]:
+          - /url: /goals
+        - link "Informes" [ref=f1e51] [cursor=pointer]:
+          - /url: /reports
+        - link "Ajustes" [ref=f1e58] [cursor=pointer]:
+          - /url: /settings
+      - paragraph [ref=f1e64]: Pago dos veces al mes. Los presupuestos van del 1-15.
+    - generic [ref=f1e65]:
+      - banner [ref=f1e66]:
+        - generic [ref=f1e67]:
+          - generic [ref=f1e86]:
+            - paragraph [ref=f1e87]: Sep 1-15
+            - paragraph [ref=f1e88]: 15 días restantes
+          - generic [ref=f1e89]:
+            - button "USD" [ref=f1e90]
+            - button "ES" [ref=f1e91]
+            - button "Cambiar modo claro y oscuro" [ref=f1e92]
+            - button "Bloquear Cadence" [ref=f1e94]
+      - main [ref=f1e95]:
+        - generic [ref=f1e96]:
+          - generic [ref=f1e98]:
+            - heading "Informes" [level=1] [ref=f1e99]
+            - paragraph [ref=f1e100]: Todo en USD, convertido a las tasas actuales.
+          - generic [ref=f1e101]:
+            - generic [ref=f1e102]:
+              - generic [ref=f1e103]:
+                - generic [ref=f1e104]: Gastos por categoría
+                - generic [ref=f1e105]: September 1-15, 2026
+              - list [ref=f1e107]:
+                - listitem [ref=f1e108]:
+                  - generic [ref=f1e109]:
+                    - generic [ref=f1e110]: Sin categoría
+                    - generic [ref=f1e113]:
+                      - generic [ref=f1e114]: $15.50
+                      - generic [ref=f1e115]: 100%
+            - generic [ref=f1e118]:
+              - generic [ref=f1e119]:
+                - generic [ref=f1e120]: Últimos 6 periodos de pago
+                - generic [ref=f1e121]: $2.58 de promedio por periodo
+              - generic [ref=f1e123]:
+                - generic [ref=f1e124]:
+                  - generic [ref=f1e125]: $15.50
+                  - generic [ref=f1e126]: periodo pico
+                - generic [ref=f1e127]:
+                  - 'generic "June 16-30, 2026: $0.00 gastado" [ref=f1e128]':
+                    - generic:
+                      - paragraph: Jun 16-30
+                      - paragraph: $0.00 gastado
+                      - paragraph: $0.00 recibido
+                  - 'generic "July 1-15, 2026: $0.00 gastado" [ref=f1e129]':
+                    - generic:
+                      - paragraph: Jul 1-15
+                      - paragraph: $0.00 gastado
+                      - paragraph: $0.00 recibido
+                  - 'generic "July 16-31, 2026: $0.00 gastado" [ref=f1e130]':
+                    - generic:
+                      - paragraph: Jul 16-31
+                      - paragraph: $0.00 gastado
+                      - paragraph: $0.00 recibido
+                  - 'generic "August 1-15, 2026: $0.00 gastado" [ref=f1e131]':
+                    - generic:
+                      - paragraph: Aug 1-15
+                      - paragraph: $0.00 gastado
+                      - paragraph: $0.00 recibido
+                  - 'generic "August 16-31, 2026: $0.00 gastado" [ref=f1e132]':
+                    - generic:
+                      - paragraph: Aug 16-31
+                      - paragraph: $0.00 gastado
+                      - paragraph: $0.00 recibido
+                  - 'generic "September 1-15, 2026: $15.50 gastado" [ref=f1e133]':
+                    - generic:
+                      - paragraph: Sep 1-15
+                      - paragraph: $15.50 gastado
+                      - paragraph: $0.00 recibido
+                - generic [ref=f1e135]:
+                  - generic [ref=f1e136]: Jun 16-30
+                  - generic [ref=f1e137]: Jul 1-15
+                  - generic [ref=f1e138]: Jul 16-31
+                  - generic [ref=f1e139]: Aug 1-15
+                  - generic [ref=f1e140]: Aug 16-31
+                  - generic [ref=f1e141]: Sep 1-15
+          - generic [ref=f1e143]:
+            - generic [ref=f1e144]:
+              - paragraph [ref=f1e145]: Este periodo
+              - paragraph [ref=f1e146]: $15.50
+              - paragraph [ref=f1e147]: 1 categoría usada
+            - generic [ref=f1e148]:
+              - paragraph [ref=f1e149]: En 6 periodos
+              - paragraph [ref=f1e150]: $15.50
+            - generic [ref=f1e151]:
+              - paragraph [ref=f1e152]: Ingresos este periodo
+              - paragraph [ref=f1e153]: $0.00
+          - generic [ref=f1e154]:
+            - heading "Gasto mensual" [level=2] [ref=f1e155]
+            - paragraph [ref=f1e156]: "Meses calendario, no periodos de pago: una vista de más largo alcance junto a los periodos de arriba."
+          - generic [ref=f1e157]:
+            - generic [ref=f1e158]:
+              - generic [ref=f1e159]:
+                - generic [ref=f1e160]: Promedio mensual de gasto de estilo de vida por categoría
+                - generic [ref=f1e161]: El gasto normal es solo estilo de vida más gasto comprometido. Los ahorros y las inversiones no están incluidos.
+              - generic [ref=f1e163]:
+                - paragraph [ref=f1e164]: Nada gastado este periodo
+                - paragraph [ref=f1e165]: Los gastos categorizados aparecen aquí en cuanto los registras.
+            - generic [ref=f1e166]:
+              - generic [ref=f1e167]:
+                - generic [ref=f1e168]: Los últimos 6 meses completados
+                - generic [ref=f1e169]: $0.00 de promedio de gasto normal en 6 meses
+              - generic [ref=f1e171]:
+                - generic [ref=f1e172]:
+                  - generic [ref=f1e173]: $0.00
+                  - generic [ref=f1e174]: mes pico
+                - generic [ref=f1e175]:
+                  - 'generic "March 2026: $0.00 gasto normal" [ref=f1e176]':
+                    - generic:
+                      - paragraph: Mar 2026
+                      - paragraph: $0.00 gasto normal
+                      - paragraph: $100.00 ahorros e inversión
+                  - 'generic "April 2026: $0.00 gasto normal" [ref=f1e177]':
+                    - generic:
+                      - paragraph: Apr 2026
+                      - paragraph: $0.00 gasto normal
+                      - paragraph: $100.00 ahorros e inversión
+                  - 'generic "May 2026: $0.00 gasto normal" [ref=f1e178]':
+                    - generic:
+                      - paragraph: May 2026
+                      - paragraph: $0.00 gasto normal
+                      - paragraph: $100.00 ahorros e inversión
+                  - 'generic "June 2026: $0.00 gasto normal" [ref=f1e179]':
+                    - generic:
+                      - paragraph: Jun 2026
+                      - paragraph: $0.00 gasto normal
+                      - paragraph: $100.00 ahorros e inversión
+                  - 'generic "July 2026: $0.00 gasto normal" [ref=f1e180]':
+                    - generic:
+                      - paragraph: Jul 2026
+                      - paragraph: $0.00 gasto normal
+                      - paragraph: $100.00 ahorros e inversión
+                  - 'generic "August 2026: $0.00 gasto normal" [ref=f1e181]':
+                    - generic:
+                      - paragraph: Aug 2026
+                      - paragraph: $0.00 gasto normal
+                      - paragraph: $100.00 ahorros e inversión
+                - generic [ref=f1e182]:
+                  - generic [ref=f1e183]: Mar 2026
+                  - generic [ref=f1e184]: Apr 2026
+                  - generic [ref=f1e185]: May 2026
+                  - generic [ref=f1e186]: Jun 2026
+                  - generic [ref=f1e187]: Jul 2026
+                  - generic [ref=f1e188]: Aug 2026
+          - generic [ref=f1e190]:
+            - generic [ref=f1e191]:
+              - paragraph [ref=f1e192]: Promedio mensual de gasto comprometido
+              - paragraph [ref=f1e193]: $0.00
+              - paragraph [ref=f1e194]: "Suscripciones activas: cargos reales cuando Cadence puede identificarlos, su monto programado en caso contrario."
+            - generic [ref=f1e195]:
+              - paragraph [ref=f1e196]: Promedio mensual de ahorros e inversión
+              - paragraph [ref=f1e197]: $100.00
+              - paragraph [ref=f1e198]: "Aportes a metas, aportes recurrentes y gastos de Ahorro/Inversión: se mantienen aparte del gasto normal."
+            - generic [ref=f1e199]:
+              - paragraph [ref=f1e200]: Promedio de salida de efectivo total
+              - paragraph [ref=f1e201]: $100.00
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f1e207] [cursor=pointer]

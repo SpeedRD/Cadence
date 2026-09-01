@@ -1,0 +1,113 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - link "Cadence" [ref=e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=e16]:
+        - link "Panel" [ref=e17] [cursor=pointer]:
+          - /url: /
+        - link "Transacciones" [ref=e22] [cursor=pointer]:
+          - /url: /transactions
+        - link "Revisión" [ref=e27] [cursor=pointer]:
+          - /url: /review
+        - link "Cuentas" [ref=e32] [cursor=pointer]:
+          - /url: /accounts
+        - link "Presupuestos" [ref=e37] [cursor=pointer]:
+          - /url: /budgets
+        - link "Recurrentes" [ref=e40] [cursor=pointer]:
+          - /url: /recurring
+        - link "Metas" [ref=e47] [cursor=pointer]:
+          - /url: /goals
+        - link "Informes" [ref=e51] [cursor=pointer]:
+          - /url: /reports
+        - link "Ajustes" [ref=e58] [cursor=pointer]:
+          - /url: /settings
+      - paragraph [ref=e64]: Pago dos veces al mes. Los presupuestos van del 1-15.
+    - generic [ref=e65]:
+      - banner [ref=e66]:
+        - generic [ref=e67]:
+          - generic [ref=e86]:
+            - paragraph [ref=e87]: Sep 1-15
+            - paragraph [ref=e88]: 15 días restantes
+          - generic [ref=e89]:
+            - button "USD" [ref=e90]
+            - button "ES" [ref=e91]
+            - button "Cambiar modo claro y oscuro" [ref=e92]
+            - button "Bloquear Cadence" [ref=e94]
+      - main [ref=e95]:
+        - generic [ref=e96]:
+          - generic [ref=e98]:
+            - generic [ref=e99]:
+              - generic [ref=e100]:
+                - generic [ref=e101]:
+                  - paragraph [ref=e102]: Periodo A · September 1-15, 2026
+                  - paragraph [ref=e103]: 15 de 15 días restantes
+                - generic [ref=e120]:
+                  - generic [ref=e121]: Sep 1
+                  - generic [ref=e122]: Sep 15
+              - generic [ref=e123]:
+                - paragraph [ref=e124]: Disponible para gastar por día
+                - paragraph [ref=e125]: Define un presupuesto para este periodo y Cadence calcula cuánto puedes gastar cada día después de los compromisos.
+                - link "Definir el presupuesto de este periodo" [ref=e126] [cursor=pointer]:
+                  - /url: /budgets
+            - generic [ref=e127]:
+              - generic [ref=e128]:
+                - generic [ref=e129]:
+                  - paragraph [ref=e130]: Gastado
+                  - paragraph [ref=e131]: sin presupuesto
+                - paragraph [ref=e132]: $15.50
+                - paragraph [ref=e133]: de $0.00 presupuestado
+              - generic [ref=e134]:
+                - generic [ref=e135]:
+                  - term [ref=e136]: Comprometido
+                  - definition [ref=e137]: $100.00
+                  - paragraph [ref=e138]: 1 elemento vence antes de Sep 15
+                - generic [ref=e139]:
+                  - term [ref=e140]: Ingresos
+                  - definition [ref=e141]: $0.00
+                  - paragraph [ref=e142]: registrado este periodo
+          - generic [ref=e143]:
+            - generic [ref=e144]:
+              - generic [ref=e145]: Ritmo de gasto mensual
+              - generic [ref=e146]: September 2026
+            - generic [ref=e147]:
+              - generic [ref=e148]:
+                - generic [ref=e149]:
+                  - paragraph [ref=e150]: Proyectado este mes
+                  - paragraph [ref=e151]: $465.00
+                  - paragraph [ref=e152]: Día 1 de 30
+                - generic [ref=e153]:
+                  - paragraph [ref=e154]: Tu promedio
+                  - paragraph [ref=e155]: $0.00
+              - paragraph [ref=e156]: $465.00 por encima de tu promedio
+              - generic [ref=e157]:
+                - generic [ref=e158]:
+                  - term [ref=e159]: Estilo de vida
+                  - definition [ref=e160]: $465.00
+                - generic [ref=e161]:
+                  - term [ref=e162]: Comprometido
+                  - definition [ref=e163]: $0.00
+                - generic [ref=e164]:
+                  - term [ref=e165]: Ahorros e inversión
+                  - definition [ref=e166]: $0.00
+              - paragraph [ref=e167]: Basado en los últimos 6 meses completados · Salida de efectivo total $465.00
+          - generic [ref=e168]:
+            - generic [ref=e169]:
+              - generic [ref=e170]:
+                - heading "Metas" [level=2] [ref=e171]
+                - link "Todas las metas" [ref=e172] [cursor=pointer]:
+                  - /url: /goals
+              - generic [ref=e173]:
+                - paragraph [ref=e174]: Aún no hay metas
+                - paragraph [ref=e175]: Registra algo para lo que estás ahorrando y Cadence calcula lo que necesita cada periodo de pago.
+                - link "Crear una meta" [ref=e177] [cursor=pointer]:
+                  - /url: /goals
+            - generic [ref=e179]:
+              - generic [ref=e180]: Próximos 7 días
+              - list [ref=e183]:
+                - listitem [ref=e184]:
+                  - generic [ref=e189]:
+                    - paragraph [ref=e190]: Fondo de inversión
+                    - paragraph [ref=e191]: Sep 1 · hoy · aporte
+                  - paragraph [ref=e193]: $100.00
+  - region "Notifications alt+T"
