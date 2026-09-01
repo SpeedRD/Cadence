@@ -3,8 +3,6 @@ import { Archivo, IBM_Plex_Mono, Instrument_Sans } from "next/font/google";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
-import { getSettings } from "@/lib/auth";
-import { isLocale } from "@/lib/i18n";
 
 import "./globals.css";
 
@@ -30,12 +28,14 @@ export const metadata: Metadata = {
   description: "Personal finance on your pay rhythm.",
 };
 
-export default async function RootLayout({ children }: LayoutProps<"/">) {
-  const settings = await getSettings();
-  const lang = isLocale(settings.language) ? settings.language : "en";
+export default function RootLayout({ children }: LayoutProps<"/">) {
+  // Static "en" rather than reading Settings.language: the root layout wraps
+  // routes Next.js statically prerenders at build time (e.g. /_not-found), so
+  // a DB read here would make every production build depend on a live,
+  // already-migrated database connection.
   return (
     <html
-      lang={lang}
+      lang="en"
       suppressHydrationWarning
       className={`${archivo.variable} ${instrumentSans.variable} ${plexMono.variable} h-full antialiased`}
     >
