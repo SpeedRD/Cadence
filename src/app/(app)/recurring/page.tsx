@@ -17,12 +17,15 @@ import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { listRecurringItems } from "@/lib/data/recurring";
 import { toISODate } from "@/lib/date";
+import { getDictionary } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Recurring - Cadence" };
 
 export default async function RecurringPage() {
   const context = await getAppContext();
+  const t = getDictionary(context.language).recurring;
+  const common = getDictionary(context.language).common;
   const [data, categories] = await Promise.all([
     listRecurringItems(context),
     prisma.category.findMany({
@@ -37,16 +40,17 @@ export default async function RecurringPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Recurring"
-        description="Everything that leaves on a schedule. Both kinds reduce safe to spend for the period they fall in."
+        title={t.title}
+        description={t.description}
         actions={
           <RecurringDialog
             categories={categories}
             values={{ nextDate: today, currency }}
+            locale={context.language}
             trigger={
               <Button size="sm">
                 <Plus className="size-3.5" />
-                New item
+                {t.newItem}
               </Button>
             }
           />
@@ -58,21 +62,20 @@ export default async function RecurringPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Repeat className="size-4 text-muted-foreground" />
-              Subscriptions
+              {t.subscriptions}
             </CardTitle>
             <CardDescription>
-              {formatMoney(data.subscriptionsMonthly, currency)} a month across{" "}
-              {data.subscriptions.filter((row) => row.active).length} active item
-              {data.subscriptions.filter((row) => row.active).length === 1
-                ? ""
-                : "s"}
+              {t.monthlyAcrossActive(
+                formatMoney(data.subscriptionsMonthly, currency),
+                data.subscriptions.filter((row) => row.active).length,
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {data.subscriptions.length === 0 ? (
               <EmptyState
-                title="No subscriptions"
-                description="Add the bills that repeat so they stop surprising you mid-period."
+                title={t.noSubscriptionsTitle}
+                description={t.noSubscriptionsDescription}
               />
             ) : (
               <RecurringList
@@ -80,6 +83,7 @@ export default async function RecurringPage() {
                 categories={categories}
                 displayCurrency={currency}
                 today={context.today}
+                locale={context.language}
               />
             )}
           </CardContent>
@@ -89,20 +93,20 @@ export default async function RecurringPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <PiggyBank className="size-4 text-primary" />
-              Recurring contributions
+              {t.recurringContributions}
             </CardTitle>
             <CardDescription>
-              {formatMoney(data.contributionsMonthly, currency)} a month going
-              into something
+              {t.monthlyGoingInto(formatMoney(data.contributionsMonthly, currency))}
             </CardDescription>
             <CardAction>
               <RecurringDialog
                 categories={categories}
                 values={{ nextDate: today, currency, kind: "CONTRIBUTION" }}
+                locale={context.language}
                 trigger={
                   <Button variant="ghost" size="xs">
                     <Plus className="size-3" />
-                    Add
+                    {common.add}
                   </Button>
                 }
               />
@@ -111,8 +115,8 @@ export default async function RecurringPage() {
           <CardContent>
             {data.contributions.length === 0 ? (
               <EmptyState
-                title="No recurring contributions"
-                description="Money you put in on a schedule - an investment, a savings sweep - lives here."
+                title={t.noContributionsTitle}
+                description={t.noContributionsDescription}
               />
             ) : (
               <RecurringList
@@ -120,6 +124,7 @@ export default async function RecurringPage() {
                 categories={categories}
                 displayCurrency={currency}
                 today={context.today}
+                locale={context.language}
               />
             )}
           </CardContent>

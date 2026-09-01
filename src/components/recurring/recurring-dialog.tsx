@@ -10,12 +10,8 @@ import {
 } from "@/components/form/selects";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  FREQUENCY_LABELS,
-  RECURRING_FREQUENCIES,
-  RECURRING_KINDS,
-  RECURRING_KIND_LABELS,
-} from "@/lib/labels";
+import { getDictionary, type Locale } from "@/lib/i18n";
+import { RECURRING_FREQUENCIES, RECURRING_KINDS } from "@/lib/labels";
 import { saveRecurringAction } from "@/server/actions/recurring";
 
 export interface RecurringFormValues {
@@ -37,23 +33,27 @@ export function RecurringDialog({
   trigger,
   open,
   onOpenChange,
+  locale,
 }: {
   categories: Option[];
   values: RecurringFormValues;
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  locale: Locale;
 }) {
   const editing = Boolean(values.id);
+  const t = getDictionary(locale).recurring;
+  const common = getDictionary(locale).common;
 
   return (
     <FormDialog
-      title={editing ? "Edit recurring item" : "New recurring item"}
-      description="Subscriptions are bills going out. Contributions are money you put into something."
+      title={editing ? t.editItem : t.newItemTitle}
+      description={t.itemDescription}
       action={saveRecurringAction}
-      submitLabel={editing ? "Save changes" : "Add item"}
-      cancelLabel="Cancel"
-      savedMessage="Saved"
+      submitLabel={editing ? t.saveChanges : t.addItem}
+      cancelLabel={common.cancel}
+      savedMessage={editing ? t.itemUpdated : t.itemAdded}
       trigger={trigger}
       open={open}
       onOpenChange={onOpenChange}
@@ -66,35 +66,35 @@ export function RecurringDialog({
       />
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Name" htmlFor="recurring-name" className="col-span-2">
+        <Field label={common.name} htmlFor="recurring-name" className="col-span-2">
           <Input
             id="recurring-name"
             name="name"
             defaultValue={values.name ?? ""}
-            placeholder="Netflix"
+            placeholder={t.namePlaceholder}
             required
           />
         </Field>
-        <Field label="Kind">
+        <Field label={t.kind}>
           <EnumSelect
             name="kind"
             options={RECURRING_KINDS}
-            labels={RECURRING_KIND_LABELS}
+            labels={common.recurringKindLabels}
             defaultValue={values.kind ?? "SUBSCRIPTION"}
           />
         </Field>
-        <Field label="Frequency">
+        <Field label={t.frequency}>
           <EnumSelect
             name="frequency"
             options={RECURRING_FREQUENCIES}
-            labels={FREQUENCY_LABELS}
+            labels={common.frequencyLabels}
             defaultValue={values.frequency ?? "MONTHLY"}
           />
         </Field>
       </div>
 
       <div className="grid grid-cols-[1fr_110px] gap-3">
-        <Field label="Amount" htmlFor="recurring-amount">
+        <Field label={common.amount} htmlFor="recurring-amount">
           <Input
             id="recurring-amount"
             name="amount"
@@ -105,13 +105,13 @@ export function RecurringDialog({
             required
           />
         </Field>
-        <Field label="Currency">
+        <Field label={common.currency}>
           <CurrencySelect name="currency" defaultValue={values.currency} />
         </Field>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Next due" htmlFor="recurring-next">
+        <Field label={t.nextDue} htmlFor="recurring-next">
           <Input
             id="recurring-next"
             type="date"
@@ -120,7 +120,7 @@ export function RecurringDialog({
             required
           />
         </Field>
-        <Field label="Category">
+        <Field label={common.category}>
           <CategorySelect
             name="categoryId"
             categories={categories}
@@ -129,12 +129,12 @@ export function RecurringDialog({
         </Field>
       </div>
 
-      <Field label="Note" htmlFor="recurring-note">
+      <Field label={common.note} htmlFor="recurring-note">
         <Textarea
           id="recurring-note"
           name="note"
           rows={2}
-          placeholder="Optional"
+          placeholder={common.optional}
           defaultValue={values.note ?? ""}
         />
       </Field>

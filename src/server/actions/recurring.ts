@@ -1,7 +1,7 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
-import { isLocale } from "@/lib/i18n";
+import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { firstError, formObject, recurringSchema } from "@/lib/validation";
 
@@ -14,6 +14,7 @@ export async function saveRecurringAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).recurring;
   const parsed = recurringSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
@@ -25,7 +26,7 @@ export async function saveRecurringAction(
   }
 
   revalidateApp();
-  return done(id ? "Recurring item updated" : "Recurring item added");
+  return done(id ? t.itemUpdated : t.itemAdded);
 }
 
 export async function deleteRecurringAction(
@@ -33,11 +34,15 @@ export async function deleteRecurringAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).recurring;
+  const common = getDictionary(locale).common;
   const id = String(formData.get("id") ?? "").trim();
-  if (!id) return fail("Nothing to delete");
+  if (!id) return fail(common.nothingToDelete);
   await prisma.recurringItem.delete({ where: { id } });
   revalidateApp();
-  return done("Recurring item deleted");
+  return done(t.itemDeleted);
 }
 
 export async function toggleRecurringAction(
@@ -45,14 +50,17 @@ export async function toggleRecurringAction(
   formData: FormData,
 ): Promise<ActionState> {
   await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).recurring;
   const id = String(formData.get("id") ?? "").trim();
   const item = await prisma.recurringItem.findUnique({ where: { id } });
-  if (!item) return fail("That item no longer exists");
+  if (!item) return fail(t.itemNoLongerExists);
 
   await prisma.recurringItem.update({
     where: { id },
     data: { active: !item.active },
   });
   revalidateApp();
-  return done(item.active ? "Paused" : "Resumed");
+  return done(item.active ? t.itemPaused : t.itemResumed);
 }

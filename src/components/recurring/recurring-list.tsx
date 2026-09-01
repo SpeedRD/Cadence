@@ -16,7 +16,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { formatMoney } from "@/lib/currency";
 import { formatDate, formatRelativeDays, toISODate } from "@/lib/date";
-import { FREQUENCY_LABELS, labelFor } from "@/lib/labels";
+import { getDictionary, type Locale } from "@/lib/i18n";
+import { labelFor } from "@/lib/labels";
 import {
   deleteRecurringAction,
   toggleRecurringAction,
@@ -30,15 +31,19 @@ export function RecurringList({
   categories,
   displayCurrency,
   today,
+  locale,
 }: {
   rows: RecurringRow[];
   categories: Option[];
   displayCurrency: string;
   today: Date;
+  locale: Locale;
 }) {
   const [editing, setEditing] = useState<RecurringRow | null>(null);
   const [deleting, setDeleting] = useState<RecurringRow | null>(null);
   const [, startTransition] = useTransition();
+  const t = getDictionary(locale).recurring;
+  const common = getDictionary(locale).common;
 
   const toggle = (row: RecurringRow) => {
     startTransition(async () => {
@@ -66,12 +71,12 @@ export function RecurringList({
                 <span className="truncate text-sm font-medium">{row.name}</span>
                 {!row.active ? (
                   <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
-                    paused
+                    {t.paused}
                   </span>
                 ) : null}
               </div>
               <p className="text-[0.6875rem] text-muted-foreground">
-                {labelFor(FREQUENCY_LABELS, row.frequency)} · next{" "}
+                {labelFor(common.frequencyLabels, row.frequency)} · {t.nextLabel}{" "}
                 {formatDate(row.nextDate)}
                 {row.active ? ` (${formatRelativeDays(today, row.nextDate)})` : ""}
                 {row.categoryName ? ` · ${row.categoryName}` : ""}
@@ -94,7 +99,7 @@ export function RecurringList({
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  aria-label={`Actions for ${row.name}`}
+                  aria-label={t.actionsFor(row.name)}
                 >
                   <MoreHorizontal className="size-3.5" />
                 </Button>
@@ -102,18 +107,18 @@ export function RecurringList({
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onSelect={() => setEditing(row)}>
                   <Pencil className="size-3.5" />
-                  Edit
+                  {common.edit}
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => toggle(row)}>
                   {row.active ? (
                     <>
                       <Pause className="size-3.5" />
-                      Pause
+                      {t.pause}
                     </>
                   ) : (
                     <>
                       <Play className="size-3.5" />
-                      Resume
+                      {t.resume}
                     </>
                   )}
                 </DropdownMenuItem>
@@ -122,7 +127,7 @@ export function RecurringList({
                   onSelect={() => setDeleting(row)}
                 >
                   <Trash2 className="size-3.5" />
-                  Delete
+                  {common.delete}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -135,6 +140,7 @@ export function RecurringList({
           categories={categories}
           open
           onOpenChange={(next) => !next && setEditing(null)}
+          locale={locale}
           values={{
             id: editing.id,
             name: editing.name,
@@ -156,11 +162,11 @@ export function RecurringList({
           onOpenChange={(next) => !next && setDeleting(null)}
           id={deleting.id}
           action={deleteRecurringAction}
-          title={`Delete ${deleting.name}?`}
-          description="It stops counting against safe to spend straight away."
-          confirmLabel="Delete"
-          keepLabel="Keep it"
-          deletedMessage="Deleted"
+          title={t.deleteItemTitle(deleting.name)}
+          description={t.stopsCounting}
+          confirmLabel={common.delete}
+          keepLabel={common.keepIt}
+          deletedMessage={t.itemDeleted}
         />
       ) : null}
     </>
