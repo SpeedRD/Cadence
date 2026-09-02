@@ -41,7 +41,12 @@ import {
   scaleFlexibleSuggestions,
 } from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
-import { resolveImportCategoryId, suggestCategoryName } from "../src/lib/categorization";
+import {
+  EXPLICIT_NO_CATEGORY,
+  resolveImportCategoryId,
+  suggestCategoryName,
+} from "../src/lib/categorization";
+import { detectImportGroups, type GroupableRow } from "../src/lib/import-grouping";
 import { num, round2 } from "../src/lib/money";
 import { gmailRedirectUri } from "../src/lib/oauth/google";
 import type { NextRequest } from "next/server";
@@ -1701,6 +1706,194 @@ async function main() {
     await prisma.transaction.deleteMany({ where: { accountId: backfillAccount.id } });
     await prisma.account.delete({ where: { id: backfillAccount.id } });
     console.log("  ok   backfill fixtures removed");
+  }
+
+  console.log("\n-- CSV import review: resolveImportCategoryId 'leave uncategorized' override --");
+  {
+    const categoryIdByName = new Map(
+      (await prisma.category.findMany({ select: { id: true, name: true } })).map((c) => [
+        c.name.toLowerCase(),
+        c.id,
+      ]),
+    );
+    const shoppingId = categoryIdByName.get("shopping")!;
+    const knownCategoryIds = new Set([shoppingId]);
+
+    eq(
+      "explicit EXPLICIT_NO_CATEGORY sentinel forces Uncategorized even though the note would otherwise auto-suggest Shopping",
+      resolveImportCategoryId({
+        explicitCategoryId: EXPLICIT_NO_CATEGORY,
+        note: "AMAZON.COM*A1B2C3D4",
+        type: "EXPENSE",
+        knownCategoryIds,
+        categoryIdByName,
+      }),
+      null,
+    );
+    eq(
+      "an explicit real category id still overrides the sentinel's sibling automatic path",
+      resolveImportCategoryId({
+        explicitCategoryId: shoppingId,
+        note: "SOME OTHER MERCHANT",
+        type: "EXPENSE",
+        knownCategoryIds,
+        categoryIdByName,
+      }),
+      shoppingId,
+    );
+  }
+
+  console.log("\n-- CSV import review: grouped pattern detection (import-grouping, pure) --");
+  {
+    const rowSpecs: {
+      date: Date;
+      amount: number;
+      note: string;
+      type: "EXPENSE" | "INCOME";
+    }[] = [
+      // Amazon: same merchant, varying order-id suffix and casing noise -> one group.
+      { date: civilDate(2026, 3, 1), amount: 20, note: "AMAZON.COM*A1B2C3", type: "EXPENSE" },
+      { date: civilDate(2026, 3, 10), amount: 45.5, note: "AMAZON.COM*D4E5F6", type: "EXPENSE" },
+      { date: civilDate(2026, 3, 20), amount: 12.99, note: "AMAZON.COM*G7H8I9", type: "EXPENSE" },
+      // Uber (rides) vs Uber Eats: both repeated, must stay distinct groups.
+      { date: civilDate(2026, 3, 2), amount: 15, note: "UBER TRIP HELP.UBER.COM", type: "EXPENSE" },
+      { date: civilDate(2026, 3, 12), amount: 18, note: "Uber Trip Help.uber.com", type: "EXPENSE" },
+      { date: civilDate(2026, 3, 3), amount: 22, note: "UBER EATS ORDER #4821", type: "EXPENSE" },
+      { date: civilDate(2026, 3, 13), amount: 19, note: "UBER EATS ORDER #7733", type: "EXPENSE" },
+      // A single unknown merchant - too rare to be a "pattern", goes to the unknown bucket.
+      { date: civilDate(2026, 3, 4), amount: 60, note: "BOB'S WIDGET FACTORY", type: "EXPENSE" },
+      // Repeated unknown merchant with irregular gaps - still a group (same merchant), but not a subscription.
+      { date: civilDate(2026, 3, 5), amount: 500, note: "CIVEX POLIZAS MADRID 001", type: "EXPENSE" },
+      { date: civilDate(2026, 6, 22), amount: 500, note: "CIVEX POLIZAS MADRID 002", type: "EXPENSE" },
+      // Whoop: unknown category, but perfectly periodic + same amount -> possible subscription.
+      { date: civilDate(2026, 1, 15), amount: 49.99, note: "WHOOP MEMBERSHIP", type: "EXPENSE" },
+      { date: civilDate(2026, 2, 14), amount: 49.99, note: "WHOOP MEMBERSHIP", type: "EXPENSE" },
+      { date: civilDate(2026, 3, 16), amount: 49.99, note: "WHOOP MEMBERSHIP", type: "EXPENSE" },
+      // Spotify: known Subscriptions merchant, repeated -> possible subscription via the category itself.
+      { date: civilDate(2026, 1, 5), amount: 9.99, note: "SPOTIFY USA", type: "EXPENSE" },
+      { date: civilDate(2026, 2, 5), amount: 9.99, note: "SPOTIFY USA", type: "EXPENSE" },
+      // Transfer-shaped rows: three distinct patterns, an outgoing debit, an ACH transfer, and an incoming credit.
+      { date: civilDate(2026, 3, 6), amount: 5000, note: "Debito Por Transferencia", type: "EXPENSE" },
+      { date: civilDate(2026, 3, 7), amount: 3000, note: "Por Transferencia ACH", type: "EXPENSE" },
+      { date: civilDate(2026, 3, 8), amount: 7000, note: "Transferencia Recibida De Juan", type: "INCOME" },
+      // Income that happens to share the Amazon merchant text must never join the expense group.
+      { date: civilDate(2026, 3, 9), amount: 100, note: "AMAZON.COM REFUND", type: "INCOME" },
+    ];
+    const rows: GroupableRow[] = rowSpecs.map((spec, index) => ({ index, ...spec }));
+
+    const recurringCountBefore = await prisma.recurringItem.count();
+    const transferTxCountBefore = await prisma.transaction.count({ where: { type: "TRANSFER" } });
+    const { groups, unknownRowIndexes } = detectImportGroups(rows);
+    eq(
+      "10. detecting patterns (including possible subscriptions) never itself creates a RecurringItem",
+      await prisma.recurringItem.count(),
+      recurringCountBefore,
+    );
+    eq(
+      "9. detecting patterns (including possible transfers) never itself creates a linked transfer transaction",
+      await prisma.transaction.count({ where: { type: "TRANSFER" } }),
+      transferTxCountBefore,
+    );
+
+    const byRowIndex = (index: number) => groups.find((g) => g.rowIndexes.includes(index));
+
+    const amazon = byRowIndex(0);
+    check(
+      "1. repeated Amazon rows form exactly one group covering exactly those 3 rows",
+      Boolean(amazon) && amazon!.rowIndexes.slice().sort().join(",") === "0,1,2",
+    );
+    eq("3. Amazon group gets the deterministic Shopping suggestion", amazon?.suggestedCategoryName, "Shopping");
+    eq(
+      "7. grouping never changes the underlying amounts - the group total is exactly the sum of its rows",
+      amazon?.totalAmount,
+      round2(20 + 45.5 + 12.99),
+    );
+
+    const uberTrip = byRowIndex(3);
+    const uberEats = byRowIndex(5);
+    check(
+      "2. repeated Uber rides and repeated Uber Eats orders form two distinct groups",
+      Boolean(uberTrip) && Boolean(uberEats) && uberTrip!.id !== uberEats!.id,
+    );
+    check(
+      "6. the Uber-rides group covers only rows 3 and 4 - not the Uber Eats rows",
+      uberTrip!.rowIndexes.slice().sort().join(",") === "3,4",
+    );
+    check(
+      "6. the Uber Eats group covers only rows 5 and 6 - not the Uber-rides rows",
+      uberEats!.rowIndexes.slice().sort().join(",") === "5,6",
+    );
+    eq("3. Uber rides suggest Transport", uberTrip?.suggestedCategoryName, "Transport");
+    eq("3. Uber Eats suggests Dining", uberEats?.suggestedCategoryName, "Dining");
+
+    check(
+      "4. a one-off unknown merchant (Bob's Widget Factory) is never categorized and lands in the unknown bucket, not a group",
+      unknownRowIndexes.includes(7) && !byRowIndex(7),
+    );
+
+    const civex = byRowIndex(8);
+    check(
+      "repeated-but-unrecognized merchants (Civex Polizas) still form their own group for review, without a category suggestion",
+      Boolean(civex) &&
+        civex!.rowIndexes.slice().sort().join(",") === "8,9" &&
+        civex!.suggestedCategoryName === null &&
+        civex!.kind === "unknown",
+    );
+
+    const whoop = byRowIndex(10);
+    check(
+      "10. Whoop (unknown merchant, same amount, ~monthly cadence) is flagged 'possible subscription' without a category suggestion",
+      Boolean(whoop) &&
+        whoop!.possibleSubscription === true &&
+        whoop!.suggestedCategoryName === null &&
+        whoop!.kind === "subscription",
+    );
+
+    const spotify = byRowIndex(13);
+    check(
+      "10. Spotify (known Subscriptions merchant, repeated) is also flagged 'possible subscription'",
+      Boolean(spotify) && spotify!.possibleSubscription === true && spotify!.suggestedCategoryName === "Subscriptions",
+    );
+
+    const debito = byRowIndex(15);
+    const ach = byRowIndex(16);
+    const recibida = byRowIndex(17);
+    check(
+      "9. the three transfer-shaped patterns are each flagged for review as distinct groups",
+      Boolean(debito) &&
+        Boolean(ach) &&
+        Boolean(recibida) &&
+        debito!.kind === "transfer" &&
+        ach!.kind === "transfer" &&
+        recibida!.kind === "transfer" &&
+        new Set([debito!.id, ach!.id, recibida!.id]).size === 3,
+    );
+    eq("9. an incoming transfer-shaped row keeps its own row index in its transfer group", recibida?.rowIndexes.join(","), "17");
+
+    check(
+      "8. an income row is never pulled into an ordinary expense merchant group, even sharing the Amazon merchant text",
+      !byRowIndex(18) && !unknownRowIndexes.includes(18),
+    );
+
+    eq(
+      "no CSV rows are silently dropped - every row is either in a group or in the unknown bucket, except singleton rows the existing engine already categorizes on its own",
+      groups.reduce((sum, g) => sum + g.count, 0) + unknownRowIndexes.length,
+      rows.length - 1,
+    );
+  }
+
+  console.log("\n-- CSV import review: no detected patterns falls through to a normal import --");
+  {
+    const rows: GroupableRow[] = [
+      { index: 0, date: civilDate(2026, 4, 1), amount: 40, note: "SHELL OIL 998877", type: "EXPENSE" },
+      { index: 1, date: civilDate(2026, 4, 2), amount: 12, note: "STARBUCKS #221", type: "EXPENSE" },
+      { index: 2, date: civilDate(2026, 4, 3), amount: 2500, note: "PAYCHECK DEPOSIT", type: "INCOME" },
+    ];
+    const { groups, unknownRowIndexes } = detectImportGroups(rows);
+    check(
+      "12. a file with no repeated/unknown patterns produces no groups and no unknown bucket - import proceeds normally",
+      groups.length === 0 && unknownRowIndexes.length === 0,
+    );
   }
 
   console.log("\n== cleanup ==");
