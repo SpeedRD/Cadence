@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -71,7 +72,15 @@ export function PaydayCheckinCard({
             {formatMoney(flexibleTotal, draft.displayCurrency)}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          {flexibleTotal === 0 && essentialFixedTotal === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t.noAllocationsSavedNote}{" "}
+              <Link href="/budgets" className="underline underline-offset-3 hover:text-foreground">
+                {t.setBudgetsLink}
+              </Link>
+            </p>
+          ) : null}
           <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
             {t.reviewConfirmedPlan}
           </Button>

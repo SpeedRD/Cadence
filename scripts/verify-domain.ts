@@ -917,6 +917,33 @@ async function main() {
   await prisma.transaction.delete({ where: { id: dedupTransaction.id } });
   await prisma.recurringItem.delete({ where: { id: dedupSub.id } });
 
+  console.log("\n-- budgets already set for the plan period seed the planned amounts --");
+  // The "database invariants" section above already created this period's
+  // Groceries budget; point it at a distinctive amount for this check and put
+  // it back afterwards.
+  const preExistingBudget = await prisma.budget.findFirstOrThrow({
+    where: { year: 2026, month: 8, period: "B", categoryId: groceriesForPayday.id },
+  });
+  await prisma.budget.update({ where: { id: preExistingBudget.id }, data: { amount: 77, currency: "USD" } });
+  const draftWithExistingBudget = await getPaydayCheckinDraft(paydayContext);
+  const seededGroceries = draftWithExistingBudget.flexibleCategories.find((c) => c.categoryId === groceriesForPayday.id);
+  eq(
+    "a budget the user already set for the plan period pre-fills that category's planned amount instead of being silently overwritten",
+    seededGroceries?.plannedAmount,
+    77,
+  );
+  eq("the fresh suggestion is still shown separately (no history here, so 0)", seededGroceries?.suggestedAmount, 0);
+  const draftWithExistingBudgetInEur = await getPaydayCheckinDraft({ ...paydayContext, displayCurrency: "EUR" as const });
+  eq(
+    "an existing budget in another currency is converted into the display currency",
+    draftWithExistingBudgetInEur.flexibleCategories.find((c) => c.categoryId === groceriesForPayday.id)?.plannedAmount,
+    round2(convert(77, "USD", "EUR", rates)),
+  );
+  await prisma.budget.update({
+    where: { id: preExistingBudget.id },
+    data: { amount: preExistingBudget.amount, currency: preExistingBudget.currency },
+  });
+
   console.log("\n-- confirming a plan --");
   const draftForConfirm = await getPaydayCheckinDraft(paydayContext);
   const initialPayload = {
@@ -1053,6 +1080,19 @@ async function main() {
 
   const updatedIncomeTransaction = await prisma.transaction.findFirst({ where: { accountId: paydayChecking.id, source: "PAYDAY_CHECKIN" } });
   eq("the updated income transaction reflects the newly entered amount", num(updatedIncomeTransaction!.amount), 750);
+
+  console.log("\n-- a budget edited on the Budgets page after confirming wins over the stale allocation --");
+  const confirmedFlexibleBudget = await prisma.budget.findFirstOrThrow({
+    where: { year: 2026, month: 8, period: "B", categoryId: reconfirmedFlexibleCategoryId },
+  });
+  await prisma.budget.update({ where: { id: confirmedFlexibleBudget.id }, data: { amount: 60 } });
+  const draftAfterManualEdit = await getPaydayCheckinDraft(paydayContext);
+  eq(
+    "reopening the plan shows the manually edited budget, not the amount confirmed earlier",
+    draftAfterManualEdit.flexibleCategories.find((c) => c.categoryId === reconfirmedFlexibleCategoryId)?.plannedAmount,
+    60,
+  );
+  await prisma.budget.update({ where: { id: confirmedFlexibleBudget.id }, data: { amount: 45 } });
 
   console.log("\n-- reopening the confirmed check-in after the display currency changed converts, not just relabels --");
   const eurPaydayContext = { ...paydayContext, displayCurrency: "EUR" as const };

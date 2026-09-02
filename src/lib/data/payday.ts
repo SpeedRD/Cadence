@@ -234,6 +234,7 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     existing,
     recurringForMatchRows,
     plannedPeriodExpenses,
+    existingBudgetRows,
   ] = await Promise.all([
     getAccountBalances(context, { status: "ACTIVE" }),
     getPeriodSummary(plan, context),
@@ -273,6 +274,9 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       where: { type: "EXPENSE", date: { gte: plan.start, lte: plan.end } },
       select: { id: true, amount: true, currency: true, categoryId: true, note: true },
     }),
+    prisma.budget.findMany({
+      where: { year: planRef.year, month: planRef.month, period: planRef.period, categoryId: { not: null } },
+    }),
   ]);
 
   const forMatch = recurringForMatchRows.map((item) => ({ ...item, amount: num(item.amount) }));
@@ -285,6 +289,21 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
   }));
   const { actualNativeByItemId } = matchRecurringToTransactions(forMatch, matchableExpenses);
   const alreadyLoggedIds = new Set(actualNativeByItemId.keys());
+
+  // Category budgets already saved for the plan period - set by hand on the
+  // Budgets page, copied forward, or written by an earlier confirmation and
+  // edited since - seed the planned amounts, so confirming never silently
+  // overwrites a budget the user can already see. The confirmed check-in's
+  // allocation is the fallback, then the fresh suggestion; the suggestion
+  // itself is always recomputed and shown separately.
+  const existingBudgetByCategory = new Map(
+    existingBudgetRows
+      .filter((budget) => budget.categoryId)
+      .map((budget) => [
+        budget.categoryId as string,
+        round2(convert(num(budget.amount), budget.currency, context.displayCurrency, context.rates)),
+      ]),
+  );
 
   const existingSnapshotByAccount = new Map((existing?.snapshots ?? []).map((s) => [s.accountId, s]));
   const existingAllocationByKey = new Map(
@@ -365,9 +384,11 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       name: category.name,
       color: category.color,
       suggestedAmount: suggestion.amount,
-      plannedAmount: existingAlloc
-        ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
-        : suggestion.amount,
+      plannedAmount:
+        existingBudgetByCategory.get(category.id) ??
+        (existingAlloc
+          ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
+          : suggestion.amount),
       basis: suggestion.basis,
     };
   });
@@ -411,9 +432,11 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       name: category.name,
       color: category.color,
       suggestedAmount: scaledAmount,
-      plannedAmount: existingAlloc
-        ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
-        : scaledAmount,
+      plannedAmount:
+        existingBudgetByCategory.get(category.id) ??
+        (existingAlloc
+          ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
+          : scaledAmount),
       basis: suggestion.basis,
     };
   });

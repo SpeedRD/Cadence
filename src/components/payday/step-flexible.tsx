@@ -32,9 +32,13 @@ export function StepFlexible({
   const allocated = round2(categories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const remaining = round2(available - allocated);
   const perDay = round2(Math.max(0, remaining) / Math.max(1, daysRemaining));
+  const hasSuggestions = categories.some((c) => c.suggestedAmount > 0);
 
   return (
     <div className="space-y-3">
+      {categories.length > 0 && !hasSuggestions ? (
+        <p className="text-sm text-muted-foreground">{t.noSuggestionsYetNote}</p>
+      ) : null}
       {categories.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t.noFlexibleCategoriesConfigured}</p>
       ) : (

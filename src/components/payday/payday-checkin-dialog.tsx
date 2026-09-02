@@ -100,6 +100,10 @@ export function PaydayCheckinDialog({
   const needsZeroBufferAck = plan.plannedBuffer <= 0;
   const incomeTransactionCount = plan.accounts.filter((a) => a.incomeEntered > 0).length;
   const budgetCount = plan.essentialCategories.length + plan.flexibleCategories.length;
+  const allocatedCategoryCount = [...plan.essentialCategories, ...plan.flexibleCategories].filter(
+    (c) => c.plannedAmount > 0,
+  ).length;
+  const stepTitles = [t.step1Title, t.step2Title, t.step3Title, t.step4Title, t.step5Title];
 
   function updateAccount(accountId: string, patch: Partial<PaydayCheckinDraft["accounts"][number]>) {
     setPlan((prev) => ({
@@ -160,10 +164,12 @@ export function PaydayCheckinDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
+      <DialogContent className="flex flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t.wizardTitle(plan.periodLabel)}</DialogTitle>
-          <DialogDescription>{t.stepOf(step, STEP_COUNT)}</DialogDescription>
+          <DialogDescription>
+            {t.stepOf(step, STEP_COUNT)} · {stepTitles[step - 1]}
+          </DialogDescription>
         </DialogHeader>
 
         <form
@@ -237,6 +243,7 @@ export function PaydayCheckinDialog({
                 incomeTransactionCount={incomeTransactionCount}
                 totalIncome={totalIncome}
                 budgetCount={budgetCount}
+                allocatedCategoryCount={allocatedCategoryCount}
                 displayCurrency={plan.displayCurrency}
                 needsDeficitAck={needsDeficitAck}
                 acknowledgedDeficit={acknowledgedDeficit}
