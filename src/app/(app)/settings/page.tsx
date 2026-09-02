@@ -4,6 +4,8 @@ import Link from "next/link";
 import { ActionButton } from "@/components/form/action-button";
 import { PageHeader } from "@/components/page-header";
 import { DisplayCurrencyForm } from "@/components/settings/display-currency-form";
+import { EssentialCategoryToggle } from "@/components/settings/essential-category-toggle";
+import { PlanningPreferencesForm } from "@/components/settings/planning-preferences-form";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,10 +14,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { getSettings } from "@/lib/auth";
 import { CURRENCIES, CURRENCY_LABELS, formatRate } from "@/lib/currency";
 import { appTimeZone } from "@/lib/date";
 import { getAppContext } from "@/lib/data/context";
 import { getDictionary } from "@/lib/i18n";
+import { num } from "@/lib/money";
+import { prisma } from "@/lib/prisma";
 import { logoutAction } from "@/server/actions/auth";
 import { recalculateGoalsAction } from "@/server/actions/settings";
 
@@ -25,6 +30,11 @@ export default async function SettingsPage() {
   const context = await getAppContext();
   const timezone = appTimeZone();
   const t = getDictionary(context.language).settingsPage;
+  const settings = await getSettings();
+  const eligibleCategories = await prisma.category.findMany({
+    where: { kind: "EXPENSE", isSubscriptionDefault: false, isSavingsDefault: false },
+    orderBy: { name: "asc" },
+  });
 
   return (
     <div className="space-y-5">
@@ -72,6 +82,54 @@ export default async function SettingsPage() {
                 ? t.rateServiceUnreachable
                 : ""}
             </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t.planningPreferencesTitle}</CardTitle>
+            <CardDescription>{t.planningPreferencesDescription}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <PlanningPreferencesForm
+              bufferPercent={settings.bufferPercent}
+              bufferFloorAmount={num(settings.bufferFloorAmount)}
+              bufferFloorCurrency={settings.bufferFloorCurrency}
+              carryoverIncludedByDefault={settings.carryoverIncludedByDefault}
+              locale={context.language}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>{t.essentialCategoriesTitle}</CardTitle>
+            <CardDescription>{t.essentialCategoriesDescription}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {eligibleCategories.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t.noEligibleCategories}</p>
+            ) : (
+              <ul className="divide-y divide-border/70">
+                {eligibleCategories.map((category) => (
+                  <li key={category.id} className="flex items-center justify-between gap-3 py-2 first:pt-0">
+                    <span className="flex items-center gap-2 text-sm">
+                      <span
+                        className="size-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: category.color }}
+                      />
+                      {category.name}
+                    </span>
+                    <EssentialCategoryToggle
+                      categoryId={category.id}
+                      initialValue={category.isEssentialFixed}
+                      ariaLabel={t.essentialToggleAria(category.name)}
+                      errorMessage={t.categoryNoLongerExists}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
           </CardContent>
         </Card>
 

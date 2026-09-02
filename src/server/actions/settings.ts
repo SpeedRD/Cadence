@@ -4,7 +4,7 @@ import { SETTINGS_ID, getSettings, requireAuth } from "@/lib/auth";
 import { recomputeAllGoals } from "@/lib/goals";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
-import { firstError, formObject, settingsSchema } from "@/lib/validation";
+import { firstError, formObject, planningPreferencesSchema, settingsSchema } from "@/lib/validation";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
@@ -56,4 +56,41 @@ export async function recalculateGoalsAction(
   const count = await recomputeAllGoals();
   revalidateApp();
   return done(t.goalsRecalculated(count));
+}
+
+export async function savePlanningPreferencesAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).settingsPage;
+  const parsed = planningPreferencesSchema.safeParse(formObject(formData));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
+
+  await prisma.settings.upsert({
+    where: { id: SETTINGS_ID },
+    update: parsed.data,
+    create: { id: SETTINGS_ID, ...parsed.data },
+  });
+  revalidateApp();
+  return done(t.planningPreferencesSaved);
+}
+
+export async function toggleEssentialCategoryAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).settingsPage;
+  const categoryId = String(formData.get("categoryId") ?? "").trim();
+  const isEssentialFixed = formData.get("isEssentialFixed") === "true";
+  if (!categoryId) return fail(t.categoryNoLongerExists);
+
+  await prisma.category.update({ where: { id: categoryId }, data: { isEssentialFixed } });
+  revalidateApp();
+  return done(isEssentialFixed ? t.categoryMarkedEssential : t.categoryUnmarkedEssential);
 }
