@@ -3,6 +3,7 @@
 import { z } from "zod";
 
 import { getSettings, requireAuth } from "@/lib/auth";
+import { resolveImportCategoryId } from "@/lib/categorization";
 import { CURRENCIES } from "@/lib/currency";
 import { fromISODate } from "@/lib/date";
 import { getDictionary, isLocale } from "@/lib/i18n";
@@ -59,20 +60,11 @@ export async function importTransactionsAction(
   });
   if (!account) return fail(t.accountNoLongerExists);
 
-  const categoryIds = [
-    ...new Set(
-      parsed.data.rows
-        .map((row) => row.categoryId)
-        .filter((id): id is string => Boolean(id)),
-    ),
-  ];
-  const categories = categoryIds.length
-    ? await prisma.category.findMany({
-        where: { id: { in: categoryIds } },
-        select: { id: true },
-      })
-    : [];
-  const knownCategories = new Set(categories.map((category) => category.id));
+  const categories = await prisma.category.findMany({ select: { id: true, name: true } });
+  const knownCategoryIds = new Set(categories.map((category) => category.id));
+  const categoryIdByName = new Map(
+    categories.map((category) => [category.name.toLowerCase(), category.id]),
+  );
 
   const data = parsed.data.rows.map((row) => ({
     date: fromISODate(row.date) as Date,
@@ -80,8 +72,13 @@ export async function importTransactionsAction(
     currency: parsed.data.currency,
     type: row.type,
     accountId: account.id,
-    categoryId:
-      row.categoryId && knownCategories.has(row.categoryId) ? row.categoryId : null,
+    categoryId: resolveImportCategoryId({
+      explicitCategoryId: row.categoryId,
+      note: row.note,
+      type: row.type,
+      knownCategoryIds,
+      categoryIdByName,
+    }),
     note: row.note,
     source: "CSV" as const,
   }));

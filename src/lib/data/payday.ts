@@ -27,6 +27,7 @@ import {
   nextPeriod,
   periodInfo,
   periodsRemaining,
+  previousComparablePeriod,
   previousPeriod,
   type PeriodRef,
 } from "@/lib/period";
@@ -138,12 +139,15 @@ export async function getCategorySuggestions(
   if (categories.length === 0) return result;
   const categoryIds = categories.map((c) => c.id);
 
-  const prevRef = previousPeriod(planRef);
+  // Comparable, not merely prior: last month's same half (1st-15th vs.
+  // 16th-end), never the opposite half of the month that a single
+  // previousPeriod() step would land on.
+  const comparableRef = previousComparablePeriod(planRef);
   const lastBudgets = await prisma.budget.findMany({
     where: {
-      year: prevRef.year,
-      month: prevRef.month,
-      period: prevRef.period,
+      year: comparableRef.year,
+      month: comparableRef.month,
+      period: comparableRef.period,
       categoryId: { in: categoryIds },
     },
   });
@@ -162,15 +166,16 @@ export async function getCategorySuggestions(
   const historicalTotals = new Map<string, number>();
   const historicalNonZero = new Set<string>();
   if (remaining.length > 0) {
-    // Same HISTORY_PERIODS periods as before (prevRef, then two periods back
-    // each time), just fetched in parallel instead of sequentially - each
-    // getPeriodSummary() call is an independent DB round-trip, and the
-    // dashboard calls this unconditionally on every load.
+    // HISTORY_PERIODS comparable (same-half) periods, starting at
+    // comparableRef and stepping one full cycle back each time, fetched in
+    // parallel instead of sequentially - each getPeriodSummary() call is an
+    // independent DB round-trip, and the dashboard calls this unconditionally
+    // on every load.
     const cursors: PeriodRef[] = [];
-    let cursor = prevRef;
+    let cursor = comparableRef;
     for (let i = 0; i < HISTORY_PERIODS; i += 1) {
       cursors.push(cursor);
-      cursor = previousPeriod(previousPeriod(cursor));
+      cursor = previousComparablePeriod(cursor);
     }
     const summaries = await Promise.all(
       cursors.map((ref) => getPeriodSummary(periodInfo(ref), context)),

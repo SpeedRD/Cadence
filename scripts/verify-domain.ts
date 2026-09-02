@@ -33,6 +33,7 @@ import {
   periodInfo,
   periodsRemaining,
   periodSeries,
+  previousComparablePeriod,
 } from "../src/lib/period";
 import {
   availableForFlexibleCategories,
@@ -40,6 +41,7 @@ import {
   scaleFlexibleSuggestions,
 } from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
+import { resolveImportCategoryId, suggestCategoryName } from "../src/lib/categorization";
 import { num, round2 } from "../src/lib/money";
 import { gmailRedirectUri } from "../src/lib/oauth/google";
 import type { NextRequest } from "next/server";
@@ -854,7 +856,9 @@ async function main() {
   await prisma.account.delete({ where: { id: openingBalanceAccount.id } });
 
   console.log("\n== payday check-in (database) ==");
-  const { getPaydayCheckinDraft, confirmPaydayCheckin } = await import("../src/lib/data/payday");
+  const { getPaydayCheckinDraft, confirmPaydayCheckin, getCategorySuggestions } = await import(
+    "../src/lib/data/payday"
+  );
   const { getSettings } = await import("../src/lib/auth");
 
   const paydaySettings = await getSettings();
@@ -1016,6 +1020,144 @@ async function main() {
     where: { id: preExistingBudget.id },
     data: { amount: preExistingBudget.amount, currency: preExistingBudget.currency },
   });
+
+  console.log("\n-- smart flexible-category budget recommendations --");
+  {
+    const diningCat = await prisma.category.findFirstOrThrow({ where: { name: "Dining" } });
+    const transportCat = await prisma.category.findFirstOrThrow({ where: { name: "Transport" } });
+    const entertainmentCat = await prisma.category.findFirstOrThrow({ where: { name: "Entertainment" } });
+    const shoppingCat = await prisma.category.findFirstOrThrow({ where: { name: "Shopping" } });
+    const recCategories = [diningCat, transportCat, entertainmentCat, shoppingCat].map((c) => ({ id: c.id }));
+
+    // planRef for this section's draft is 2026-08-B; the comparable prior
+    // period (same half-of-month, one cycle back) is 2026-07-B, not the
+    // opposite-half 2026-08-A that a plain previousPeriod() step would land on.
+    eq(
+      "previousComparablePeriod lands on the same half one month back, not the opposite half",
+      JSON.stringify(previousComparablePeriod({ year: 2026, month: 8, period: "B" })),
+      JSON.stringify({ year: 2026, month: 7, period: "B" }),
+    );
+
+    const recHistoryAccount = await prisma.account.create({
+      data: { name: "Verify Payday History", currency: "USD", type: "CHECKING" },
+    });
+
+    // Priority 1: a budget in the most recent comparable period wins outright,
+    // even though this same category also has spending history in the
+    // lookback window - history must never blend with or override a match.
+    const comparableDiningBudget = await prisma.budget.create({
+      data: { year: 2026, month: 7, period: "B", categoryId: diningCat.id, amount: 150, currency: "USD" },
+    });
+    // Priority 2: Transport has no comparable-period budget, only categorized
+    // spending across two of the six same-half lookback periods.
+    await prisma.transaction.createMany({
+      data: [
+        { date: civilDate(2026, 7, 20), amount: 80, currency: "USD", type: "EXPENSE", accountId: recHistoryAccount.id, categoryId: transportCat.id, source: "MANUAL" },
+        { date: civilDate(2026, 5, 20), amount: 100, currency: "USD", type: "EXPENSE", accountId: recHistoryAccount.id, categoryId: transportCat.id, source: "MANUAL" },
+        { date: civilDate(2026, 7, 20), amount: 500, currency: "USD", type: "EXPENSE", accountId: recHistoryAccount.id, categoryId: null, source: "MANUAL" },
+      ],
+    });
+    // Also give Dining spending history, to prove the budget match still wins.
+    await prisma.transaction.create({
+      data: { date: civilDate(2026, 6, 20), amount: 40, currency: "USD", type: "EXPENSE", accountId: recHistoryAccount.id, categoryId: diningCat.id, source: "MANUAL" },
+    });
+
+    const txCountBefore = await prisma.transaction.count();
+    const goalContributionCountBefore = await prisma.goalContribution.count();
+
+    const suggestions = await getCategorySuggestions(draft.periodRef, recCategories, paydayContext);
+
+    check(
+      "recommendation generation never creates transactions or goal contributions",
+      (await prisma.transaction.count()) === txCountBefore &&
+        (await prisma.goalContribution.count()) === goalContributionCountBefore,
+    );
+
+    eq(
+      "most recent comparable budget is used when available (priority 1)",
+      JSON.stringify(suggestions.get(diningCat.id)),
+      JSON.stringify({ amount: 150, basis: "last_budget" }),
+    );
+    eq(
+      "same category with no comparable budget falls back to categorized spending history (priority 2)",
+      JSON.stringify(suggestions.get(transportCat.id)),
+      JSON.stringify({ amount: 30, basis: "average" }), // (80 + 100) / HISTORY_PERIODS(6)
+    );
+    eq(
+      "no useful history produces zero (priority 3/4), never a fabricated guess",
+      JSON.stringify(suggestions.get(entertainmentCat.id)),
+      JSON.stringify({ amount: 0, basis: "none" }),
+    );
+    eq(
+      "an uncategorized transaction in the same window does not leak into an unrelated category's recommendation",
+      JSON.stringify(suggestions.get(shoppingCat.id)),
+      JSON.stringify({ amount: 0, basis: "none" }),
+    );
+    check(
+      "recommendations are generated independently per category, not one shared figure",
+      suggestions.get(diningCat.id)?.amount !== suggestions.get(transportCat.id)?.amount,
+    );
+
+    const periodASuggestions = await getCategorySuggestions(
+      { year: 2026, month: 8, period: "A" },
+      [{ id: diningCat.id }],
+      paydayContext,
+    );
+    eq(
+      "same-half matching: a Period A plan does not pick up the Period B comparable-period budget",
+      JSON.stringify(periodASuggestions.get(diningCat.id)),
+      JSON.stringify({ amount: 0, basis: "none" }),
+    );
+
+    console.log("\n-- scaling flexible recommendations against available money --");
+    const rawSuggestions = [
+      { id: diningCat.id, suggested: suggestions.get(diningCat.id)!.amount },
+      { id: transportCat.id, suggested: suggestions.get(transportCat.id)!.amount },
+    ];
+    const rawTotal = rawSuggestions.reduce((sum, s) => sum + s.suggested, 0);
+    eq("raw recommendations total 180 before any scaling", rawTotal, 180);
+
+    const comfortablyAvailable = scaleFlexibleSuggestions(rawSuggestions, 500);
+    eq(
+      "recommendations that already fit the available money pass through unscaled",
+      JSON.stringify(comfortablyAvailable.map((s) => s.scaled)),
+      JSON.stringify([150, 30]),
+    );
+
+    const tightlyAvailable = scaleFlexibleSuggestions(rawSuggestions, 90);
+    const scaledTotal = tightlyAvailable.reduce((sum, s) => sum + s.scaled, 0);
+    check("scaled recommendations never exceed available flexible money", scaledTotal <= 90);
+    eq("proportional scaling: total lands exactly on the available amount here", scaledTotal, 90);
+    const rawRatio = rawSuggestions[0].suggested / rawSuggestions[1].suggested;
+    const scaledDining = tightlyAvailable.find((s) => s.id === diningCat.id)!.scaled;
+    const scaledTransport = tightlyAvailable.find((s) => s.id === transportCat.id)!.scaled;
+    eq("proportional scaling preserves the relative ratio between categories", scaledDining / scaledTransport, rawRatio);
+
+    const negativeAvailable = scaleFlexibleSuggestions(rawSuggestions, -50);
+    check(
+      "negative available flexible money preserves the existing deficit behavior - every suggestion scales to zero, none negative",
+      negativeAvailable.every((s) => s.scaled === 0),
+    );
+
+    // The shared draft's own `available` is already deeply negative at this
+    // point in the script (no income entered yet on this unconfirmed plan),
+    // so this closes the loop end-to-end: real comparable-period/history
+    // recommendations exist (basis last_budget/average, confirmed above) but
+    // the draft still forces every flexible suggestedAmount to 0 rather than
+    // suggesting money that isn't there.
+    const draftDuringDeficit = await getPaydayCheckinDraft(paydayContext);
+    const draftDining = draftDuringDeficit.flexibleCategories.find((c) => c.categoryId === diningCat.id);
+    eq(
+      "wired end-to-end: a real last_budget recommendation is still forced to 0 while the plan is in deficit",
+      JSON.stringify(draftDining && { basis: draftDining.basis, suggestedAmount: draftDining.suggestedAmount }),
+      JSON.stringify({ basis: "last_budget", suggestedAmount: 0 }),
+    );
+
+    await prisma.transaction.deleteMany({ where: { accountId: recHistoryAccount.id } });
+    await prisma.account.delete({ where: { id: recHistoryAccount.id } });
+    await prisma.budget.delete({ where: { id: comparableDiningBudget.id } });
+    console.log("  ok   flexible-category recommendation fixtures removed");
+  }
 
   console.log("\n-- confirming a plan --");
   const draftForConfirm = await getPaydayCheckinDraft(paydayContext);
@@ -1324,6 +1466,137 @@ async function main() {
       else env.APP_URL = savedAppUrl;
       if (savedNodeEnv === undefined) delete env.NODE_ENV;
       else env.NODE_ENV = savedNodeEnv;
+    }
+  }
+
+  console.log("\n-- Automatic transaction categorization --");
+  {
+    eq("clear merchant match: Uber Eats -> Dining", suggestCategoryName("UBER EATS ORDER #4821", "EXPENSE"), "Dining");
+    eq("clear merchant match: bare Uber -> Transport", suggestCategoryName("Uber Trip Help.uber.com", "EXPENSE"), "Transport");
+    eq("clear merchant match: Shell -> Transport", suggestCategoryName("SHELL OIL 12345678", "EXPENSE"), "Transport");
+    eq("clear merchant match: McDonald's -> Dining", suggestCategoryName("MCDONALD'S #3021", "EXPENSE"), "Dining");
+    eq("clear merchant match: Amazon -> Shopping", suggestCategoryName("AMAZON.COM*A1B2C3D4", "EXPENSE"), "Shopping");
+    eq("clear merchant match: Anthropic -> Subscriptions", suggestCategoryName("ANTHROPIC", "EXPENSE"), "Subscriptions");
+    eq("clear merchant match: Whole Foods -> Groceries", suggestCategoryName("WHOLE FOODS MARKET #123", "EXPENSE"), "Groceries");
+    eq(
+      "case/spacing variation still matches: '  uber   eats  '",
+      suggestCategoryName("  uber   EATS  ", "EXPENSE"),
+      "Dining",
+    );
+    eq(
+      "unknown merchant remains uncategorized",
+      suggestCategoryName("BOB'S WIDGET FACTORY", "EXPENSE"),
+      null,
+    );
+    eq(
+      "income rows are never auto-categorized, even with a matching description",
+      suggestCategoryName("AMAZON.COM REFUND", "INCOME"),
+      null,
+    );
+    eq("empty/missing description stays uncategorized", suggestCategoryName(null, "EXPENSE"), null);
+
+    const categoryIdByName = new Map(
+      (await prisma.category.findMany({ select: { id: true, name: true } })).map((c) => [
+        c.name.toLowerCase(),
+        c.id,
+      ]),
+    );
+    const diningId = categoryIdByName.get("dining");
+    const transportId = categoryIdByName.get("transport");
+    const knownCategoryIds = new Set([diningId, transportId].filter((id): id is string => Boolean(id)));
+
+    if (diningId && transportId) {
+      eq(
+        "explicit import category wins over automatic categorization",
+        resolveImportCategoryId({
+          explicitCategoryId: transportId,
+          note: "UBER EATS ORDER #4821",
+          type: "EXPENSE",
+          knownCategoryIds,
+          categoryIdByName,
+        }),
+        transportId,
+      );
+      eq(
+        "no explicit category falls back to the automatic suggestion",
+        resolveImportCategoryId({
+          explicitCategoryId: null,
+          note: "UBER EATS ORDER #4821",
+          type: "EXPENSE",
+          knownCategoryIds,
+          categoryIdByName,
+        }),
+        diningId,
+      );
+      eq(
+        "an explicit category id that no longer exists falls back to automatic categorization",
+        resolveImportCategoryId({
+          explicitCategoryId: "stale-deleted-category-id",
+          note: "UBER EATS ORDER #4821",
+          type: "EXPENSE",
+          knownCategoryIds,
+          categoryIdByName,
+        }),
+        diningId,
+      );
+    } else {
+      check("Dining and Transport categories exist for the resolveImportCategoryId checks", false);
+    }
+    eq(
+      "no explicit category and no rule match leaves the row uncategorized",
+      resolveImportCategoryId({
+        explicitCategoryId: null,
+        note: "BOB'S WIDGET FACTORY",
+        type: "EXPENSE",
+        knownCategoryIds,
+        categoryIdByName,
+      }),
+      null,
+    );
+
+    // Existing categorized transactions are never touched by import: CSV
+    // import only ever inserts new rows (createMany), so a pre-existing
+    // categorized transaction must be unaffected by an unrelated import run.
+    if (diningId) {
+      const existing = await prisma.transaction.create({
+        data: {
+          date: new Date("2026-08-15"),
+          amount: 42,
+          currency: "USD",
+          type: "EXPENSE",
+          accountId: checking.id,
+          categoryId: diningId,
+          note: "Existing manually categorized row",
+          source: "MANUAL",
+        },
+      });
+      await prisma.transaction.createMany({
+        data: [
+          {
+            date: new Date("2026-08-16"),
+            amount: 10,
+            currency: "USD",
+            type: "EXPENSE",
+            accountId: checking.id,
+            categoryId: resolveImportCategoryId({
+              explicitCategoryId: null,
+              note: "UBER EATS ORDER #9999",
+              type: "EXPENSE",
+              knownCategoryIds,
+              categoryIdByName,
+            }),
+            note: "UBER EATS ORDER #9999",
+            source: "CSV",
+          },
+        ],
+      });
+      const reloaded = await prisma.transaction.findUnique({ where: { id: existing.id } });
+      eq(
+        "an unrelated CSV import does not change an existing manually categorized transaction",
+        reloaded?.categoryId,
+        diningId,
+      );
+      await prisma.transaction.deleteMany({ where: { accountId: checking.id, note: { in: ["Existing manually categorized row", "UBER EATS ORDER #9999"] } } });
     }
   }
 

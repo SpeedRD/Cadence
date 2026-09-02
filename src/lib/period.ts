@@ -102,6 +102,18 @@ export function previousPeriod(ref: PeriodRef): PeriodRef {
 }
 
 /**
+ * The most recent period sharing the same half-of-month as `ref` - one
+ * previousPeriod() step lands on the opposite half (A<->B), so this composes
+ * it twice to land one cycle back on the same half (e.g. this month's B ->
+ * last month's B). Used wherever a "comparable prior period" is needed for
+ * budget or spending comparisons, so a 1st-15th period is never compared
+ * against a 16th-end one.
+ */
+export function previousComparablePeriod(ref: PeriodRef): PeriodRef {
+  return previousPeriod(previousPeriod(ref));
+}
+
+/**
  * Days left in the period containing `date`, counting `date` itself, so a
  * per-day figure on the last day divides by 1 rather than 0.
  */
