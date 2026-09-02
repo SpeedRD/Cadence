@@ -885,6 +885,9 @@ async function main() {
     flexibleCategories: initialPayload.flexibleCategories.map((c) =>
       c.categoryId === reconfirmedFlexibleCategoryId ? { ...c, plannedAmount: 45 } : c,
     ),
+    // Also give includedCarryover something non-zero to convert below -
+    // acknowledgedDeficit is already true, inherited from initialPayload.
+    includedCarryover: 10,
   };
   const reconfirmResult = await confirmPaydayCheckin(updatedPayload, paydayContext);
   check("re-confirming the same period succeeds", reconfirmResult.ok === true);
@@ -924,6 +927,11 @@ async function main() {
     "a stored flexible category amount is converted from the currency it was confirmed in, not read back raw",
     draftAfterCurrencySwitch.flexibleCategories.find((c) => c.categoryId === reconfirmedFlexibleCategoryId)?.plannedAmount,
     round2(convert(45, "USD", "EUR", rates)),
+  );
+  eq(
+    "the already-confirmed carryover amount is also converted, not left raw",
+    draftAfterCurrencySwitch.includedCarryover,
+    round2(convert(10, "USD", "EUR", rates)),
   );
 
   console.log("\n-- zeroing income removes the transaction, never leaves a stale one --");
