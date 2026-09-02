@@ -23,8 +23,11 @@ import {
 import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getGoalDetail } from "@/lib/data/goals";
+import { planPeriodRef } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
+import { num } from "@/lib/money";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Goal - Cadence" };
 
@@ -37,6 +40,12 @@ export default async function GoalDetailPage({
   const context = await getAppContext();
   const detail = await getGoalDetail(id, context);
   if (!detail) notFound();
+  const planRef = planPeriodRef(context);
+  const confirmedCheckin = await prisma.paydayCheckin.findFirst({
+    where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
+    include: { allocations: { where: { type: "GOAL", goalId: id } } },
+  });
+  const plannedAllocation = confirmedCheckin?.allocations[0] ?? null;
 
   const { summary, contributions, contributionTotal } = detail;
   const today = toISODate(context.today);
@@ -150,6 +159,20 @@ export default async function GoalDetailPage({
           {drifted ? (
             <p className="text-xs text-[var(--warning)]">
               {t.driftedWarning(formatMoney(contributionTotal, summary.currency))}
+            </p>
+          ) : null}
+
+          {plannedAllocation ? (
+            <p className="text-xs text-muted-foreground">
+              {t.plannedThisPeriod(formatMoney(num(plannedAllocation.plannedAmount), summary.currency))}
+              {num(plannedAllocation.recommendedAmount) - num(plannedAllocation.plannedAmount) > 0.005
+                ? ` · ${t.plannedBehindRoadmap(
+                    formatMoney(
+                      num(plannedAllocation.recommendedAmount) - num(plannedAllocation.plannedAmount),
+                      summary.currency,
+                    ),
+                  )}`
+                : ""}
             </p>
           ) : null}
         </CardContent>

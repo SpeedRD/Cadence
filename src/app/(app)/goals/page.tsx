@@ -12,8 +12,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { listGoals } from "@/lib/data/goals";
+import { planPeriodRef } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
+import { num } from "@/lib/money";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Goals - Cadence" };
 
@@ -23,6 +26,14 @@ export default async function GoalsPage() {
   const today = toISODate(context.today);
   const t = getDictionary(context.language).goals;
   const common = getDictionary(context.language).common;
+  const planRef = planPeriodRef(context);
+  const confirmedCheckin = await prisma.paydayCheckin.findFirst({
+    where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
+    include: { allocations: { where: { type: "GOAL" } } },
+  });
+  const plannedByGoalId = new Map(
+    (confirmedCheckin?.allocations ?? []).map((allocation) => [allocation.goalId as string, allocation]),
+  );
 
   return (
     <div className="space-y-5">
@@ -149,6 +160,14 @@ export default async function GoalsPage() {
                     }
                   />
                 </div>
+
+                {plannedByGoalId.has(goal.id) ? (
+                  <p className="text-xs text-muted-foreground">
+                    {t.plannedThisPeriod(
+                      formatMoney(num(plannedByGoalId.get(goal.id)!.plannedAmount), goal.currency),
+                    )}
+                  </p>
+                ) : null}
               </CardContent>
             </Card>
           ))}
