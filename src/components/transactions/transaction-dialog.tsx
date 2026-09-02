@@ -63,9 +63,10 @@ export function TransactionDialog({
     >
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field label={common.type}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={common.type} htmlFor="transaction-type">
           <EnumSelect
+            id="transaction-type"
             name="type"
             options={["EXPENSE", "INCOME"]}
             labels={common.transactionTypeLabels}
@@ -83,7 +84,7 @@ export function TransactionDialog({
         </Field>
       </div>
 
-      <div className="grid grid-cols-[1fr_110px] gap-3">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px]">
         <Field label={common.amount} htmlFor="transaction-amount">
           <Input
             id="transaction-amount"
@@ -95,22 +96,24 @@ export function TransactionDialog({
             required
           />
         </Field>
-        <Field label={common.currency}>
-          <CurrencySelect name="currency" defaultValue={values.currency} />
+        <Field label={common.currency} htmlFor="transaction-currency">
+          <CurrencySelect id="transaction-currency" name="currency" defaultValue={values.currency} />
         </Field>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field label={common.account}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={common.account} htmlFor="transaction-account">
           <AccountSelect
+            id="transaction-account"
             name="accountId"
             accounts={accounts}
             defaultValue={values.accountId ?? accounts[0]?.id}
             common={common}
           />
         </Field>
-        <Field label={common.category}>
+        <Field label={common.category} htmlFor="transaction-category">
           <CategorySelect
+            id="transaction-category"
             name="categoryId"
             categories={categories}
             defaultValue={values.categoryId ?? "none"}

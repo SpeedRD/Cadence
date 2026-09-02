@@ -9,6 +9,7 @@ export function StepConfirm({
   incomeTransactionCount,
   totalIncome,
   budgetCount,
+  allocatedCategoryCount,
   displayCurrency,
   needsDeficitAck,
   acknowledgedDeficit,
@@ -23,6 +24,8 @@ export function StepConfirm({
   incomeTransactionCount: number;
   totalIncome: number;
   budgetCount: number;
+  /** Categories with a planned amount above zero - when none, say where budgets can be set later. */
+  allocatedCategoryCount: number;
   displayCurrency: string;
   needsDeficitAck: boolean;
   acknowledgedDeficit: boolean;
@@ -46,6 +49,9 @@ export function StepConfirm({
           <p>{t.confirmSnapshotsNote}</p>
           <p>{t.confirmIncomeNote(incomeTransactionCount, formatMoney(totalIncome, displayCurrency))}</p>
           <p>{t.confirmBudgetsNote(budgetCount)}</p>
+          {budgetCount > 0 && allocatedCategoryCount === 0 ? (
+            <p>{t.confirmNoAllocationsNote}</p>
+          ) : null}
           <p>{t.confirmReservedNote}</p>
         </CardContent>
       </Card>

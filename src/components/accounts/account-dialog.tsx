@@ -55,17 +55,18 @@ export function AccountDialog({
         />
       </Field>
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field label={common.type}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={common.type} htmlFor="account-type">
           <EnumSelect
+            id="account-type"
             name="type"
             options={ACCOUNT_TYPES}
             labels={common.accountTypeLabels}
             defaultValue={values.type ?? "CHECKING"}
           />
         </Field>
-        <Field label={common.currency}>
-          <CurrencySelect name="currency" defaultValue={values.currency} />
+        <Field label={common.currency} htmlFor="account-currency">
+          <CurrencySelect id="account-currency" name="currency" defaultValue={values.currency} />
         </Field>
       </div>
     </FormDialog>

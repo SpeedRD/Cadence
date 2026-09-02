@@ -26,6 +26,7 @@ import {
 import { formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
+import { transactionEditBlock } from "@/lib/transactions";
 import { deleteTransactionAction } from "@/server/actions/transactions";
 import { cn } from "@/lib/utils";
 
@@ -38,11 +39,18 @@ function AmountCell({
   row: TransactionRow;
   displayCurrency: string;
 }) {
-  const sign = row.type === "INCOME" ? "+" : row.type === "EXPENSE" ? "-" : "";
+  const sign =
+    row.type === "INCOME" || row.type === "OPENING_BALANCE"
+      ? "+"
+      : row.type === "EXPENSE"
+        ? "-"
+        : "";
+  // An opening balance raises the account like income but is not income, so
+  // it gets the neutral transfer tone rather than the income green.
   const tone =
     row.type === "INCOME"
       ? "text-[var(--good)]"
-      : row.type === "TRANSFER"
+      : row.type === "TRANSFER" || row.type === "OPENING_BALANCE"
         ? "text-muted-foreground"
         : "";
 
@@ -111,7 +119,9 @@ export function TransactionTable({
                           ? (row.transferDirection === "OUT"
                               ? t.transferTo(row.counterpartAccountName ?? t.anotherAccount)
                               : t.transferFrom(row.counterpartAccountName ?? t.anotherAccount))
-                          : (row.categoryName ?? t.uncategorized))}
+                          : row.type === "OPENING_BALANCE"
+                            ? t.openingBalance
+                            : (row.categoryName ?? t.uncategorized))}
                     </span>
                     {row.categoryName ? (
                       <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
@@ -159,10 +169,14 @@ export function TransactionTable({
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onSelect={() => setEditing(row)}>
-                        <Pencil className="size-3.5" />
-                        {common.edit}
-                      </DropdownMenuItem>
+                      {/* Opening balances are edited from the Accounts page so
+                          they can never be re-saved as income or spending. */}
+                      {transactionEditBlock(row) !== "opening_balance" ? (
+                        <DropdownMenuItem onSelect={() => setEditing(row)}>
+                          <Pencil className="size-3.5" />
+                          {common.edit}
+                        </DropdownMenuItem>
+                      ) : null}
                       <DropdownMenuItem
                         variant="destructive"
                         onSelect={() => setDeleting(row)}

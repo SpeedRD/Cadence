@@ -41,6 +41,7 @@ export const en = {
       EXPENSE: "Expense",
       INCOME: "Income",
       TRANSFER: "Transfer",
+      OPENING_BALANCE: "Opening balance",
     } as Record<string, string>,
     sourceLabels: {
       MANUAL: "Manual",
@@ -49,6 +50,7 @@ export const en = {
       OUTLOOK: "Outlook",
       PAYPAL: "PayPal",
       PAYDAY_CHECKIN: "Payday check-in",
+      OPENING_BALANCE: "Opening balance",
     } as Record<string, string>,
     frequencyLabels: {
       WEEKLY: "Weekly",
@@ -255,6 +257,9 @@ export const en = {
     transactionNoLongerExists: "That transaction no longer exists",
     transferNoLongerExists: "That transfer no longer exists",
     editFromTransferForm: "Edit this transfer from the transfer form",
+    editOpeningBalanceFromAccounts:
+      "This is an account's opening balance - change it from the Accounts page so it stays separate from income and spending",
+    openingBalance: "Opening balance",
     nothingToDelete: "Nothing to delete",
   },
   accounts: {
@@ -670,6 +675,8 @@ export const en = {
       `This plan is ${amount} short - something above has to give before you can allocate flexible categories.`,
 
     step4Title: "Plan flexible categories",
+    noSuggestionsYetNote:
+      "No spending history yet, so there are no suggested amounts. Enter what you want to allow for each category, or leave them at 0 and set budgets later on the Budgets page - the money in your accounts is unaffected either way.",
     suggested: "Suggested",
     basisLastBudget: "last budget",
     basisAverage: "average",
@@ -692,6 +699,10 @@ export const en = {
       `${count} category budget${count === 1 ? "" : "s"} will be created or updated for this period.`,
     confirmReservedNote:
       "Subscriptions, recurring contributions, and goal amounts are reserved in the plan but not logged as actual transactions or contributions.",
+    confirmNoAllocationsNote:
+      "No category amounts are allocated yet - you can set or change category budgets any time on the Budgets page.",
+    noAllocationsSavedNote: "No category allocations saved yet.",
+    setBudgetsLink: "Set budgets",
     acknowledgeZeroBufferLabel: "I understand this plan leaves no protected buffer.",
     confirmPlan: "Confirm plan",
     checkinConfirmed: "Payday check-in confirmed",

@@ -16,12 +16,15 @@ export interface Option {
 }
 
 export function AccountSelect({
+  id,
   name,
   accounts,
   defaultValue,
   placeholder,
   common,
 }: {
+  /** Lets a <Field htmlFor> label the trigger button. */
+  id?: string;
   name: string;
   accounts: Option[];
   defaultValue?: string;
@@ -30,7 +33,7 @@ export function AccountSelect({
 }) {
   return (
     <Select name={name} defaultValue={defaultValue}>
-      <SelectTrigger className="w-full">
+      <SelectTrigger id={id} className="w-full">
         <SelectValue placeholder={placeholder ?? common.pickAnAccount} />
       </SelectTrigger>
       <SelectContent>
@@ -48,12 +51,14 @@ export function AccountSelect({
 }
 
 export function CategorySelect({
+  id,
   name,
   categories,
   defaultValue,
   includeNone = true,
   common,
 }: {
+  id?: string;
   name: string;
   categories: Option[];
   defaultValue?: string;
@@ -62,7 +67,7 @@ export function CategorySelect({
 }) {
   return (
     <Select name={name} defaultValue={defaultValue ?? (includeNone ? "none" : undefined)}>
-      <SelectTrigger className="w-full">
+      <SelectTrigger id={id} className="w-full">
         <SelectValue placeholder={common.pickACategory} />
       </SelectTrigger>
       <SelectContent>
@@ -82,15 +87,17 @@ export function CategorySelect({
 }
 
 export function CurrencySelect({
+  id,
   name,
   defaultValue,
 }: {
+  id?: string;
   name: string;
   defaultValue?: string;
 }) {
   return (
     <Select name={name} defaultValue={defaultValue ?? CURRENCIES[0]}>
-      <SelectTrigger className="w-full">
+      <SelectTrigger id={id} className="w-full">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -105,12 +112,14 @@ export function CurrencySelect({
 }
 
 export function EnumSelect({
+  id,
   name,
   options,
   labels,
   defaultValue,
   placeholder,
 }: {
+  id?: string;
   name: string;
   options: readonly string[];
   labels: Record<string, string>;
@@ -119,7 +128,7 @@ export function EnumSelect({
 }) {
   return (
     <Select name={name} defaultValue={defaultValue}>
-      <SelectTrigger className="w-full">
+      <SelectTrigger id={id} className="w-full">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>

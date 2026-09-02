@@ -26,7 +26,7 @@ export function StepIncome({
       <p className="text-sm text-muted-foreground">{t.step2Description}</p>
       {accounts.map((account) => (
         <Card key={account.accountId} size="sm">
-          <CardContent className="grid grid-cols-[1fr_140px_1fr] items-end gap-3">
+          <CardContent className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px_minmax(0,1fr)] sm:items-end">
             <p className="text-sm font-medium">{account.name}</p>
             <Field label={`${t.incomeAmount} (${account.currency})`} htmlFor={`income-${account.accountId}`}>
               <PaydayAmountInput
@@ -36,6 +36,7 @@ export function StepIncome({
               />
             </Field>
             <Input
+              aria-label={`${t.incomeNotePlaceholder} - ${account.name}`}
               placeholder={t.incomeNotePlaceholder}
               value={account.incomeNote}
               onChange={(event) => onChange(account.accountId, { incomeNote: event.target.value })}

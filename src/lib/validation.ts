@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CURRENCIES } from "@/lib/currency";
 import { fromISODate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
+import { parseAmountInput, type ParsedAmount } from "@/lib/money";
 import {
   ACCOUNT_TYPES,
   RECURRING_FREQUENCIES,
@@ -37,17 +38,51 @@ const optionalIsoDate = z
     return parsed;
   });
 
+function amountIssue(reason: Exclude<ParsedAmount, { ok: true }>["reason"]): string {
+  if (reason === "too_many_decimals") return "Use at most 2 decimal places";
+  if (reason === "too_large") return "That amount is too large";
+  if (reason === "empty") return "Enter an amount";
+  return "Enter a valid amount";
+}
+
+/**
+ * Amounts arrive as typed text (see parseAmountInput for what is accepted) and
+ * are validated only after that normalization, so "12,50" from an iPhone's
+ * Spanish decimal keypad is 12.50 rather than 1250 or an error.
+ */
 const positiveAmount = z
   .string()
   .trim()
   .min(1, "Enter an amount")
   .transform((value, ctx) => {
-    const parsed = Number(value.replace(/,/g, ""));
-    if (!Number.isFinite(parsed) || parsed <= 0) {
+    const parsed = parseAmountInput(value);
+    if (!parsed.ok) {
+      ctx.addIssue({ code: "custom", message: amountIssue(parsed.reason) });
+      return z.NEVER;
+    }
+    if (parsed.amount <= 0) {
       ctx.addIssue({ code: "custom", message: "Enter an amount greater than 0" });
       return z.NEVER;
     }
-    return Math.round(parsed * 100) / 100;
+    return parsed.amount;
+  });
+
+/** Zero allowed; an empty field is null so callers can treat it as "clear". */
+const nonNegativeAmountOrEmpty = z
+  .string()
+  .trim()
+  .transform((value, ctx) => {
+    if (value === "") return null;
+    const parsed = parseAmountInput(value);
+    if (!parsed.ok) {
+      ctx.addIssue({ code: "custom", message: amountIssue(parsed.reason) });
+      return z.NEVER;
+    }
+    if (parsed.amount < 0) {
+      ctx.addIssue({ code: "custom", message: "Enter 0 or more" });
+      return z.NEVER;
+    }
+    return parsed.amount;
   });
 
 const optionalText = z
@@ -110,18 +145,7 @@ export const budgetSchema = z.object({
   month: z.coerce.number().int().min(1).max(12),
   period: z.enum(["A", "B"]),
   categoryId: optionalId,
-  amount: z
-    .string()
-    .trim()
-    .transform((value, ctx) => {
-      if (value === "") return null;
-      const parsed = Number(value.replace(/,/g, ""));
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        ctx.addIssue({ code: "custom", message: "Enter 0 or more" });
-        return z.NEVER;
-      }
-      return Math.round(parsed * 100) / 100;
-    }),
+  amount: nonNegativeAmountOrEmpty,
   currency,
 });
 
@@ -201,17 +225,13 @@ export const paydayConfirmSchema = z.object({
 
 export const planningPreferencesSchema = z.object({
   bufferPercent: z.coerce.number().int().min(0).max(100),
-  bufferFloorAmount: z
-    .string()
-    .trim()
-    .transform((value, ctx) => {
-      const parsed = Number(value.replace(/,/g, ""));
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        ctx.addIssue({ code: "custom", message: "Enter 0 or more" });
-        return z.NEVER;
-      }
-      return Math.round(parsed * 100) / 100;
-    }),
+  bufferFloorAmount: nonNegativeAmountOrEmpty.transform((value, ctx) => {
+    if (value === null) {
+      ctx.addIssue({ code: "custom", message: "Enter 0 or more" });
+      return z.NEVER;
+    }
+    return value;
+  }),
   bufferFloorCurrency: currency,
   carryoverIncludedByDefault: z
     .string()
@@ -260,6 +280,9 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Enter a valid date": "Ingresa una fecha válida",
   "Enter an amount": "Ingresa un monto",
   "Enter an amount greater than 0": "Ingresa un monto mayor que 0",
+  "Enter a valid amount": "Ingresa un monto válido",
+  "Use at most 2 decimal places": "Usa como máximo 2 decimales",
+  "That amount is too large": "Ese monto es demasiado grande",
   "Keep notes under 500 characters": "Mantén las notas en menos de 500 caracteres",
   "Use 4 to 6 digits": "Usa de 4 a 6 dígitos",
   "Name the account": "Ponle nombre a la cuenta",

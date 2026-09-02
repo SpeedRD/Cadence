@@ -141,11 +141,11 @@ export function TransactionFilters({
         </SelectContent>
       </Select>
 
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         <Input
           type="date"
           aria-label={t.fromDateAria}
-          className="h-8 w-[9.5rem]"
+          className="h-8 w-[9.5rem] max-w-full"
           value={values.from ?? ""}
           onChange={(event) => apply({ from: event.target.value })}
         />
@@ -153,7 +153,7 @@ export function TransactionFilters({
         <Input
           type="date"
           aria-label={t.toDateAria}
-          className="h-8 w-[9.5rem]"
+          className="h-8 w-[9.5rem] max-w-full"
           value={values.to ?? ""}
           onChange={(event) => apply({ to: event.target.value })}
         />

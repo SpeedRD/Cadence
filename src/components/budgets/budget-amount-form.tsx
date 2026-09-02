@@ -4,6 +4,7 @@ import { Check } from "lucide-react";
 import { useActionState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 
+import { useSubmitWithoutReset } from "@/components/form/use-submit-without-reset";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -37,6 +38,7 @@ export function BudgetAmountForm({
 }) {
   const t = getDictionary(locale).budgets;
   const [state, formAction, pending] = useActionState(saveBudgetAction, null);
+  const submit = useSubmitWithoutReset(formAction);
   const handled = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -49,6 +51,7 @@ export function BudgetAmountForm({
   return (
     <form
       action={formAction}
+      onSubmit={submit}
       className={cn(
         "flex items-center gap-1",
         size === "lg" ? "justify-start" : "justify-end",

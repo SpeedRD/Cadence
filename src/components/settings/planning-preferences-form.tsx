@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Field } from "@/components/form/field";
 import { CurrencySelect } from "@/components/form/selects";
 import { SubmitButton } from "@/components/form/submit-button";
+import { useSubmitWithoutReset } from "@/components/form/use-submit-without-reset";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -27,6 +28,7 @@ export function PlanningPreferencesForm({
   const t = getDictionary(locale).settingsPage;
   const common = getDictionary(locale).common;
   const [state, formAction, pending] = useActionState(savePlanningPreferencesAction, null);
+  const submit = useSubmitWithoutReset(formAction);
   const [carryoverDefault, setCarryoverDefault] = useState(carryoverIncludedByDefault);
   const handled = useRef<number | undefined>(undefined);
 
@@ -38,13 +40,13 @@ export function PlanningPreferencesForm({
   }, [state, t.planningPreferencesSaved]);
 
   return (
-    <form action={formAction} className="space-y-4">
+    <form action={formAction} onSubmit={submit} className="space-y-4">
       <input
         type="hidden"
         name="carryoverIncludedByDefault"
         value={carryoverDefault ? "true" : "false"}
       />
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <Field label={t.bufferPercentLabel} htmlFor="buffer-percent" hint={t.bufferPercentHint}>
           <Input
             id="buffer-percent"

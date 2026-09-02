@@ -147,6 +147,73 @@ async function main() {
   eq("quoted comma preserved", rows[1][2], "Coffee, large");
   eq("escaped quotes", rows[2][2], 'He said "hi"');
 
+  console.log("\n== amount entry parsing ==");
+  const { parseAmountInput } = await import("../src/lib/money");
+  const amountCases: [string, number | string][] = [
+    ["12.50", 12.5],
+    ["12,50", 12.5],
+    ["12,5", 12.5],
+    ["0,99", 0.99],
+    ["1,250", 1250],
+    ["1,250.00", 1250],
+    ["1.250,50", 1250.5],
+    ["1,234,567", 1234567],
+    ["1.234.567,89", 1234567.89],
+    ["1 250,50", 1250.5],
+    ["12,", 12],
+    [",5", 0.5],
+    ["-12.30", -12.3],
+    ["4061.02", 4061.02],
+    ["0.1", 0.1],
+    ["", "empty"],
+    ["-", "invalid"],
+    [".", "invalid"],
+    ["abc", "invalid"],
+    ["1,23,4", "invalid"],
+    ["1.2.3", "invalid"],
+    ["12.345", "too_many_decimals"],
+    ["1.250", "too_many_decimals"],
+    ["1000000000000", "too_large"],
+  ];
+  for (const [raw, expected] of amountCases) {
+    const parsed = parseAmountInput(raw);
+    if (typeof expected === "number") {
+      check(`parses ${JSON.stringify(raw)} as ${expected}`, parsed.ok && parsed.amount === expected, parsed);
+    } else {
+      check(`rejects ${JSON.stringify(raw)} as ${expected}`, !parsed.ok && parsed.reason === expected, parsed);
+    }
+  }
+  check(
+    "parsing never leaks binary float error (1.005 is rejected, not rounded to 1)",
+    !parseAmountInput("1.005").ok,
+  );
+  const eightCents = parseAmountInput("0.08");
+  eq("parsed cents are exact for 0.07 + 0.01 style inputs", eightCents.ok ? eightCents.amount : "error", 0.08);
+
+  const { transactionSchema } = await import("../src/lib/validation");
+  const txBase = { date: "2026-08-20", currency: "DOP", type: "EXPENSE", accountId: "acct", categoryId: "", note: "" };
+  const commaTx = transactionSchema.safeParse({ ...txBase, amount: "12,50" });
+  eq("a transaction amount typed with a comma decimal is 12.50, not 1250", commaTx.success ? commaTx.data.amount : "error", 12.5);
+  const dotTx = transactionSchema.safeParse({ ...txBase, amount: "12.50" });
+  eq("a transaction amount typed with a dot decimal is unchanged", dotTx.success ? dotTx.data.amount : "error", 12.5);
+  const threeDecimals = transactionSchema.safeParse({ ...txBase, amount: "12.345" });
+  eq("three decimals are rejected with a specific message", threeDecimals.success ? "accepted" : threeDecimals.error.issues[0].message, "Use at most 2 decimal places");
+  const zeroTx = transactionSchema.safeParse({ ...txBase, amount: "0,00" });
+  eq("a zero amount is still rejected", zeroTx.success ? "accepted" : zeroTx.error.issues[0].message, "Enter an amount greater than 0");
+  const { firstError } = await import("../src/lib/validation");
+  eq(
+    "the decimal-places message is translated to Spanish",
+    threeDecimals.success ? "accepted" : firstError(threeDecimals.error, "es"),
+    "Usa como máximo 2 decimales",
+  );
+
+  console.log("\n== transaction edit guard ==");
+  const { transactionEditBlock } = await import("../src/lib/transactions");
+  eq("an opening balance can't be edited through the transaction form", transactionEditBlock({ type: "OPENING_BALANCE", transferId: null }), "opening_balance");
+  eq("a transfer leg can't be edited through the transaction form", transactionEditBlock({ type: "TRANSFER", transferId: "t1" }), "transfer");
+  eq("an ordinary expense can be edited", transactionEditBlock({ type: "EXPENSE", transferId: null }), null);
+  eq("an ordinary income can be edited", transactionEditBlock({ type: "INCOME", transferId: null }), null);
+
   console.log("\n== currency conversion through USD ==");
   const rates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.5 }, fetchedAt: new Date(), stale: false };
   eq("USD to DOP", convert(100, "USD", "DOP", rates), 6000);
@@ -850,6 +917,33 @@ async function main() {
   await prisma.transaction.delete({ where: { id: dedupTransaction.id } });
   await prisma.recurringItem.delete({ where: { id: dedupSub.id } });
 
+  console.log("\n-- budgets already set for the plan period seed the planned amounts --");
+  // The "database invariants" section above already created this period's
+  // Groceries budget; point it at a distinctive amount for this check and put
+  // it back afterwards.
+  const preExistingBudget = await prisma.budget.findFirstOrThrow({
+    where: { year: 2026, month: 8, period: "B", categoryId: groceriesForPayday.id },
+  });
+  await prisma.budget.update({ where: { id: preExistingBudget.id }, data: { amount: 77, currency: "USD" } });
+  const draftWithExistingBudget = await getPaydayCheckinDraft(paydayContext);
+  const seededGroceries = draftWithExistingBudget.flexibleCategories.find((c) => c.categoryId === groceriesForPayday.id);
+  eq(
+    "a budget the user already set for the plan period pre-fills that category's planned amount instead of being silently overwritten",
+    seededGroceries?.plannedAmount,
+    77,
+  );
+  eq("the fresh suggestion is still shown separately (no history here, so 0)", seededGroceries?.suggestedAmount, 0);
+  const draftWithExistingBudgetInEur = await getPaydayCheckinDraft({ ...paydayContext, displayCurrency: "EUR" as const });
+  eq(
+    "an existing budget in another currency is converted into the display currency",
+    draftWithExistingBudgetInEur.flexibleCategories.find((c) => c.categoryId === groceriesForPayday.id)?.plannedAmount,
+    round2(convert(77, "USD", "EUR", rates)),
+  );
+  await prisma.budget.update({
+    where: { id: preExistingBudget.id },
+    data: { amount: preExistingBudget.amount, currency: preExistingBudget.currency },
+  });
+
   console.log("\n-- confirming a plan --");
   const draftForConfirm = await getPaydayCheckinDraft(paydayContext);
   const initialPayload = {
@@ -986,6 +1080,19 @@ async function main() {
 
   const updatedIncomeTransaction = await prisma.transaction.findFirst({ where: { accountId: paydayChecking.id, source: "PAYDAY_CHECKIN" } });
   eq("the updated income transaction reflects the newly entered amount", num(updatedIncomeTransaction!.amount), 750);
+
+  console.log("\n-- a budget edited on the Budgets page after confirming wins over the stale allocation --");
+  const confirmedFlexibleBudget = await prisma.budget.findFirstOrThrow({
+    where: { year: 2026, month: 8, period: "B", categoryId: reconfirmedFlexibleCategoryId },
+  });
+  await prisma.budget.update({ where: { id: confirmedFlexibleBudget.id }, data: { amount: 60 } });
+  const draftAfterManualEdit = await getPaydayCheckinDraft(paydayContext);
+  eq(
+    "reopening the plan shows the manually edited budget, not the amount confirmed earlier",
+    draftAfterManualEdit.flexibleCategories.find((c) => c.categoryId === reconfirmedFlexibleCategoryId)?.plannedAmount,
+    60,
+  );
+  await prisma.budget.update({ where: { id: confirmedFlexibleBudget.id }, data: { amount: 45 } });
 
   console.log("\n-- reopening the confirmed check-in after the display currency changed converts, not just relabels --");
   const eurPaydayContext = { ...paydayContext, displayCurrency: "EUR" as const };

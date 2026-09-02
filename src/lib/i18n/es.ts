@@ -43,6 +43,7 @@ export const es = {
       EXPENSE: "Gasto",
       INCOME: "Ingreso",
       TRANSFER: "Transferencia",
+      OPENING_BALANCE: "Saldo inicial",
     } as Record<string, string>,
     sourceLabels: {
       MANUAL: "Manual",
@@ -51,6 +52,7 @@ export const es = {
       OUTLOOK: "Outlook",
       PAYPAL: "PayPal",
       PAYDAY_CHECKIN: "Chequeo de pago",
+      OPENING_BALANCE: "Saldo inicial",
     } as Record<string, string>,
     frequencyLabels: {
       WEEKLY: "Semanal",
@@ -258,6 +260,9 @@ export const es = {
     transactionNoLongerExists: "Esa transacción ya no existe",
     transferNoLongerExists: "Esa transferencia ya no existe",
     editFromTransferForm: "Edita esta transferencia desde el formulario de transferencias",
+    editOpeningBalanceFromAccounts:
+      "Este es el saldo inicial de una cuenta: cámbialo desde la página de Cuentas para que se mantenga separado de ingresos y gastos",
+    openingBalance: "Saldo inicial",
     nothingToDelete: "Nada que eliminar",
   },
   accounts: {
@@ -678,6 +683,8 @@ export const es = {
       `Este plan queda corto por ${amount} - algo de lo anterior tiene que ceder antes de poder asignar categorías flexibles.`,
 
     step4Title: "Planifica las categorías flexibles",
+    noSuggestionsYetNote:
+      "Aún no hay historial de gastos, así que no hay montos sugeridos. Ingresa lo que quieras permitir en cada categoría, o déjalas en 0 y define los presupuestos más tarde en Presupuestos: el dinero de tus cuentas no cambia en ningún caso.",
     suggested: "Sugerido",
     basisLastBudget: "último presupuesto",
     basisAverage: "promedio",
@@ -700,6 +707,10 @@ export const es = {
       `Se ${count === 1 ? "creará o actualizará" : "crearán o actualizarán"} ${count} presupuesto${count === 1 ? "" : "s"} de categoría para este periodo.`,
     confirmReservedNote:
       "Las suscripciones, los aportes recurrentes y los montos de metas quedan reservados en el plan, pero no se registran como transacciones o aportes reales.",
+    confirmNoAllocationsNote:
+      "Aún no hay montos asignados a categorías: puedes definir o cambiar los presupuestos por categoría en cualquier momento en Presupuestos.",
+    noAllocationsSavedNote: "Aún no hay asignaciones por categoría guardadas.",
+    setBudgetsLink: "Definir presupuestos",
     acknowledgeZeroBufferLabel: "Entiendo que este plan no deja colchón protegido.",
     confirmPlan: "Confirmar plan",
     checkinConfirmed: "Chequeo de pago confirmado",
