@@ -54,6 +54,22 @@ export function convert(
   return (amount / fromRate) * toRate;
 }
 
+/**
+ * Whether `amount` in `currency` is the same money, to the cent, as `stored`
+ * in `storedCurrency`. Lets a write path tell "the user retyped what was
+ * already there, just shown in another currency" apart from a real edit, so
+ * re-saving an unchanged field never re-denominates the stored row.
+ */
+export function isSameMoney(
+  amount: number,
+  currency: string,
+  stored: number,
+  storedCurrency: string,
+  table: RateTable,
+): boolean {
+  return Math.abs(convert(stored, storedCurrency, currency, table) - amount) < 0.005;
+}
+
 export function formatMoney(
   amount: number,
   currency: string,

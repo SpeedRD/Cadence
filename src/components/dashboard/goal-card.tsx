@@ -32,7 +32,7 @@ export function GoalCard({
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <span className="figure text-lg">
-              {formatMoney(goal.savedAmount, goal.currency)}
+              {formatMoney(goal.displaySaved, displayCurrency)}
             </span>
             <span className="text-xs text-muted-foreground tnum">
               {Math.round(goal.progress * 100)}%
@@ -40,30 +40,30 @@ export function GoalCard({
           </div>
           <Meter value={goal.progress} max={1} status="accent" />
           <p className="text-xs text-muted-foreground">
-            {t.of(formatMoney(goal.targetAmount, goal.currency))}
+            {t.of(formatMoney(goal.displayTarget, displayCurrency))}
             {showConverted
-              ? ` · ${formatMoney(goal.displaySaved, displayCurrency)} ${t.of(formatMoney(goal.displayTarget, displayCurrency))}`
+              ? ` · ${formatMoney(goal.savedAmount, goal.currency)} ${t.of(formatMoney(goal.targetAmount, goal.currency))}`
               : ""}
           </p>
         </div>
 
         {goal.achievedAt ? (
           <p className="text-xs text-[var(--good)]">{t.reached}</p>
-        ) : goal.targetDate && goal.perPeriod !== null ? (
+        ) : goal.targetDate && goal.displayPerPeriod !== null ? (
           <p className="text-xs text-muted-foreground">
             <span className="text-foreground figure">
-              {formatMoney(goal.perPeriod, goal.currency)}
+              {formatMoney(goal.displayPerPeriod, displayCurrency)}
             </span>{" "}
             {t.perPayPeriod} ·{" "}
             {goal.periodsLeft === 0
               ? t.dueThisPeriod
               : t.periodsTo(goal.periodsLeft!, formatDate(goal.targetDate))}
           </p>
-        ) : goal.pacePerPeriod ? (
+        ) : goal.displayPacePerPeriod ? (
           <p className="text-xs text-muted-foreground">
             {t.pace}{" "}
             <span className="text-foreground figure">
-              {formatMoney(goal.pacePerPeriod, goal.currency)}
+              {formatMoney(goal.displayPacePerPeriod, displayCurrency)}
             </span>{" "}
             {t.perPeriod}
             {goal.projectedEnd ? ` · ${t.onTrackFor(formatDate(goal.projectedEnd))}` : ""}

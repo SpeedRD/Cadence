@@ -22,7 +22,6 @@ import { getAppContext } from "@/lib/data/context";
 import { getPaydayCheckinDraft, planPeriodRef } from "@/lib/data/payday";
 import { getPeriodSummary } from "@/lib/data/period-summary";
 import { getDictionary } from "@/lib/i18n";
-import { num } from "@/lib/money";
 import {
   nextPeriod,
   parsePeriodKey,
@@ -53,24 +52,25 @@ export default async function BudgetsPage({
   const isCurrent = period.key === context.currentPeriod.key;
   const isPlanTarget = period.key === periodKey(planPeriodRef(context));
 
-  const [summary, categories, budgetRows, paydayDraft] = await Promise.all([
+  const [summary, categories, paydayDraft] = await Promise.all([
     getPeriodSummary(period, context),
     prisma.category.findMany({
       where: { kind: "EXPENSE" },
       orderBy: { name: "asc" },
     }),
-    prisma.budget.findMany({
-      where: { year: period.year, month: period.month, period: period.period },
-    }),
     isPlanTarget ? getPaydayCheckinDraft(context) : Promise.resolve(null),
   ]);
 
+  // Every budget figure on this page - the inputs included - comes from the
+  // period summary, which has already converted each stored budget into the
+  // display currency exactly once. Reading prisma.budget here instead would
+  // put stored DOP amounts next to converted USD spending, and the progress
+  // meters would compare the two.
   const budgetByCategory = new Map(
-    budgetRows
-      .filter((budget) => budget.categoryId)
-      .map((budget) => [budget.categoryId as string, budget]),
+    summary.categories
+      .filter((line) => line.categoryId !== null)
+      .map((line) => [line.categoryId as string, line.budget]),
   );
-  const overallRow = budgetRows.find((budget) => budget.categoryId === null);
   const spentByCategory = new Map(
     summary.categories.map((line) => [line.categoryId ?? "none", line.spent]),
   );
@@ -82,8 +82,9 @@ export default async function BudgetsPage({
       spent: spentByCategory.get(category.id) ?? 0,
     }))
     .sort((a, b) => {
-      const aHas = a.budget ? 1 : 0;
-      const bHas = b.budget ? 1 : 0;
+      // A budget of exactly 0 still counts as "has a budget", as before.
+      const aHas = a.budget !== null ? 1 : 0;
+      const bHas = b.budget !== null ? 1 : 0;
       if (aHas !== bHas) return bHas - aHas;
       if (b.spent !== a.spent) return b.spent - a.spent;
       return a.category.name.localeCompare(b.category.name);
@@ -149,8 +150,8 @@ export default async function BudgetsPage({
               month={period.month}
               period={period.period}
               categoryId={null}
-              amount={overallRow ? num(overallRow.amount) : null}
-              currency={overallRow?.currency ?? context.displayCurrency}
+              amount={summary.overallBudget}
+              currency={summary.currency}
               label={t.overallBudgetForPeriod}
               locale={context.language}
               size="lg"
@@ -217,8 +218,7 @@ export default async function BudgetsPage({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map(({ category, budget, spent }) => {
-                const budgetDisplay = budget ? num(budget.amount) : null;
+              {rows.map(({ category, budget: budgetDisplay, spent }) => {
                 return (
                   <TableRow key={category.id}>
                     <TableCell>
@@ -254,7 +254,7 @@ export default async function BudgetsPage({
                         period={period.period}
                         categoryId={category.id}
                         amount={budgetDisplay}
-                        currency={budget?.currency ?? context.displayCurrency}
+                        currency={summary.currency}
                         label={t.categoryBudgetAria(category.name)}
                         locale={context.language}
                       />

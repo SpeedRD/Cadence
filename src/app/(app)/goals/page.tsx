@@ -9,13 +9,13 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/stat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatMoney } from "@/lib/currency";
+import { convert, formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { listGoals } from "@/lib/data/goals";
 import { planPeriodRef } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
-import { num } from "@/lib/money";
+import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Goals - Cadence" };
@@ -34,6 +34,16 @@ export default async function GoalsPage() {
   const plannedByGoalId = new Map(
     (confirmedCheckin?.allocations ?? []).map((allocation) => [allocation.goalId as string, allocation]),
   );
+  /** Allocations store the display currency in force when they were confirmed. */
+  const toDisplay = (allocation: { plannedAmount: unknown; currency: string }) =>
+    round2(
+      convert(
+        num(allocation.plannedAmount as never),
+        allocation.currency,
+        context.displayCurrency,
+        context.rates,
+      ),
+    );
 
   return (
     <div className="space-y-5">
@@ -104,26 +114,32 @@ export default async function GoalsPage() {
                 <div className="space-y-1.5">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="figure text-xl">
-                      {formatMoney(goal.savedAmount, goal.currency)}
+                      {formatMoney(goal.displaySaved, goal.displayCurrency)}
                     </span>
                     <span className="text-xs text-muted-foreground tnum">
                       {t.percentOf(
                         Math.round(goal.progress * 100),
-                        formatMoney(goal.targetAmount, goal.currency),
+                        formatMoney(goal.displayTarget, goal.displayCurrency),
                       )}
                     </span>
                   </div>
                   <Meter value={goal.progress} max={1} status="accent" size="lg" />
+                  {goal.currency !== goal.displayCurrency ? (
+                    <p className="figure text-[0.6875rem] text-muted-foreground">
+                      {formatMoney(goal.savedAmount, goal.currency)}{" "}
+                      {t.ofAmount(formatMoney(goal.targetAmount, goal.currency))}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="flex items-end justify-between gap-3">
                   <div className="text-xs text-muted-foreground">
                     {goal.achievedAt ? (
                       <span className="text-[var(--good)]">{t.fullyFunded}</span>
-                    ) : goal.perPeriod !== null ? (
+                    ) : goal.displayPerPeriod !== null ? (
                       <>
                         <span className="figure text-foreground">
-                          {formatMoney(goal.perPeriod, goal.currency)}
+                          {formatMoney(goal.displayPerPeriod, goal.displayCurrency)}
                         </span>{" "}
                         {t.perPayPeriod}
                         {goal.periodsLeft !== null
@@ -132,11 +148,11 @@ export default async function GoalsPage() {
                             : ` · ${t.periodsLeft(goal.periodsLeft)}`
                           : ""}
                       </>
-                    ) : goal.pacePerPeriod ? (
+                    ) : goal.displayPacePerPeriod ? (
                       <>
                         {t.pace}{" "}
                         <span className="figure text-foreground">
-                          {formatMoney(goal.pacePerPeriod, goal.currency)}
+                          {formatMoney(goal.displayPacePerPeriod, goal.displayCurrency)}
                         </span>{" "}
                         {t.perPeriod}
                         {goal.projectedEnd
@@ -144,7 +160,7 @@ export default async function GoalsPage() {
                           : ""}
                       </>
                     ) : (
-                      t.toGo(formatMoney(goal.remaining, goal.currency))
+                      t.toGo(formatMoney(goal.displayRemaining, goal.displayCurrency))
                     )}
                   </div>
                   <ContributionDialog
@@ -164,7 +180,10 @@ export default async function GoalsPage() {
                 {plannedByGoalId.has(goal.id) ? (
                   <p className="text-xs text-muted-foreground">
                     {t.plannedThisPeriod(
-                      formatMoney(num(plannedByGoalId.get(goal.id)!.plannedAmount), goal.currency),
+                      formatMoney(
+                        toDisplay(plannedByGoalId.get(goal.id)!),
+                        context.displayCurrency,
+                      ),
                     )}
                   </p>
                 ) : null}
