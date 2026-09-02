@@ -36,6 +36,7 @@ enum TransactionType {
   EXPENSE
   INCOME
   TRANSFER
+  OPENING_BALANCE
 }
 
 enum TransactionSource {
@@ -45,6 +46,7 @@ enum TransactionSource {
   OUTLOOK
   PAYPAL
   PAYDAY_CHECKIN
+  OPENING_BALANCE
 }
 
 /// Which leg of a transfer a row is. Null for non-transfer rows.

@@ -66,6 +66,12 @@ export const pinSchema = z
   .trim()
   .regex(/^\d{4,6}$/, "Use 4 to 6 digits");
 
+export const openingBalanceSchema = z.object({
+  accountId: z.string().trim().min(1, "Pick an account"),
+  amount: positiveAmount,
+  date: isoDate,
+});
+
 export const accountSchema = z.object({
   id: z.string().trim().optional(),
   name: z.string().trim().min(1, "Name the account").max(60),

@@ -18,6 +18,9 @@ export interface AccountBalance {
   /** Same balance converted to the selected display currency. */
   displayBalance: number;
   transactionCount: number;
+  /** Transactions other than the opening balance itself - gates the "Set opening balance" action. */
+  otherTransactionCount: number;
+  openingBalance: { id: string; amount: number; date: Date } | null;
 }
 
 export type AccountStatusFilter = "ACTIVE" | "ARCHIVED" | "ALL";
@@ -36,7 +39,7 @@ export async function getAccountBalances(
   options: { status?: AccountStatusFilter } = {},
 ): Promise<AccountBalance[]> {
   const status = options.status ?? "ACTIVE";
-  const [accounts, groups, counts] = await Promise.all([
+  const [accounts, groups, counts, openingBalances] = await Promise.all([
     prisma.account.findMany({
       where: status === "ALL" ? undefined : { status },
       orderBy: { name: "asc" },
@@ -45,11 +48,32 @@ export async function getAccountBalances(
       by: ["accountId", "type", "currency", "transferDirection"],
       _sum: { amount: true },
     }),
-    prisma.transaction.groupBy({ by: ["accountId"], _count: { _all: true } }),
+    prisma.transaction.groupBy({ by: ["accountId", "type"], _count: { _all: true } }),
+    prisma.transaction.findMany({
+      where: { type: "OPENING_BALANCE" },
+      select: { id: true, accountId: true, amount: true, date: true },
+    }),
   ]);
 
-  const countByAccount = new Map(
-    counts.map((row) => [row.accountId, row._count._all]),
+  const countsByAccount = new Map<string, number>();
+  const otherCountsByAccount = new Map<string, number>();
+  for (const row of counts) {
+    countsByAccount.set(
+      row.accountId,
+      (countsByAccount.get(row.accountId) ?? 0) + row._count._all,
+    );
+    if (row.type !== "OPENING_BALANCE") {
+      otherCountsByAccount.set(
+        row.accountId,
+        (otherCountsByAccount.get(row.accountId) ?? 0) + row._count._all,
+      );
+    }
+  }
+  const openingBalanceByAccount = new Map(
+    openingBalances.map((row) => [
+      row.accountId,
+      { id: row.id, amount: num(row.amount), date: row.date },
+    ]),
   );
 
   return accounts.map((account) => {
@@ -76,9 +100,52 @@ export async function getAccountBalances(
       displayBalance: round2(
         convert(balance, account.currency, context.displayCurrency, context.rates),
       ),
-      transactionCount: countByAccount.get(account.id) ?? 0,
+      transactionCount: countsByAccount.get(account.id) ?? 0,
+      otherTransactionCount: otherCountsByAccount.get(account.id) ?? 0,
+      openingBalance: openingBalanceByAccount.get(account.id) ?? null,
     };
   });
+}
+
+export type SetOpeningBalanceResult = { ok: true } | { ok: false; reason: "has_history" };
+
+/**
+ * Records (or replaces) the one-time starting balance for an account with no
+ * ordinary transaction history. Stored as a single OPENING_BALANCE
+ * transaction, not a separate ledger field - balanceSign() gives it the same
+ * sign as income, and it's excluded from isCashflow() so it never counts as
+ * income, spending, or budget activity.
+ */
+export async function setOpeningBalance(
+  accountId: string,
+  amount: number,
+  date: Date,
+): Promise<SetOpeningBalanceResult> {
+  const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+  const [existing, otherCount] = await Promise.all([
+    prisma.transaction.findFirst({ where: { accountId, type: "OPENING_BALANCE" } }),
+    prisma.transaction.count({ where: { accountId, type: { not: "OPENING_BALANCE" } } }),
+  ]);
+  if (otherCount > 0) return { ok: false, reason: "has_history" };
+
+  if (existing) {
+    await prisma.transaction.update({
+      where: { id: existing.id },
+      data: { amount, date, currency: account.currency },
+    });
+  } else {
+    await prisma.transaction.create({
+      data: {
+        accountId,
+        amount,
+        date,
+        currency: account.currency,
+        type: "OPENING_BALANCE",
+        source: "OPENING_BALANCE",
+      },
+    });
+  }
+  return { ok: true };
 }
 
 export async function archiveAccount(accountId: string): Promise<void> {

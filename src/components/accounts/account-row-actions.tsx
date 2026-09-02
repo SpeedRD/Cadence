@@ -1,10 +1,11 @@
 "use client";
 
-import { Archive, ArchiveRestore, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Landmark, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { AccountDialog } from "@/components/accounts/account-dialog";
+import { OpeningBalanceDialog } from "@/components/accounts/opening-balance-dialog";
 import { ConfirmDelete } from "@/components/form/confirm-delete";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import {
   archiveAccountAction,
@@ -23,6 +25,7 @@ import {
 export function AccountRowActions({
   account,
   locale,
+  today,
 }: {
   account: {
     id: string;
@@ -31,14 +34,19 @@ export function AccountRowActions({
     status: string;
     currency: string;
     transactionCount: number;
+    otherTransactionCount: number;
+    openingBalance: { amount: number; date: Date } | null;
   };
   locale: Locale;
+  today: Date;
 }) {
   const t = getDictionary(locale).accounts;
   const common = getDictionary(locale).common;
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [settingOpeningBalance, setSettingOpeningBalance] = useState(false);
   const isArchived = account.status === "ARCHIVED";
+  const canSetOpeningBalance = account.otherTransactionCount === 0;
 
   async function runLifecycleAction(
     action: (state: null, formData: FormData) => Promise<{ ok: boolean; error?: string; message?: string } | null>,
@@ -74,6 +82,14 @@ export function AccountRowActions({
                 {common.edit}
               </DropdownMenuItem>
               <DropdownMenuItem
+                disabled={!canSetOpeningBalance}
+                title={canSetOpeningBalance ? undefined : t.openingBalanceUnavailable}
+                onSelect={() => canSetOpeningBalance && setSettingOpeningBalance(true)}
+              >
+                <Landmark className="size-3.5" />
+                {account.openingBalance ? t.editOpeningBalance : t.setOpeningBalance}
+              </DropdownMenuItem>
+              <DropdownMenuItem
                 onSelect={() => runLifecycleAction(archiveAccountAction, t.accountArchived)}
               >
                 <Archive className="size-3.5" />
@@ -99,6 +115,18 @@ export function AccountRowActions({
             type: account.type,
             currency: account.currency,
           }}
+        />
+      ) : null}
+
+      {settingOpeningBalance ? (
+        <OpeningBalanceDialog
+          open
+          onOpenChange={(next) => !next && setSettingOpeningBalance(false)}
+          locale={locale}
+          accountId={account.id}
+          accountName={account.name}
+          amount={account.openingBalance?.amount}
+          date={toISODate(account.openingBalance?.date ?? today)}
         />
       ) : null}
 

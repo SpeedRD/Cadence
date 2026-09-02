@@ -86,6 +86,7 @@ export default async function AccountsPage() {
                 locale={context.language}
                 t={t}
                 common={common}
+                today={context.today}
               />
             )}
           </TabsContent>
@@ -102,6 +103,7 @@ export default async function AccountsPage() {
                 locale={context.language}
                 t={t}
                 common={common}
+                today={context.today}
               />
             )}
           </TabsContent>
@@ -117,12 +119,14 @@ function AccountsTable({
   locale,
   t,
   common,
+  today,
 }: {
   accounts: AccountBalance[];
   displayCurrency: string;
   locale: Locale;
   t: Dictionary["accounts"];
   common: Dictionary["common"];
+  today: Date;
 }) {
   return (
     <Card className="py-0">
@@ -173,7 +177,7 @@ function AccountsTable({
                   ) : null}
                 </TableCell>
                 <TableCell>
-                  <AccountRowActions account={account} locale={locale} />
+                  <AccountRowActions account={account} locale={locale} today={today} />
                 </TableCell>
               </TableRow>
             ))}

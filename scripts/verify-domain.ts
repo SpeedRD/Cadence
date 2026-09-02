@@ -553,9 +553,8 @@ async function main() {
   eq("a deficit scales every suggestion to zero, never negative", deficit.every((s) => s.scaled === 0), true);
 
   console.log("\n== account archive lifecycle ==");
-  const { archiveAccount, restoreAccount, deleteAccountIfSafe, getAccountLedger } = await import(
-    "../src/lib/data/accounts"
-  );
+  const { archiveAccount, restoreAccount, deleteAccountIfSafe, getAccountLedger, setOpeningBalance } =
+    await import("../src/lib/data/accounts");
   const archiveTestAccount = await prisma.account.create({
     data: { name: "Verify Archive Me", currency: "USD", type: "CHECKING" },
   });
@@ -635,6 +634,84 @@ async function main() {
   check("permanent delete succeeds once no history remains", cleanDelete.ok === true);
   const gone = await prisma.account.findUnique({ where: { id: archiveTestAccount.id } });
   check("the account is actually gone", gone === null);
+
+  console.log("\n== opening balance ==");
+  const openingBalanceAccount = await prisma.account.create({
+    data: { name: "Verify Opening Balance", currency: "DOP", type: "CHECKING" },
+  });
+
+  const setResult = await setOpeningBalance(openingBalanceAccount.id, 4061.02, context.today);
+  check("setting an opening balance on a fresh account succeeds", setResult.ok === true);
+
+  let obBalances = await getAccountBalances(context, { status: "ALL" });
+  let obBalance = obBalances.find((a) => a.id === openingBalanceAccount.id)!;
+  eq("an opening balance raises the account's ledger balance", obBalance.balance, 4061.02);
+
+  const summaryWithOpeningBalance = await getPeriodSummary(context.currentPeriod, context);
+  check(
+    "an opening balance is never counted as income",
+    summaryWithOpeningBalance.income === summary.income,
+  );
+  check(
+    "an opening balance is never counted as spending or budget activity",
+    summaryWithOpeningBalance.spent === summary.spent,
+  );
+
+  const replaceResult = await setOpeningBalance(openingBalanceAccount.id, 5000, context.today);
+  check("setting the opening balance again succeeds", replaceResult.ok === true);
+  const openingBalanceRowCount = await prisma.transaction.count({
+    where: { accountId: openingBalanceAccount.id, type: "OPENING_BALANCE" },
+  });
+  eq(
+    "setting an opening balance again updates the existing row instead of duplicating it",
+    openingBalanceRowCount,
+    1,
+  );
+  obBalances = await getAccountBalances(context, { status: "ALL" });
+  obBalance = obBalances.find((a) => a.id === openingBalanceAccount.id)!;
+  eq("the replaced opening balance is reflected in the ledger balance", obBalance.balance, 5000);
+
+  await prisma.transaction.create({
+    data: {
+      date: context.today,
+      amount: 10,
+      currency: "DOP",
+      type: "EXPENSE",
+      accountId: openingBalanceAccount.id,
+      source: "MANUAL",
+    },
+  });
+  const blockedOpeningBalance = await setOpeningBalance(openingBalanceAccount.id, 1, context.today);
+  check(
+    "an account with ordinary transaction history can no longer have its opening balance set",
+    blockedOpeningBalance.ok === false && blockedOpeningBalance.reason === "has_history",
+  );
+
+  const obCheckin = await prisma.paydayCheckin.create({
+    data: { year: 2099, month: 1, period: "A", checkinDate: context.today, currency: "DOP", status: "CONFIRMED" },
+  });
+  await prisma.paydayAccountSnapshot.create({
+    data: {
+      paydayCheckinId: obCheckin.id,
+      accountId: openingBalanceAccount.id,
+      expectedLedgerBalance: 4990,
+      reportedBalance: 9999,
+      difference: 9999 - 4990,
+      currency: "DOP",
+    },
+  });
+  const obBalancesAfterSnapshot = await getAccountBalances(context, { status: "ALL" });
+  const obBalanceAfterSnapshot = obBalancesAfterSnapshot.find((a) => a.id === openingBalanceAccount.id)!;
+  eq(
+    "a payday reconciliation snapshot never mutates the opening-balance-derived ledger balance",
+    obBalanceAfterSnapshot.balance,
+    4990,
+  );
+
+  await prisma.paydayAccountSnapshot.deleteMany({ where: { paydayCheckinId: obCheckin.id } });
+  await prisma.paydayCheckin.delete({ where: { id: obCheckin.id } });
+  await prisma.transaction.deleteMany({ where: { accountId: openingBalanceAccount.id } });
+  await prisma.account.delete({ where: { id: openingBalanceAccount.id } });
 
   console.log("\n== payday check-in (database) ==");
   const { getPaydayCheckinDraft, confirmPaydayCheckin } = await import("../src/lib/data/payday");

@@ -315,6 +315,17 @@ export const en = {
     noArchivedAccountsDescription:
       "Accounts you archive keep their full history and show up here.",
     archivedBadge: "Archived",
+    setOpeningBalance: "Set opening balance",
+    editOpeningBalance: "Edit opening balance",
+    openingBalanceUnavailable:
+      "Only available before this account has other transactions.",
+    openingBalanceDialogTitle: (name: string) => `Opening balance for ${name}`,
+    openingBalanceDialogDescription:
+      "The starting amount already in this account - not income, and it won't count toward budgets or reports.",
+    openingBalanceAmountLabel: "Starting balance",
+    openingBalanceDateLabel: "As of",
+    openingBalanceSaved: "Opening balance saved",
+    openingBalanceBlocked: "This account already has other transactions, so its opening balance can no longer be changed here.",
   },
   budgets: {
     title: "Budgets",

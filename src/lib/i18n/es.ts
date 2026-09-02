@@ -318,6 +318,17 @@ export const es = {
     noArchivedAccountsDescription:
       "Las cuentas que archives conservan su historial completo y aparecen aquí.",
     archivedBadge: "Archivada",
+    setOpeningBalance: "Definir saldo inicial",
+    editOpeningBalance: "Editar saldo inicial",
+    openingBalanceUnavailable:
+      "Solo disponible antes de que esta cuenta tenga otras transacciones.",
+    openingBalanceDialogTitle: (name: string) => `Saldo inicial de ${name}`,
+    openingBalanceDialogDescription:
+      "El monto con el que ya cuenta esta cuenta - no es ingreso y no se contará en presupuestos ni reportes.",
+    openingBalanceAmountLabel: "Saldo inicial",
+    openingBalanceDateLabel: "A partir de",
+    openingBalanceSaved: "Saldo inicial guardado",
+    openingBalanceBlocked: "Esta cuenta ya tiene otras transacciones, así que su saldo inicial ya no se puede cambiar aquí.",
   },
   budgets: {
     title: "Presupuestos",

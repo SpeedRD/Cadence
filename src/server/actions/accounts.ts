@@ -1,10 +1,15 @@
 "use server";
 
-import { archiveAccount, deleteAccountIfSafe, restoreAccount } from "@/lib/data/accounts";
+import {
+  archiveAccount,
+  deleteAccountIfSafe,
+  restoreAccount,
+  setOpeningBalance,
+} from "@/lib/data/accounts";
 import { getSettings, requireAuth } from "@/lib/auth";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
-import { accountSchema, firstError, formObject } from "@/lib/validation";
+import { accountSchema, firstError, formObject, openingBalanceSchema } from "@/lib/validation";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
@@ -62,6 +67,28 @@ export async function restoreAccountAction(
 
   revalidateApp();
   return done(t.accountRestored);
+}
+
+export async function setOpeningBalanceAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).accounts;
+  const parsed = openingBalanceSchema.safeParse(formObject(formData));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
+
+  const result = await setOpeningBalance(
+    parsed.data.accountId,
+    parsed.data.amount,
+    parsed.data.date,
+  );
+  if (!result.ok) return fail(t.openingBalanceBlocked);
+
+  revalidateApp();
+  return done(t.openingBalanceSaved);
 }
 
 export async function deleteAccountAction(
