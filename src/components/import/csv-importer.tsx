@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
 import type { Option } from "@/components/form/selects";
+import { ImportReview } from "@/components/import/import-review";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,6 +37,7 @@ import {
 import { CURRENCIES, formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
+import { detectImportGroups } from "@/lib/import-grouping";
 import { importTransactionsAction } from "@/server/actions/import";
 import { cn } from "@/lib/utils";
 
@@ -91,6 +93,7 @@ export function CsvImporter({
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
   const [currency, setCurrency] = useState(defaultCurrency);
   const [categoryId, setCategoryId] = useState("none");
+  const [groupDecisions, setGroupDecisions] = useState<Record<string, string>>({});
 
   const [state, formAction, pending] = useActionState(
     importTransactionsAction,
@@ -144,15 +147,40 @@ export function CsvImporter({
   const validRows = parsed.filter((row) => row.valid);
   const skipped = parsed.length - validRows.length;
 
+  const { groups, unknownRowIndexes } = useMemo(
+    () =>
+      detectImportGroups(
+        validRows.map((row, index) => ({
+          index,
+          date: row.date as Date,
+          amount: row.amount as number,
+          note: row.note,
+          type: row.type,
+        })),
+      ),
+    [validRows],
+  );
+
+  const rowCategoryOverrides = useMemo(() => {
+    const overrides = new Map<number, string>();
+    for (const group of groups) {
+      const decision = groupDecisions[group.id];
+      if (!decision) continue;
+      for (const index of group.rowIndexes) overrides.set(index, decision);
+    }
+    return overrides;
+  }, [groups, groupDecisions]);
+
   const payload = JSON.stringify({
     accountId,
     currency,
-    rows: validRows.map((row) => ({
+    rows: validRows.map((row, index) => ({
       date: toISODate(row.date as Date),
       amount: row.amount as number,
       type: row.type,
       note: row.note || null,
-      categoryId: categoryId === "none" ? null : categoryId,
+      categoryId:
+        rowCategoryOverrides.get(index) ?? (categoryId === "none" ? null : categoryId),
     })),
   });
 
@@ -181,6 +209,7 @@ export function CsvImporter({
               const parsedRows = parseCsv(text);
               setRows(parsedRows);
               setFileName(file.name);
+              setGroupDecisions({});
               const width = parsedRows.reduce(
                 (max, row) => Math.max(max, row.length),
                 0,
@@ -381,6 +410,32 @@ export function CsvImporter({
                   {t.showingFirst(PREVIEW_ROWS, parsed.length)}
                 </p>
               ) : null}
+
+              <ImportReview
+                groups={groups}
+                unknownRowIndexes={unknownRowIndexes}
+                rows={validRows.map((row) => ({
+                  date: row.date as Date,
+                  amount: row.amount as number,
+                  note: row.note,
+                  type: row.type,
+                }))}
+                categories={categories}
+                accounts={accounts}
+                currency={currency}
+                accountId={accountId}
+                locale={locale}
+                decisions={groupDecisions}
+                onDecideAction={(groupId, decision) =>
+                  setGroupDecisions((previous) => {
+                    if (decision === undefined) {
+                      const { [groupId]: _removed, ...rest } = previous;
+                      return rest;
+                    }
+                    return { ...previous, [groupId]: decision };
+                  })
+                }
+              />
 
               <form action={formAction} className="flex items-center gap-3">
                 <input type="hidden" name="payload" value={payload} />
