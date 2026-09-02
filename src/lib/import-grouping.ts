@@ -280,3 +280,29 @@ export function detectImportGroups(rows: GroupableRow[]): GroupingResult {
 
   return { groups, unknownRowIndexes };
 }
+
+/** One review decision: apply `categoryId` (a real category id, or the
+ *  EXPLICIT_NO_CATEGORY sentinel from categorization-rules.ts) to every row
+ *  in `rowIndexes`. Used for both a detected group's decision (its whole
+ *  rowIndexes list) and a manually selected set of "unknown merchant" rows -
+ *  the two are otherwise identical fan-out operations. */
+export interface RowCategoryDecision {
+  rowIndexes: number[];
+  categoryId: string;
+}
+
+/**
+ * Flattens a list of decisions into a single index -> categoryId map, later
+ * ones winning on overlap. Pure fan-out, no grouping/detection logic of its
+ * own - kept separate from detectImportGroups so it can be reused (and
+ * tested) for arbitrary manually-selected rows too.
+ */
+export function buildRowCategoryOverrides(
+  decisions: RowCategoryDecision[],
+): Map<number, string> {
+  const overrides = new Map<number, string>();
+  for (const decision of decisions) {
+    for (const index of decision.rowIndexes) overrides.set(index, decision.categoryId);
+  }
+  return overrides;
+}

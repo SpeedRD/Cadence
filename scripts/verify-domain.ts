@@ -46,7 +46,12 @@ import {
   resolveImportCategoryId,
   suggestCategoryName,
 } from "../src/lib/categorization";
-import { detectImportGroups, type GroupableRow } from "../src/lib/import-grouping";
+import {
+  buildRowCategoryOverrides,
+  detectImportGroups,
+  type GroupableRow,
+  type RowCategoryDecision,
+} from "../src/lib/import-grouping";
 import { num, round2 } from "../src/lib/money";
 import { gmailRedirectUri } from "../src/lib/oauth/google";
 import type { NextRequest } from "next/server";
@@ -1894,6 +1899,88 @@ async function main() {
       "12. a file with no repeated/unknown patterns produces no groups and no unknown bucket - import proceeds normally",
       groups.length === 0 && unknownRowIndexes.length === 0,
     );
+  }
+
+  console.log("\n-- CSV import review: unknown-merchant bulk selection (buildRowCategoryOverrides, pure) --");
+  {
+    const categoryIdByName = new Map(
+      (await prisma.category.findMany({ select: { id: true, name: true } })).map((c) => [
+        c.name.toLowerCase(),
+        c.id,
+      ]),
+    );
+    const groceriesId = categoryIdByName.get("groceries")!;
+    const diningId = categoryIdByName.get("dining")!;
+
+    // Single-row selection: picking exactly one unknown row applies the
+    // chosen category to that row only.
+    {
+      const decisions: RowCategoryDecision[] = [{ rowIndexes: [4], categoryId: groceriesId }];
+      const overrides = buildRowCategoryOverrides(decisions);
+      eq("single-row selection: the selected row gets the chosen category", overrides.get(4), groceriesId);
+      eq("single-row selection: an unrelated row is left with no override", overrides.get(5), undefined);
+      eq("single-row selection: produces exactly one override", overrides.size, 1);
+    }
+
+    // Multi-row categorization: selecting several unknown rows at once and
+    // applying one category covers all and only the selected rows.
+    {
+      const decisions: RowCategoryDecision[] = [
+        { rowIndexes: [1, 3, 7], categoryId: diningId },
+      ];
+      const overrides = buildRowCategoryOverrides(decisions);
+      check(
+        "multi-row categorization: all three selected rows get the same category",
+        overrides.get(1) === diningId && overrides.get(3) === diningId && overrides.get(7) === diningId,
+      );
+      check(
+        "multi-row categorization: rows outside the selection are untouched",
+        !overrides.has(0) && !overrides.has(2) && !overrides.has(4) && !overrides.has(5) && !overrides.has(6),
+      );
+      eq("multi-row categorization: produces exactly the 3 selected overrides, no more", overrides.size, 3);
+    }
+
+    // Leave uncategorized: an explicit EXPLICIT_NO_CATEGORY decision on a
+    // multi-row selection is preserved verbatim (resolveImportCategoryId is
+    // what turns it into a forced-null category at import time).
+    {
+      const decisions: RowCategoryDecision[] = [
+        { rowIndexes: [2, 9], categoryId: EXPLICIT_NO_CATEGORY },
+      ];
+      const overrides = buildRowCategoryOverrides(decisions);
+      eq("leave uncategorized: row 2 carries the explicit sentinel", overrides.get(2), EXPLICIT_NO_CATEGORY);
+      eq("leave uncategorized: row 9 carries the explicit sentinel", overrides.get(9), EXPLICIT_NO_CATEGORY);
+      eq(
+        "leave uncategorized: resolves to Uncategorized even for a note that would otherwise auto-suggest",
+        resolveImportCategoryId({
+          explicitCategoryId: overrides.get(2)!,
+          note: "SHELL OIL 998877",
+          type: "EXPENSE",
+          knownCategoryIds: new Set([groceriesId]),
+          categoryIdByName,
+        }),
+        null,
+      );
+    }
+
+    // A later decision on the same row (e.g. re-selecting and re-applying)
+    // overwrites the earlier one, and unrelated group decisions combine
+    // cleanly with individually-selected unknown rows.
+    {
+      const decisions: RowCategoryDecision[] = [
+        { rowIndexes: [10, 11, 12], categoryId: groceriesId }, // a detected group's decision
+        { rowIndexes: [4], categoryId: diningId }, // an individually-selected unknown row
+        { rowIndexes: [4], categoryId: groceriesId }, // re-selected and re-applied with a different category
+      ];
+      const overrides = buildRowCategoryOverrides(decisions);
+      eq("re-applying a decision to the same row wins over the earlier one", overrides.get(4), groceriesId);
+      check(
+        "a group decision and an individual unknown-row decision coexist without interference",
+        overrides.get(10) === groceriesId &&
+          overrides.get(11) === groceriesId &&
+          overrides.get(12) === groceriesId,
+      );
+    }
   }
 
   console.log("\n== cleanup ==");

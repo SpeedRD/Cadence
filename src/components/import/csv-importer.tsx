@@ -37,7 +37,11 @@ import {
 import { CURRENCIES, formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
-import { detectImportGroups } from "@/lib/import-grouping";
+import {
+  buildRowCategoryOverrides,
+  detectImportGroups,
+  type RowCategoryDecision,
+} from "@/lib/import-grouping";
 import { importTransactionsAction } from "@/server/actions/import";
 import { cn } from "@/lib/utils";
 
@@ -94,6 +98,7 @@ export function CsvImporter({
   const [currency, setCurrency] = useState(defaultCurrency);
   const [categoryId, setCategoryId] = useState("none");
   const [groupDecisions, setGroupDecisions] = useState<Record<string, string>>({});
+  const [unknownRowDecisions, setUnknownRowDecisions] = useState<Record<number, string>>({});
 
   const [state, formAction, pending] = useActionState(
     importTransactionsAction,
@@ -162,14 +167,14 @@ export function CsvImporter({
   );
 
   const rowCategoryOverrides = useMemo(() => {
-    const overrides = new Map<number, string>();
-    for (const group of groups) {
-      const decision = groupDecisions[group.id];
-      if (!decision) continue;
-      for (const index of group.rowIndexes) overrides.set(index, decision);
+    const decisions: RowCategoryDecision[] = groups
+      .filter((group) => groupDecisions[group.id])
+      .map((group) => ({ rowIndexes: group.rowIndexes, categoryId: groupDecisions[group.id] }));
+    for (const [indexKey, decidedCategoryId] of Object.entries(unknownRowDecisions)) {
+      decisions.push({ rowIndexes: [Number(indexKey)], categoryId: decidedCategoryId });
     }
-    return overrides;
-  }, [groups, groupDecisions]);
+    return buildRowCategoryOverrides(decisions);
+  }, [groups, groupDecisions, unknownRowDecisions]);
 
   const payload = JSON.stringify({
     accountId,
@@ -210,6 +215,7 @@ export function CsvImporter({
               setRows(parsedRows);
               setFileName(file.name);
               setGroupDecisions({});
+              setUnknownRowDecisions({});
               const width = parsedRows.reduce(
                 (max, row) => Math.max(max, row.length),
                 0,
@@ -433,6 +439,14 @@ export function CsvImporter({
                       return rest;
                     }
                     return { ...previous, [groupId]: decision };
+                  })
+                }
+                unknownDecisions={unknownRowDecisions}
+                onDecideUnknownAction={(rowIndexes, decidedCategoryId) =>
+                  setUnknownRowDecisions((previous) => {
+                    const next = { ...previous };
+                    for (const index of rowIndexes) next[index] = decidedCategoryId;
+                    return next;
                   })
                 }
               />

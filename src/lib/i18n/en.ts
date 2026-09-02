@@ -283,6 +283,9 @@ export const en = {
     changeDecision: "Change",
     unknownMerchantsTitle: "Unknown merchants",
     reviewIndividually: "Review individually",
+    selectedCount: (n: number) => `${n} selected`,
+    selectAllAria: "Select all",
+    selectRowAria: "Select row",
   },
   accounts: {
     title: "Accounts",

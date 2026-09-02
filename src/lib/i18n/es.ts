@@ -286,6 +286,9 @@ export const es = {
     changeDecision: "Cambiar",
     unknownMerchantsTitle: "Comercios desconocidos",
     reviewIndividually: "Revisar individualmente",
+    selectedCount: (n: number) => `${n} seleccionada${n === 1 ? "" : "s"}`,
+    selectAllAria: "Seleccionar todo",
+    selectRowAria: "Seleccionar fila",
   },
   accounts: {
     title: "Cuentas",

@@ -54,6 +54,8 @@ export function ImportReview({
   locale,
   decisions,
   onDecideAction,
+  unknownDecisions,
+  onDecideUnknownAction,
 }: {
   groups: DetectedGroup[];
   unknownRowIndexes: number[];
@@ -65,10 +67,13 @@ export function ImportReview({
   locale: Locale;
   decisions: Record<string, string>;
   onDecideAction: (groupId: string, categoryId: string | undefined) => void;
+  /** Per-row decisions for the "unknown merchants" bucket - keyed by the same
+   *  row index as `rows`, independent of the grouped decisions above. */
+  unknownDecisions: Record<number, string>;
+  onDecideUnknownAction: (rowIndexes: number[], categoryId: string) => void;
 }) {
   const dictionary = getDictionary(locale);
   const t = dictionary.transactions;
-  const common = dictionary.common;
   const [unknownExpanded, setUnknownExpanded] = useState(false);
 
   const categoryIdByName = new Map(
@@ -126,11 +131,15 @@ export function ImportReview({
             </Button>
           </div>
           {unknownExpanded ? (
-            <div className="mt-3 overflow-x-auto rounded-md border border-border/50">
-              <RowsTable
-                rows={unknownRowIndexes.map((index) => rows[index])}
+            <div className="mt-3">
+              <UnknownRowsPanel
+                rowIndexes={unknownRowIndexes}
+                rows={rows}
+                categories={categories}
                 currency={currency}
-                common={common}
+                locale={locale}
+                decisions={unknownDecisions}
+                onDecideAction={onDecideUnknownAction}
               />
             </div>
           ) : null}
@@ -326,6 +335,144 @@ function GroupCard({
           <RowsTable rows={rows} currency={currency} common={common} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The "unknown merchants" bucket: rows that matched no repeated pattern and
+ * have no automatic suggestion. Unlike a detected group, these rows have
+ * nothing in common except "uncategorized" - so instead of one bulk action
+ * for the whole bucket, the user picks which rows to act on. Selection is
+ * local, transient UI state; only the resulting per-row decision (categoryId
+ * or EXPLICIT_NO_CATEGORY) is reported to the caller.
+ */
+function UnknownRowsPanel({
+  rowIndexes,
+  rows,
+  categories,
+  currency,
+  locale,
+  decisions,
+  onDecideAction,
+}: {
+  rowIndexes: number[];
+  rows: ReviewRow[];
+  categories: Option[];
+  currency: string;
+  locale: Locale;
+  decisions: Record<number, string>;
+  onDecideAction: (rowIndexes: number[], categoryId: string) => void;
+}) {
+  const dictionary = getDictionary(locale);
+  const t = dictionary.transactions;
+  const common = dictionary.common;
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  const allSelected = rowIndexes.length > 0 && rowIndexes.every((index) => selected.has(index));
+
+  const toggleRow = (index: number) => {
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(rowIndexes));
+  };
+
+  const applyToSelected = (categoryId: string) => {
+    if (selected.size === 0) return;
+    onDecideAction(Array.from(selected), categoryId);
+    setSelected(new Set());
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            className="size-3.5 rounded-sm border-border accent-primary"
+            checked={allSelected}
+            onChange={toggleAll}
+            aria-label={t.selectAllAria}
+          />
+          {t.selectedCount(selected.size)}
+        </label>
+        {selected.size > 0 ? (
+          <>
+            <Select onValueChange={applyToSelected}>
+              <SelectTrigger size="sm" className="h-6 w-40 text-xs">
+                <SelectValue placeholder={common.pickACategory} />
+              </SelectTrigger>
+              <SelectContent>
+                {categories.map((category) => (
+                  <SelectItem key={category.id} value={category.id}>
+                    {category.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => applyToSelected(EXPLICIT_NO_CATEGORY)}
+            >
+              {t.leaveUncategorized}
+            </Button>
+          </>
+        ) : null}
+      </div>
+
+      <div className="overflow-x-auto rounded-md border border-border/50">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-8" />
+              <TableHead className="w-28">{common.date}</TableHead>
+              <TableHead>{common.note}</TableHead>
+              <TableHead className="w-32 text-right">{common.amount}</TableHead>
+              <TableHead className="w-36">{common.category}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rowIndexes.map((index) => {
+              const row = rows[index];
+              const decision = decisions[index];
+              return (
+                <TableRow key={index}>
+                  <TableCell>
+                    <input
+                      type="checkbox"
+                      className="size-3.5 rounded-sm border-border accent-primary"
+                      checked={selected.has(index)}
+                      onChange={() => toggleRow(index)}
+                      aria-label={t.selectRowAria}
+                    />
+                  </TableCell>
+                  <TableCell className="figure text-xs">{toISODate(row.date)}</TableCell>
+                  <TableCell className="max-w-[22rem] truncate text-sm">{row.note || "-"}</TableCell>
+                  <TableCell className="text-right">
+                    <span className="figure text-sm">{formatMoney(row.amount, currency)}</span>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {decision === undefined
+                      ? "-"
+                      : decision === EXPLICIT_NO_CATEGORY
+                        ? t.appliedUncategorized
+                        : (categories.find((category) => category.id === decision)?.name ?? "-")}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }
