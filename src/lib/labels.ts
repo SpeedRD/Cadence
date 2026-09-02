@@ -11,12 +11,13 @@ export const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   OTHER: "Other",
 };
 
-export const TRANSACTION_TYPES = ["EXPENSE", "INCOME", "TRANSFER"] as const;
+export const TRANSACTION_TYPES = ["EXPENSE", "INCOME", "TRANSFER", "EXTERNAL_TRANSFER"] as const;
 export const TRANSACTION_TYPE_LABELS: Record<string, string> = {
   EXPENSE: "Expense",
   INCOME: "Income",
   TRANSFER: "Transfer",
   OPENING_BALANCE: "Opening balance",
+  EXTERNAL_TRANSFER: "External transfer",
 };
 
 export const TRANSACTION_SOURCES = [

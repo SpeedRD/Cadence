@@ -45,12 +45,14 @@ function AmountCell({
       : row.type === "EXPENSE"
         ? "-"
         : "";
-  // An opening balance raises the account like income but is not income, so
-  // it gets the neutral transfer tone rather than the income green.
+  // An opening balance raises the account like income but is not income, and
+  // an external transfer moves value like an internal transfer leg but has
+  // no Cadence-side counterparty - both get the neutral transfer tone rather
+  // than the income green or a directional sign.
   const tone =
     row.type === "INCOME"
       ? "text-[var(--good)]"
-      : row.type === "TRANSFER" || row.type === "OPENING_BALANCE"
+      : row.type === "TRANSFER" || row.type === "OPENING_BALANCE" || row.type === "EXTERNAL_TRANSFER"
         ? "text-muted-foreground"
         : "";
 
@@ -119,9 +121,11 @@ export function TransactionTable({
                           ? (row.transferDirection === "OUT"
                               ? t.transferTo(row.counterpartAccountName ?? t.anotherAccount)
                               : t.transferFrom(row.counterpartAccountName ?? t.anotherAccount))
-                          : row.type === "OPENING_BALANCE"
-                            ? t.openingBalance
-                            : (row.categoryName ?? t.uncategorized))}
+                          : row.type === "EXTERNAL_TRANSFER"
+                            ? (row.transferDirection === "OUT" ? t.externalTransferOut : t.externalTransferIn)
+                            : row.type === "OPENING_BALANCE"
+                              ? t.openingBalance
+                              : (row.categoryName ?? t.uncategorized))}
                     </span>
                     {row.categoryName ? (
                       <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
@@ -149,9 +153,9 @@ export function TransactionTable({
                 <TableCell className="hidden md:table-cell">
                   <SourceBadge
                     source={row.source}
-                    isTransfer={row.type === "TRANSFER"}
+                    isTransfer={row.type === "TRANSFER" || row.type === "EXTERNAL_TRANSFER"}
                     labels={common.sourceLabels}
-                    transferLabel={t.transfer}
+                    transferLabel={row.type === "EXTERNAL_TRANSFER" ? t.externalTransferBadge : t.transfer}
                   />
                 </TableCell>
                 <TableCell>
@@ -209,6 +213,7 @@ export function TransactionTable({
             accountId: editingPlain.accountId,
             categoryId: editingPlain.categoryId ?? "none",
             note: editingPlain.note,
+            transferDirection: editingPlain.transferDirection,
           }}
         />
       ) : null}

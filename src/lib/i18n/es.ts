@@ -44,6 +44,7 @@ export const es = {
       INCOME: "Ingreso",
       TRANSFER: "Transferencia",
       OPENING_BALANCE: "Saldo inicial",
+      EXTERNAL_TRANSFER: "Transferencia externa",
     } as Record<string, string>,
     sourceLabels: {
       MANUAL: "Manual",
@@ -195,6 +196,9 @@ export const es = {
     saveChanges: "Guardar cambios",
     addTransaction: "Agregar transacción",
     notePlaceholder: "¿Para qué fue?",
+    direction: "Dirección",
+    directionOut: "Saliente - el dinero salió de esta cuenta",
+    directionIn: "Entrante - el dinero llegó, para reenviarlo",
     editTransfer: "Editar transferencia",
     moveMoney: "Mover dinero",
     transferDescription:
@@ -263,6 +267,9 @@ export const es = {
     editOpeningBalanceFromAccounts:
       "Este es el saldo inicial de una cuenta: cámbialo desde la página de Cuentas para que se mantenga separado de ingresos y gastos",
     openingBalance: "Saldo inicial",
+    externalTransferOut: "Transferencia externa saliente",
+    externalTransferIn: "Transferencia externa entrante",
+    externalTransferBadge: "Externa",
     nothingToDelete: "Nada que eliminar",
     detectedPatternsTitle: "Patrones detectados",
     detectedPatternsDescription:
@@ -291,6 +298,10 @@ export const es = {
     selectRowAria: "Seleccionar fila",
     markAsIncome: "Marcar como ingreso",
     appliedMarkedAsIncome: "Marcado como ingreso",
+    recordAsExternalTransfer: "Registrar como transferencia externa",
+    appliedExternalTransfer: "Registrado como transferencia externa",
+    resolveTransfersHint: (n: number) =>
+      `Resuelve ${n} posible${n === 1 ? "" : "s"} transferencia${n === 1 ? "" : "s"} antes de importar`,
   },
   accounts: {
     title: "Cuentas",
@@ -322,6 +333,7 @@ export const es = {
     spendingOut: "Gastos",
     netTransfers: "Transferencias netas",
     inOut: (inAmount: string, outAmount: string) => `${inAmount} entrada · ${outAmount} salida`,
+    netExternal: "Externas netas",
     noActivityTitle: "Aún no hay actividad",
     noActivityDescription:
       "Las transacciones registradas en esta cuenta aparecen aquí con un saldo acumulado.",

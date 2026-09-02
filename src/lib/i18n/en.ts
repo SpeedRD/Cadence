@@ -42,6 +42,7 @@ export const en = {
       INCOME: "Income",
       TRANSFER: "Transfer",
       OPENING_BALANCE: "Opening balance",
+      EXTERNAL_TRANSFER: "External transfer",
     } as Record<string, string>,
     sourceLabels: {
       MANUAL: "Manual",
@@ -192,6 +193,9 @@ export const en = {
     saveChanges: "Save changes",
     addTransaction: "Add transaction",
     notePlaceholder: "What was it for?",
+    direction: "Direction",
+    directionOut: "Outgoing - money left this account",
+    directionIn: "Incoming - money arrived, to be forwarded",
     editTransfer: "Edit transfer",
     moveMoney: "Move money",
     transferDescription:
@@ -260,6 +264,9 @@ export const en = {
     editOpeningBalanceFromAccounts:
       "This is an account's opening balance - change it from the Accounts page so it stays separate from income and spending",
     openingBalance: "Opening balance",
+    externalTransferOut: "External transfer out",
+    externalTransferIn: "External transfer in",
+    externalTransferBadge: "External",
     nothingToDelete: "Nothing to delete",
     detectedPatternsTitle: "Detected patterns",
     detectedPatternsDescription:
@@ -288,6 +295,10 @@ export const en = {
     selectRowAria: "Select row",
     markAsIncome: "Mark as income",
     appliedMarkedAsIncome: "Marked as income",
+    recordAsExternalTransfer: "Record as external transfer",
+    appliedExternalTransfer: "Recorded as external transfer",
+    resolveTransfersHint: (n: number) =>
+      `Resolve ${n} possible transfer${n === 1 ? "" : "s"} before importing`,
   },
   accounts: {
     title: "Accounts",
@@ -319,6 +330,7 @@ export const en = {
     spendingOut: "Spending out",
     netTransfers: "Net transfers",
     inOut: (inAmount: string, outAmount: string) => `${inAmount} in · ${outAmount} out`,
+    netExternal: "Net external",
     noActivityTitle: "No activity yet",
     noActivityDescription:
       "Transactions logged against this account show up here with a running balance.",

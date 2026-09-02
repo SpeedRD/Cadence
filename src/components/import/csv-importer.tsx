@@ -188,17 +188,45 @@ export function CsvImporter({
     return buildRowCategoryOverrides(decisions);
   }, [groups, groupTypeDecisions]);
 
+  // A row whose type override is EXTERNAL_TRANSFER needs a direction too -
+  // taken from the group's own detected direction (OUT groups are outgoing,
+  // IN groups incoming), never invented independently of the group.
+  const rowDirectionOverrides = useMemo(() => {
+    const decisions: RowCategoryDecision[] = groups
+      .filter((group) => groupTypeDecisions[group.id] === "EXTERNAL_TRANSFER" && group.transferDirection)
+      .map((group) => ({ rowIndexes: group.rowIndexes, categoryId: group.transferDirection as string }));
+    return buildRowCategoryOverrides(decisions);
+  }, [groups, groupTypeDecisions]);
+
+  // The Import button stays disabled while any detected transfer-shaped
+  // group has neither a category decision (leave as expense/uncategorized)
+  // nor a type decision (mark as income / record as external transfer) -
+  // a transfer-shaped description alone must never silently import as
+  // ordinary income or spending.
+  const unresolvedTransferGroups = groups.filter(
+    (group) =>
+      group.kind === "transfer" &&
+      groupDecisions[group.id] === undefined &&
+      groupTypeDecisions[group.id] === undefined,
+  );
+
   const payload = JSON.stringify({
     accountId,
     currency,
-    rows: validRows.map((row, index) => ({
-      date: toISODate(row.date as Date),
-      amount: row.amount as number,
-      type: rowTypeOverrides.get(index) ?? row.type,
-      note: row.note || null,
-      categoryId:
-        rowCategoryOverrides.get(index) ?? (categoryId === "none" ? null : categoryId),
-    })),
+    rows: validRows.map((row, index) => {
+      const type = rowTypeOverrides.get(index) ?? row.type;
+      return {
+        date: toISODate(row.date as Date),
+        amount: row.amount as number,
+        type,
+        transferDirection: type === "EXTERNAL_TRANSFER" ? (rowDirectionOverrides.get(index) ?? null) : null,
+        note: row.note || null,
+        categoryId:
+          type === "EXTERNAL_TRANSFER"
+            ? null
+            : (rowCategoryOverrides.get(index) ?? (categoryId === "none" ? null : categoryId)),
+      };
+    }),
   });
 
   const columnOptions = Array.from({ length: columnCount }, (_, index) => ({
@@ -476,10 +504,14 @@ export function CsvImporter({
 
               <form action={formAction} className="flex items-center gap-3">
                 <input type="hidden" name="payload" value={payload} />
-                <SubmitButton pending={pending}>
+                <SubmitButton pending={pending} disabled={unresolvedTransferGroups.length > 0}>
                   {t.importCount(validRows.length)}
                 </SubmitButton>
-                {state?.error ? (
+                {unresolvedTransferGroups.length > 0 ? (
+                  <span className="text-sm text-muted-foreground">
+                    {t.resolveTransfersHint(unresolvedTransferGroups.length)}
+                  </span>
+                ) : state?.error ? (
                   <span className="text-sm text-destructive">{state.error}</span>
                 ) : null}
               </form>

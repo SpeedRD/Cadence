@@ -19,13 +19,19 @@ const importPayloadSchema = z.object({
   currency: z.enum(CURRENCIES),
   rows: z
     .array(
-      z.object({
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Row has an invalid date"),
-        amount: z.number().positive("Row amount must be greater than 0"),
-        type: z.enum(["EXPENSE", "INCOME"]),
-        note: z.string().max(500).nullable(),
-        categoryId: z.string().nullable(),
-      }),
+      z
+        .object({
+          date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Row has an invalid date"),
+          amount: z.number().positive("Row amount must be greater than 0"),
+          type: z.enum(["EXPENSE", "INCOME", "EXTERNAL_TRANSFER"]),
+          transferDirection: z.enum(["OUT", "IN"]).nullable(),
+          note: z.string().max(500).nullable(),
+          categoryId: z.string().nullable(),
+        })
+        .refine((row) => (row.type === "EXTERNAL_TRANSFER") === (row.transferDirection !== null), {
+          message: "External transfer rows need a direction",
+          path: ["transferDirection"],
+        }),
     )
     .min(1, "Nothing to import")
     .max(MAX_ROWS, `Import at most ${MAX_ROWS} rows at a time`),
@@ -71,14 +77,18 @@ export async function importTransactionsAction(
     amount: row.amount,
     currency: parsed.data.currency,
     type: row.type,
+    transferDirection: row.transferDirection,
     accountId: account.id,
-    categoryId: resolveImportCategoryId({
-      explicitCategoryId: row.categoryId,
-      note: row.note,
-      type: row.type,
-      knownCategoryIds,
-      categoryIdByName,
-    }),
+    categoryId:
+      row.type === "EXTERNAL_TRANSFER"
+        ? null
+        : resolveImportCategoryId({
+            explicitCategoryId: row.categoryId,
+            note: row.note,
+            type: row.type,
+            knownCategoryIds,
+            categoryIdByName,
+          }),
     note: row.note,
     source: "CSV" as const,
   }));

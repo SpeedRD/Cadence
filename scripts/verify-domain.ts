@@ -223,12 +223,72 @@ async function main() {
     "Usa como máximo 2 decimales",
   );
 
+  console.log("\n-- transactionSchema: EXTERNAL_TRANSFER invariants --");
+  {
+    const base = { date: "2026-08-20", currency: "DOP", accountId: "acct", note: "" };
+
+    const missingDirection = transactionSchema.safeParse({
+      ...base, amount: "100", type: "EXTERNAL_TRANSFER", categoryId: "",
+    });
+    check("EXTERNAL_TRANSFER without a direction is rejected", !missingDirection.success);
+
+    const outParsed = transactionSchema.safeParse({
+      ...base, amount: "5000", type: "EXTERNAL_TRANSFER", categoryId: "some-category-id", transferDirection: "OUT",
+    });
+    check("EXTERNAL_TRANSFER with an OUT direction validates", outParsed.success);
+    eq(
+      "categoryId is forced null even though one was submitted",
+      outParsed.success ? outParsed.data.categoryId : "n/a",
+      null,
+    );
+    eq(
+      "transferDirection OUT survives validation",
+      outParsed.success ? outParsed.data.transferDirection : "n/a",
+      "OUT",
+    );
+
+    const inParsed = transactionSchema.safeParse({
+      ...base, amount: "2000", type: "EXTERNAL_TRANSFER", categoryId: "", transferDirection: "IN",
+    });
+    check("EXTERNAL_TRANSFER with an IN direction validates", inParsed.success);
+    eq(
+      "transferDirection IN survives validation",
+      inParsed.success ? inParsed.data.transferDirection : "n/a",
+      "IN",
+    );
+
+    const garbageDirection = transactionSchema.safeParse({
+      ...base, amount: "100", type: "EXTERNAL_TRANSFER", categoryId: "", transferDirection: "SIDEWAYS",
+    });
+    check("an unrecognized transferDirection value is rejected for EXTERNAL_TRANSFER", !garbageDirection.success);
+
+    const expenseWithStaleDirection = transactionSchema.safeParse({
+      ...base, amount: "50", type: "EXPENSE", categoryId: "", transferDirection: "OUT",
+    });
+    check("an ordinary EXPENSE still validates even if transferDirection is present", expenseWithStaleDirection.success);
+    eq(
+      "a stale transferDirection is dropped for a non-EXTERNAL_TRANSFER type",
+      expenseWithStaleDirection.success ? expenseWithStaleDirection.data.transferDirection : "n/a",
+      null,
+    );
+
+    const incomeNoDirection = transactionSchema.safeParse({
+      ...base, amount: "50", type: "INCOME", categoryId: "",
+    });
+    check("an ordinary INCOME with no transferDirection field at all still validates", incomeNoDirection.success);
+  }
+
   console.log("\n== transaction edit guard ==");
-  const { transactionEditBlock } = await import("../src/lib/transactions");
+  const { transactionEditBlock, balanceSign, isCashflow } = await import("../src/lib/transactions");
   eq("an opening balance can't be edited through the transaction form", transactionEditBlock({ type: "OPENING_BALANCE", transferId: null }), "opening_balance");
   eq("a transfer leg can't be edited through the transaction form", transactionEditBlock({ type: "TRANSFER", transferId: "t1" }), "transfer");
   eq("an ordinary expense can be edited", transactionEditBlock({ type: "EXPENSE", transferId: null }), null);
   eq("an ordinary income can be edited", transactionEditBlock({ type: "INCOME", transferId: null }), null);
+  eq("an outgoing external transfer can be edited (single row, never paired)", transactionEditBlock({ type: "EXTERNAL_TRANSFER", transferId: null }), null);
+  eq("an incoming external transfer can be edited (single row, never paired)", transactionEditBlock({ type: "EXTERNAL_TRANSFER", transferId: null }), null);
+  eq("balanceSign(EXTERNAL_TRANSFER, OUT) is -1, same shape as an outgoing internal transfer leg", balanceSign("EXTERNAL_TRANSFER", "OUT"), -1);
+  eq("balanceSign(EXTERNAL_TRANSFER, IN) is +1, same shape as an incoming internal transfer leg", balanceSign("EXTERNAL_TRANSFER", "IN"), 1);
+  eq("isCashflow(EXTERNAL_TRANSFER) is false - it never counts as income or spending", isCashflow("EXTERNAL_TRANSFER"), false);
 
   console.log("\n== currency conversion through USD ==");
   const rates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.5 }, fetchedAt: new Date(), stale: false };
@@ -237,6 +297,27 @@ async function main() {
   eq("EUR to DOP has no stored pair", convert(10, "EUR", "DOP", rates), 1200);
   eq("DOP to EUR round trip", convert(1200, "DOP", "EUR", rates), 10);
   eq("same currency is identity", convert(7, "EUR", "EUR", rates), 7);
+
+  console.log("\n== external transfer: schema ==");
+  {
+    const smokeAccount = await prisma.account.create({
+      data: { name: "Verify Schema Smoke", currency: "USD", type: "CHECKING" },
+    });
+    const smokeRow = await prisma.transaction.create({
+      data: {
+        date: civilDate(2026, 8, 1),
+        amount: 1,
+        currency: "USD",
+        type: "EXTERNAL_TRANSFER",
+        transferDirection: "OUT",
+        accountId: smokeAccount.id,
+        source: "MANUAL",
+      },
+    });
+    eq("Postgres accepts the EXTERNAL_TRANSFER enum value", smokeRow.type, "EXTERNAL_TRANSFER");
+    await prisma.transaction.delete({ where: { id: smokeRow.id } });
+    await prisma.account.delete({ where: { id: smokeAccount.id } });
+  }
 
   console.log("\n== database invariants ==");
   const context = {
@@ -349,6 +430,306 @@ async function main() {
   const verifyGoal = goals.find((g) => g.id === goal.id)!;
   eq("periods left to the target date", verifyGoal.periodsLeft, 9);
   eq("per period = remaining / periods left", verifyGoal.perPeriod, Math.round((800 / 9) * 100) / 100);
+
+  console.log("\n== external transfer: manual create/update/delete invariants ==");
+  {
+    // saveTransactionAction/deleteTransactionAction are "use server" actions
+    // gated by requireAuth() (next/headers cookies()), which only works
+    // inside a real Next.js request - this script can't call them directly.
+    // Every check below instead exercises the exact same two steps those
+    // actions perform - validate via transactionSchema, then the identical
+    // prisma.transaction calls - so each assertion is a real database
+    // assertion, just without the auth/redirect wrapper (covered by manual
+    // QA instead - see the plan's final task).
+    const extAccount = await prisma.account.create({
+      data: { name: "Verify External Transfer", currency: "DOP", type: "CHECKING" },
+    });
+    const otherAccount = await prisma.account.create({
+      data: { name: "Verify External Transfer Other", currency: "DOP", type: "CHECKING" },
+    });
+    const groceriesCat = await prisma.category.findFirstOrThrow({ where: { name: "Groceries" } });
+    const incomeCat = await prisma.category.findFirstOrThrow({ where: { name: "Income" } });
+
+    const extContext = {
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today: civilDate(2026, 8, 20),
+      currentPeriod: periodForDate(civilDate(2026, 8, 20)),
+    };
+    const balanceOf = async (accountId: string) => {
+      const balances = await getAccountBalances(extContext, { status: "ALL" });
+      return balances.find((a) => a.id === accountId)?.balance ?? 0;
+    };
+
+    // -- create: EXTERNAL_TRANSFER OUT, categoryId forced null even if submitted --
+    const createOutParsed = transactionSchema.safeParse({
+      date: "2026-08-20",
+      amount: "5000",
+      currency: "DOP",
+      type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id,
+      categoryId: groceriesCat.id, // deliberately submitted - must be dropped
+      note: "Sent to Mom",
+      transferDirection: "OUT",
+    });
+    check("create: EXTERNAL_TRANSFER OUT validates", createOutParsed.success);
+    if (!createOutParsed.success) throw new Error("fixture setup failed: createOutParsed");
+    eq("create: categoryId is forced null even though one was submitted", createOutParsed.data.categoryId, null);
+    eq("create: transferDirection OUT survives validation", createOutParsed.data.transferDirection, "OUT");
+
+    const { id: _createOutId, ...outValues } = createOutParsed.data;
+    const outRow = await prisma.transaction.create({ data: { ...outValues, source: "MANUAL" } });
+    eq("create: transferId stays null - never paired like an internal transfer", outRow.transferId, null);
+    eq("create: type is EXTERNAL_TRANSFER", outRow.type, "EXTERNAL_TRANSFER");
+    eq("create: categoryId is null in the database", outRow.categoryId, null);
+    eq("create: transactionEditBlock allows editing it (unlike a TRANSFER leg)", transactionEditBlock(outRow), null);
+    eq("create: account balance drops by the full amount", await balanceOf(extAccount.id), -5000);
+
+    // -- create: EXTERNAL_TRANSFER IN --
+    const createInParsed = transactionSchema.safeParse({
+      date: "2026-08-21",
+      amount: "2000",
+      currency: "DOP",
+      type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id,
+      categoryId: "",
+      note: "Dad's pass-through funds",
+      transferDirection: "IN",
+    });
+    check("create: EXTERNAL_TRANSFER IN validates", createInParsed.success);
+    if (!createInParsed.success) throw new Error("fixture setup failed: createInParsed");
+    const { id: _createInId, ...inValues } = createInParsed.data;
+    const inRow = await prisma.transaction.create({ data: { ...inValues, source: "MANUAL" } });
+    eq("create: account balance reflects both rows (-5000 + 2000)", await balanceOf(extAccount.id), -3000);
+
+    // -- update: EXPENSE -> EXTERNAL_TRANSFER clears category, sets direction --
+    const expenseRow = await prisma.transaction.create({
+      data: { date: civilDate(2026, 8, 22), amount: 300, currency: "DOP", type: "EXPENSE", accountId: extAccount.id, categoryId: groceriesCat.id, source: "MANUAL" },
+    });
+    const toExternalParsed = transactionSchema.safeParse({
+      id: expenseRow.id,
+      date: "2026-08-22",
+      amount: "300",
+      currency: "DOP",
+      type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id,
+      categoryId: groceriesCat.id, // still submitted by a form that hasn't cleared its own field yet
+      note: "Actually a pass-through",
+      transferDirection: "OUT",
+    });
+    check("update EXPENSE->EXTERNAL_TRANSFER validates", toExternalParsed.success);
+    if (!toExternalParsed.success) throw new Error("fixture setup failed: toExternalParsed");
+    const { id: updateId1, ...toExternalValues } = toExternalParsed.data;
+    await prisma.transaction.update({ where: { id: updateId1! }, data: toExternalValues });
+    const afterToExternal = await prisma.transaction.findUniqueOrThrow({ where: { id: expenseRow.id } });
+    eq("update EXPENSE->EXTERNAL_TRANSFER: categoryId clears to null", afterToExternal.categoryId, null);
+    eq("update EXPENSE->EXTERNAL_TRANSFER: transferDirection is set", afterToExternal.transferDirection, "OUT");
+    eq("update EXPENSE->EXTERNAL_TRANSFER: transferId remains null", afterToExternal.transferId, null);
+    eq("update EXPENSE->EXTERNAL_TRANSFER: still editable", transactionEditBlock(afterToExternal), null);
+
+    // -- update: EXTERNAL_TRANSFER -> INCOME clears direction, category settable again --
+    const backToIncomeParsed = transactionSchema.safeParse({
+      id: expenseRow.id,
+      date: "2026-08-22",
+      amount: "300",
+      currency: "DOP",
+      type: "INCOME",
+      accountId: extAccount.id,
+      categoryId: incomeCat.id,
+      note: "Turned out to be real income",
+      transferDirection: "OUT", // stale client state from before switching the type back - must be dropped
+    });
+    check("update EXTERNAL_TRANSFER->INCOME validates", backToIncomeParsed.success);
+    if (!backToIncomeParsed.success) throw new Error("fixture setup failed: backToIncomeParsed");
+    eq("update EXTERNAL_TRANSFER->INCOME: stale transferDirection is dropped by validation", backToIncomeParsed.data.transferDirection, null);
+    const { id: updateId2, ...backToIncomeValues } = backToIncomeParsed.data;
+    await prisma.transaction.update({ where: { id: updateId2! }, data: backToIncomeValues });
+    const afterBackToIncome = await prisma.transaction.findUniqueOrThrow({ where: { id: expenseRow.id } });
+    eq("update EXTERNAL_TRANSFER->INCOME: transferDirection clears to null in the database", afterBackToIncome.transferDirection, null);
+    eq("update EXTERNAL_TRANSFER->INCOME: categoryId is settable again", afterBackToIncome.categoryId, incomeCat.id);
+    eq("update EXTERNAL_TRANSFER->INCOME: transferId still null", afterBackToIncome.transferId, null);
+
+    // -- update: direction change OUT -> IN on an existing EXTERNAL_TRANSFER row --
+    const balanceBeforeFlip = await balanceOf(extAccount.id);
+    const flipParsed = transactionSchema.safeParse({
+      id: outRow.id, date: "2026-08-20", amount: "5000", currency: "DOP", type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id, categoryId: "", note: "Sent to Mom", transferDirection: "IN",
+    });
+    check("update: flipping EXTERNAL_TRANSFER direction validates", flipParsed.success);
+    if (!flipParsed.success) throw new Error("fixture setup failed: flipParsed");
+    const { id: flipId, ...flipValues } = flipParsed.data;
+    await prisma.transaction.update({ where: { id: flipId! }, data: flipValues });
+    const balanceAfterFlip = await balanceOf(extAccount.id);
+    eq(
+      "update: flipping OUT->IN on a 5000 row moves the balance by 10000 (removes the -5000 effect, adds +5000)",
+      round2(balanceAfterFlip - balanceBeforeFlip),
+      10000,
+    );
+
+    // flip it back OUT so the rest of this block's balance math stays predictable
+    const flipBackParsed = transactionSchema.safeParse({
+      id: outRow.id, date: "2026-08-20", amount: "5000", currency: "DOP", type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id, categoryId: "", note: "Sent to Mom", transferDirection: "OUT",
+    });
+    if (!flipBackParsed.success) throw new Error("fixture setup failed: flipBackParsed");
+    const { id: flipBackId, ...flipBackValues } = flipBackParsed.data;
+    await prisma.transaction.update({ where: { id: flipBackId! }, data: flipBackValues });
+    const afterFlipBack = await prisma.transaction.findUniqueOrThrow({ where: { id: outRow.id } });
+    eq("update: flipped-back row's transferDirection is OUT again", afterFlipBack.transferDirection, "OUT");
+    eq("update: flipped-back row is still editable", transactionEditBlock(afterFlipBack), null);
+
+    // -- update: reassigning accountId moves the effect to the new account --
+    const balanceOldBefore = await balanceOf(extAccount.id);
+    const balanceNewBefore = await balanceOf(otherAccount.id);
+    const reassignParsed = transactionSchema.safeParse({
+      id: inRow.id, date: "2026-08-21", amount: "2000", currency: "DOP", type: "EXTERNAL_TRANSFER",
+      accountId: otherAccount.id, categoryId: "", note: "Dad's pass-through funds", transferDirection: "IN",
+    });
+    check("update: reassigning accountId validates", reassignParsed.success);
+    if (!reassignParsed.success) throw new Error("fixture setup failed: reassignParsed");
+    const { id: reassignId, ...reassignValues } = reassignParsed.data;
+    await prisma.transaction.update({ where: { id: reassignId! }, data: reassignValues });
+    eq("update: old account balance drops by the reassigned row's effect", round2((await balanceOf(extAccount.id)) - balanceOldBefore), -2000);
+    eq("update: new account balance picks up the reassigned row's effect", round2((await balanceOf(otherAccount.id)) - balanceNewBefore), 2000);
+
+    // move it back so the delete check below only has to look in one place
+    const moveBackParsed = transactionSchema.safeParse({
+      id: inRow.id, date: "2026-08-21", amount: "2000", currency: "DOP", type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id, categoryId: "", note: "Dad's pass-through funds", transferDirection: "IN",
+    });
+    if (!moveBackParsed.success) throw new Error("fixture setup failed: moveBackParsed");
+    const { id: moveBackId, ...moveBackValues } = moveBackParsed.data;
+    await prisma.transaction.update({ where: { id: moveBackId! }, data: moveBackValues });
+    const afterMoveBack = await prisma.transaction.findUniqueOrThrow({ where: { id: inRow.id } });
+    eq("update: moved-back row is on extAccount again", afterMoveBack.accountId, extAccount.id);
+
+    // -- delete: an EXTERNAL_TRANSFER row is a single row, never a paired delete --
+    const beforeDeleteCount = await prisma.transaction.count({ where: { accountId: extAccount.id } });
+    const balanceBeforeDelete = await balanceOf(extAccount.id);
+    const toDelete = await prisma.transaction.findUniqueOrThrow({ where: { id: outRow.id } });
+    // Mirrors deleteTransactionAction exactly: transferId is null, so it
+    // takes the single-row `else` branch, never the multi-row
+    // `deleteMany({ transferId })` branch used for internal transfer legs.
+    eq("delete: the row being deleted has a null transferId before branching", toDelete.transferId, null);
+    if (toDelete.transferId) {
+      await prisma.transaction.deleteMany({ where: { transferId: toDelete.transferId } });
+    } else {
+      await prisma.transaction.delete({ where: { id: toDelete.id } });
+    }
+    const afterDeleteCount = await prisma.transaction.count({ where: { accountId: extAccount.id } });
+    eq("delete: exactly one row is removed, not a paired transfer delete", beforeDeleteCount - afterDeleteCount, 1);
+    const stillThere = await prisma.transaction.findUnique({ where: { id: inRow.id } });
+    check("delete: the other EXTERNAL_TRANSFER row on the same account is untouched", stillThere !== null);
+    eq("delete: the sibling row's account is unchanged", stillThere?.accountId, extAccount.id);
+    eq(
+      "delete: deleting the 5000 OUT row raises the account balance by exactly 5000",
+      round2((await balanceOf(extAccount.id)) - balanceBeforeDelete),
+      5000,
+    );
+
+    await prisma.transaction.deleteMany({ where: { accountId: { in: [extAccount.id, otherAccount.id] } } });
+    await prisma.account.deleteMany({ where: { id: { in: [extAccount.id, otherAccount.id] } } });
+    console.log("  ok   external transfer manual CRUD fixtures removed");
+  }
+
+  console.log("\n== external transfer: BSC import scenario ==");
+  {
+    // Reproduces the real production-data edge case this feature exists for:
+    // a BSC bank CSV account with "Debito Por Transferencia" rows that are
+    // NOT internal Cadence transfers (the destination is outside Cadence
+    // entirely) and must not inflate spending. Amounts match the actual BSC
+    // CSV cited in the task: several DOP 5,000 rows plus two large ones
+    // (134,422 and 115,000).
+    const bsc = await prisma.account.create({
+      data: { name: "Verify BSC", currency: "DOP", type: "CHECKING" },
+    });
+    const bscContext = {
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today: civilDate(2026, 8, 20),
+      currentPeriod: periodForDate(civilDate(2026, 8, 20)),
+    };
+
+    const bscExternalRows = [
+      { date: civilDate(2026, 4, 16), amount: 134422, note: "Debito Por Transferencia" },
+      { date: civilDate(2026, 5, 3), amount: 5000, note: "Debito Por Transferencia" },
+      { date: civilDate(2026, 6, 12), amount: 5000, note: "Debito Por Transferencia" },
+      { date: civilDate(2026, 8, 21), amount: 115000, note: "Debito Por Transferencia" },
+    ];
+    // A real, unrelated expense in the same account/period, to prove it's
+    // still counted normally once the external-transfer rows are excluded.
+    const realExpense = { date: civilDate(2026, 8, 18), amount: 1200, note: "Supermercado Nacional" };
+
+    // Mirrors exactly what importTransactionsAction writes for a row whose
+    // CSV-review decision was "Record as external transfer": categoryId
+    // null, transferDirection carried through, source CSV.
+    await prisma.transaction.createMany({
+      data: bscExternalRows.map((row) => ({
+        date: row.date,
+        amount: row.amount,
+        currency: "DOP",
+        type: "EXTERNAL_TRANSFER" as const,
+        transferDirection: "OUT" as const,
+        accountId: bsc.id,
+        categoryId: null,
+        note: row.note,
+        source: "CSV" as const,
+      })),
+    });
+    const groceriesForBsc = await prisma.category.findFirstOrThrow({ where: { name: "Groceries" } });
+    await prisma.transaction.create({
+      data: {
+        date: realExpense.date,
+        amount: realExpense.amount,
+        currency: "DOP",
+        type: "EXPENSE",
+        accountId: bsc.id,
+        categoryId: groceriesForBsc.id,
+        note: realExpense.note,
+        source: "CSV",
+      },
+    });
+
+    const bscBalances = await getAccountBalances(bscContext, { status: "ALL" });
+    const bscBalance = bscBalances.find((a) => a.id === bsc.id)!;
+    const totalExternal = bscExternalRows.reduce((sum, row) => sum + row.amount, 0);
+    eq(
+      "BSC account balance reflects the full reduction from every external-transfer row plus the real expense",
+      bscBalance.balance,
+      -(totalExternal + realExpense.amount),
+    );
+
+    const { getPeriodSummary } = await import("../src/lib/data/period-summary");
+    const augPeriodB = periodForDate(civilDate(2026, 8, 20));
+    const augSummary = await getPeriodSummary(augPeriodB, bscContext);
+    // getPeriodSummary is app-wide (not scoped to one account) and converts to
+    // the display currency, so this also includes the pre-existing $30 USD
+    // "database invariants" expense (line ~342, Aug 19, same period) plus our
+    // 1200 DOP real expense converted to USD (1200 / 60 = 20): 30 + 20 = 50.
+    // The point of this check is what's absent: none of the 259,422 DOP in
+    // external-transfer rows (including the 115,000 landing in this same
+    // period) leaks into spend.
+    eq(
+      "period spend for the covering period counts only the real expense, not the 115,000 external transfer landing in the same period",
+      augSummary.spent,
+      50,
+    );
+
+    const { getAccountLedger } = await import("../src/lib/data/accounts");
+    const bscLedger = await getAccountLedger(bsc.id, bscContext);
+    eq("ledger externalOut totals every external-transfer row", bscLedger!.totals.externalOut, totalExternal);
+    eq("ledger outflow only counts the real expense, not the external transfers", bscLedger!.totals.outflow, 1200);
+
+    const anyExternalRow = await prisma.transaction.findFirstOrThrow({ where: { accountId: bsc.id, type: "EXTERNAL_TRANSFER" } });
+    eq("each external-transfer row remains individually editable", transactionEditBlock(anyExternalRow), null);
+    eq("each external-transfer row is still a single row, never paired", anyExternalRow.transferId, null);
+
+    await prisma.transaction.deleteMany({ where: { accountId: bsc.id } });
+    await prisma.account.delete({ where: { id: bsc.id } });
+    console.log("  ok   BSC scenario fixtures removed");
+  }
 
   console.log("\n== the display currency drives goal and budget presentation ==");
   // A stored amount is a native financial value; every figure the pages show
@@ -2124,6 +2505,77 @@ async function main() {
       "8. an ordinary expense row with no type decision keeps its original type - ordinary category logic is untouched",
       simulatedPayloadType(0, "EXPENSE"),
       "EXPENSE",
+    );
+
+    // 10/11/12: "Record as external transfer" is a distinct decision from
+    // both "mark as income" and "leave as expense" - same channel
+    // (typeDecisions) as income, but resolves to EXTERNAL_TRANSFER with the
+    // group's own direction, never invented independently.
+    const externalOverrides = buildRowCategoryOverrides([
+      { rowIndexes: outgoing.rowIndexes, categoryId: "EXTERNAL_TRANSFER" },
+    ]);
+    eq(
+      "10. recording an outgoing transfer group as external overrides exactly its own row",
+      externalOverrides.get(0),
+      "EXTERNAL_TRANSFER",
+    );
+    const simulatedPayloadRow = (
+      originalType: "EXPENSE" | "INCOME",
+      group: (typeof groups)[number],
+      typeOverride: string | undefined,
+    ) => {
+      const type = typeOverride ?? originalType;
+      return {
+        type,
+        transferDirection: type === "EXTERNAL_TRANSFER" ? group.transferDirection : null,
+        categoryId: type === "EXTERNAL_TRANSFER" ? null : "would-be-resolved-category-id",
+      };
+    };
+    const outgoingExternalRow = simulatedPayloadRow("EXPENSE", outgoing, externalOverrides.get(0));
+    eq("11. an outgoing external-transfer row gets the group's own OUT direction", outgoingExternalRow.transferDirection, "OUT");
+    eq("12. an outgoing external-transfer row forces categoryId null even if a default category was set", outgoingExternalRow.categoryId, null);
+
+    const incomingExternalOverrides = buildRowCategoryOverrides([
+      { rowIndexes: incoming.rowIndexes, categoryId: "EXTERNAL_TRANSFER" },
+    ]);
+    const incomingExternalRow = simulatedPayloadRow("INCOME", incoming, incomingExternalOverrides.get(1));
+    eq("11. an incoming external-transfer row gets the group's own IN direction", incomingExternalRow.transferDirection, "IN");
+    eq("12. an incoming external-transfer row forces categoryId null too", incomingExternalRow.categoryId, null);
+
+    const ordinaryOutgoingRow = simulatedPayloadRow("EXPENSE", outgoing, undefined);
+    eq("13. a row with no type decision keeps direction null - it's not an external transfer", ordinaryOutgoingRow.transferDirection, null);
+
+    // 14: the submit-time guard - the Import button stays disabled while any
+    // detected transfer-shaped group has neither a category nor a type decision.
+    const unresolvedTransferGroups = (
+      allGroups: typeof groups,
+      categoryDecisions: Record<string, string>,
+      typeDecisions: Record<string, string>,
+    ) =>
+      allGroups.filter(
+        (group) =>
+          group.kind === "transfer" &&
+          categoryDecisions[group.id] === undefined &&
+          typeDecisions[group.id] === undefined,
+      );
+    eq(
+      "14. with no decisions at all, every transfer group is unresolved and blocks import",
+      unresolvedTransferGroups(groups, {}, {}).length,
+      groups.filter((g) => g.kind === "transfer").length,
+    );
+    eq(
+      "14. resolving the outgoing group via a type decision (external transfer) clears it from the unresolved list",
+      unresolvedTransferGroups(groups, {}, { [outgoing.id]: "EXTERNAL_TRANSFER" }).some((g) => g.id === outgoing.id),
+      false,
+    );
+    eq(
+      "14. resolving the outgoing group via a category decision (leave as expense) also clears it",
+      unresolvedTransferGroups(groups, { [outgoing.id]: EXPLICIT_NO_CATEGORY }, {}).some((g) => g.id === outgoing.id),
+      false,
+    );
+    check(
+      "14. an ordinary (non-transfer) group never blocks import even with zero decisions",
+      unresolvedTransferGroups(shoppingGroups, {}, {}).length === 0,
     );
   }
 

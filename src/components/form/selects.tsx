@@ -118,6 +118,7 @@ export function EnumSelect({
   labels,
   defaultValue,
   placeholder,
+  onValueChange,
 }: {
   id?: string;
   name: string;
@@ -125,9 +126,10 @@ export function EnumSelect({
   labels: Record<string, string>;
   defaultValue?: string;
   placeholder?: string;
+  onValueChange?: (value: string) => void;
 }) {
   return (
-    <Select name={name} defaultValue={defaultValue}>
+    <Select name={name} defaultValue={defaultValue} onValueChange={onValueChange}>
       <SelectTrigger id={id} className="w-full">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
