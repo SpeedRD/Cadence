@@ -464,19 +464,48 @@ export async function confirmPaydayCheckin(
   const planRef: PeriodRef = { year: input.year, month: input.month, period: input.period };
   const plan = periodInfo(planRef);
 
-  const [liveAccounts, planSummary, allGoals, essentialCategories, flexibleCategories, carryover] =
-    await Promise.all([
-      getAccountBalances(context, { status: "ACTIVE" }),
-      getPeriodSummary(plan, context),
-      listGoals(context),
-      prisma.category.findMany({
-        where: { kind: "EXPENSE", isEssentialFixed: true, isSubscriptionDefault: false, isSavingsDefault: false },
-      }),
-      prisma.category.findMany({
-        where: { kind: "EXPENSE", isEssentialFixed: false, isSubscriptionDefault: false, isSavingsDefault: false },
-      }),
-      getAvailableCarryover(planRef, context),
-    ]);
+  const [
+    liveAccounts,
+    planSummary,
+    allGoals,
+    essentialCategories,
+    flexibleCategories,
+    carryover,
+    recurringForMatchRows,
+    plannedPeriodExpenses,
+  ] = await Promise.all([
+    getAccountBalances(context, { status: "ACTIVE" }),
+    getPeriodSummary(plan, context),
+    listGoals(context),
+    prisma.category.findMany({
+      where: { kind: "EXPENSE", isEssentialFixed: true, isSubscriptionDefault: false, isSavingsDefault: false },
+    }),
+    prisma.category.findMany({
+      where: { kind: "EXPENSE", isEssentialFixed: false, isSubscriptionDefault: false, isSavingsDefault: false },
+    }),
+    getAvailableCarryover(planRef, context),
+    prisma.recurringItem.findMany({
+      where: {
+        active: true,
+        kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] },
+        nextDate: { gte: maxDate(context.today, plan.start), lte: plan.end },
+      },
+      select: {
+        id: true,
+        name: true,
+        amount: true,
+        currency: true,
+        categoryId: true,
+        kind: true,
+        frequency: true,
+        nextDate: true,
+      },
+    }),
+    prisma.transaction.findMany({
+      where: { type: "EXPENSE", date: { gte: plan.start, lte: plan.end } },
+      select: { id: true, amount: true, currency: true, categoryId: true, note: true },
+    }),
+  ]);
   const liveAccountById = new Map(liveAccounts.map((a) => [a.id, a]));
   const essentialById = new Map(essentialCategories.map((c) => [c.id, c]));
   const flexibleById = new Map(flexibleCategories.map((c) => [c.id, c]));
@@ -495,10 +524,25 @@ export async function confirmPaydayCheckin(
     }, 0),
   );
 
+  const forMatch = recurringForMatchRows.map((item) => ({ ...item, amount: num(item.amount) }));
+  const matchableExpenses = plannedPeriodExpenses.map((tx) => ({
+    id: tx.id,
+    amount: num(tx.amount),
+    currency: tx.currency,
+    categoryId: tx.categoryId,
+    note: tx.note,
+  }));
+  const { actualNativeByItemId } = matchRecurringToTransactions(forMatch, matchableExpenses);
+  const alreadyLoggedIds = new Set(actualNativeByItemId.keys());
+
   const subscriptionItems = planSummary.committedItems.filter((i) => i.kind === "SUBSCRIPTION");
   const contributionItems = planSummary.committedItems.filter((i) => i.kind === "CONTRIBUTION");
-  const subscriptionsTotal = round2(subscriptionItems.reduce((sum, i) => sum + i.amount, 0));
-  const contributionsTotal = round2(contributionItems.reduce((sum, i) => sum + i.amount, 0));
+  const subscriptionsTotal = round2(
+    subscriptionItems.filter((i) => !alreadyLoggedIds.has(i.id)).reduce((sum, i) => sum + i.amount, 0),
+  );
+  const contributionsTotal = round2(
+    contributionItems.filter((i) => !alreadyLoggedIds.has(i.id)).reduce((sum, i) => sum + i.amount, 0),
+  );
 
   const goalById = new Map(allGoals.map((g) => [g.id, g]));
   const goalInputs = input.goals.filter((g) => {
