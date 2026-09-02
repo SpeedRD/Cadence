@@ -19,3 +19,20 @@ export function balanceSign(
 export function isCashflow(type: string): boolean {
   return type === "INCOME" || type === "EXPENSE";
 }
+
+export type TransactionEditBlock = "transfer" | "opening_balance" | null;
+
+/**
+ * Rows the generic transaction form must not edit: a transfer leg (edit both
+ * legs from the transfer form) and an account's opening balance (edit it from
+ * the Accounts page, where it stays an OPENING_BALANCE rather than being
+ * re-saved as income or spending).
+ */
+export function transactionEditBlock(row: {
+  type: string;
+  transferId: string | null;
+}): TransactionEditBlock {
+  if (row.transferId) return "transfer";
+  if (row.type === "OPENING_BALANCE") return "opening_balance";
+  return null;
+}

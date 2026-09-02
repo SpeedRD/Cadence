@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Input } from "@/components/ui/input";
+import { parseAmountInput } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 /**
@@ -19,6 +20,12 @@ import { cn } from "@/lib/utils";
  * lone "-" or "." would report 0 upward and immediately get overwritten back
  * to "0", making it impossible to type a negative number over a non-zero
  * seed.
+ *
+ * Either "." or "," is accepted as the decimal point (an iPhone set to a
+ * Spanish region only offers "," on its decimal keypad) and at most two
+ * decimals can be typed; thousands separators are not accepted here because
+ * this field re-parses on every keystroke and "1,250" would otherwise flip
+ * between 1.25 and 1250 as it is typed. Digits only, then: 1250.
  */
 export function PaydayAmountInput({
   value,
@@ -55,11 +62,13 @@ export function PaydayAmountInput({
       value={text}
       onChange={(event) => {
         const raw = event.target.value;
-        const pattern = allowNegative ? /^-?[\d,]*\.?\d*$/ : /^[\d,]*\.?\d*$/;
+        const pattern = allowNegative
+          ? /^-?\d*(?:[.,]\d{0,2})?$/
+          : /^\d*(?:[.,]\d{0,2})?$/;
         if (raw !== "" && !pattern.test(raw)) return;
         setText(raw);
-        const parsed = Number(raw.replace(/,/g, ""));
-        const next = Number.isFinite(parsed) ? parsed : 0;
+        const parsed = parseAmountInput(raw);
+        const next = parsed.ok ? parsed.amount : 0;
         setLastEmitted(next);
         onChange(next);
       }}

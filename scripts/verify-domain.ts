@@ -147,6 +147,73 @@ async function main() {
   eq("quoted comma preserved", rows[1][2], "Coffee, large");
   eq("escaped quotes", rows[2][2], 'He said "hi"');
 
+  console.log("\n== amount entry parsing ==");
+  const { parseAmountInput } = await import("../src/lib/money");
+  const amountCases: [string, number | string][] = [
+    ["12.50", 12.5],
+    ["12,50", 12.5],
+    ["12,5", 12.5],
+    ["0,99", 0.99],
+    ["1,250", 1250],
+    ["1,250.00", 1250],
+    ["1.250,50", 1250.5],
+    ["1,234,567", 1234567],
+    ["1.234.567,89", 1234567.89],
+    ["1 250,50", 1250.5],
+    ["12,", 12],
+    [",5", 0.5],
+    ["-12.30", -12.3],
+    ["4061.02", 4061.02],
+    ["0.1", 0.1],
+    ["", "empty"],
+    ["-", "invalid"],
+    [".", "invalid"],
+    ["abc", "invalid"],
+    ["1,23,4", "invalid"],
+    ["1.2.3", "invalid"],
+    ["12.345", "too_many_decimals"],
+    ["1.250", "too_many_decimals"],
+    ["1000000000000", "too_large"],
+  ];
+  for (const [raw, expected] of amountCases) {
+    const parsed = parseAmountInput(raw);
+    if (typeof expected === "number") {
+      check(`parses ${JSON.stringify(raw)} as ${expected}`, parsed.ok && parsed.amount === expected, parsed);
+    } else {
+      check(`rejects ${JSON.stringify(raw)} as ${expected}`, !parsed.ok && parsed.reason === expected, parsed);
+    }
+  }
+  check(
+    "parsing never leaks binary float error (1.005 is rejected, not rounded to 1)",
+    !parseAmountInput("1.005").ok,
+  );
+  const eightCents = parseAmountInput("0.08");
+  eq("parsed cents are exact for 0.07 + 0.01 style inputs", eightCents.ok ? eightCents.amount : "error", 0.08);
+
+  const { transactionSchema } = await import("../src/lib/validation");
+  const txBase = { date: "2026-08-20", currency: "DOP", type: "EXPENSE", accountId: "acct", categoryId: "", note: "" };
+  const commaTx = transactionSchema.safeParse({ ...txBase, amount: "12,50" });
+  eq("a transaction amount typed with a comma decimal is 12.50, not 1250", commaTx.success ? commaTx.data.amount : "error", 12.5);
+  const dotTx = transactionSchema.safeParse({ ...txBase, amount: "12.50" });
+  eq("a transaction amount typed with a dot decimal is unchanged", dotTx.success ? dotTx.data.amount : "error", 12.5);
+  const threeDecimals = transactionSchema.safeParse({ ...txBase, amount: "12.345" });
+  eq("three decimals are rejected with a specific message", threeDecimals.success ? "accepted" : threeDecimals.error.issues[0].message, "Use at most 2 decimal places");
+  const zeroTx = transactionSchema.safeParse({ ...txBase, amount: "0,00" });
+  eq("a zero amount is still rejected", zeroTx.success ? "accepted" : zeroTx.error.issues[0].message, "Enter an amount greater than 0");
+  const { firstError } = await import("../src/lib/validation");
+  eq(
+    "the decimal-places message is translated to Spanish",
+    threeDecimals.success ? "accepted" : firstError(threeDecimals.error, "es"),
+    "Usa como máximo 2 decimales",
+  );
+
+  console.log("\n== transaction edit guard ==");
+  const { transactionEditBlock } = await import("../src/lib/transactions");
+  eq("an opening balance can't be edited through the transaction form", transactionEditBlock({ type: "OPENING_BALANCE", transferId: null }), "opening_balance");
+  eq("a transfer leg can't be edited through the transaction form", transactionEditBlock({ type: "TRANSFER", transferId: "t1" }), "transfer");
+  eq("an ordinary expense can be edited", transactionEditBlock({ type: "EXPENSE", transferId: null }), null);
+  eq("an ordinary income can be edited", transactionEditBlock({ type: "INCOME", transferId: null }), null);
+
   console.log("\n== currency conversion through USD ==");
   const rates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.5 }, fetchedAt: new Date(), stale: false };
   eq("USD to DOP", convert(100, "USD", "DOP", rates), 6000);
