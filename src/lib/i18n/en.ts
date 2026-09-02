@@ -286,6 +286,8 @@ export const en = {
     selectedCount: (n: number) => `${n} selected`,
     selectAllAria: "Select all",
     selectRowAria: "Select row",
+    markAsIncome: "Mark as income",
+    appliedMarkedAsIncome: "Marked as income",
   },
   accounts: {
     title: "Accounts",

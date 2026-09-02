@@ -27,7 +27,7 @@ import { EXPLICIT_NO_CATEGORY } from "@/lib/categorization-rules";
 import { formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
-import type { DetectedGroup } from "@/lib/import-grouping";
+import { buildTransferPrefill, type DetectedGroup } from "@/lib/import-grouping";
 
 export interface ReviewRow {
   date: Date;
@@ -56,6 +56,8 @@ export function ImportReview({
   onDecideAction,
   unknownDecisions,
   onDecideUnknownAction,
+  typeDecisions,
+  onDecideTypeAction,
 }: {
   groups: DetectedGroup[];
   unknownRowIndexes: number[];
@@ -71,6 +73,10 @@ export function ImportReview({
    *  row index as `rows`, independent of the grouped decisions above. */
   unknownDecisions: Record<number, string>;
   onDecideUnknownAction: (rowIndexes: number[], categoryId: string) => void;
+  /** "Mark as income" decisions for incoming transfer-shaped groups - a
+   *  transaction-type override, never a category assignment (see GroupCard). */
+  typeDecisions: Record<string, string>;
+  onDecideTypeAction: (groupId: string, typeOverride: string | undefined) => void;
 }) {
   const dictionary = getDictionary(locale);
   const t = dictionary.transactions;
@@ -103,6 +109,8 @@ export function ImportReview({
             locale={locale}
             decision={decisions[group.id]}
             onDecideAction={(categoryId) => onDecideAction(group.id, categoryId)}
+            typeDecision={typeDecisions[group.id]}
+            onDecideTypeAction={(typeOverride) => onDecideTypeAction(group.id, typeOverride)}
           />
         ))}
       </div>
@@ -160,6 +168,8 @@ function GroupCard({
   locale,
   decision,
   onDecideAction,
+  typeDecision,
+  onDecideTypeAction,
 }: {
   group: DetectedGroup;
   rows: ReviewRow[];
@@ -171,6 +181,10 @@ function GroupCard({
   locale: Locale;
   decision: string | undefined;
   onDecideAction: (categoryId: string | undefined) => void;
+  /** "Mark as income" for an incoming transfer-shaped group - a type
+   *  override, tracked separately from `decision` (category) per group. */
+  typeDecision: string | undefined;
+  onDecideTypeAction: (typeOverride: string | undefined) => void;
 }) {
   const dictionary = getDictionary(locale);
   const t = dictionary.transactions;
@@ -194,13 +208,20 @@ function GroupCard({
     categoryId: subscriptionsId ?? "none",
     note: group.sampleNote,
   };
-  const transferValues = {
-    date: toISODate(latestDate),
-    amount: rows[rows.length - 1]?.amount,
-    currency,
-    fromAccountId: accountId,
-    note: group.sampleNote,
-  };
+
+  const isIncomingTransfer = group.kind === "transfer" && group.transferDirection === "IN";
+  const isOutgoingTransfer = group.kind === "transfer" && group.transferDirection === "OUT";
+
+  const transferValues = group.transferDirection
+    ? buildTransferPrefill({
+        direction: group.transferDirection,
+        accountId,
+        date: toISODate(latestDate),
+        amount: rows[rows.length - 1]?.amount ?? 0,
+        currency,
+        note: group.sampleNote,
+      })
+    : undefined;
 
   const badge =
     group.kind === "transfer"
@@ -210,6 +231,10 @@ function GroupCard({
         : group.suggestedCategoryName
           ? { label: t.suggestedCategory(group.suggestedCategoryName), variant: "outline" as const }
           : null;
+
+  // An incoming transfer-shaped group resolves via the separate type
+  // decision (Mark as income), never via the category decision channel.
+  const resolved = isIncomingTransfer ? typeDecision !== undefined : decision !== undefined;
 
   return (
     <div className="space-y-2 rounded-md border border-border/60 p-3">
@@ -223,28 +248,35 @@ function GroupCard({
         {badge ? <Badge variant={badge.variant}>{badge.label}</Badge> : null}
       </div>
 
-      {decision !== undefined ? (
+      {resolved ? (
         <div className="flex items-center justify-between gap-2 text-xs">
           <span className="text-muted-foreground">
-            {decision === EXPLICIT_NO_CATEGORY
-              ? group.kind === "transfer"
-                ? t.appliedLeaveAsExpense
-                : t.appliedUncategorized
-              : t.appliedCategory(
-                  categories.find((category) => category.id === decision)?.name ?? "",
-                )}
+            {isIncomingTransfer
+              ? t.appliedMarkedAsIncome
+              : decision === EXPLICIT_NO_CATEGORY
+                ? group.kind === "transfer"
+                  ? t.appliedLeaveAsExpense
+                  : t.appliedUncategorized
+                : t.appliedCategory(
+                    categories.find((category) => category.id === decision)?.name ?? "",
+                  )}
           </span>
-          <Button type="button" variant="ghost" size="xs" onClick={() => onDecideAction(undefined)}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            onClick={() => (isIncomingTransfer ? onDecideTypeAction(undefined) : onDecideAction(undefined))}
+          >
             {t.changeDecision}
           </Button>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          {group.kind === "transfer" ? (
+          {isOutgoingTransfer ? (
             <>
               <TransferDialog
                 accounts={accounts}
-                values={transferValues}
+                values={transferValues!}
                 locale={locale}
                 trigger={
                   <Button type="button" variant="outline" size="xs">
@@ -259,6 +291,27 @@ function GroupCard({
                 onClick={() => onDecideAction(EXPLICIT_NO_CATEGORY)}
               >
                 {t.leaveAsExpense}
+              </Button>
+            </>
+          ) : isIncomingTransfer ? (
+            <>
+              <TransferDialog
+                accounts={accounts}
+                values={transferValues!}
+                locale={locale}
+                trigger={
+                  <Button type="button" variant="outline" size="xs">
+                    {t.reviewGroup}
+                  </Button>
+                }
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => onDecideTypeAction("INCOME")}
+              >
+                {t.markAsIncome}
               </Button>
             </>
           ) : (

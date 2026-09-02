@@ -99,6 +99,7 @@ export function CsvImporter({
   const [categoryId, setCategoryId] = useState("none");
   const [groupDecisions, setGroupDecisions] = useState<Record<string, string>>({});
   const [unknownRowDecisions, setUnknownRowDecisions] = useState<Record<number, string>>({});
+  const [groupTypeDecisions, setGroupTypeDecisions] = useState<Record<string, string>>({});
 
   const [state, formAction, pending] = useActionState(
     importTransactionsAction,
@@ -176,13 +177,24 @@ export function CsvImporter({
     return buildRowCategoryOverrides(decisions);
   }, [groups, groupDecisions, unknownRowDecisions]);
 
+  // "Mark as income" on an incoming transfer-shaped group overrides the
+  // row's transaction type only - never its category (see import-review.tsx).
+  // buildRowCategoryOverrides is a generic index -> value fan-out, reused
+  // here for the same shape of decision.
+  const rowTypeOverrides = useMemo(() => {
+    const decisions: RowCategoryDecision[] = groups
+      .filter((group) => groupTypeDecisions[group.id])
+      .map((group) => ({ rowIndexes: group.rowIndexes, categoryId: groupTypeDecisions[group.id] }));
+    return buildRowCategoryOverrides(decisions);
+  }, [groups, groupTypeDecisions]);
+
   const payload = JSON.stringify({
     accountId,
     currency,
     rows: validRows.map((row, index) => ({
       date: toISODate(row.date as Date),
       amount: row.amount as number,
-      type: row.type,
+      type: rowTypeOverrides.get(index) ?? row.type,
       note: row.note || null,
       categoryId:
         rowCategoryOverrides.get(index) ?? (categoryId === "none" ? null : categoryId),
@@ -216,6 +228,7 @@ export function CsvImporter({
               setFileName(file.name);
               setGroupDecisions({});
               setUnknownRowDecisions({});
+              setGroupTypeDecisions({});
               const width = parsedRows.reduce(
                 (max, row) => Math.max(max, row.length),
                 0,
@@ -447,6 +460,16 @@ export function CsvImporter({
                     const next = { ...previous };
                     for (const index of rowIndexes) next[index] = decidedCategoryId;
                     return next;
+                  })
+                }
+                typeDecisions={groupTypeDecisions}
+                onDecideTypeAction={(groupId, typeOverride) =>
+                  setGroupTypeDecisions((previous) => {
+                    if (typeOverride === undefined) {
+                      const { [groupId]: _removed, ...rest } = previous;
+                      return rest;
+                    }
+                    return { ...previous, [groupId]: typeOverride };
                   })
                 }
               />

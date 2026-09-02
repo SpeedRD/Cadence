@@ -289,6 +289,8 @@ export const es = {
     selectedCount: (n: number) => `${n} seleccionada${n === 1 ? "" : "s"}`,
     selectAllAria: "Seleccionar todo",
     selectRowAria: "Seleccionar fila",
+    markAsIncome: "Marcar como ingreso",
+    appliedMarkedAsIncome: "Marcado como ingreso",
   },
   accounts: {
     title: "Cuentas",

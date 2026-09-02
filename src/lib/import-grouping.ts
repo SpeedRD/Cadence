@@ -15,6 +15,11 @@ import { suggestCategoryName } from "@/lib/categorization-rules";
 export type ImportRowType = "EXPENSE" | "INCOME";
 export type RecurringFrequencyGuess = "WEEKLY" | "BIWEEKLY" | "MONTHLY" | "YEARLY";
 export type DetectedGroupKind = "transfer" | "subscription" | "category" | "unknown";
+/** Which side of a possible transfer the *currently selected import account*
+ *  is on: OUT for a negative/outgoing row (the account is the source), IN for
+ *  a positive/incoming row (the account is the destination). Only meaningful
+ *  when kind is "transfer". */
+export type TransferGroupDirection = "IN" | "OUT";
 
 export interface GroupableRow {
   /** Position of this row in the caller's row list - preserved so a decision
@@ -46,6 +51,11 @@ export interface DetectedGroup {
   /** Suggested next due date for a RecurringItem, one cadence after the
    *  latest occurrence in the group. */
   inferredNextDate: Date;
+  /** Set only when kind is "transfer" - which side of the transfer the
+   *  current import account is on, derived from the rows' own type (all rows
+   *  in a transfer group share one type - see detectImportGroups). Null for
+   *  every other kind. */
+  transferDirection: TransferGroupDirection | null;
 }
 
 export interface GroupingResult {
@@ -192,6 +202,7 @@ function buildGroup(
   kind: DetectedGroupKind,
   suggestedCategoryName: string | null,
   possibleSubscription: boolean,
+  transferDirection: TransferGroupDirection | null,
 ): DetectedGroup {
   const dates = rows.map((row) => row.date);
   const latestDate = dates.reduce((latest, date) => (date > latest ? date : latest), dates[0]);
@@ -199,7 +210,11 @@ function buildGroup(
   return {
     id: `${bucket}:${key}`,
     kind,
-    displayName: toTitleCase(key),
+    // Always derived from the merchant text alone - `key` may carry a
+    // direction prefix (see the transfer bucket key below) to keep incoming
+    // and outgoing groups distinct, but that's an internal identity detail
+    // and must never leak into what the user sees.
+    displayName: toTitleCase(cleanMerchantKey(rows[0].note)),
     sampleNote: rows[0].note,
     rowIndexes: rows.map((row) => row.index),
     count: rows.length,
@@ -208,6 +223,7 @@ function buildGroup(
     possibleSubscription,
     inferredFrequency,
     inferredNextDate: advanceByFrequency(latestDate, inferredFrequency),
+    transferDirection,
   };
 }
 
@@ -218,7 +234,11 @@ function buildGroup(
  *
  * - Transfer-shaped rows (any type - a transfer can be a debit or a credit)
  *   always get their own group, even a single occurrence, since flagging
- *   them for review matters regardless of frequency.
+ *   them for review matters regardless of frequency. Incoming and outgoing
+ *   transfer-shaped rows are never grouped together, even when they'd
+ *   otherwise share a merchant key - direction is part of the group's
+ *   identity, since the correct review action (and the correct transfer
+ *   direction to prefill) depends on it.
  * - Ordinary merchant/category grouping only ever considers EXPENSE rows -
  *   income never forms a merchant group.
  * - A repeated (2+) merchant always gets its own card, whether or not the
@@ -234,7 +254,10 @@ export function detectImportGroups(rows: GroupableRow[]): GroupingResult {
 
   for (const row of rows) {
     if (isTransferShapedDescription(row.note)) {
-      const key = cleanMerchantKey(row.note);
+      // Direction is part of the key: an incoming and an outgoing row must
+      // never end up in the same transfer group even if the description
+      // (after cleaning) is otherwise identical.
+      const key = `${row.type}:${cleanMerchantKey(row.note)}`;
       const bucket = transferBuckets.get(key) ?? [];
       bucket.push(row);
       transferBuckets.set(key, bucket);
@@ -251,7 +274,9 @@ export function detectImportGroups(rows: GroupableRow[]): GroupingResult {
   const unknownRowIndexes: number[] = [];
 
   for (const [key, bucketRows] of transferBuckets) {
-    groups.push(buildGroup(key, "transfer", bucketRows, "transfer", null, false));
+    const transferDirection: TransferGroupDirection =
+      bucketRows[0].type === "INCOME" ? "IN" : "OUT";
+    groups.push(buildGroup(key, "transfer", bucketRows, "transfer", null, false, transferDirection));
   }
 
   for (const [key, bucketRows] of expenseBuckets) {
@@ -272,7 +297,7 @@ export function detectImportGroups(rows: GroupableRow[]): GroupingResult {
         ? "category"
         : "unknown";
 
-    groups.push(buildGroup(key, "expense", bucketRows, kind, suggestion, possibleSubscription));
+    groups.push(buildGroup(key, "expense", bucketRows, kind, suggestion, possibleSubscription, null));
   }
 
   groups.sort((a, b) => b.count - a.count || a.displayName.localeCompare(b.displayName));
@@ -305,4 +330,43 @@ export function buildRowCategoryOverrides(
     for (const index of decision.rowIndexes) overrides.set(index, decision.categoryId);
   }
   return overrides;
+}
+
+export interface TransferPrefill {
+  date: string;
+  amount: number;
+  currency: string;
+  fromAccountId: string;
+  toAccountId: string;
+  note: string;
+}
+
+/**
+ * Prefill values for reviewing a possible-transfer group through the
+ * existing TransferDialog. Only the side of the transfer the CSV rows
+ * actually belong to is filled in, using the group's own direction: an
+ * incoming (IN) group means the current account is the destination, an
+ * outgoing (OUT) group means it's the source. The other side is always left
+ * as "" (never defaulted to some other active account) - TransferDialog's own
+ * AccountSelect only falls back to accounts[0]/accounts[1] when its value is
+ * null/undefined, and "" matches no account, so it renders as an unset
+ * placeholder the user must explicitly fill in before the form can submit.
+ */
+export function buildTransferPrefill(params: {
+  direction: TransferGroupDirection;
+  accountId: string;
+  date: string;
+  amount: number;
+  currency: string;
+  note: string;
+}): TransferPrefill {
+  const { direction, accountId, date, amount, currency, note } = params;
+  return {
+    date,
+    amount,
+    currency,
+    fromAccountId: direction === "IN" ? "" : accountId,
+    toAccountId: direction === "IN" ? accountId : "",
+    note,
+  };
 }

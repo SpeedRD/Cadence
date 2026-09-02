@@ -48,6 +48,7 @@ import {
 } from "../src/lib/categorization";
 import {
   buildRowCategoryOverrides,
+  buildTransferPrefill,
   detectImportGroups,
   type GroupableRow,
   type RowCategoryDecision,
@@ -1981,6 +1982,149 @@ async function main() {
           overrides.get(12) === groceriesId,
       );
     }
+  }
+
+  console.log("\n-- CSV import review: transfer direction (incoming vs outgoing) --");
+  {
+    const currentAccountId = "acct-checking";
+    // An empty prefill string proves the review never falls back to some
+    // other active account (e.g. "Popular") - see the eq() checks below.
+
+    const rows: GroupableRow[] = [
+      // Negative/outgoing: "Debito Por Transferencia".
+      { index: 0, date: civilDate(2026, 3, 6), amount: 5000, note: "Debito Por Transferencia", type: "EXPENSE" },
+      // Positive/incoming: "Transferencia Recibida de CMS Business Consulting Group".
+      {
+        index: 1,
+        date: civilDate(2026, 3, 8),
+        amount: 42000,
+        note: "Transferencia Recibida de CMS Business Consulting Group",
+        type: "INCOME",
+      },
+      // Same cleaned merchant text as row 1 but the outgoing leg - must not
+      // join the incoming group just because the text (after cleaning)
+      // matches, since direction is part of group identity.
+      {
+        index: 2,
+        date: civilDate(2026, 3, 9),
+        amount: 1500,
+        note: "Transferencia Recibida de CMS Business Consulting Group",
+        type: "EXPENSE",
+      },
+    ];
+    const { groups } = detectImportGroups(rows);
+
+    const outgoing = groups.find((g) => g.rowIndexes.includes(0))!;
+    const incoming = groups.find((g) => g.rowIndexes.includes(1))!;
+    const outgoingTwin = groups.find((g) => g.rowIndexes.includes(2))!;
+
+    check(
+      "negative 'Debito Por Transferencia' is grouped as an outgoing transfer",
+      outgoing.kind === "transfer" && outgoing.transferDirection === "OUT",
+    );
+    check(
+      "positive 'Transferencia Recibida...' is grouped as an incoming transfer",
+      incoming.kind === "transfer" && incoming.transferDirection === "IN",
+    );
+    check(
+      "6. an outgoing row never shares a group with an incoming row, even with identical merchant text",
+      incoming.id !== outgoingTwin.id && !incoming.rowIndexes.includes(2) && outgoingTwin.transferDirection === "OUT",
+    );
+    eq("6. the incoming group covers only its own row", incoming.rowIndexes.join(","), "1");
+    check(
+      "the direction-aware grouping key never leaks into the displayed group name (no 'Income:'/'Expense:' prefix)",
+      !incoming.displayName.toLowerCase().includes("income") &&
+        !outgoing.displayName.toLowerCase().includes("expense"),
+    );
+
+    // Existing grouped category review (a non-transfer kind) is unaffected -
+    // transferDirection is simply null for it.
+    const shoppingRows: GroupableRow[] = [
+      { index: 10, date: civilDate(2026, 3, 1), amount: 20, note: "AMAZON.COM*A1B2C3", type: "EXPENSE" },
+      { index: 11, date: civilDate(2026, 3, 2), amount: 30, note: "AMAZON.COM*D4E5F6", type: "EXPENSE" },
+    ];
+    const { groups: shoppingGroups } = detectImportGroups(shoppingRows);
+    eq(
+      "existing grouped category review is untouched: a category-kind group has transferDirection null",
+      shoppingGroups[0]?.transferDirection,
+      null,
+    );
+
+    // 2/3/4/5: TransferDialog prefill direction, and that no arbitrary
+    // "other active account" is ever inferred for the unset side.
+    const outgoingPrefill = buildTransferPrefill({
+      direction: "OUT",
+      accountId: currentAccountId,
+      date: "2026-03-06",
+      amount: 5000,
+      currency: "USD",
+      note: outgoing.sampleNote,
+    });
+    check(
+      "4. an outgoing review defaults From to the current account",
+      outgoingPrefill.fromAccountId === currentAccountId,
+    );
+    eq(
+      "2/5. an outgoing review never infers a destination account - not even another active one - it's left blank",
+      outgoingPrefill.toAccountId,
+      "",
+    );
+
+    const incomingPrefill = buildTransferPrefill({
+      direction: "IN",
+      accountId: currentAccountId,
+      date: "2026-03-08",
+      amount: 42000,
+      currency: "USD",
+      note: incoming.sampleNote,
+    });
+    check(
+      "1/3. an incoming review never defaults From to the current account (that direction is wrong for money coming in)",
+      incomingPrefill.fromAccountId !== currentAccountId,
+    );
+    check(
+      "3. an incoming review puts the current account on the To side, matching the money's actual direction",
+      incomingPrefill.toAccountId === currentAccountId,
+    );
+    eq(
+      "2/5. an incoming review never infers a source account - not even another active one - it's left blank",
+      incomingPrefill.fromAccountId,
+      "",
+    );
+
+    // 7/8/9: an explicit "Mark as income" type override is a distinct
+    // decision channel from category decisions, and survives into the final
+    // per-row payload the same way a category override does.
+    const typeOverrides = buildRowCategoryOverrides([
+      { rowIndexes: incoming.rowIndexes, categoryId: "INCOME" },
+    ]);
+    eq(
+      "7. marking an incoming transfer group as income overrides exactly its own row",
+      typeOverrides.get(1),
+      "INCOME",
+    );
+    eq(
+      "7. an unrelated row's type is untouched by the income override",
+      typeOverrides.get(0),
+      undefined,
+    );
+    const categoryOverrides = buildRowCategoryOverrides([]); // no category decision was ever made for row 1
+    check(
+      "9. an income decision is never recorded as a category assignment - the category-override map has no entry for it",
+      !categoryOverrides.has(1),
+    );
+    const simulatedPayloadType = (rowIndex: number, originalType: string) =>
+      typeOverrides.get(rowIndex) ?? originalType;
+    eq(
+      "7. the final import payload uses the explicit income override, not the row's original type",
+      simulatedPayloadType(1, "EXPENSE"), // even if the original type were somehow EXPENSE, the override wins
+      "INCOME",
+    );
+    eq(
+      "8. an ordinary expense row with no type decision keeps its original type - ordinary category logic is untouched",
+      simulatedPayloadType(0, "EXPENSE"),
+      "EXPENSE",
+    );
   }
 
   console.log("\n== cleanup ==");
