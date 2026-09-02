@@ -267,6 +267,9 @@ export const es = {
     editOpeningBalanceFromAccounts:
       "Este es el saldo inicial de una cuenta: cámbialo desde la página de Cuentas para que se mantenga separado de ingresos y gastos",
     openingBalance: "Saldo inicial",
+    externalTransferOut: "Transferencia externa saliente",
+    externalTransferIn: "Transferencia externa entrante",
+    externalTransferBadge: "Externa",
     nothingToDelete: "Nada que eliminar",
     detectedPatternsTitle: "Patrones detectados",
     detectedPatternsDescription:

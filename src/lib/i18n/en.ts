@@ -264,6 +264,9 @@ export const en = {
     editOpeningBalanceFromAccounts:
       "This is an account's opening balance - change it from the Accounts page so it stays separate from income and spending",
     openingBalance: "Opening balance",
+    externalTransferOut: "External transfer out",
+    externalTransferIn: "External transfer in",
+    externalTransferBadge: "External",
     nothingToDelete: "Nothing to delete",
     detectedPatternsTitle: "Detected patterns",
     detectedPatternsDescription:
