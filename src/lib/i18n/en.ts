@@ -323,6 +323,7 @@ export const en = {
     spendingOut: "Spending out",
     netTransfers: "Net transfers",
     inOut: (inAmount: string, outAmount: string) => `${inAmount} in · ${outAmount} out`,
+    netExternal: "Net external",
     noActivityTitle: "No activity yet",
     noActivityDescription:
       "Transactions logged against this account show up here with a running balance.",

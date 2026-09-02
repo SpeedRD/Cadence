@@ -326,6 +326,7 @@ export const es = {
     spendingOut: "Gastos",
     netTransfers: "Transferencias netas",
     inOut: (inAmount: string, outAmount: string) => `${inAmount} entrada · ${outAmount} salida`,
+    netExternal: "Externas netas",
     noActivityTitle: "Aún no hay actividad",
     noActivityDescription:
       "Las transacciones registradas en esta cuenta aparecen aquí con un saldo acumulado.",

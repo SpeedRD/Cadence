@@ -268,6 +268,12 @@ export async function getAccountLedger(accountId: string, context: AppContext) {
   const transfersOut = rows
     .filter((row) => row.type === "TRANSFER" && row.effect < 0)
     .reduce((total, row) => total + Math.abs(row.effect), 0);
+  const externalIn = rows
+    .filter((row) => row.type === "EXTERNAL_TRANSFER" && row.effect > 0)
+    .reduce((total, row) => total + row.effect, 0);
+  const externalOut = rows
+    .filter((row) => row.type === "EXTERNAL_TRANSFER" && row.effect < 0)
+    .reduce((total, row) => total + Math.abs(row.effect), 0);
 
   return {
     account,
@@ -281,6 +287,8 @@ export async function getAccountLedger(accountId: string, context: AppContext) {
       outflow: round2(outflow),
       transfersIn: round2(transfersIn),
       transfersOut: round2(transfersOut),
+      externalIn: round2(externalIn),
+      externalOut: round2(externalOut),
     },
   };
 }

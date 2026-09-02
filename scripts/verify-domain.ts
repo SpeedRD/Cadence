@@ -633,6 +633,104 @@ async function main() {
     console.log("  ok   external transfer manual CRUD fixtures removed");
   }
 
+  console.log("\n== external transfer: BSC import scenario ==");
+  {
+    // Reproduces the real production-data edge case this feature exists for:
+    // a BSC bank CSV account with "Debito Por Transferencia" rows that are
+    // NOT internal Cadence transfers (the destination is outside Cadence
+    // entirely) and must not inflate spending. Amounts match the actual BSC
+    // CSV cited in the task: several DOP 5,000 rows plus two large ones
+    // (134,422 and 115,000).
+    const bsc = await prisma.account.create({
+      data: { name: "Verify BSC", currency: "DOP", type: "CHECKING" },
+    });
+    const bscContext = {
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today: civilDate(2026, 8, 20),
+      currentPeriod: periodForDate(civilDate(2026, 8, 20)),
+    };
+
+    const bscExternalRows = [
+      { date: civilDate(2026, 4, 16), amount: 134422, note: "Debito Por Transferencia" },
+      { date: civilDate(2026, 5, 3), amount: 5000, note: "Debito Por Transferencia" },
+      { date: civilDate(2026, 6, 12), amount: 5000, note: "Debito Por Transferencia" },
+      { date: civilDate(2026, 8, 21), amount: 115000, note: "Debito Por Transferencia" },
+    ];
+    // A real, unrelated expense in the same account/period, to prove it's
+    // still counted normally once the external-transfer rows are excluded.
+    const realExpense = { date: civilDate(2026, 8, 18), amount: 1200, note: "Supermercado Nacional" };
+
+    // Mirrors exactly what importTransactionsAction writes for a row whose
+    // CSV-review decision was "Record as external transfer": categoryId
+    // null, transferDirection carried through, source CSV.
+    await prisma.transaction.createMany({
+      data: bscExternalRows.map((row) => ({
+        date: row.date,
+        amount: row.amount,
+        currency: "DOP",
+        type: "EXTERNAL_TRANSFER" as const,
+        transferDirection: "OUT" as const,
+        accountId: bsc.id,
+        categoryId: null,
+        note: row.note,
+        source: "CSV" as const,
+      })),
+    });
+    const groceriesForBsc = await prisma.category.findFirstOrThrow({ where: { name: "Groceries" } });
+    await prisma.transaction.create({
+      data: {
+        date: realExpense.date,
+        amount: realExpense.amount,
+        currency: "DOP",
+        type: "EXPENSE",
+        accountId: bsc.id,
+        categoryId: groceriesForBsc.id,
+        note: realExpense.note,
+        source: "CSV",
+      },
+    });
+
+    const bscBalances = await getAccountBalances(bscContext, { status: "ALL" });
+    const bscBalance = bscBalances.find((a) => a.id === bsc.id)!;
+    const totalExternal = bscExternalRows.reduce((sum, row) => sum + row.amount, 0);
+    eq(
+      "BSC account balance reflects the full reduction from every external-transfer row plus the real expense",
+      bscBalance.balance,
+      -(totalExternal + realExpense.amount),
+    );
+
+    const { getPeriodSummary } = await import("../src/lib/data/period-summary");
+    const augPeriodB = periodForDate(civilDate(2026, 8, 20));
+    const augSummary = await getPeriodSummary(augPeriodB, bscContext);
+    // getPeriodSummary is app-wide (not scoped to one account) and converts to
+    // the display currency, so this also includes the pre-existing $30 USD
+    // "database invariants" expense (line ~342, Aug 19, same period) plus our
+    // 1200 DOP real expense converted to USD (1200 / 60 = 20): 30 + 20 = 50.
+    // The point of this check is what's absent: none of the 259,422 DOP in
+    // external-transfer rows (including the 115,000 landing in this same
+    // period) leaks into spend.
+    eq(
+      "period spend for the covering period counts only the real expense, not the 115,000 external transfer landing in the same period",
+      augSummary.spent,
+      50,
+    );
+
+    const { getAccountLedger } = await import("../src/lib/data/accounts");
+    const bscLedger = await getAccountLedger(bsc.id, bscContext);
+    eq("ledger externalOut totals every external-transfer row", bscLedger!.totals.externalOut, totalExternal);
+    eq("ledger outflow only counts the real expense, not the external transfers", bscLedger!.totals.outflow, 1200);
+
+    const anyExternalRow = await prisma.transaction.findFirstOrThrow({ where: { accountId: bsc.id, type: "EXTERNAL_TRANSFER" } });
+    eq("each external-transfer row remains individually editable", transactionEditBlock(anyExternalRow), null);
+    eq("each external-transfer row is still a single row, never paired", anyExternalRow.transferId, null);
+
+    await prisma.transaction.deleteMany({ where: { accountId: bsc.id } });
+    await prisma.account.delete({ where: { id: bsc.id } });
+    console.log("  ok   BSC scenario fixtures removed");
+  }
+
   console.log("\n== the display currency drives goal and budget presentation ==");
   // A stored amount is a native financial value; every figure the pages show
   // is that same amount converted once into the selected display currency.

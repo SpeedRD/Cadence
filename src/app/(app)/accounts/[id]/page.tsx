@@ -72,7 +72,7 @@ export default async function AccountDetailPage({
       />
 
       <Card>
-        <CardContent className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <CardContent className="grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
           <Stat
             label={t.balance}
             value={formatMoney(ledger.balance, account.currency)}
@@ -100,6 +100,18 @@ export default async function AccountDetailPage({
             hint={t.inOut(
               formatMoney(totals.transfersIn, account.currency),
               formatMoney(totals.transfersOut, account.currency),
+            )}
+          />
+          <Stat
+            label={t.netExternal}
+            value={formatMoney(
+              totals.externalIn - totals.externalOut,
+              account.currency,
+              { signDisplay: "always" },
+            )}
+            hint={t.inOut(
+              formatMoney(totals.externalIn, account.currency),
+              formatMoney(totals.externalOut, account.currency),
             )}
           />
         </CardContent>
