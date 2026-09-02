@@ -2,7 +2,7 @@
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { formatMoney } from "@/lib/currency";
 import { round2 } from "@/lib/money";
 import type { Dictionary } from "@/lib/i18n";
@@ -51,15 +51,11 @@ export function StepFlexible({
                   {basisLabel(category.basis, t)})
                 </p>
               </div>
-              <Input
-                aria-label={category.name}
-                inputMode="decimal"
-                className="w-32 font-mono text-right"
+              <PaydayAmountInput
+                ariaLabel={category.name}
+                className="w-32"
                 value={category.plannedAmount}
-                onChange={(event) => {
-                  const parsed = Number(event.target.value.replace(/,/g, ""));
-                  onChange(category.categoryId, Number.isFinite(parsed) ? Math.max(0, parsed) : 0);
-                }}
+                onChange={(value) => onChange(category.categoryId, Math.max(0, value))}
               />
             </CardContent>
           </Card>

@@ -2,6 +2,7 @@
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Field } from "@/components/form/field";
+import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/currency";
 import type { Dictionary } from "@/lib/i18n";
@@ -28,17 +29,10 @@ export function StepIncome({
           <CardContent className="grid grid-cols-[1fr_140px_1fr] items-end gap-3">
             <p className="text-sm font-medium">{account.name}</p>
             <Field label={`${t.incomeAmount} (${account.currency})`} htmlFor={`income-${account.accountId}`}>
-              <Input
+              <PaydayAmountInput
                 id={`income-${account.accountId}`}
-                inputMode="decimal"
-                className="font-mono text-right"
                 value={account.incomeEntered}
-                onChange={(event) => {
-                  const parsed = Number(event.target.value.replace(/,/g, ""));
-                  onChange(account.accountId, {
-                    incomeEntered: Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
-                  });
-                }}
+                onChange={(value) => onChange(account.accountId, { incomeEntered: Math.max(0, value) })}
               />
             </Field>
             <Input

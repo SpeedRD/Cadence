@@ -1,9 +1,9 @@
 "use client";
 
 import { Field } from "@/components/form/field";
+import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { formatMoney } from "@/lib/currency";
 import { formatDayMonth } from "@/lib/date";
@@ -26,15 +26,11 @@ function AmountInput({
   ariaLabel: string;
 }) {
   return (
-    <Input
-      aria-label={ariaLabel}
-      inputMode="decimal"
-      className="w-32 font-mono text-right"
+    <PaydayAmountInput
+      ariaLabel={ariaLabel}
+      className="w-32"
       value={value}
-      onChange={(event) => {
-        const parsed = Number(event.target.value.replace(/,/g, ""));
-        onChange(Number.isFinite(parsed) ? Math.max(0, parsed) : 0);
-      }}
+      onChange={(next) => onChange(Math.max(0, next))}
     />
   );
 }

@@ -166,7 +166,15 @@ export function PaydayCheckinDialog({
           <DialogDescription>{t.stepOf(step, STEP_COUNT)}</DialogDescription>
         </DialogHeader>
 
-        <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-4">
+        <form
+          action={formAction}
+          className="flex min-h-0 flex-1 flex-col gap-4"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && step < STEP_COUNT) {
+              event.preventDefault();
+            }
+          }}
+        >
           <input type="hidden" name="payload" value={payload} />
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             {step === 1 ? (

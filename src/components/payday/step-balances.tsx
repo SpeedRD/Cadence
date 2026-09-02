@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Field } from "@/components/form/field";
-import { Input } from "@/components/ui/input";
+import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { formatMoney } from "@/lib/currency";
 import { round2 } from "@/lib/money";
 import type { Dictionary } from "@/lib/i18n";
@@ -40,15 +40,11 @@ export function StepBalances({
               </div>
               <div className="w-40">
                 <Field label={t.reportedBalance} htmlFor={`balance-${account.accountId}`}>
-                  <Input
+                  <PaydayAmountInput
                     id={`balance-${account.accountId}`}
-                    inputMode="decimal"
-                    className="font-mono text-right"
                     value={account.reportedBalance}
-                    onChange={(event) => {
-                      const parsed = Number(event.target.value.replace(/,/g, ""));
-                      onChange(account.accountId, Number.isFinite(parsed) ? parsed : 0);
-                    }}
+                    onChange={(value) => onChange(account.accountId, value)}
+                    allowNegative
                   />
                 </Field>
               </div>
