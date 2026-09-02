@@ -39,7 +39,7 @@ import {
   scaleFlexibleSuggestions,
 } from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
-import { num } from "../src/lib/money";
+import { num, round2 } from "../src/lib/money";
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL ?? "" }),
@@ -870,10 +870,20 @@ async function main() {
   );
 
   console.log("\n-- revisiting a confirmed check-in --");
+  const reconfirmedEssentialCategoryId = draftForConfirm.essentialCategories[0].categoryId;
+  const reconfirmedFlexibleCategoryId = draftForConfirm.flexibleCategories[0].categoryId;
   const updatedPayload = {
     ...initialPayload,
     accounts: initialPayload.accounts.map((a) =>
       a.accountId === paydayChecking.id ? { ...a, incomeEntered: 750, incomeNote: "Salary + bonus" } : a,
+    ),
+    // Give the essential/flexible category and buffer overlays checked below something
+    // non-zero to convert - the fresh suggestions for this scratch DB are 0.
+    essentialCategories: initialPayload.essentialCategories.map((c) =>
+      c.categoryId === reconfirmedEssentialCategoryId ? { ...c, plannedAmount: 20 } : c,
+    ),
+    flexibleCategories: initialPayload.flexibleCategories.map((c) =>
+      c.categoryId === reconfirmedFlexibleCategoryId ? { ...c, plannedAmount: 45 } : c,
     ),
   };
   const reconfirmResult = await confirmPaydayCheckin(updatedPayload, paydayContext);
@@ -896,6 +906,25 @@ async function main() {
 
   const updatedIncomeTransaction = await prisma.transaction.findFirst({ where: { accountId: paydayChecking.id, source: "PAYDAY_CHECKIN" } });
   eq("the updated income transaction reflects the newly entered amount", num(updatedIncomeTransaction!.amount), 750);
+
+  console.log("\n-- reopening the confirmed check-in after the display currency changed converts, not just relabels --");
+  const eurPaydayContext = { ...paydayContext, displayCurrency: "EUR" as const };
+  const draftAfterCurrencySwitch = await getPaydayCheckinDraft(eurPaydayContext);
+  eq(
+    "the stored buffer is converted from the currency it was confirmed in, not read back raw",
+    draftAfterCurrencySwitch.plannedBuffer,
+    round2(convert(updatedPayload.buffer, "USD", "EUR", rates)),
+  );
+  eq(
+    "a stored essential category amount is converted from the currency it was confirmed in, not read back raw",
+    draftAfterCurrencySwitch.essentialCategories.find((c) => c.categoryId === reconfirmedEssentialCategoryId)?.plannedAmount,
+    round2(convert(20, "USD", "EUR", rates)),
+  );
+  eq(
+    "a stored flexible category amount is converted from the currency it was confirmed in, not read back raw",
+    draftAfterCurrencySwitch.flexibleCategories.find((c) => c.categoryId === reconfirmedFlexibleCategoryId)?.plannedAmount,
+    round2(convert(45, "USD", "EUR", rates)),
+  );
 
   console.log("\n-- zeroing income removes the transaction, never leaves a stale one --");
   const zeroedPayload = {

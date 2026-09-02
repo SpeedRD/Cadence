@@ -347,7 +347,9 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       name: category.name,
       color: category.color,
       suggestedAmount: suggestion.amount,
-      plannedAmount: existingAlloc ? num(existingAlloc.plannedAmount) : suggestion.amount,
+      plannedAmount: existingAlloc
+        ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
+        : suggestion.amount,
       basis: suggestion.basis,
     };
   });
@@ -358,10 +360,12 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
   );
   const suggestedBuffer = defaultProtectedBuffer(totalIncome, settings.bufferPercent, bufferFloor);
   const existingBufferAlloc = existingAllocationByKey.get("BUFFER:");
-  const plannedBuffer = existingBufferAlloc ? num(existingBufferAlloc.plannedAmount) : suggestedBuffer;
+  const plannedBuffer = existingBufferAlloc
+    ? round2(convert(num(existingBufferAlloc.plannedAmount), existingBufferAlloc.currency, context.displayCurrency, context.rates))
+    : suggestedBuffer;
 
   const includedCarryover = existing
-    ? num(existing.includedCarryover)
+    ? round2(convert(num(existing.includedCarryover), existing.currency, context.displayCurrency, context.rates))
     : settings.carryoverIncludedByDefault
       ? carryover.amount
       : 0;
@@ -389,7 +393,9 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       name: category.name,
       color: category.color,
       suggestedAmount: scaledAmount,
-      plannedAmount: existingAlloc ? num(existingAlloc.plannedAmount) : scaledAmount,
+      plannedAmount: existingAlloc
+        ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
+        : scaledAmount,
       basis: suggestion.basis,
     };
   });
