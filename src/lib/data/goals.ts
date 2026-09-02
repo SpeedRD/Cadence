@@ -12,6 +12,13 @@ import { prisma } from "@/lib/prisma";
 
 import type { AppContext } from "@/lib/data/context";
 
+/**
+ * Native fields (targetAmount/savedAmount/remaining/perPeriod/pacePerPeriod)
+ * stay in the goal's own stored currency - that is what the edit and
+ * contribution forms write back. The `display*` twins are the same figures
+ * converted once into the global display currency, which is what every
+ * presentation surface shows; see the note on `displayCurrency` below.
+ */
 export interface GoalSummary {
   id: string;
   name: string;
@@ -29,8 +36,17 @@ export interface GoalSummary {
   pacePerPeriod: number | null;
   projectedEnd: Date | null;
   contributionCount: number;
+  /**
+   * The global display currency every `display*` field below is expressed in.
+   * Always derived from the stored native amount, never from another
+   * `display*` value, so switching DOP -> USD -> DOP recovers the original.
+   */
+  displayCurrency: string;
   displayTarget: number;
   displaySaved: number;
+  displayRemaining: number;
+  displayPerPeriod: number | null;
+  displayPacePerPeriod: number | null;
 }
 
 function summarize(
@@ -83,6 +99,9 @@ function summarize(
     }
   }
 
+  const toDisplay = (amount: number) =>
+    round2(convert(amount, goal.currency, context.displayCurrency, context.rates));
+
   return {
     id: goal.id,
     name: goal.name,
@@ -98,12 +117,12 @@ function summarize(
     pacePerPeriod,
     projectedEnd,
     contributionCount: contributions.length,
-    displayTarget: round2(
-      convert(targetAmount, goal.currency, context.displayCurrency, context.rates),
-    ),
-    displaySaved: round2(
-      convert(savedAmount, goal.currency, context.displayCurrency, context.rates),
-    ),
+    displayCurrency: context.displayCurrency,
+    displayTarget: toDisplay(targetAmount),
+    displaySaved: toDisplay(savedAmount),
+    displayRemaining: toDisplay(remaining),
+    displayPerPeriod: perPeriod === null ? null : toDisplay(perPeriod),
+    displayPacePerPeriod: pacePerPeriod === null ? null : toDisplay(pacePerPeriod),
   };
 }
 
@@ -163,6 +182,9 @@ export async function getGoalDetail(id: string, context: AppContext) {
     summary,
     contributions,
     contributionTotal,
+    displayContributionTotal: round2(
+      convert(contributionTotal, goal.currency, context.displayCurrency, context.rates),
+    ),
     nextPeriodStart: addDays(context.currentPeriod.end, 1),
   };
 }

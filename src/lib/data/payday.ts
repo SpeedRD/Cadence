@@ -62,10 +62,15 @@ export interface PaydayCommittedDraft {
   alreadyLogged: boolean;
 }
 
+/**
+ * Like every other row in the draft, both amounts are in the draft's
+ * `displayCurrency` - a goal roadmap figure is a planning value, not a native
+ * one, and it is summed straight into the plan totals. The goal's own stored
+ * currency and amounts are untouched; only the presentation is converted.
+ */
 export interface PaydayGoalDraft {
   goalId: string;
   name: string;
-  currency: string;
   recommendedAmount: number;
   plannedAmount: number;
   targetDate: Date;
@@ -356,20 +361,22 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       // period rather than today's (see planPeriodRef()) - so recompute here
       // anchored to plan.start instead of trusting the pre-computed fields.
       const periodsLeft = Math.max(1, periodsRemaining(plan.start, g.targetDate as Date));
-      const recommendedAmount = round2(g.remaining / periodsLeft);
+      const recommendedAmount = round2(g.displayRemaining / periodsLeft);
       return {
         goalId: g.id,
         name: g.name,
-        currency: g.currency,
         recommendedAmount,
-        plannedAmount: existingAlloc ? num(existingAlloc.plannedAmount) : recommendedAmount,
+        // Allocations carry the display currency of the check-in that wrote
+        // them, which is not necessarily today's - convert like the category
+        // and buffer allocations below rather than reading the raw number.
+        plannedAmount: existingAlloc
+          ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
+          : recommendedAmount,
         targetDate: g.targetDate as Date,
         periodsLeft,
       };
     });
-  const goalPlanTotal = round2(
-    goals.reduce((sum, g) => sum + convert(g.plannedAmount, g.currency, context.displayCurrency, context.rates), 0),
-  );
+  const goalPlanTotal = round2(goals.reduce((sum, g) => sum + g.plannedAmount, 0));
 
   const suggestionsByCategory = await getCategorySuggestions(
     planRef,
@@ -600,12 +607,8 @@ export async function confirmPaydayCheckin(
     const goal = goalById.get(g.goalId);
     return Boolean(goal && goal.targetDate && !goal.achievedAt);
   });
-  const goalPlanTotal = round2(
-    goalInputs.reduce((sum, g) => {
-      const goal = goalById.get(g.goalId)!;
-      return sum + convert(g.plannedAmount, goal.currency, context.displayCurrency, context.rates);
-    }, 0),
-  );
+  // Planned goal amounts arrive in the display currency (see PaydayGoalDraft).
+  const goalPlanTotal = round2(goalInputs.reduce((sum, g) => sum + g.plannedAmount, 0));
 
   const essentialInputs = input.essentialCategories.filter((c) => essentialById.has(c.categoryId));
   const essentialFixedTotal = round2(essentialInputs.reduce((sum, c) => sum + c.plannedAmount, 0));
@@ -747,14 +750,14 @@ export async function confirmPaydayCheckin(
         // trust listGoals()'s today-anchored perPeriod for the audit-trail
         // recommendedAmount here.
         const periodsLeft = Math.max(1, periodsRemaining(plan.start, goal.targetDate as Date));
-        const recommendedAmount = round2(goal.remaining / periodsLeft);
+        const recommendedAmount = round2(goal.displayRemaining / periodsLeft);
         return {
           paydayCheckinId: checkin.id,
           type: "GOAL" as const,
           goalId: goal.id,
           recommendedAmount,
           plannedAmount: g.plannedAmount,
-          currency: goal.currency,
+          currency: context.displayCurrency,
           basis: "roadmap",
         };
       }),

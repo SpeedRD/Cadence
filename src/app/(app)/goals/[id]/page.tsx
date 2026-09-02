@@ -20,13 +20,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatMoney } from "@/lib/currency";
+import { convert, formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getGoalDetail } from "@/lib/data/goals";
 import { planPeriodRef } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
-import { num } from "@/lib/money";
+import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Goal - Cadence" };
@@ -47,9 +47,13 @@ export default async function GoalDetailPage({
   });
   const plannedAllocation = confirmedCheckin?.allocations[0] ?? null;
 
-  const { summary, contributions, contributionTotal } = detail;
+  const { summary, contributions, contributionTotal, displayContributionTotal } = detail;
   const today = toISODate(context.today);
   const drifted = Math.abs(contributionTotal - summary.savedAmount) > 0.005;
+  const display = context.displayCurrency;
+  /** Allocations store the display currency in force when they were confirmed. */
+  const plannedInDisplay = (amount: unknown, currency: string) =>
+    round2(convert(num(amount as never), currency, display, context.rates));
   const t = getDictionary(context.language).goals;
   const common = getDictionary(context.language).common;
 
@@ -106,12 +110,12 @@ export default async function GoalDetailPage({
           <div className="space-y-2">
             <div className="flex items-baseline justify-between gap-3">
               <span className="figure text-3xl">
-                {formatMoney(summary.savedAmount, summary.currency)}
+                {formatMoney(summary.displaySaved, display)}
               </span>
               <span className="text-sm text-muted-foreground tnum">
                 {t.percentOf(
                   Math.round(summary.progress * 100),
-                  formatMoney(summary.targetAmount, summary.currency),
+                  formatMoney(summary.displayTarget, display),
                 )}
               </span>
             </div>
@@ -121,13 +125,13 @@ export default async function GoalDetailPage({
           <div className="grid gap-6 sm:grid-cols-3">
             <Stat
               label={t.stillToGo}
-              value={formatMoney(summary.remaining, summary.currency)}
+              value={formatMoney(summary.displayRemaining, display)}
               hint={t.contributionCount(summary.contributionCount)}
             />
-            {summary.perPeriod !== null ? (
+            {summary.displayPerPeriod !== null ? (
               <Stat
                 label={t.perPayPeriodLabel}
-                value={formatMoney(summary.perPeriod, summary.currency)}
+                value={formatMoney(summary.displayPerPeriod, display)}
                 hint={
                   summary.periodsLeft === 0
                     ? t.dueThisPeriod
@@ -138,8 +142,8 @@ export default async function GoalDetailPage({
               <Stat
                 label={t.pace}
                 value={
-                  summary.pacePerPeriod
-                    ? formatMoney(summary.pacePerPeriod, summary.currency)
+                  summary.displayPacePerPeriod
+                    ? formatMoney(summary.displayPacePerPeriod, display)
                     : "-"
                 }
                 hint={
@@ -149,27 +153,38 @@ export default async function GoalDetailPage({
                 }
               />
             )}
+            {/* The figures above follow the display currency; this is the
+                goal's own stored denomination, which never changes with it. */}
             <Stat
-              label={t.inCurrency(context.displayCurrency)}
-              value={formatMoney(summary.displaySaved, context.displayCurrency)}
-              hint={t.ofAmount(formatMoney(summary.displayTarget, context.displayCurrency))}
+              label={t.inCurrency(summary.currency)}
+              value={formatMoney(summary.savedAmount, summary.currency)}
+              hint={t.ofAmount(formatMoney(summary.targetAmount, summary.currency))}
             />
           </div>
 
           {drifted ? (
             <p className="text-xs text-[var(--warning)]">
-              {t.driftedWarning(formatMoney(contributionTotal, summary.currency))}
+              {t.driftedWarning(formatMoney(displayContributionTotal, display))}
             </p>
           ) : null}
 
           {plannedAllocation ? (
             <p className="text-xs text-muted-foreground">
-              {t.plannedThisPeriod(formatMoney(num(plannedAllocation.plannedAmount), summary.currency))}
+              {t.plannedThisPeriod(
+                formatMoney(
+                  plannedInDisplay(plannedAllocation.plannedAmount, plannedAllocation.currency),
+                  display,
+                ),
+              )}
               {num(plannedAllocation.recommendedAmount) - num(plannedAllocation.plannedAmount) > 0.005
                 ? ` · ${t.plannedBehindRoadmap(
                     formatMoney(
-                      num(plannedAllocation.recommendedAmount) - num(plannedAllocation.plannedAmount),
-                      summary.currency,
+                      plannedInDisplay(
+                        num(plannedAllocation.recommendedAmount) -
+                          num(plannedAllocation.plannedAmount),
+                        plannedAllocation.currency,
+                      ),
+                      display,
                     ),
                   )}`
                 : ""}

@@ -30,6 +30,7 @@ import {
   daysRemainingInPeriod,
   isPaydayDate,
   periodForDate,
+  periodInfo,
   periodsRemaining,
   periodSeries,
 } from "../src/lib/period";
@@ -333,6 +334,76 @@ async function main() {
   const verifyGoal = goals.find((g) => g.id === goal.id)!;
   eq("periods left to the target date", verifyGoal.periodsLeft, 9);
   eq("per period = remaining / periods left", verifyGoal.perPeriod, Math.round((800 / 9) * 100) / 100);
+
+  console.log("\n== the display currency drives goal and budget presentation ==");
+  // A stored amount is a native financial value; every figure the pages show
+  // is that same amount converted once into the selected display currency.
+  // Switching between the three first-class currencies must therefore always
+  // derive from the stored value, never from an already-converted one.
+  const inCurrency = (code: "USD" | "DOP" | "EUR") => ({ ...context, displayCurrency: code });
+  const goalIn = async (code: "USD" | "DOP" | "EUR") =>
+    (await listGoals(inCurrency(code))).find((g) => g.id === goal.id)!;
+  const goalInEur = await goalIn("EUR");
+  const goalInUsd = await goalIn("USD");
+  const goalInDop = await goalIn("DOP");
+
+  eq("the goal's own stored currency is reported unchanged", goalInUsd.currency, "EUR");
+  for (const [code, view] of [["EUR", goalInEur], ["USD", goalInUsd], ["DOP", goalInDop]] as const) {
+    eq(`goal progress is shown in ${code}`, view.displaySaved, round2(convert(200, "EUR", code, rates)));
+    eq(`goal target is shown in ${code}`, view.displayTarget, round2(convert(1000, "EUR", code, rates)));
+    eq(`goal remaining is shown in ${code}`, view.displayRemaining, round2(convert(800, "EUR", code, rates)));
+    eq(
+      `the per-pay-period roadmap amount is shown in ${code}`,
+      view.displayPerPeriod,
+      round2(convert(verifyGoal.perPeriod!, "EUR", code, rates)),
+    );
+    eq(`the display currency is reported alongside the figures in ${code}`, view.displayCurrency, code);
+  }
+  eq("a goal in the display currency is not converted at all", goalInEur.displaySaved, 200);
+  eq("switching EUR -> USD -> EUR recovers the stored goal amount exactly", (await goalIn("EUR")).displaySaved, 200);
+  eq("switching EUR -> DOP -> EUR recovers the stored goal amount exactly", (await goalIn("EUR")).displayTarget, 1000);
+  const goalRowAfterSwitching = await prisma.goal.findUniqueOrThrow({ where: { id: goal.id } });
+  check(
+    "switching the display currency never rewrites the goal's stored currency or amounts",
+    goalRowAfterSwitching.currency === "EUR" &&
+      num(goalRowAfterSwitching.savedAmount) === 200 &&
+      num(goalRowAfterSwitching.targetAmount) === 1000,
+  );
+
+  // A period far outside the payday history lookback, so this budget is only
+  // ever read by the checks below.
+  const displayBudgetPeriod = { year: 2026, month: 2, period: "A" as const };
+  const displayBudget = await prisma.budget.create({
+    data: { ...displayBudgetPeriod, categoryId: groceries!.id, amount: 9000, currency: "DOP" },
+  });
+  const budgetIn = async (code: "USD" | "DOP" | "EUR") =>
+    getPeriodSummary(periodInfo(displayBudgetPeriod), inCurrency(code));
+  for (const code of ["DOP", "USD", "EUR"] as const) {
+    const view = await budgetIn(code);
+    eq(`a DOP budget's category line is shown in ${code}`, view.categories[0]?.budget, round2(convert(9000, "DOP", code, rates)));
+    eq(`the period budget total is shown in ${code}`, view.periodBudget, round2(convert(9000, "DOP", code, rates)));
+    eq(`the summary reports the currency its figures are in (${code})`, view.currency, code);
+  }
+  eq("switching DOP -> USD -> DOP recovers the stored budget exactly", (await budgetIn("DOP")).periodBudget, 9000);
+  eq("switching DOP -> EUR -> DOP recovers the stored budget exactly", (await budgetIn("DOP")).periodBudget, 9000);
+  const budgetRowAfterSwitching = await prisma.budget.findUniqueOrThrow({ where: { id: displayBudget.id } });
+  check(
+    "switching the display currency never rewrites the budget's stored currency or amount",
+    budgetRowAfterSwitching.currency === "DOP" && num(budgetRowAfterSwitching.amount) === 9000,
+  );
+
+  // The Budgets page edits these amounts in the display currency, so the save
+  // path has to tell an untouched field apart from a real edit.
+  const { isSameMoney } = await import("../src/lib/currency");
+  check(
+    "re-saving the displayed value is recognised as the stored amount, not an edit",
+    isSameMoney(round2(convert(9000, "DOP", "USD", rates)), "USD", 9000, "DOP", rates),
+  );
+  check(
+    "an actual edit is not mistaken for the stored amount",
+    !isSameMoney(round2(convert(9000, "DOP", "USD", rates)) + 1, "USD", 9000, "DOP", rates),
+  );
+  await prisma.budget.delete({ where: { id: displayBudget.id } });
 
   const { advanceDueRecurringItems } = await import("../src/lib/recurring");
   const advanced = await advanceDueRecurringItems(context.today);
@@ -1116,6 +1187,23 @@ async function main() {
     "the already-confirmed carryover amount is also converted, not left raw",
     draftAfterCurrencySwitch.includedCarryover,
     round2(convert(10, "USD", "EUR", rates)),
+  );
+  const goalAfterCurrencySwitch = draftAfterCurrencySwitch.goals.find((g) => g.goalId === datedGoal.id);
+  const goalBeforeCurrencySwitch = draftAfterManualEdit.goals.find((g) => g.goalId === datedGoal.id)!;
+  eq(
+    "a stored goal amount is converted from the currency it was confirmed in, not read back raw",
+    goalAfterCurrencySwitch?.plannedAmount,
+    round2(convert(goalBeforeCurrencySwitch.plannedAmount, "USD", "EUR", rates)),
+  );
+  eq(
+    "the goal roadmap figure follows the display currency like every other planning value",
+    goalAfterCurrencySwitch?.recommendedAmount,
+    round2(convert(goalBeforeCurrencySwitch.recommendedAmount, "USD", "EUR", rates)),
+  );
+  const datedGoalRowAfterSwitch = await prisma.goal.findUniqueOrThrow({ where: { id: datedGoal.id } });
+  check(
+    "reopening a plan in another currency never rewrites the goal's stored currency",
+    datedGoalRowAfterSwitch.currency === "USD" && num(datedGoalRowAfterSwitch.targetAmount) === 1000,
   );
 
   console.log("\n-- zeroing income removes the transaction, never leaves a stale one --");

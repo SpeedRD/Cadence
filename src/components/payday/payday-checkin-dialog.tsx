@@ -79,12 +79,8 @@ export function PaydayCheckinDialog({
       0,
     ),
   );
-  const goalPlanTotal = round2(
-    plan.goals.reduce(
-      (sum, g) => sum + convert(g.plannedAmount, g.currency, plan.displayCurrency, rates),
-      0,
-    ),
-  );
+  // Goal planned amounts are already in plan.displayCurrency (PaydayGoalDraft).
+  const goalPlanTotal = round2(plan.goals.reduce((sum, g) => sum + g.plannedAmount, 0));
   const essentialFixedTotal = round2(plan.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const flexibleTotal = round2(plan.flexibleCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const available = availableForFlexibleCategories({

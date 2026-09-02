@@ -157,10 +157,10 @@ export function StepCommitments({
                     <div>
                       <p className="text-sm font-medium">{goal.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        {t.roadmapAmount}: {formatMoney(goal.recommendedAmount, goal.currency)}
+                        {t.roadmapAmount}: {formatMoney(goal.recommendedAmount, displayCurrency)}
                       </p>
                     </div>
-                    <Field label={t.plannedAmount}>
+                    <Field label={`${t.plannedAmount} (${displayCurrency})`}>
                       <AmountInput
                         value={goal.plannedAmount}
                         onChange={(value) => onGoalChange(goal.goalId, value)}
@@ -172,8 +172,8 @@ export function StepCommitments({
                     {variance === 0
                       ? t.goalOnTrack
                       : variance > 0
-                        ? t.goalAhead(formatMoney(variance, goal.currency))
-                        : t.goalBehind(formatMoney(Math.abs(variance), goal.currency))}
+                        ? t.goalAhead(formatMoney(variance, displayCurrency))
+                        : t.goalBehind(formatMoney(Math.abs(variance), displayCurrency))}
                   </p>
                 </div>
               );

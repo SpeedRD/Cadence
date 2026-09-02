@@ -1,9 +1,12 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
+import { isSameMoney } from "@/lib/currency";
 import { getDictionary, isLocale } from "@/lib/i18n";
+import { num } from "@/lib/money";
 import { previousPeriod, type PayPeriodCode } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
+import { getRateTable } from "@/lib/rates";
 import { budgetSchema, firstError, formObject } from "@/lib/validation";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
@@ -35,6 +38,18 @@ export async function saveBudgetAction(
     if (existing) await prisma.budget.delete({ where: { id: existing.id } });
     revalidateApp();
     return done(t.budgetCleared);
+  }
+
+  // The Budgets page renders this field in the global display currency, so an
+  // untouched save arrives as the stored amount converted. Recognise that and
+  // leave the row alone: only a real edit re-denominates a budget.
+  if (
+    existing &&
+    existing.currency !== currency &&
+    isSameMoney(amount, currency, num(existing.amount), existing.currency, await getRateTable())
+  ) {
+    revalidateApp();
+    return done(t.budgetSaved);
   }
 
   if (existing) {
