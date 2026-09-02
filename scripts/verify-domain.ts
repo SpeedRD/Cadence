@@ -224,11 +224,16 @@ async function main() {
   );
 
   console.log("\n== transaction edit guard ==");
-  const { transactionEditBlock } = await import("../src/lib/transactions");
+  const { transactionEditBlock, balanceSign, isCashflow } = await import("../src/lib/transactions");
   eq("an opening balance can't be edited through the transaction form", transactionEditBlock({ type: "OPENING_BALANCE", transferId: null }), "opening_balance");
   eq("a transfer leg can't be edited through the transaction form", transactionEditBlock({ type: "TRANSFER", transferId: "t1" }), "transfer");
   eq("an ordinary expense can be edited", transactionEditBlock({ type: "EXPENSE", transferId: null }), null);
   eq("an ordinary income can be edited", transactionEditBlock({ type: "INCOME", transferId: null }), null);
+  eq("an outgoing external transfer can be edited (single row, never paired)", transactionEditBlock({ type: "EXTERNAL_TRANSFER", transferId: null }), null);
+  eq("an incoming external transfer can be edited (single row, never paired)", transactionEditBlock({ type: "EXTERNAL_TRANSFER", transferId: null }), null);
+  eq("balanceSign(EXTERNAL_TRANSFER, OUT) is -1, same shape as an outgoing internal transfer leg", balanceSign("EXTERNAL_TRANSFER", "OUT"), -1);
+  eq("balanceSign(EXTERNAL_TRANSFER, IN) is +1, same shape as an incoming internal transfer leg", balanceSign("EXTERNAL_TRANSFER", "IN"), 1);
+  eq("isCashflow(EXTERNAL_TRANSFER) is false - it never counts as income or spending", isCashflow("EXTERNAL_TRANSFER"), false);
 
   console.log("\n== currency conversion through USD ==");
   const rates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.5 }, fetchedAt: new Date(), stale: false };
