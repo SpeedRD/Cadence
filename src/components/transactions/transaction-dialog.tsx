@@ -33,7 +33,7 @@ export function TransactionDialog({
   categories,
   values,
   trigger,
-  open,
+  open: controlledOpen,
   onOpenChange,
   locale,
 }: {
@@ -52,6 +52,34 @@ export function TransactionDialog({
   const [type, setType] = useState(values.type ?? "EXPENSE");
   const isExternalTransfer = type === "EXTERNAL_TRANSFER";
 
+  // Mirrors FormDialog's own controlled/uncontrolled resolution so this
+  // component can see the effective open state even for the "New
+  // transaction" trigger, which never passes `open`/`onOpenChange` and so
+  // is uncontrolled from here down.
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = onOpenChange ?? setUncontrolledOpen;
+
+  // The "New transaction" dialog is a single long-lived instance (the page
+  // only mounts it once), so this component's own state does NOT reset
+  // just because the dialog closes. The Type <Select> below is uncontrolled
+  // and DOES get remounted (and visually reset to its defaultValue) each
+  // time Radix re-opens the dialog's content. Without this, cancelling out
+  // of an External transfer selection and reopening the dialog left `type`
+  // stuck at EXTERNAL_TRANSFER while the Select visibly showed "Expense"
+  // again - hiding the category field and silently forcing categoryId to
+  // null on the next save. Reset `type` in lockstep with the same open
+  // transition that resets the Select - adjusted during render (React's
+  // documented pattern for this), not in an effect, to avoid an extra
+  // render pass.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setType(values.type ?? "EXPENSE");
+    }
+  }
+
   return (
     <FormDialog
       title={editing ? t.editTransaction : t.newTransaction}
@@ -64,7 +92,7 @@ export function TransactionDialog({
       savedMessage={editing ? t.transactionUpdated : t.transactionAdded}
       trigger={trigger}
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={setOpen}
     >
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
 
