@@ -37,6 +37,7 @@ enum TransactionType {
   INCOME
   TRANSFER
   OPENING_BALANCE
+  EXTERNAL_TRANSFER
 }
 
 enum TransactionSource {
@@ -49,7 +50,9 @@ enum TransactionSource {
   OPENING_BALANCE
 }
 
-/// Which leg of a transfer a row is. Null for non-transfer rows.
+/// Which leg of a transfer a row is (OUT on the source leg, IN on the
+/// destination leg), or, for an EXTERNAL_TRANSFER row (no paired leg), simply
+/// whether money left (OUT) or arrived (IN). Null for every other type.
 enum TransferDirection {
   OUT
   IN

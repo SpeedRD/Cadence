@@ -238,6 +238,27 @@ async function main() {
   eq("DOP to EUR round trip", convert(1200, "DOP", "EUR", rates), 10);
   eq("same currency is identity", convert(7, "EUR", "EUR", rates), 7);
 
+  console.log("\n== external transfer: schema ==");
+  {
+    const smokeAccount = await prisma.account.create({
+      data: { name: "Verify Schema Smoke", currency: "USD", type: "CHECKING" },
+    });
+    const smokeRow = await prisma.transaction.create({
+      data: {
+        date: civilDate(2026, 8, 1),
+        amount: 1,
+        currency: "USD",
+        type: "EXTERNAL_TRANSFER",
+        transferDirection: "OUT",
+        accountId: smokeAccount.id,
+        source: "MANUAL",
+      },
+    });
+    eq("Postgres accepts the EXTERNAL_TRANSFER enum value", smokeRow.type, "EXTERNAL_TRANSFER");
+    await prisma.transaction.delete({ where: { id: smokeRow.id } });
+    await prisma.account.delete({ where: { id: smokeAccount.id } });
+  }
+
   console.log("\n== database invariants ==");
   const context = {
     displayCurrency: "USD" as const,
