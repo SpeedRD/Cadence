@@ -10,6 +10,15 @@ import { cn } from "@/lib/utils";
  * or a leading "-" survives a re-render. A plain controlled <Input value={n}>
  * strips them on every keystroke because the parsed number round-trips back
  * through the DOM before the user finishes typing it.
+ *
+ * Resyncs `text` from an external `value` change (e.g. the dialog reopening
+ * with a fresh draft), but never from a change this input itself just caused
+ * (tracked via lastEmitted, kept as state rather than a ref so the
+ * render-time resync check below can read it without tripping
+ * react-hooks/refs) - otherwise an intermediate unparseable value like a
+ * lone "-" or "." would report 0 upward and immediately get overwritten back
+ * to "0", making it impossible to type a negative number over a non-zero
+ * seed.
  */
 export function PaydayAmountInput({
   value,
@@ -27,18 +36,12 @@ export function PaydayAmountInput({
   className?: string;
 }) {
   const [text, setText] = useState(String(value));
-
-  // If `value` changed from outside this input (not as an echo of what the
-  // user just typed here - e.g. the dialog re-seeding on open, or another
-  // control recomputing this amount), resync the displayed text. Adjusting
-  // state during render (rather than in an effect) avoids an extra committed
-  // render with stale text - see
-  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
   const [prevValue, setPrevValue] = useState(value);
+  const [lastEmitted, setLastEmitted] = useState(value);
+
   if (value !== prevValue) {
     setPrevValue(value);
-    const parsed = Number(text.replace(/,/g, ""));
-    if (!Number.isFinite(parsed) || parsed !== value) {
+    if (value !== lastEmitted) {
       setText(String(value));
     }
   }
@@ -56,7 +59,9 @@ export function PaydayAmountInput({
         if (raw !== "" && !pattern.test(raw)) return;
         setText(raw);
         const parsed = Number(raw.replace(/,/g, ""));
-        onChange(Number.isFinite(parsed) ? parsed : 0);
+        const next = Number.isFinite(parsed) ? parsed : 0;
+        setLastEmitted(next);
+        onChange(next);
       }}
     />
   );

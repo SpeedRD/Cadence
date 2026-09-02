@@ -170,9 +170,10 @@ export function PaydayCheckinDialog({
           action={formAction}
           className="flex min-h-0 flex-1 flex-col gap-4"
           onKeyDown={(event) => {
-            if (event.key === "Enter" && step < STEP_COUNT) {
-              event.preventDefault();
-            }
+            if (event.key !== "Enter" || step >= STEP_COUNT) return;
+            if (event.nativeEvent.isComposing) return;
+            if ((event.target as HTMLElement).closest("button")) return;
+            event.preventDefault();
           }}
         >
           <input type="hidden" name="payload" value={payload} />
