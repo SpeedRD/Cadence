@@ -8,12 +8,14 @@ import { cn } from "@/lib/utils";
 export function SubmitButton({
   children,
   pending,
+  disabled,
   className,
   variant,
   size,
 }: {
   children: React.ReactNode;
   pending: boolean;
+  disabled?: boolean;
   className?: string;
   variant?: React.ComponentProps<typeof Button>["variant"];
   size?: React.ComponentProps<typeof Button>["size"];
@@ -21,7 +23,7 @@ export function SubmitButton({
   return (
     <Button
       type="submit"
-      disabled={pending}
+      disabled={pending || disabled}
       variant={variant}
       size={size}
       className={cn(className)}
