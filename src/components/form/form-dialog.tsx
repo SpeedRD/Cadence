@@ -4,6 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { SubmitButton } from "@/components/form/submit-button";
+import { useSubmitWithoutReset } from "@/components/form/use-submit-without-reset";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -56,6 +57,7 @@ export function FormDialog({
   const open = controlledOpen ?? uncontrolledOpen;
   const setOpen = onOpenChange ?? setUncontrolledOpen;
   const [state, formAction, pending] = useActionState(action, null);
+  const submit = useSubmitWithoutReset(formAction);
   const handled = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -70,7 +72,7 @@ export function FormDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent className={size === "wide" ? "sm:max-w-lg" : undefined}>
-        <form action={formAction} className="grid gap-5">
+        <form action={formAction} onSubmit={submit} className="grid gap-5">
           <DialogHeader>
             <DialogTitle>{title}</DialogTitle>
             {description ? (
