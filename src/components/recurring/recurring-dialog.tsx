@@ -65,8 +65,8 @@ export function RecurringDialog({
         value={values.active === false ? "false" : "true"}
       />
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field label={common.name} htmlFor="recurring-name" className="col-span-2">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={common.name} htmlFor="recurring-name" className="sm:col-span-2">
           <Input
             id="recurring-name"
             name="name"
@@ -75,16 +75,18 @@ export function RecurringDialog({
             required
           />
         </Field>
-        <Field label={t.kind}>
+        <Field label={t.kind} htmlFor="recurring-kind">
           <EnumSelect
+            id="recurring-kind"
             name="kind"
             options={RECURRING_KINDS}
             labels={common.recurringKindLabels}
             defaultValue={values.kind ?? "SUBSCRIPTION"}
           />
         </Field>
-        <Field label={t.frequency}>
+        <Field label={t.frequency} htmlFor="recurring-frequency">
           <EnumSelect
+            id="recurring-frequency"
             name="frequency"
             options={RECURRING_FREQUENCIES}
             labels={common.frequencyLabels}
@@ -93,7 +95,7 @@ export function RecurringDialog({
         </Field>
       </div>
 
-      <div className="grid grid-cols-[1fr_110px] gap-3">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px]">
         <Field label={common.amount} htmlFor="recurring-amount">
           <Input
             id="recurring-amount"
@@ -105,12 +107,12 @@ export function RecurringDialog({
             required
           />
         </Field>
-        <Field label={common.currency}>
-          <CurrencySelect name="currency" defaultValue={values.currency} />
+        <Field label={common.currency} htmlFor="recurring-currency">
+          <CurrencySelect id="recurring-currency" name="currency" defaultValue={values.currency} />
         </Field>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <Field label={t.nextDue} htmlFor="recurring-next">
           <Input
             id="recurring-next"
@@ -120,8 +122,9 @@ export function RecurringDialog({
             required
           />
         </Field>
-        <Field label={common.category}>
+        <Field label={common.category} htmlFor="recurring-category">
           <CategorySelect
+            id="recurring-category"
             name="categoryId"
             categories={categories}
             defaultValue={values.categoryId ?? "none"}

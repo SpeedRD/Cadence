@@ -44,7 +44,7 @@ export function PlanningPreferencesForm({
         name="carryoverIncludedByDefault"
         value={carryoverDefault ? "true" : "false"}
       />
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <Field label={t.bufferPercentLabel} htmlFor="buffer-percent" hint={t.bufferPercentHint}>
           <Input
             id="buffer-percent"

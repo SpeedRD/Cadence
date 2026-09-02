@@ -56,7 +56,7 @@ export function GoalDialog({
         />
       </Field>
 
-      <div className="grid grid-cols-[1fr_110px] gap-3">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px]">
         <Field label={t.targetAmount} htmlFor="goal-target">
           <Input
             id="goal-target"
@@ -68,8 +68,8 @@ export function GoalDialog({
             required
           />
         </Field>
-        <Field label={common.currency}>
-          <CurrencySelect name="currency" defaultValue={values.currency} />
+        <Field label={common.currency} htmlFor="goal-currency">
+          <CurrencySelect id="goal-currency" name="currency" defaultValue={values.currency} />
         </Field>
       </div>
 

@@ -41,7 +41,7 @@ export function RecurringList({
 }) {
   const [editing, setEditing] = useState<RecurringRow | null>(null);
   const [deleting, setDeleting] = useState<RecurringRow | null>(null);
-  const [, startTransition] = useTransition();
+  const [togglePending, startTransition] = useTransition();
   const t = getDictionary(locale).recurring;
   const common = getDictionary(locale).common;
 
@@ -109,7 +109,7 @@ export function RecurringList({
                   <Pencil className="size-3.5" />
                   {common.edit}
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => toggle(row)}>
+                <DropdownMenuItem disabled={togglePending} onSelect={() => toggle(row)}>
                   {row.active ? (
                     <>
                       <Pause className="size-3.5" />

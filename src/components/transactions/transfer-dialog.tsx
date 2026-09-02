@@ -59,17 +59,19 @@ export function TransferDialog({
         <input type="hidden" name="transferId" value={values.transferId} />
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field label={t.from}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t.from} htmlFor="transfer-from">
           <AccountSelect
+            id="transfer-from"
             name="fromAccountId"
             accounts={accounts}
             defaultValue={values.fromAccountId ?? accounts[0]?.id}
             common={common}
           />
         </Field>
-        <Field label={t.to}>
+        <Field label={t.to} htmlFor="transfer-to">
           <AccountSelect
+            id="transfer-to"
             name="toAccountId"
             accounts={accounts}
             defaultValue={values.toAccountId ?? accounts[1]?.id}
@@ -78,7 +80,7 @@ export function TransferDialog({
         </Field>
       </div>
 
-      <div className="grid grid-cols-[1fr_110px_150px] gap-3">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px]">
         <Field label={common.amount} htmlFor="transfer-amount">
           <Input
             id="transfer-amount"
@@ -90,19 +92,20 @@ export function TransferDialog({
             required
           />
         </Field>
-        <Field label={common.currency}>
-          <CurrencySelect name="currency" defaultValue={values.currency} />
-        </Field>
-        <Field label={common.date} htmlFor="transfer-date">
-          <Input
-            id="transfer-date"
-            type="date"
-            name="date"
-            defaultValue={values.date}
-            required
-          />
+        <Field label={common.currency} htmlFor="transfer-currency">
+          <CurrencySelect id="transfer-currency" name="currency" defaultValue={values.currency} />
         </Field>
       </div>
+
+      <Field label={common.date} htmlFor="transfer-date">
+        <Input
+          id="transfer-date"
+          type="date"
+          name="date"
+          defaultValue={values.date}
+          required
+        />
+      </Field>
 
       <Field label={common.note} htmlFor="transfer-note">
         <Textarea
