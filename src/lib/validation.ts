@@ -114,16 +114,41 @@ export const accountSchema = z.object({
   type: z.enum(ACCOUNT_TYPES),
 });
 
-export const transactionSchema = z.object({
-  id: z.string().trim().optional(),
-  date: isoDate,
-  amount: positiveAmount,
-  currency,
-  type: z.enum(["EXPENSE", "INCOME"]),
-  accountId: z.string().trim().min(1, "Pick an account"),
-  categoryId: optionalId,
-  note: optionalText,
-});
+export const transactionSchema = z
+  .object({
+    id: z.string().trim().optional(),
+    date: isoDate,
+    amount: positiveAmount,
+    currency,
+    type: z.enum(["EXPENSE", "INCOME", "EXTERNAL_TRANSFER"]),
+    accountId: z.string().trim().min(1, "Pick an account"),
+    categoryId: optionalId,
+    note: optionalText,
+    /** OUT/IN direction for an EXTERNAL_TRANSFER row - no paired leg, so this
+     *  is the only place the direction is recorded. Absent/empty for every
+     *  other type; normalized to null below regardless of what was
+     *  submitted, so a stale value left over from switching the type field
+     *  back to EXPENSE/INCOME in the form never survives into the database. */
+    transferDirection: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (value === "OUT" || value === "IN" ? value : null)),
+  })
+  .transform((value, ctx) => {
+    if (value.type === "EXTERNAL_TRANSFER") {
+      if (value.transferDirection === null) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Pick a direction",
+          path: ["transferDirection"],
+        });
+        return z.NEVER;
+      }
+      return { ...value, categoryId: null };
+    }
+    return { ...value, transferDirection: null };
+  });
 
 export const transferSchema = z
   .object({
@@ -298,6 +323,7 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
     "Mantén la descripción en menos de 200 caracteres",
   "Pick an account before approving": "Elige una cuenta antes de aprobar",
   "Add at least one active account": "Agrega al menos una cuenta activa",
+  "Pick a direction": "Elige una dirección",
   "Check the form and try again": "Revisa el formulario e intenta de nuevo",
 };
 

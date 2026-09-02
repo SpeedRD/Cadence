@@ -223,6 +223,61 @@ async function main() {
     "Usa como máximo 2 decimales",
   );
 
+  console.log("\n-- transactionSchema: EXTERNAL_TRANSFER invariants --");
+  {
+    const base = { date: "2026-08-20", currency: "DOP", accountId: "acct", note: "" };
+
+    const missingDirection = transactionSchema.safeParse({
+      ...base, amount: "100", type: "EXTERNAL_TRANSFER", categoryId: "",
+    });
+    check("EXTERNAL_TRANSFER without a direction is rejected", !missingDirection.success);
+
+    const outParsed = transactionSchema.safeParse({
+      ...base, amount: "5000", type: "EXTERNAL_TRANSFER", categoryId: "some-category-id", transferDirection: "OUT",
+    });
+    check("EXTERNAL_TRANSFER with an OUT direction validates", outParsed.success);
+    eq(
+      "categoryId is forced null even though one was submitted",
+      outParsed.success ? outParsed.data.categoryId : "n/a",
+      null,
+    );
+    eq(
+      "transferDirection OUT survives validation",
+      outParsed.success ? outParsed.data.transferDirection : "n/a",
+      "OUT",
+    );
+
+    const inParsed = transactionSchema.safeParse({
+      ...base, amount: "2000", type: "EXTERNAL_TRANSFER", categoryId: "", transferDirection: "IN",
+    });
+    check("EXTERNAL_TRANSFER with an IN direction validates", inParsed.success);
+    eq(
+      "transferDirection IN survives validation",
+      inParsed.success ? inParsed.data.transferDirection : "n/a",
+      "IN",
+    );
+
+    const garbageDirection = transactionSchema.safeParse({
+      ...base, amount: "100", type: "EXTERNAL_TRANSFER", categoryId: "", transferDirection: "SIDEWAYS",
+    });
+    check("an unrecognized transferDirection value is rejected for EXTERNAL_TRANSFER", !garbageDirection.success);
+
+    const expenseWithStaleDirection = transactionSchema.safeParse({
+      ...base, amount: "50", type: "EXPENSE", categoryId: "", transferDirection: "OUT",
+    });
+    check("an ordinary EXPENSE still validates even if transferDirection is present", expenseWithStaleDirection.success);
+    eq(
+      "a stale transferDirection is dropped for a non-EXTERNAL_TRANSFER type",
+      expenseWithStaleDirection.success ? expenseWithStaleDirection.data.transferDirection : "n/a",
+      null,
+    );
+
+    const incomeNoDirection = transactionSchema.safeParse({
+      ...base, amount: "50", type: "INCOME", categoryId: "",
+    });
+    check("an ordinary INCOME with no transferDirection field at all still validates", incomeNoDirection.success);
+  }
+
   console.log("\n== transaction edit guard ==");
   const { transactionEditBlock, balanceSign, isCashflow } = await import("../src/lib/transactions");
   eq("an opening balance can't be edited through the transaction form", transactionEditBlock({ type: "OPENING_BALANCE", transferId: null }), "opening_balance");
