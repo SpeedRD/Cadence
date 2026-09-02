@@ -639,8 +639,8 @@ export const es = {
     roadmapAmount: "Monto de la hoja de ruta",
     plannedAmount: "Monto planificado",
     goalOnTrack: "Al día con la hoja de ruta",
-    goalBehind: (amount: string) => `${amount} por detrás de la meta trazada`,
-    goalAhead: (amount: string) => `${amount} por delante de la meta trazada`,
+    goalBehind: (amount: string) => `${amount} por detrás de la hoja de ruta`,
+    goalAhead: (amount: string) => `${amount} por delante de la hoja de ruta`,
     protectedBufferHeading: "Colchón protegido",
     bufferSuggested: (amount: string) => `Sugerido ${amount}`,
     bufferZeroWarning: "Este plan no deja colchón protegido para gastos imprevistos.",
@@ -673,7 +673,7 @@ export const es = {
     flexibleAllocated: "Asignado",
     flexibleUnallocated: "Sin asignar",
     flexibleOverallocated: (amount: string) => `${amount} sobreasignado`,
-    safeToSpendPerDayEstimate: "Estimado seguro para gastar por día",
+    safeToSpendPerDayEstimate: "Disponible para gastar por día",
     noFlexibleCategoriesConfigured:
       "No hay categorías flexibles disponibles - cada categoría de gasto es fija esencial o está excluida.",
     acknowledgeDeficitLabel:
@@ -683,9 +683,9 @@ export const es = {
     confirmSnapshotsNote:
       "Los saldos reportados se registran solo para auditoría - nunca cambian el saldo de la cuenta.",
     confirmIncomeNote: (count: number, amount: string) =>
-      `Se crearán ${count} transacción${count === 1 ? "" : "es"} de ingreso por un total de ${amount}.`,
+      `Se ${count === 1 ? "creará" : "crearán"} ${count} transacción${count === 1 ? "" : "es"} de ingreso por un total de ${amount}.`,
     confirmBudgetsNote: (count: number) =>
-      `Se crearán o actualizarán ${count} presupuesto${count === 1 ? "" : "s"} de categoría para este periodo.`,
+      `Se ${count === 1 ? "creará o actualizará" : "crearán o actualizarán"} ${count} presupuesto${count === 1 ? "" : "s"} de categoría para este periodo.`,
     confirmReservedNote:
       "Las suscripciones, los aportes recurrentes y los montos de metas quedan reservados en el plan, pero no se registran como transacciones o aportes reales.",
     acknowledgeZeroBufferLabel: "Entiendo que este plan no deja colchón protegido.",
