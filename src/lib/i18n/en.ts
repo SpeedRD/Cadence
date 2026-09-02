@@ -41,6 +41,7 @@ export const en = {
       EXPENSE: "Expense",
       INCOME: "Income",
       TRANSFER: "Transfer",
+      OPENING_BALANCE: "Opening balance",
     } as Record<string, string>,
     sourceLabels: {
       MANUAL: "Manual",
@@ -49,6 +50,7 @@ export const en = {
       OUTLOOK: "Outlook",
       PAYPAL: "PayPal",
       PAYDAY_CHECKIN: "Payday check-in",
+      OPENING_BALANCE: "Opening balance",
     } as Record<string, string>,
     frequencyLabels: {
       WEEKLY: "Weekly",
@@ -255,6 +257,9 @@ export const en = {
     transactionNoLongerExists: "That transaction no longer exists",
     transferNoLongerExists: "That transfer no longer exists",
     editFromTransferForm: "Edit this transfer from the transfer form",
+    editOpeningBalanceFromAccounts:
+      "This is an account's opening balance - change it from the Accounts page so it stays separate from income and spending",
+    openingBalance: "Opening balance",
     nothingToDelete: "Nothing to delete",
   },
   accounts: {

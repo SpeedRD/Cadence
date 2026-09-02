@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { getSettings, requireAuth } from "@/lib/auth";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
+import { transactionEditBlock } from "@/lib/transactions";
 import {
   firstError,
   formObject,
@@ -30,9 +31,9 @@ export async function saveTransactionAction(
   if (id) {
     const existing = await prisma.transaction.findUnique({ where: { id } });
     if (!existing) return fail(t.transactionNoLongerExists);
-    if (existing.transferId) {
-      return fail(t.editFromTransferForm);
-    }
+    const block = transactionEditBlock(existing);
+    if (block === "transfer") return fail(t.editFromTransferForm);
+    if (block === "opening_balance") return fail(t.editOpeningBalanceFromAccounts);
     await prisma.transaction.update({ where: { id }, data: values });
   } else {
     await prisma.transaction.create({ data: { ...values, source: "MANUAL" } });

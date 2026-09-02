@@ -43,6 +43,7 @@ export const es = {
       EXPENSE: "Gasto",
       INCOME: "Ingreso",
       TRANSFER: "Transferencia",
+      OPENING_BALANCE: "Saldo inicial",
     } as Record<string, string>,
     sourceLabels: {
       MANUAL: "Manual",
@@ -51,6 +52,7 @@ export const es = {
       OUTLOOK: "Outlook",
       PAYPAL: "PayPal",
       PAYDAY_CHECKIN: "Chequeo de pago",
+      OPENING_BALANCE: "Saldo inicial",
     } as Record<string, string>,
     frequencyLabels: {
       WEEKLY: "Semanal",
@@ -258,6 +260,9 @@ export const es = {
     transactionNoLongerExists: "Esa transacción ya no existe",
     transferNoLongerExists: "Esa transferencia ya no existe",
     editFromTransferForm: "Edita esta transferencia desde el formulario de transferencias",
+    editOpeningBalanceFromAccounts:
+      "Este es el saldo inicial de una cuenta: cámbialo desde la página de Cuentas para que se mantenga separado de ingresos y gastos",
+    openingBalance: "Saldo inicial",
     nothingToDelete: "Nada que eliminar",
   },
   accounts: {

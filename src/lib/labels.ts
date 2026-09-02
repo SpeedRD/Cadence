@@ -16,6 +16,7 @@ export const TRANSACTION_TYPE_LABELS: Record<string, string> = {
   EXPENSE: "Expense",
   INCOME: "Income",
   TRANSFER: "Transfer",
+  OPENING_BALANCE: "Opening balance",
 };
 
 export const TRANSACTION_SOURCES = [
@@ -33,6 +34,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   OUTLOOK: "Outlook",
   PAYPAL: "PayPal",
   PAYDAY_CHECKIN: "Payday check-in",
+  OPENING_BALANCE: "Opening balance",
 };
 
 export const CATEGORY_KINDS = ["EXPENSE", "INCOME"] as const;

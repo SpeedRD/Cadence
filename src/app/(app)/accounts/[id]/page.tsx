@@ -143,7 +143,9 @@ export default async function AccountDetailPage({
                                 ? row.transferDirection === "OUT"
                                   ? t.transferTo(row.counterpartAccountName ?? t.anotherAccount)
                                   : t.transferFrom(row.counterpartAccountName ?? t.anotherAccount)
-                                : (row.categoryName ?? common.uncategorized))}
+                                : row.type === "OPENING_BALANCE"
+                                  ? t.openingBalanceAmountLabel
+                                  : (row.categoryName ?? common.uncategorized))}
                           </span>
                           {row.categoryName ? (
                             <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
