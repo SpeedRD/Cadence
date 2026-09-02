@@ -86,6 +86,7 @@ In the Vercel project → Settings → Environment Variables (Production), set:
 - `DIRECT_URL` — the Supabase session pooler string (port `5432`)
 - `APP_TIMEZONE` — `America/Santo_Domingo`
 - `SESSION_SECRET`, `OAUTH_ENCRYPTION_KEY`, `CRON_SECRET` — existing values, or generate new ones (see [PHASE2.md](./PHASE2.md))
+- `APP_URL` — the canonical production origin, e.g. `https://cadence.vercel.app` or your custom domain (no trailing slash). Required for Gmail OAuth to work in production — see [PHASE2.md](./PHASE2.md).
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`
 - `ANTHROPIC_API_KEY`

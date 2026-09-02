@@ -185,6 +185,7 @@ the authoritative source for "today" and pay-period boundaries.
 | `APP_TIMEZONE` | Core app | IANA timezone for resolving pay periods; defaults to `America/Santo_Domingo` |
 | `OAUTH_ENCRYPTION_KEY` | Email automation | Encrypts stored OAuth tokens at rest |
 | `CRON_SECRET` | Email automation | Bearer token required by the ingestion cron route |
+| `APP_URL` | Email automation (production) | Canonical production origin used to build the stable Gmail OAuth redirect URI |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Email automation | Gmail OAuth |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Email automation | Outlook OAuth |
 | `ANTHROPIC_API_KEY` | Email automation | Parses transactional emails into structured data |

@@ -1,3 +1,5 @@
+import type { NextRequest } from "next/server";
+
 /**
  * Google OAuth 2.0 (gmail.readonly) via raw fetch - the project has no other
  * Google dependency, so pulling in `googleapis` for a handful of REST calls
@@ -7,6 +9,28 @@ const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
+
+const CALLBACK_PATH = "/api/auth/gmail/callback";
+
+/**
+ * The redirect URI Google requires to be byte-identical between the
+ * authorization request and the token exchange, and to exactly match an
+ * Authorized redirect URI configured on the OAuth client. Vercel gives every
+ * deployment (including previews) its own hostname, so deriving this from
+ * the incoming request would produce a different, unregistered redirect_uri
+ * per deployment - and would let a spoofed Host header pick the callback
+ * origin. Production therefore requires APP_URL, a stable value set once in
+ * Vercel project settings; local dev (where APP_URL is normally unset) falls
+ * back to the request's own origin, e.g. http://localhost:3000.
+ */
+export function gmailRedirectUri(request: NextRequest): string {
+  const appUrl = process.env.APP_URL;
+  if (appUrl) return new URL(CALLBACK_PATH, appUrl).toString();
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("APP_URL is not set - required for Gmail OAuth in production (see PHASE2.md)");
+  }
+  return new URL(CALLBACK_PATH, request.url).toString();
+}
 
 export const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
