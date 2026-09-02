@@ -26,6 +26,7 @@ import {
   isPaydayDate,
   nextPeriod,
   periodInfo,
+  periodsRemaining,
   previousPeriod,
   type PeriodRef,
 } from "@/lib/period";
@@ -156,15 +157,25 @@ export async function getCategorySuggestions(
   const historicalTotals = new Map<string, number>();
   const historicalNonZero = new Set<string>();
   if (remaining.length > 0) {
+    // Same HISTORY_PERIODS periods as before (prevRef, then two periods back
+    // each time), just fetched in parallel instead of sequentially - each
+    // getPeriodSummary() call is an independent DB round-trip, and the
+    // dashboard calls this unconditionally on every load.
+    const cursors: PeriodRef[] = [];
     let cursor = prevRef;
     for (let i = 0; i < HISTORY_PERIODS; i += 1) {
-      const summary = await getPeriodSummary(periodInfo(cursor), context);
+      cursors.push(cursor);
+      cursor = previousPeriod(previousPeriod(cursor));
+    }
+    const summaries = await Promise.all(
+      cursors.map((ref) => getPeriodSummary(periodInfo(ref), context)),
+    );
+    for (const summary of summaries) {
       for (const line of summary.categories) {
         if (!line.categoryId || !remaining.includes(line.categoryId)) continue;
         historicalTotals.set(line.categoryId, (historicalTotals.get(line.categoryId) ?? 0) + line.spent);
         if (line.spent > 0) historicalNonZero.add(line.categoryId);
       }
-      cursor = previousPeriod(previousPeriod(cursor));
     }
   }
 
@@ -317,17 +328,24 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
   );
 
   const goals: PaydayGoalDraft[] = allGoals
-    .filter((g) => g.targetDate && !g.achievedAt && g.perPeriod !== null)
+    .filter((g) => g.targetDate && !g.achievedAt && g.remaining > 0)
     .map((g) => {
       const existingAlloc = existingAllocationByKey.get(`GOAL:${g.id}`);
+      // listGoals()'s perPeriod/periodsLeft are anchored to context.today (right
+      // for the goals page's "time until target" display), but the payday
+      // planner reserves money for the PLAN period, which can be tomorrow's
+      // period rather than today's (see planPeriodRef()) - so recompute here
+      // anchored to plan.start instead of trusting the pre-computed fields.
+      const periodsLeft = Math.max(1, periodsRemaining(plan.start, g.targetDate as Date));
+      const recommendedAmount = round2(g.remaining / periodsLeft);
       return {
         goalId: g.id,
         name: g.name,
         currency: g.currency,
-        recommendedAmount: g.perPeriod as number,
-        plannedAmount: existingAlloc ? num(existingAlloc.plannedAmount) : (g.perPeriod as number),
+        recommendedAmount,
+        plannedAmount: existingAlloc ? num(existingAlloc.plannedAmount) : recommendedAmount,
         targetDate: g.targetDate as Date,
-        periodsLeft: g.periodsLeft as number,
+        periodsLeft,
       };
     });
   const goalPlanTotal = round2(
@@ -515,10 +533,14 @@ export async function confirmPaydayCheckin(
   const liveAccountById = new Map(liveAccounts.map((a) => [a.id, a]));
   const essentialById = new Map(essentialCategories.map((c) => [c.id, c]));
   const flexibleById = new Map(flexibleCategories.map((c) => [c.id, c]));
-  const [essentialSuggestions, flexibleSuggestions] = await Promise.all([
-    getCategorySuggestions(planRef, essentialCategories, context),
-    getCategorySuggestions(planRef, flexibleCategories, context),
-  ]);
+  // One combined call over both category lists, same as getPaydayCheckinDraft
+  // above - not two separate calls that each redo the shared prior-period
+  // budget lookup and history lookback.
+  const suggestionsByCategory = await getCategorySuggestions(
+    planRef,
+    [...essentialCategories, ...flexibleCategories],
+    context,
+  );
 
   const accountInputs = input.accounts.filter((a) => liveAccountById.has(a.accountId));
   if (accountInputs.length === 0) return { ok: false, reason: "no_active_accounts" };
@@ -698,11 +720,16 @@ export async function confirmPaydayCheckin(
       })),
       ...goalInputs.map((g) => {
         const goal = goalById.get(g.goalId)!;
+        // Same plan-anchored recompute as getPaydayCheckinDraft above - never
+        // trust listGoals()'s today-anchored perPeriod for the audit-trail
+        // recommendedAmount here.
+        const periodsLeft = Math.max(1, periodsRemaining(plan.start, goal.targetDate as Date));
+        const recommendedAmount = round2(goal.remaining / periodsLeft);
         return {
           paydayCheckinId: checkin.id,
           type: "GOAL" as const,
           goalId: goal.id,
-          recommendedAmount: goal.perPeriod ?? 0,
+          recommendedAmount,
           plannedAmount: g.plannedAmount,
           currency: goal.currency,
           basis: "roadmap",
@@ -712,19 +739,19 @@ export async function confirmPaydayCheckin(
         paydayCheckinId: checkin.id,
         type: "ESSENTIAL_CATEGORY" as const,
         categoryId: c.categoryId,
-        recommendedAmount: essentialSuggestions.get(c.categoryId)?.amount ?? 0,
+        recommendedAmount: suggestionsByCategory.get(c.categoryId)?.amount ?? 0,
         plannedAmount: c.plannedAmount,
         currency: context.displayCurrency,
-        basis: essentialSuggestions.get(c.categoryId)?.basis ?? "none",
+        basis: suggestionsByCategory.get(c.categoryId)?.basis ?? "none",
       })),
       ...flexibleInputs.map((c) => ({
         paydayCheckinId: checkin.id,
         type: "FLEXIBLE_CATEGORY" as const,
         categoryId: c.categoryId,
-        recommendedAmount: flexibleSuggestions.get(c.categoryId)?.amount ?? 0,
+        recommendedAmount: suggestionsByCategory.get(c.categoryId)?.amount ?? 0,
         plannedAmount: c.plannedAmount,
         currency: context.displayCurrency,
-        basis: flexibleSuggestions.get(c.categoryId)?.basis ?? "none",
+        basis: suggestionsByCategory.get(c.categoryId)?.basis ?? "none",
       })),
       {
         paydayCheckinId: checkin.id,

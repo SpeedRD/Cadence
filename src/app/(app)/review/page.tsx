@@ -31,11 +31,18 @@ export default async function ReviewPage({
   const params = await searchParams;
   const showReviewed = single(params.reviewed) === "1";
 
-  const [rows, accounts, categories] = await Promise.all([
+  const [rows, accounts, accountsForEdit, categories] = await Promise.all([
     listStagedTransactions({ includeReviewed: showReviewed }),
     prisma.account.findMany({
       orderBy: { name: "asc" },
       where: { status: "ACTIVE" },
+      select: { id: true, name: true, currency: true },
+    }),
+    // Every account regardless of status, so a staged row whose account has
+    // since been archived still shows (and keeps) its own account in the
+    // approve/edit pickers instead of silently defaulting to another one.
+    prisma.account.findMany({
+      orderBy: { name: "asc" },
       select: { id: true, name: true, currency: true },
     }),
     prisma.category.findMany({
@@ -100,7 +107,7 @@ export default async function ReviewPage({
             <CardContent className="px-0 pb-0">
               <ReviewTable
                 rows={sourceRows}
-                accounts={accounts}
+                accounts={accountsForEdit}
                 categories={categories}
                 locale={context.language}
               />

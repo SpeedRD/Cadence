@@ -634,6 +634,7 @@ export const es = {
     contributionsDue: "Aportes recurrentes antes del próximo pago",
     noSubscriptionsDue: "No hay suscripciones antes del próximo pago.",
     noContributionsDue: "No hay aportes recurrentes antes del próximo pago.",
+    alreadyPaidThisPeriod: "Ya pagado este período",
     goalsHeading: "Hoja de ruta de metas",
     noGoalsWithTarget: "No hay metas con fecha para reservar en este periodo.",
     roadmapAmount: "Monto de la hoja de ruta",

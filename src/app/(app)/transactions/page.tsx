@@ -51,10 +51,18 @@ export default async function TransactionsPage({
     page: Number(single(params.page) ?? 1) || 1,
   };
 
-  const [accounts, categories, result, totals] = await Promise.all([
+  const [accounts, accountsForEdit, categories, result, totals] = await Promise.all([
     prisma.account.findMany({
       orderBy: { name: "asc" },
       where: { status: "ACTIVE" },
+      select: { id: true, name: true, currency: true },
+    }),
+    // Every account regardless of status, so the edit dialogs for existing
+    // transactions/transfers can still show (and keep selected) an account
+    // that's since been archived - see TransactionTable below. The "create
+    // new" pickers above must keep using the active-only `accounts` list.
+    prisma.account.findMany({
+      orderBy: { name: "asc" },
       select: { id: true, name: true, currency: true },
     }),
     prisma.category.findMany({
@@ -158,7 +166,7 @@ export default async function TransactionsPage({
           <CardContent className="px-0">
             <TransactionTable
               rows={result.rows}
-              accounts={accounts}
+              accounts={accountsForEdit}
               categories={categories}
               displayCurrency={context.displayCurrency}
               locale={context.language}

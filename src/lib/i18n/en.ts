@@ -627,6 +627,7 @@ export const en = {
     contributionsDue: "Recurring contributions due before next payday",
     noSubscriptionsDue: "No subscriptions due before next payday.",
     noContributionsDue: "No recurring contributions due before next payday.",
+    alreadyPaidThisPeriod: "Already paid this period",
     goalsHeading: "Goal roadmap",
     noGoalsWithTarget: "No dated goals to reserve for this period.",
     roadmapAmount: "Roadmap amount",

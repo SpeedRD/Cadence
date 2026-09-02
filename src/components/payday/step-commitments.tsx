@@ -3,6 +3,7 @@
 import { Field } from "@/components/form/field";
 import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { formatMoney } from "@/lib/currency";
@@ -15,6 +16,14 @@ import type {
   PaydayCommittedDraft,
   PaydayGoalDraft,
 } from "@/lib/data/payday";
+
+function AlreadyLoggedBadge({ label }: { label: string }) {
+  return (
+    <Badge variant="secondary" className="text-[0.6875rem] font-normal text-muted-foreground">
+      {label}
+    </Badge>
+  );
+}
 
 function AmountInput({
   value,
@@ -98,7 +107,10 @@ export function StepCommitments({
                   {item.name}{" "}
                   <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate)}</span>
                 </span>
-                <span className="figure">{formatMoney(item.amount, displayCurrency)}</span>
+                <span className="flex items-center gap-1.5">
+                  {item.alreadyLogged ? <AlreadyLoggedBadge label={t.alreadyPaidThisPeriod} /> : null}
+                  <span className="figure">{formatMoney(item.amount, displayCurrency)}</span>
+                </span>
               </div>
             ))
           )}
@@ -119,7 +131,10 @@ export function StepCommitments({
                   {item.name}{" "}
                   <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate)}</span>
                 </span>
-                <span className="figure">{formatMoney(item.amount, displayCurrency)}</span>
+                <span className="flex items-center gap-1.5">
+                  {item.alreadyLogged ? <AlreadyLoggedBadge label={t.alreadyPaidThisPeriod} /> : null}
+                  <span className="figure">{formatMoney(item.amount, displayCurrency)}</span>
+                </span>
               </div>
             ))
           )}
