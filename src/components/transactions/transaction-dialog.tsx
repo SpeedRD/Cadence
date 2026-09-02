@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { FormDialog } from "@/components/form/form-dialog";
 import { Field } from "@/components/form/field";
 import {
@@ -23,6 +25,7 @@ export interface TransactionFormValues {
   accountId?: string;
   categoryId?: string | null;
   note?: string | null;
+  transferDirection?: string | null;
 }
 
 export function TransactionDialog({
@@ -46,6 +49,8 @@ export function TransactionDialog({
   const t = dictionary.transactions;
   const common = dictionary.common;
   const editing = Boolean(values.id);
+  const [type, setType] = useState(values.type ?? "EXPENSE");
+  const isExternalTransfer = type === "EXTERNAL_TRANSFER";
 
   return (
     <FormDialog
@@ -68,9 +73,10 @@ export function TransactionDialog({
           <EnumSelect
             id="transaction-type"
             name="type"
-            options={["EXPENSE", "INCOME"]}
+            options={["EXPENSE", "INCOME", "EXTERNAL_TRANSFER"]}
             labels={common.transactionTypeLabels}
             defaultValue={values.type ?? "EXPENSE"}
+            onValueChange={setType}
           />
         </Field>
         <Field label={common.date} htmlFor="transaction-date">
@@ -111,16 +117,34 @@ export function TransactionDialog({
             common={common}
           />
         </Field>
-        <Field label={common.category} htmlFor="transaction-category">
-          <CategorySelect
-            id="transaction-category"
-            name="categoryId"
-            categories={categories}
-            defaultValue={values.categoryId ?? "none"}
-            common={common}
-          />
-        </Field>
+        {isExternalTransfer ? (
+          <Field label={t.direction} htmlFor="transaction-direction">
+            <EnumSelect
+              id="transaction-direction"
+              name="transferDirection"
+              options={["OUT", "IN"]}
+              labels={{ OUT: t.directionOut, IN: t.directionIn }}
+              defaultValue={values.transferDirection ?? "OUT"}
+            />
+          </Field>
+        ) : (
+          <Field label={common.category} htmlFor="transaction-category">
+            <CategorySelect
+              id="transaction-category"
+              name="categoryId"
+              categories={categories}
+              defaultValue={values.categoryId ?? "none"}
+              common={common}
+            />
+          </Field>
+        )}
       </div>
+
+      {/* categoryId is always submitted, even when the category field is
+          hidden for EXTERNAL_TRANSFER - transactionSchema forces it to null
+          for that type either way, but the field must still be present in
+          the FormData or validation rejects the row as missing categoryId. */}
+      {isExternalTransfer ? <input type="hidden" name="categoryId" value="none" /> : null}
 
       <Field label={common.note} htmlFor="transaction-note">
         <Textarea

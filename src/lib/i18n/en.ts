@@ -42,6 +42,7 @@ export const en = {
       INCOME: "Income",
       TRANSFER: "Transfer",
       OPENING_BALANCE: "Opening balance",
+      EXTERNAL_TRANSFER: "External transfer",
     } as Record<string, string>,
     sourceLabels: {
       MANUAL: "Manual",
@@ -192,6 +193,9 @@ export const en = {
     saveChanges: "Save changes",
     addTransaction: "Add transaction",
     notePlaceholder: "What was it for?",
+    direction: "Direction",
+    directionOut: "Outgoing - money left this account",
+    directionIn: "Incoming - money arrived, to be forwarded",
     editTransfer: "Edit transfer",
     moveMoney: "Move money",
     transferDescription:
