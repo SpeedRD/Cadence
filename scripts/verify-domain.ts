@@ -431,6 +431,203 @@ async function main() {
   eq("periods left to the target date", verifyGoal.periodsLeft, 9);
   eq("per period = remaining / periods left", verifyGoal.perPeriod, Math.round((800 / 9) * 100) / 100);
 
+  console.log("\n== external transfer: manual create/update/delete invariants ==");
+  {
+    // saveTransactionAction/deleteTransactionAction are "use server" actions
+    // gated by requireAuth() (next/headers cookies()), which only works
+    // inside a real Next.js request - this script can't call them directly.
+    // Every check below instead exercises the exact same two steps those
+    // actions perform - validate via transactionSchema, then the identical
+    // prisma.transaction calls - so each assertion is a real database
+    // assertion, just without the auth/redirect wrapper (covered by manual
+    // QA instead - see the plan's final task).
+    const extAccount = await prisma.account.create({
+      data: { name: "Verify External Transfer", currency: "DOP", type: "CHECKING" },
+    });
+    const otherAccount = await prisma.account.create({
+      data: { name: "Verify External Transfer Other", currency: "DOP", type: "CHECKING" },
+    });
+    const groceriesCat = await prisma.category.findFirstOrThrow({ where: { name: "Groceries" } });
+    const incomeCat = await prisma.category.findFirstOrThrow({ where: { name: "Income" } });
+
+    const extContext = {
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today: civilDate(2026, 8, 20),
+      currentPeriod: periodForDate(civilDate(2026, 8, 20)),
+    };
+    const balanceOf = async (accountId: string) => {
+      const balances = await getAccountBalances(extContext, { status: "ALL" });
+      return balances.find((a) => a.id === accountId)?.balance ?? 0;
+    };
+
+    // -- create: EXTERNAL_TRANSFER OUT, categoryId forced null even if submitted --
+    const createOutParsed = transactionSchema.safeParse({
+      date: "2026-08-20",
+      amount: "5000",
+      currency: "DOP",
+      type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id,
+      categoryId: groceriesCat.id, // deliberately submitted - must be dropped
+      note: "Sent to Mom",
+      transferDirection: "OUT",
+    });
+    check("create: EXTERNAL_TRANSFER OUT validates", createOutParsed.success);
+    if (!createOutParsed.success) throw new Error("fixture setup failed: createOutParsed");
+    eq("create: categoryId is forced null even though one was submitted", createOutParsed.data.categoryId, null);
+    eq("create: transferDirection OUT survives validation", createOutParsed.data.transferDirection, "OUT");
+
+    const { id: _createOutId, ...outValues } = createOutParsed.data;
+    const outRow = await prisma.transaction.create({ data: { ...outValues, source: "MANUAL" } });
+    eq("create: transferId stays null - never paired like an internal transfer", outRow.transferId, null);
+    eq("create: type is EXTERNAL_TRANSFER", outRow.type, "EXTERNAL_TRANSFER");
+    eq("create: categoryId is null in the database", outRow.categoryId, null);
+    eq("create: transactionEditBlock allows editing it (unlike a TRANSFER leg)", transactionEditBlock(outRow), null);
+    eq("create: account balance drops by the full amount", await balanceOf(extAccount.id), -5000);
+
+    // -- create: EXTERNAL_TRANSFER IN --
+    const createInParsed = transactionSchema.safeParse({
+      date: "2026-08-21",
+      amount: "2000",
+      currency: "DOP",
+      type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id,
+      categoryId: "",
+      note: "Dad's pass-through funds",
+      transferDirection: "IN",
+    });
+    check("create: EXTERNAL_TRANSFER IN validates", createInParsed.success);
+    if (!createInParsed.success) throw new Error("fixture setup failed: createInParsed");
+    const { id: _createInId, ...inValues } = createInParsed.data;
+    const inRow = await prisma.transaction.create({ data: { ...inValues, source: "MANUAL" } });
+    eq("create: account balance reflects both rows (-5000 + 2000)", await balanceOf(extAccount.id), -3000);
+
+    // -- update: EXPENSE -> EXTERNAL_TRANSFER clears category, sets direction --
+    const expenseRow = await prisma.transaction.create({
+      data: { date: civilDate(2026, 8, 22), amount: 300, currency: "DOP", type: "EXPENSE", accountId: extAccount.id, categoryId: groceriesCat.id, source: "MANUAL" },
+    });
+    const toExternalParsed = transactionSchema.safeParse({
+      id: expenseRow.id,
+      date: "2026-08-22",
+      amount: "300",
+      currency: "DOP",
+      type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id,
+      categoryId: groceriesCat.id, // still submitted by a form that hasn't cleared its own field yet
+      note: "Actually a pass-through",
+      transferDirection: "OUT",
+    });
+    check("update EXPENSE->EXTERNAL_TRANSFER validates", toExternalParsed.success);
+    if (!toExternalParsed.success) throw new Error("fixture setup failed: toExternalParsed");
+    const { id: updateId1, ...toExternalValues } = toExternalParsed.data;
+    await prisma.transaction.update({ where: { id: updateId1! }, data: toExternalValues });
+    const afterToExternal = await prisma.transaction.findUniqueOrThrow({ where: { id: expenseRow.id } });
+    eq("update EXPENSE->EXTERNAL_TRANSFER: categoryId clears to null", afterToExternal.categoryId, null);
+    eq("update EXPENSE->EXTERNAL_TRANSFER: transferDirection is set", afterToExternal.transferDirection, "OUT");
+    eq("update EXPENSE->EXTERNAL_TRANSFER: transferId remains null", afterToExternal.transferId, null);
+    eq("update EXPENSE->EXTERNAL_TRANSFER: still editable", transactionEditBlock(afterToExternal), null);
+
+    // -- update: EXTERNAL_TRANSFER -> INCOME clears direction, category settable again --
+    const backToIncomeParsed = transactionSchema.safeParse({
+      id: expenseRow.id,
+      date: "2026-08-22",
+      amount: "300",
+      currency: "DOP",
+      type: "INCOME",
+      accountId: extAccount.id,
+      categoryId: incomeCat.id,
+      note: "Turned out to be real income",
+      transferDirection: "OUT", // stale client state from before switching the type back - must be dropped
+    });
+    check("update EXTERNAL_TRANSFER->INCOME validates", backToIncomeParsed.success);
+    if (!backToIncomeParsed.success) throw new Error("fixture setup failed: backToIncomeParsed");
+    eq("update EXTERNAL_TRANSFER->INCOME: stale transferDirection is dropped by validation", backToIncomeParsed.data.transferDirection, null);
+    const { id: updateId2, ...backToIncomeValues } = backToIncomeParsed.data;
+    await prisma.transaction.update({ where: { id: updateId2! }, data: backToIncomeValues });
+    const afterBackToIncome = await prisma.transaction.findUniqueOrThrow({ where: { id: expenseRow.id } });
+    eq("update EXTERNAL_TRANSFER->INCOME: transferDirection clears to null in the database", afterBackToIncome.transferDirection, null);
+    eq("update EXTERNAL_TRANSFER->INCOME: categoryId is settable again", afterBackToIncome.categoryId, incomeCat.id);
+    eq("update EXTERNAL_TRANSFER->INCOME: transferId still null", afterBackToIncome.transferId, null);
+
+    // -- update: direction change OUT -> IN on an existing EXTERNAL_TRANSFER row --
+    const balanceBeforeFlip = await balanceOf(extAccount.id);
+    const flipParsed = transactionSchema.safeParse({
+      id: outRow.id, date: "2026-08-20", amount: "5000", currency: "DOP", type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id, categoryId: "", note: "Sent to Mom", transferDirection: "IN",
+    });
+    check("update: flipping EXTERNAL_TRANSFER direction validates", flipParsed.success);
+    if (!flipParsed.success) throw new Error("fixture setup failed: flipParsed");
+    const { id: flipId, ...flipValues } = flipParsed.data;
+    await prisma.transaction.update({ where: { id: flipId! }, data: flipValues });
+    const balanceAfterFlip = await balanceOf(extAccount.id);
+    eq(
+      "update: flipping OUT->IN on a 5000 row moves the balance by 10000 (removes the -5000 effect, adds +5000)",
+      round2(balanceAfterFlip - balanceBeforeFlip),
+      10000,
+    );
+
+    // flip it back OUT so the rest of this block's balance math stays predictable
+    const flipBackParsed = transactionSchema.safeParse({
+      id: outRow.id, date: "2026-08-20", amount: "5000", currency: "DOP", type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id, categoryId: "", note: "Sent to Mom", transferDirection: "OUT",
+    });
+    if (flipBackParsed.success) {
+      const { id: flipBackId, ...flipBackValues } = flipBackParsed.data;
+      await prisma.transaction.update({ where: { id: flipBackId! }, data: flipBackValues });
+    }
+
+    // -- update: reassigning accountId moves the effect to the new account --
+    const balanceOldBefore = await balanceOf(extAccount.id);
+    const balanceNewBefore = await balanceOf(otherAccount.id);
+    const reassignParsed = transactionSchema.safeParse({
+      id: inRow.id, date: "2026-08-21", amount: "2000", currency: "DOP", type: "EXTERNAL_TRANSFER",
+      accountId: otherAccount.id, categoryId: "", note: "Dad's pass-through funds", transferDirection: "IN",
+    });
+    check("update: reassigning accountId validates", reassignParsed.success);
+    if (!reassignParsed.success) throw new Error("fixture setup failed: reassignParsed");
+    const { id: reassignId, ...reassignValues } = reassignParsed.data;
+    await prisma.transaction.update({ where: { id: reassignId! }, data: reassignValues });
+    eq("update: old account balance drops by the reassigned row's effect", round2((await balanceOf(extAccount.id)) - balanceOldBefore), -2000);
+    eq("update: new account balance picks up the reassigned row's effect", round2((await balanceOf(otherAccount.id)) - balanceNewBefore), 2000);
+
+    // move it back so the delete check below only has to look in one place
+    const moveBackParsed = transactionSchema.safeParse({
+      id: inRow.id, date: "2026-08-21", amount: "2000", currency: "DOP", type: "EXTERNAL_TRANSFER",
+      accountId: extAccount.id, categoryId: "", note: "Dad's pass-through funds", transferDirection: "IN",
+    });
+    if (moveBackParsed.success) {
+      const { id: moveBackId, ...moveBackValues } = moveBackParsed.data;
+      await prisma.transaction.update({ where: { id: moveBackId! }, data: moveBackValues });
+    }
+
+    // -- delete: an EXTERNAL_TRANSFER row is a single row, never a paired delete --
+    const beforeDeleteCount = await prisma.transaction.count({ where: { accountId: extAccount.id } });
+    const balanceBeforeDelete = await balanceOf(extAccount.id);
+    const toDelete = await prisma.transaction.findUniqueOrThrow({ where: { id: outRow.id } });
+    // Mirrors deleteTransactionAction exactly: transferId is null, so it
+    // takes the single-row `else` branch, never the multi-row
+    // `deleteMany({ transferId })` branch used for internal transfer legs.
+    if (toDelete.transferId) {
+      await prisma.transaction.deleteMany({ where: { transferId: toDelete.transferId } });
+    } else {
+      await prisma.transaction.delete({ where: { id: toDelete.id } });
+    }
+    const afterDeleteCount = await prisma.transaction.count({ where: { accountId: extAccount.id } });
+    eq("delete: exactly one row is removed, not a paired transfer delete", beforeDeleteCount - afterDeleteCount, 1);
+    const stillThere = await prisma.transaction.findUnique({ where: { id: inRow.id } });
+    check("delete: the other EXTERNAL_TRANSFER row on the same account is untouched", stillThere !== null);
+    eq(
+      "delete: deleting the 5000 OUT row raises the account balance by exactly 5000",
+      round2((await balanceOf(extAccount.id)) - balanceBeforeDelete),
+      5000,
+    );
+
+    await prisma.transaction.deleteMany({ where: { accountId: { in: [extAccount.id, otherAccount.id] } } });
+    await prisma.account.deleteMany({ where: { id: { in: [extAccount.id, otherAccount.id] } } });
+    console.log("  ok   external transfer manual CRUD fixtures removed");
+  }
+
   console.log("\n== the display currency drives goal and budget presentation ==");
   // A stored amount is a native financial value; every figure the pages show
   // is that same amount converted once into the selected display currency.
