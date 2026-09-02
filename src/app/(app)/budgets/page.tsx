@@ -5,6 +5,7 @@ import { BudgetAmountForm } from "@/components/budgets/budget-amount-form";
 import { ActionButton } from "@/components/form/action-button";
 import { Meter, meterStatus } from "@/components/meter";
 import { PageHeader } from "@/components/page-header";
+import { PlanThisPeriodButton } from "@/components/payday/plan-this-period-button";
 import { Stat } from "@/components/stat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/table";
 import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
+import { getPaydayCheckinDraft, planPeriodRef } from "@/lib/data/payday";
 import { getPeriodSummary } from "@/lib/data/period-summary";
 import { getDictionary } from "@/lib/i18n";
 import { num } from "@/lib/money";
@@ -49,8 +51,9 @@ export default async function BudgetsPage({
   );
   const period = periodInfo(requested ?? context.currentPeriod);
   const isCurrent = period.key === context.currentPeriod.key;
+  const isPlanTarget = period.key === periodKey(planPeriodRef(context));
 
-  const [summary, categories, budgetRows] = await Promise.all([
+  const [summary, categories, budgetRows, paydayDraft] = await Promise.all([
     getPeriodSummary(period, context),
     prisma.category.findMany({
       where: { kind: "EXPENSE" },
@@ -59,6 +62,7 @@ export default async function BudgetsPage({
     prisma.budget.findMany({
       where: { year: period.year, month: period.month, period: period.period },
     }),
+    isPlanTarget ? getPaydayCheckinDraft(context) : Promise.resolve(null),
   ]);
 
   const budgetByCategory = new Map(
@@ -93,18 +97,23 @@ export default async function BudgetsPage({
         title={t.title}
         description={t.description}
         actions={
-          <ActionButton
-            action={copyPreviousBudgetsAction}
-            fields={{
-              year: period.year,
-              month: period.month,
-              period: period.period,
-            }}
-            size="sm"
-          >
-            <Copy className="size-3.5" />
-            {t.copyLastPeriod}
-          </ActionButton>
+          <>
+            {paydayDraft ? (
+              <PlanThisPeriodButton draft={paydayDraft} rates={context.rates} locale={context.language} />
+            ) : null}
+            <ActionButton
+              action={copyPreviousBudgetsAction}
+              fields={{
+                year: period.year,
+                month: period.month,
+                period: period.period,
+              }}
+              size="sm"
+            >
+              <Copy className="size-3.5" />
+              {t.copyLastPeriod}
+            </ActionButton>
+          </>
         }
       />
 
