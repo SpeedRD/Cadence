@@ -41,6 +41,8 @@ import {
 } from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
 import { num, round2 } from "../src/lib/money";
+import { gmailRedirectUri } from "../src/lib/oauth/google";
+import type { NextRequest } from "next/server";
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL ?? "" }),
@@ -1280,6 +1282,50 @@ async function main() {
   await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Payday" } } });
   await prisma.category.update({ where: { id: billsCategory.id }, data: { isEssentialFixed: false } });
   console.log("  ok   payday fixtures removed");
+
+  console.log("\n-- Gmail OAuth redirect URI --");
+  {
+    const env = process.env as Record<string, string | undefined>;
+    const savedAppUrl = env.APP_URL;
+    const savedNodeEnv = env.NODE_ENV;
+    const fakeRequest = (url: string) => ({ url }) as unknown as NextRequest;
+
+    try {
+      env.APP_URL = "https://cadence.example.com";
+      env.NODE_ENV = "production";
+      eq(
+        "production uses the configured APP_URL regardless of the request's own host",
+        gmailRedirectUri(fakeRequest("https://random-preview-abc123.vercel.app/api/auth/gmail/start")),
+        "https://cadence.example.com/api/auth/gmail/callback",
+      );
+      eq(
+        "a spoofed Host-derived request URL cannot override the configured redirect URI",
+        gmailRedirectUri(fakeRequest("https://attacker.example.net/api/auth/gmail/start")),
+        "https://cadence.example.com/api/auth/gmail/callback",
+      );
+
+      delete env.APP_URL;
+      let threw = false;
+      try {
+        gmailRedirectUri(fakeRequest("https://random-preview-abc123.vercel.app/api/auth/gmail/start"));
+      } catch {
+        threw = true;
+      }
+      check("production without APP_URL refuses to fall back to the request host", threw);
+
+      env.NODE_ENV = "development";
+      eq(
+        "local dev without APP_URL still builds the redirect URI from localhost",
+        gmailRedirectUri(fakeRequest("http://localhost:3000/api/auth/gmail/start")),
+        "http://localhost:3000/api/auth/gmail/callback",
+      );
+    } finally {
+      if (savedAppUrl === undefined) delete env.APP_URL;
+      else env.APP_URL = savedAppUrl;
+      if (savedNodeEnv === undefined) delete env.NODE_ENV;
+      else env.NODE_ENV = savedNodeEnv;
+    }
+  }
 
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });

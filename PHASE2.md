@@ -41,16 +41,20 @@ import (Phase 1) are unchanged.
    avoids Google's app-verification review.
 4. **APIs & Services → Credentials → Create Credentials → OAuth client ID**,
    type **Web application**.
-5. Under **Authorized redirect URIs**, add one entry per place you'll run the
-   app from, e.g.:
+5. Under **Authorized redirect URIs**, add exactly:
    - `http://localhost:3000/api/auth/gmail/callback` (local dev)
-   - `https://your-app.vercel.app/api/auth/gmail/callback` (production)
-   - any custom domain, the same way
+   - `{APP_URL}/api/auth/gmail/callback` (production - the exact value of
+     your `APP_URL` env var, e.g. `https://cadence.vercel.app/api/auth/gmail/callback`)
 
-   Cadence builds the redirect URI from the request's own origin at connect
-   time, so it works unmodified on `*.vercel.app` and a custom domain - you
-   just need each origin you'll actually use registered here, since Google
-   rejects a callback to a redirect URI it doesn't recognize.
+   In production the redirect URI is built from `APP_URL`, a stable value you
+   set once in Vercel project settings - not from the incoming request's
+   hostname. This keeps it working across every deployment (Vercel gives each
+   preview its own throwaway hostname, which Google would never recognize)
+   and stops a spoofed `Host` header from choosing the callback origin.
+   Google rejects a callback to a redirect URI it doesn't recognize, so only
+   the URI above needs to be registered - do not add preview-deployment
+   URLs. Local dev (no `APP_URL` set) still builds the redirect URI from the
+   request's own origin, so `http://localhost:3000` works unmodified.
 6. Copy the generated **Client ID** and **Client secret** into
    `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
 

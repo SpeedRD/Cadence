@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 
 import { requireAuth } from "@/lib/auth";
 import { encrypt } from "@/lib/crypto";
-import { exchangeGoogleCode, fetchGoogleEmail } from "@/lib/oauth/google";
+import { exchangeGoogleCode, fetchGoogleEmail, gmailRedirectUri } from "@/lib/oauth/google";
 import { clearOAuthState, consumeOAuthState } from "@/lib/oauth/state";
 import { prisma } from "@/lib/prisma";
 
@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const redirectUri = new URL("/api/auth/gmail/callback", request.url).toString();
+    const redirectUri = gmailRedirectUri(request);
     const tokens = await exchangeGoogleCode(code, redirectUri);
     if (!tokens.refreshToken) {
       return redirectWith(request, {
