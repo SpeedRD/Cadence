@@ -441,6 +441,8 @@ export type ConfirmPaydayCheckinResult =
   | { ok: false; reason: "deficit_not_acknowledged" }
   | { ok: false; reason: "zero_buffer_not_acknowledged" };
 
+export type ConfirmPaydayCheckinInput = z.infer<typeof paydayConfirmSchema>;
+
 /**
  * Confirms one pay period's payday check-in atomically: reconciled income
  * transactions, balance snapshots, the check-in row itself, plan-allocation
@@ -456,7 +458,7 @@ export type ConfirmPaydayCheckinResult =
  * file for the auth/form-parsing/localized-message layer around this.
  */
 export async function confirmPaydayCheckin(
-  input: z.infer<typeof paydayConfirmSchema>,
+  input: ConfirmPaydayCheckinInput,
   context: ConfirmPaydayCheckinContext,
 ): Promise<ConfirmPaydayCheckinResult> {
   const planRef: PeriodRef = { year: input.year, month: input.month, period: input.period };
@@ -579,12 +581,14 @@ export async function confirmPaydayCheckin(
 
       let incomeTransactionId = existingSnapshot?.incomeTransactionId ?? null;
       if (accountInput.incomeEntered > 0) {
+        let updated = { count: 0 };
         if (incomeTransactionId) {
-          await tx.transaction.update({
+          updated = await tx.transaction.updateMany({
             where: { id: incomeTransactionId },
             data: { date: checkinDate, amount: accountInput.incomeEntered, note: accountInput.incomeNote },
           });
-        } else {
+        }
+        if (updated.count === 0) {
           const created = await tx.transaction.create({
             data: {
               date: checkinDate,
@@ -599,7 +603,7 @@ export async function confirmPaydayCheckin(
           incomeTransactionId = created.id;
         }
       } else if (incomeTransactionId) {
-        await tx.transaction.delete({ where: { id: incomeTransactionId } });
+        await tx.transaction.deleteMany({ where: { id: incomeTransactionId } });
         incomeTransactionId = null;
       }
 
