@@ -7,7 +7,7 @@ roadmaps are all computed per pay period — **Period A: 1st–15th** and **Peri
 
 ## Preview
 
-![Cadence dashboard showing the current pay period, safe-to-spend view, and goals summary](screenshots/Screenshot%202026-08-31%20at%209.37.13%E2%80%AFPM.png)
+![Cadence dashboard showing the payday check-in banner, current pay period safe-to-spend, and goals summary](screenshots/Screenshot%202026-09-02%20at%2010.00.52%E2%80%AFAM.png)
 
 ## Why Cadence
 
@@ -15,43 +15,63 @@ Most budgeting apps assume one paycheck a month. Cadence assumes two, and builds
 everything else around that:
 
 - Twice-monthly budgeting, split cleanly at the 1st–15th and 16th–end boundaries
+- A guided payday check-in that plans each period's protected buffer and
+  category allocations from income, balances, and commitments
 - A safe-to-spend-per-day figure that accounts for budget, spending so far, and
   upcoming committed outflows
 - Savings goals with a per-pay-period contribution roadmap, not just a single target
-- Multi-currency support (USD, DOP, EUR) with cached USD-based exchange rates
+- Multi-currency support (DOP, USD, and EUR as first-class currencies) with cached
+  USD-based exchange rates — changing your display currency only changes how
+  figures are presented, never the currency a transaction was recorded in
 - Manual entry and CSV import as the baseline, with optional Gmail/Outlook
   review-based automation on top
+- English and Spanish interface localization
 - A single-user, privacy-conscious design — no multi-tenant accounts, no
   auto-posting of anything without review
 
 ## Features
+
+**Payday check-in** — A guided, step-by-step planner (income → account balances →
+committed outflows → flexible categories → confirm) that runs each payday. It
+computes a protected buffer (a configurable percentage of income or a fixed
+minimum, whichever is larger), then shows what's left for flexible categories
+after subscriptions, recurring contributions, goal contributions, and essential
+fixed categories are set aside.
 
 **Pay-period budgeting and safe-to-spend** — Set an overall budget per period, or
 let it fall back to the sum of category budgets. Safe-to-spend subtracts what's
 already spent and what's still committed (recurring items due before period end),
 then divides by days remaining.
 
-**Transactions and CSV import** — Manual entry, plus CSV import with date-format
-selection for bank exports that don't use ISO dates.
+**Transactions, transfers, and CSV import** — Manual entry, plus CSV import with
+date-format selection for bank exports that don't use ISO dates. Transfers are
+linked debit/credit rows that move balances between accounts without counting as
+income or expense.
 
-**Accounts and transfers** — Track balances across checking, savings, cash, and
-other account types. Transfers are linked debit/credit rows that move balances
-without counting as income or expense.
+**Accounts and opening balances** — Track balances across checking, savings, cash,
+and other account types, each with its own native currency. An opening balance can
+be set per account to seed its starting balance before tracked transactions begin.
 
 **Recurring subscriptions and investment contributions** — Track bills and
 recurring savings/investment contributions separately; both factor into
-safe-to-spend for the period they fall in.
+safe-to-spend and the payday check-in for the period they fall in.
 
 **Savings goals** — Target amount, optional target date, and a roadmap of what each
 pay period needs to carry to hit it.
 
-**Multi-currency** — Every account and transaction can use USD, DOP, or EUR; all
-figures convert to your chosen display currency using cached exchange rates.
+**Multi-currency** — Every account and transaction is recorded in DOP, USD, or EUR.
+Changing the display currency in Settings only changes how figures are presented
+everywhere in the app (dashboard, budgets, goals, payday planning); it never
+converts or mutates the currency a transaction, account, or goal was recorded in.
+Conversions use cached, periodically refreshed USD-based exchange rates.
 
 **Email review queue** — Connect Gmail and/or Outlook to have transactional emails
 parsed into a staged queue. Nothing becomes a real transaction until you approve it.
 
 **Reports** — Current-period spending by category, and a six-pay-period trend view.
+
+**Localization** — English and Spanish interface translations, switchable from the
+top navigation bar.
 
 **Security / PIN gate** — Single PIN-protected session; every route except login is
 protected server-side.
@@ -60,44 +80,48 @@ protected server-side.
 
 <!-- Screenshots live in screenshots/ and should be refreshed after meaningful UI changes. -->
 
-### Dashboard and budgeting
+### Dashboard, payday check-in, and budgeting
 
-![Cadence dashboard for the current pay period, showing safe-to-spend and an empty goals panel](screenshots/Screenshot%202026-08-31%20at%209.37.13%E2%80%AFPM.png)
+![Cadence dashboard showing the payday check-in banner, current pay period safe-to-spend, monthly spending pace, and a goals summary](screenshots/Screenshot%202026-09-02%20at%2010.00.52%E2%80%AFAM.png)
 
-![Budgets page with an overall budget field and a per-category budget table](screenshots/Screenshot%202026-08-31%20at%209.38.01%E2%80%AFPM.png)
+![Budgets page with an overall budget field, committed/safe-to-spend totals, and a per-category budget table](screenshots/Screenshot%202026-09-02%20at%2010.01.29%E2%80%AFAM.png)
 
 The overall budget drives safe-to-spend; category budgets are tracked independently
-and used as a fallback when no overall budget is set.
+and used as a fallback when no overall budget is set. The payday check-in banner
+launches the guided planning flow for the current period.
 
 ### Transactions and review queue
 
-![Transactions page with search, account/category/type/source filters, and a CSV import button](screenshots/Screenshot%202026-08-31%20at%209.37.30%E2%80%AFPM.png)
+![Transactions page with search, account/category/type/source filters, Import CSV, Transfer, and New actions](screenshots/Screenshot%202026-09-02%20at%2010.01.03%E2%80%AFAM.png)
 
-![Review queue for staged transactions pulled from connected email accounts](screenshots/Screenshot%202026-08-31%20at%209.37.42%E2%80%AFPM.png)
+![Review queue with no pending items, and a Manage connections action for Gmail/Outlook](screenshots/Screenshot%202026-09-02%20at%2010.01.13%E2%80%AFAM.png)
 
 Staged email items sit in the review queue until you approve, edit, or reject them.
 
 ### Accounts, recurring items, and goals
 
-![Accounts page prompting the user to add their first account](screenshots/Screenshot%202026-08-31%20at%209.37.53%E2%80%AFPM.png)
+![Accounts page listing checking and savings accounts with their native-currency and display-currency balances](screenshots/Screenshot%202026-09-02%20at%2010.01.21%E2%80%AFAM.png)
 
-![Recurring page showing separate panels for subscriptions and recurring contributions](screenshots/Screenshot%202026-08-31%20at%209.38.11%E2%80%AFPM.png)
+![Recurring page showing separate panels for subscriptions and recurring contributions](screenshots/Screenshot%202026-09-02%20at%2010.01.39%E2%80%AFAM.png)
 
-![Goals page prompting the user to create their first savings goal](screenshots/Screenshot%202026-08-31%20at%209.38.21%E2%80%AFPM.png)
+![Goals page showing a savings goal with its progress, target date, and per-pay-period contribution amount](screenshots/Screenshot%202026-09-02%20at%2010.01.47%E2%80%AFAM.png)
 
 ### Reports and settings
 
-![Reports page showing spending by category for the current period and a six-pay-period trend chart](screenshots/Screenshot%202026-08-31%20at%209.38.42%E2%80%AFPM.png)
+![Reports page showing spending by category for the current period and a six-pay-period trend chart](screenshots/Screenshot%202026-09-02%20at%2010.01.55%E2%80%AFAM.png)
 
-![Settings page showing display currency, cached exchange rates, goal recalculation, and email connections](screenshots/Screenshot%202026-08-31%20at%209.38.53%E2%80%AFPM.png)
+![Settings page showing display currency, cached exchange rates, payday planning preferences, essential fixed categories, and email connections](screenshots/Screenshot%202026-09-02%20at%2010.02.20%E2%80%AFAM.png)
 
 ## How it works
 
-1. Create the accounts you actually use (checking, savings, cash, etc.).
+1. Create the accounts you actually use (checking, savings, cash, etc.), with an
+   opening balance if you're not starting from zero.
 2. Enter transactions manually, import a CSV, or connect Gmail/Outlook for
    automated candidate detection.
 3. Review any email-derived items on `/review` — approve, edit, or reject each one.
-4. Set a budget (overall and/or per category) for the current pay period.
+4. Set a budget (overall and/or per category) for the current pay period, or use
+   the payday check-in flow to plan the period from income, balances, and
+   commitments.
 5. Add recurring subscriptions and recurring investment/savings contributions.
 6. Create savings goals and follow their per-pay-period roadmap.
 
