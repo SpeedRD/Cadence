@@ -295,6 +295,10 @@ export const en = {
     selectRowAria: "Select row",
     markAsIncome: "Mark as income",
     appliedMarkedAsIncome: "Marked as income",
+    recordAsExternalTransfer: "Record as external transfer",
+    appliedExternalTransfer: "Recorded as external transfer",
+    resolveTransfersHint: (n: number) =>
+      `Resolve ${n} possible transfer${n === 1 ? "" : "s"} before importing`,
   },
   accounts: {
     title: "Accounts",

@@ -298,6 +298,10 @@ export const es = {
     selectRowAria: "Seleccionar fila",
     markAsIncome: "Marcar como ingreso",
     appliedMarkedAsIncome: "Marcado como ingreso",
+    recordAsExternalTransfer: "Registrar como transferencia externa",
+    appliedExternalTransfer: "Registrado como transferencia externa",
+    resolveTransfersHint: (n: number) =>
+      `Resuelve ${n} posible${n === 1 ? "" : "s"} transferencia${n === 1 ? "" : "s"} antes de importar`,
   },
   accounts: {
     title: "Cuentas",

@@ -2506,6 +2506,77 @@ async function main() {
       simulatedPayloadType(0, "EXPENSE"),
       "EXPENSE",
     );
+
+    // 10/11/12: "Record as external transfer" is a distinct decision from
+    // both "mark as income" and "leave as expense" - same channel
+    // (typeDecisions) as income, but resolves to EXTERNAL_TRANSFER with the
+    // group's own direction, never invented independently.
+    const externalOverrides = buildRowCategoryOverrides([
+      { rowIndexes: outgoing.rowIndexes, categoryId: "EXTERNAL_TRANSFER" },
+    ]);
+    eq(
+      "10. recording an outgoing transfer group as external overrides exactly its own row",
+      externalOverrides.get(0),
+      "EXTERNAL_TRANSFER",
+    );
+    const simulatedPayloadRow = (
+      originalType: "EXPENSE" | "INCOME",
+      group: (typeof groups)[number],
+      typeOverride: string | undefined,
+    ) => {
+      const type = typeOverride ?? originalType;
+      return {
+        type,
+        transferDirection: type === "EXTERNAL_TRANSFER" ? group.transferDirection : null,
+        categoryId: type === "EXTERNAL_TRANSFER" ? null : "would-be-resolved-category-id",
+      };
+    };
+    const outgoingExternalRow = simulatedPayloadRow("EXPENSE", outgoing, externalOverrides.get(0));
+    eq("11. an outgoing external-transfer row gets the group's own OUT direction", outgoingExternalRow.transferDirection, "OUT");
+    eq("12. an outgoing external-transfer row forces categoryId null even if a default category was set", outgoingExternalRow.categoryId, null);
+
+    const incomingExternalOverrides = buildRowCategoryOverrides([
+      { rowIndexes: incoming.rowIndexes, categoryId: "EXTERNAL_TRANSFER" },
+    ]);
+    const incomingExternalRow = simulatedPayloadRow("INCOME", incoming, incomingExternalOverrides.get(1));
+    eq("11. an incoming external-transfer row gets the group's own IN direction", incomingExternalRow.transferDirection, "IN");
+    eq("12. an incoming external-transfer row forces categoryId null too", incomingExternalRow.categoryId, null);
+
+    const ordinaryOutgoingRow = simulatedPayloadRow("EXPENSE", outgoing, undefined);
+    eq("13. a row with no type decision keeps direction null - it's not an external transfer", ordinaryOutgoingRow.transferDirection, null);
+
+    // 14: the submit-time guard - the Import button stays disabled while any
+    // detected transfer-shaped group has neither a category nor a type decision.
+    const unresolvedTransferGroups = (
+      allGroups: typeof groups,
+      categoryDecisions: Record<string, string>,
+      typeDecisions: Record<string, string>,
+    ) =>
+      allGroups.filter(
+        (group) =>
+          group.kind === "transfer" &&
+          categoryDecisions[group.id] === undefined &&
+          typeDecisions[group.id] === undefined,
+      );
+    eq(
+      "14. with no decisions at all, every transfer group is unresolved and blocks import",
+      unresolvedTransferGroups(groups, {}, {}).length,
+      groups.filter((g) => g.kind === "transfer").length,
+    );
+    eq(
+      "14. resolving the outgoing group via a type decision (external transfer) clears it from the unresolved list",
+      unresolvedTransferGroups(groups, {}, { [outgoing.id]: "EXTERNAL_TRANSFER" }).some((g) => g.id === outgoing.id),
+      false,
+    );
+    eq(
+      "14. resolving the outgoing group via a category decision (leave as expense) also clears it",
+      unresolvedTransferGroups(groups, { [outgoing.id]: EXPLICIT_NO_CATEGORY }, {}).some((g) => g.id === outgoing.id),
+      false,
+    );
+    check(
+      "14. an ordinary (non-transfer) group never blocks import even with zero decisions",
+      unresolvedTransferGroups(shoppingGroups, {}, {}).length === 0,
+    );
   }
 
   console.log("\n== cleanup ==");

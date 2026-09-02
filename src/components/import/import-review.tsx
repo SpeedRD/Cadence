@@ -232,9 +232,13 @@ function GroupCard({
           ? { label: t.suggestedCategory(group.suggestedCategoryName), variant: "outline" as const }
           : null;
 
-  // An incoming transfer-shaped group resolves via the separate type
-  // decision (Mark as income), never via the category decision channel.
-  const resolved = isIncomingTransfer ? typeDecision !== undefined : decision !== undefined;
+  // A transfer-shaped group resolves via either the separate type decision
+  // (Mark as income / Record as external transfer) or the category decision
+  // channel (Leave as expense), never requiring both.
+  const isTransferGroup = group.kind === "transfer";
+  const resolved = isTransferGroup
+    ? typeDecision !== undefined || decision !== undefined
+    : decision !== undefined;
 
   return (
     <div className="space-y-2 rounded-md border border-border/60 p-3">
@@ -251,21 +255,23 @@ function GroupCard({
       {resolved ? (
         <div className="flex items-center justify-between gap-2 text-xs">
           <span className="text-muted-foreground">
-            {isIncomingTransfer
+            {typeDecision === "INCOME"
               ? t.appliedMarkedAsIncome
-              : decision === EXPLICIT_NO_CATEGORY
-                ? group.kind === "transfer"
-                  ? t.appliedLeaveAsExpense
-                  : t.appliedUncategorized
-                : t.appliedCategory(
-                    categories.find((category) => category.id === decision)?.name ?? "",
-                  )}
+              : typeDecision === "EXTERNAL_TRANSFER"
+                ? t.appliedExternalTransfer
+                : decision === EXPLICIT_NO_CATEGORY
+                  ? group.kind === "transfer"
+                    ? t.appliedLeaveAsExpense
+                    : t.appliedUncategorized
+                  : t.appliedCategory(
+                      categories.find((category) => category.id === decision)?.name ?? "",
+                    )}
           </span>
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            onClick={() => (isIncomingTransfer ? onDecideTypeAction(undefined) : onDecideAction(undefined))}
+            onClick={() => (typeDecision !== undefined ? onDecideTypeAction(undefined) : onDecideAction(undefined))}
           >
             {t.changeDecision}
           </Button>
@@ -288,6 +294,14 @@ function GroupCard({
                 type="button"
                 variant="ghost"
                 size="xs"
+                onClick={() => onDecideTypeAction("EXTERNAL_TRANSFER")}
+              >
+                {t.recordAsExternalTransfer}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
                 onClick={() => onDecideAction(EXPLICIT_NO_CATEGORY)}
               >
                 {t.leaveAsExpense}
@@ -305,6 +319,14 @@ function GroupCard({
                   </Button>
                 }
               />
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => onDecideTypeAction("EXTERNAL_TRANSFER")}
+              >
+                {t.recordAsExternalTransfer}
+              </Button>
               <Button
                 type="button"
                 variant="ghost"
