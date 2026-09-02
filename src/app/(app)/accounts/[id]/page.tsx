@@ -35,6 +35,7 @@ export default async function AccountDetailPage({
   const context = await getAppContext();
   const t = getDictionary(context.language).accounts;
   const common = getDictionary(context.language).common;
+  const transactionsT = getDictionary(context.language).transactions;
   const ledger = await getAccountLedger(id, context);
   if (!ledger) notFound();
 
@@ -155,9 +156,11 @@ export default async function AccountDetailPage({
                                 ? row.transferDirection === "OUT"
                                   ? t.transferTo(row.counterpartAccountName ?? t.anotherAccount)
                                   : t.transferFrom(row.counterpartAccountName ?? t.anotherAccount)
-                                : row.type === "OPENING_BALANCE"
-                                  ? t.openingBalanceAmountLabel
-                                  : (row.categoryName ?? common.uncategorized))}
+                                : row.type === "EXTERNAL_TRANSFER"
+                                  ? (row.transferDirection === "OUT" ? transactionsT.externalTransferOut : transactionsT.externalTransferIn)
+                                  : row.type === "OPENING_BALANCE"
+                                    ? t.openingBalanceAmountLabel
+                                    : (row.categoryName ?? common.uncategorized))}
                           </span>
                           {row.categoryName ? (
                             <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
@@ -176,9 +179,9 @@ export default async function AccountDetailPage({
                       <TableCell className="hidden md:table-cell">
                         <SourceBadge
                           source={row.source}
-                          isTransfer={row.type === "TRANSFER"}
+                          isTransfer={row.type === "TRANSFER" || row.type === "EXTERNAL_TRANSFER"}
                           labels={common.sourceLabels}
-                          transferLabel={t.transfer}
+                          transferLabel={row.type === "EXTERNAL_TRANSFER" ? transactionsT.externalTransferBadge : t.transfer}
                         />
                       </TableCell>
                       <TableCell className="text-right">
@@ -186,7 +189,7 @@ export default async function AccountDetailPage({
                           className={cn(
                             "figure text-sm",
                             row.effect > 0 && row.type === "INCOME" && "text-[var(--good)]",
-                            row.type === "TRANSFER" && "text-muted-foreground",
+                            (row.type === "TRANSFER" || row.type === "EXTERNAL_TRANSFER") && "text-muted-foreground",
                           )}
                         >
                           {row.effect > 0 ? "+" : "-"}
