@@ -5,6 +5,7 @@ import {
   PenLine,
   ArrowRightLeft,
   CircleSmall,
+  Wallet,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -17,6 +18,7 @@ const SOURCE_ICONS: Record<string, LucideIcon> = {
   GMAIL: Mail,
   OUTLOOK: Mail,
   PAYPAL: CreditCard,
+  PAYDAY_CHECKIN: Wallet,
 };
 
 /**

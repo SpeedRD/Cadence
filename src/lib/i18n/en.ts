@@ -48,6 +48,7 @@ export const en = {
       GMAIL: "Gmail",
       OUTLOOK: "Outlook",
       PAYPAL: "PayPal",
+      PAYDAY_CHECKIN: "Payday check-in",
     } as Record<string, string>,
     frequencyLabels: {
       WEEKLY: "Weekly",
@@ -444,6 +445,8 @@ export const en = {
     goalDeleted: "Goal deleted",
     goalNoLongerExists: "That goal no longer exists",
     contributionLogged: "Contribution logged",
+    plannedThisPeriod: (amount: string) => `${amount} planned this period`,
+    plannedBehindRoadmap: (amount: string) => `${amount} behind the roadmap`,
     contributionRemoved: "Contribution removed",
     contributionNoLongerExists: "That contribution no longer exists",
   },
@@ -533,6 +536,24 @@ export const en = {
     connectFirst: "Connect a Gmail or Outlook account first",
     syncedResult: (accounts: number, staged: number) =>
       `Synced ${accounts} account${accounts === 1 ? "" : "s"} - ${staged} new item${staged === 1 ? "" : "s"} staged`,
+    planningPreferencesTitle: "Planning preferences",
+    planningPreferencesDescription:
+      "How the payday planner sizes your protected buffer and carries money forward.",
+    bufferPercentLabel: "Buffer percentage",
+    bufferPercentHint: "Percent of each check-in's income reserved as a buffer by default.",
+    bufferFloorLabel: "Fixed minimum buffer",
+    carryoverDefaultLabel: "Include carryover by default",
+    carryoverDefaultHint:
+      "When on, unspent money from the previous period's budget pre-fills as included carryover in each new check-in.",
+    planningPreferencesSaved: "Planning preferences saved",
+    essentialCategoriesTitle: "Essential fixed categories",
+    essentialCategoriesDescription:
+      "Categories marked essential fixed are reserved in the payday plan before flexible category suggestions.",
+    noEligibleCategories: "No expense categories available to configure.",
+    essentialToggleAria: (name: string) => `Mark ${name} as essential fixed`,
+    categoryNoLongerExists: "That category no longer exists",
+    categoryMarkedEssential: "Marked as essential fixed",
+    categoryUnmarkedEssential: "No longer essential fixed",
   },
   review: {
     title: "Review queue",
@@ -568,6 +589,107 @@ export const en = {
     accountNoLongerExists: "That account no longer exists",
     transactionAlreadyExists: "This transaction already exists",
     nothingToReject: "Nothing to reject",
+  },
+  payday: {
+    bannerTitle: "Payday check-in ready",
+    bannerDescription:
+      "Confirm balances, record this period's income, and plan until your next payday.",
+    startCheckin: "Start payday check-in",
+    planThisPeriod: "Plan this period",
+    dismissForToday: "Not now",
+    reviewConfirmedPlan: "Review this period's plan",
+    wizardTitle: (periodLabel: string) => `Payday check-in - ${periodLabel}`,
+    stepOf: (step: number, total: number) => `Step ${step} of ${total}`,
+    back: "Back",
+    next: "Next",
+    cancel: "Cancel",
+
+    step1Title: "Confirm account balances",
+    step1Description:
+      "This is a reconciliation check only - it never creates income or expenses.",
+    ledgerBalance: "Ledger balance",
+    reportedBalance: "Reported balance",
+    matchesLedger: "Matches ledger",
+    aboveLedger: (amount: string) => `${amount} above ledger`,
+    belowLedger: (amount: string) => `${amount} below ledger`,
+    manageAccountsLink: "Manage accounts",
+    noActiveAccountsTitle: "No active accounts",
+    noActiveAccountsDescription: "Add or restore an account before starting a check-in.",
+
+    step2Title: "Record income received",
+    step2Description: "Optional per account - leave any account at zero if nothing came in.",
+    incomeAmount: "Income received",
+    incomeNotePlaceholder: "Salary, freelance payment, bonus...",
+    totalIncome: "Total income",
+
+    step3Title: "Review commitments and goals",
+    subscriptionsDue: "Subscriptions due before next payday",
+    contributionsDue: "Recurring contributions due before next payday",
+    noSubscriptionsDue: "No subscriptions due before next payday.",
+    noContributionsDue: "No recurring contributions due before next payday.",
+    goalsHeading: "Goal roadmap",
+    noGoalsWithTarget: "No dated goals to reserve for this period.",
+    roadmapAmount: "Roadmap amount",
+    plannedAmount: "Planned amount",
+    goalOnTrack: "On track with the roadmap",
+    goalBehind: (amount: string) => `${amount} behind the target roadmap`,
+    goalAhead: (amount: string) => `${amount} ahead of the target roadmap`,
+    protectedBufferHeading: "Protected buffer",
+    bufferSuggested: (amount: string) => `Suggested ${amount}`,
+    bufferZeroWarning: "This plan leaves no protected buffer for unexpected spending.",
+    bufferBelowFloorWarning: (floor: string) => `This is below your configured floor of ${floor}.`,
+    essentialCategoriesHeading: "Essential fixed spending",
+    noEssentialCategoriesConfigured:
+      "No categories are marked essential fixed yet - configure them in Settings.",
+    carryoverHeading: "Carryover from last period",
+    carryoverAvailable: (amount: string) => `${amount} unspent from last period's budget`,
+    carryoverUnavailable:
+      "No prior period budget to measure carryover against - this plan is funded by income only.",
+    carryoverIncluded: "Include in this plan",
+    summaryIncome: "Income",
+    summaryCarryover: "Included carryover",
+    summarySubscriptions: "Subscriptions",
+    summaryContributions: "Recurring contributions",
+    summaryGoals: "Goal plan",
+    summaryEssential: "Essential fixed",
+    summaryBuffer: "Protected buffer",
+    summaryAvailable: "Available for flexible categories",
+    deficitWarning: (amount: string) =>
+      `This plan is ${amount} short - something above has to give before you can allocate flexible categories.`,
+
+    step4Title: "Plan flexible categories",
+    suggested: "Suggested",
+    basisLastBudget: "last budget",
+    basisAverage: "average",
+    basisNone: "not enough history",
+    flexibleAllocated: "Allocated",
+    flexibleUnallocated: "Unallocated",
+    flexibleOverallocated: (amount: string) => `${amount} overallocated`,
+    safeToSpendPerDayEstimate: "Estimated safe to spend per day",
+    noFlexibleCategoriesConfigured:
+      "No flexible categories available - every expense category is either essential fixed or excluded.",
+    acknowledgeDeficitLabel:
+      "I understand this plan is short and choices above need to change or spending will be tighter than planned.",
+
+    step5Title: "Confirm your plan",
+    confirmSnapshotsNote:
+      "Balance snapshots are recorded for audit only - they never change account balances.",
+    confirmIncomeNote: (count: number, amount: string) =>
+      `${count} income transaction${count === 1 ? "" : "s"} totalling ${amount} will be created.`,
+    confirmBudgetsNote: (count: number) =>
+      `${count} category budget${count === 1 ? "" : "s"} will be created or updated for this period.`,
+    confirmReservedNote:
+      "Subscriptions, recurring contributions, and goal amounts are reserved in the plan but not logged as actual transactions or contributions.",
+    acknowledgeZeroBufferLabel: "I understand this plan leaves no protected buffer.",
+    confirmPlan: "Confirm plan",
+    checkinConfirmed: "Payday check-in confirmed",
+    editConfirmedPlanNote:
+      "You already confirmed this period's check-in - saving again updates it in place.",
+
+    couldNotReadPlan: "Could not read the plan - try again",
+    noActiveAccounts: "Add at least one active account before checking in",
+    acknowledgeDeficitFirst: "Acknowledge the deficit/overallocation warning before confirming",
+    acknowledgeZeroBufferFirst: "Acknowledge the zero-buffer warning before confirming",
   },
 };
 

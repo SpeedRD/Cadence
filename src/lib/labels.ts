@@ -24,6 +24,7 @@ export const TRANSACTION_SOURCES = [
   "GMAIL",
   "OUTLOOK",
   "PAYPAL",
+  "PAYDAY_CHECKIN",
 ] as const;
 export const SOURCE_LABELS: Record<string, string> = {
   MANUAL: "Manual",
@@ -31,6 +32,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   GMAIL: "Gmail",
   OUTLOOK: "Outlook",
   PAYPAL: "PayPal",
+  PAYDAY_CHECKIN: "Payday check-in",
 };
 
 export const CATEGORY_KINDS = ["EXPENSE", "INCOME"] as const;

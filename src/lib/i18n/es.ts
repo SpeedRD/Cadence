@@ -50,6 +50,7 @@ export const es = {
       GMAIL: "Gmail",
       OUTLOOK: "Outlook",
       PAYPAL: "PayPal",
+      PAYDAY_CHECKIN: "Chequeo de pago",
     } as Record<string, string>,
     frequencyLabels: {
       WEEKLY: "Semanal",
@@ -448,6 +449,8 @@ export const es = {
     goalDeleted: "Meta eliminada",
     goalNoLongerExists: "Esa meta ya no existe",
     contributionLogged: "Aporte registrado",
+    plannedThisPeriod: (amount: string) => `${amount} planificado este periodo`,
+    plannedBehindRoadmap: (amount: string) => `${amount} por detrás de la hoja de ruta`,
     contributionRemoved: "Aporte eliminado",
     contributionNoLongerExists: "Ese aporte ya no existe",
   },
@@ -540,6 +543,24 @@ export const es = {
     connectFirst: "Conecta primero una cuenta de Gmail o Outlook",
     syncedResult: (accounts: number, staged: number) =>
       `Se ${accounts === 1 ? "sincronizó" : "sincronizaron"} ${accounts} cuenta${accounts === 1 ? "" : "s"} - ${staged} elemento${staged === 1 ? "" : "s"} nuevo${staged === 1 ? "" : "s"} en revisión`,
+    planningPreferencesTitle: "Preferencias de planificación",
+    planningPreferencesDescription:
+      "Cómo el planificador de pago calcula tu colchón protegido y traslada dinero de un periodo a otro.",
+    bufferPercentLabel: "Porcentaje de colchón",
+    bufferPercentHint: "Porcentaje del ingreso de cada chequeo reservado como colchón por defecto.",
+    bufferFloorLabel: "Colchón mínimo fijo",
+    carryoverDefaultLabel: "Incluir remanente por defecto",
+    carryoverDefaultHint:
+      "Si está activo, el dinero sin gastar del presupuesto del periodo anterior se precarga como remanente incluido en cada chequeo nuevo.",
+    planningPreferencesSaved: "Preferencias de planificación guardadas",
+    essentialCategoriesTitle: "Categorías fijas esenciales",
+    essentialCategoriesDescription:
+      "Las categorías marcadas como fijas esenciales se reservan en el plan de pago antes de las sugerencias de categorías flexibles.",
+    noEligibleCategories: "No hay categorías de gasto disponibles para configurar.",
+    essentialToggleAria: (name: string) => `Marcar ${name} como fija esencial`,
+    categoryNoLongerExists: "Esa categoría ya no existe",
+    categoryMarkedEssential: "Marcada como fija esencial",
+    categoryUnmarkedEssential: "Ya no es fija esencial",
   },
   review: {
     title: "Cola de revisión",
@@ -575,5 +596,107 @@ export const es = {
     accountNoLongerExists: "Esa cuenta ya no existe",
     transactionAlreadyExists: "Esta transacción ya existe",
     nothingToReject: "Nada que rechazar",
+  },
+  payday: {
+    bannerTitle: "Chequeo de pago listo",
+    bannerDescription:
+      "Confirma saldos, registra el ingreso de este periodo y planifica hasta tu próximo pago.",
+    startCheckin: "Iniciar chequeo de pago",
+    planThisPeriod: "Planificar este periodo",
+    dismissForToday: "Ahora no",
+    reviewConfirmedPlan: "Revisar el plan de este periodo",
+    wizardTitle: (periodLabel: string) => `Chequeo de pago - ${periodLabel}`,
+    stepOf: (step: number, total: number) => `Paso ${step} de ${total}`,
+    back: "Atrás",
+    next: "Siguiente",
+    cancel: "Cancelar",
+
+    step1Title: "Confirma los saldos de las cuentas",
+    step1Description:
+      "Esto es solo una verificación de conciliación - nunca crea ingresos ni gastos.",
+    ledgerBalance: "Saldo según el libro",
+    reportedBalance: "Saldo reportado",
+    matchesLedger: "Coincide con el libro",
+    aboveLedger: (amount: string) => `${amount} por encima del libro`,
+    belowLedger: (amount: string) => `${amount} por debajo del libro`,
+    manageAccountsLink: "Administrar cuentas",
+    noActiveAccountsTitle: "No hay cuentas activas",
+    noActiveAccountsDescription: "Agrega o restaura una cuenta antes de iniciar un chequeo.",
+
+    step2Title: "Registra el ingreso recibido",
+    step2Description: "Opcional por cuenta - deja una cuenta en cero si no entró nada.",
+    incomeAmount: "Ingreso recibido",
+    incomeNotePlaceholder: "Salario, pago freelance, bono...",
+    totalIncome: "Ingreso total",
+
+    step3Title: "Revisa compromisos y metas",
+    subscriptionsDue: "Suscripciones antes del próximo pago",
+    contributionsDue: "Aportes recurrentes antes del próximo pago",
+    noSubscriptionsDue: "No hay suscripciones antes del próximo pago.",
+    noContributionsDue: "No hay aportes recurrentes antes del próximo pago.",
+    goalsHeading: "Hoja de ruta de metas",
+    noGoalsWithTarget: "No hay metas con fecha para reservar en este periodo.",
+    roadmapAmount: "Monto de la hoja de ruta",
+    plannedAmount: "Monto planificado",
+    goalOnTrack: "Al día con la hoja de ruta",
+    goalBehind: (amount: string) => `${amount} por detrás de la meta trazada`,
+    goalAhead: (amount: string) => `${amount} por delante de la meta trazada`,
+    protectedBufferHeading: "Colchón protegido",
+    bufferSuggested: (amount: string) => `Sugerido ${amount}`,
+    bufferZeroWarning: "Este plan no deja colchón protegido para gastos imprevistos.",
+    bufferBelowFloorWarning: (floor: string) =>
+      `Esto está por debajo de tu mínimo configurado de ${floor}.`,
+    essentialCategoriesHeading: "Gastos fijos esenciales",
+    noEssentialCategoriesConfigured:
+      "Aún no hay categorías marcadas como fijas esenciales - configúralas en Ajustes.",
+    carryoverHeading: "Remanente del periodo anterior",
+    carryoverAvailable: (amount: string) => `${amount} sin gastar del presupuesto anterior`,
+    carryoverUnavailable:
+      "No hay presupuesto del periodo anterior para medir el remanente - este plan se financia solo con el ingreso.",
+    carryoverIncluded: "Incluir en este plan",
+    summaryIncome: "Ingreso",
+    summaryCarryover: "Remanente incluido",
+    summarySubscriptions: "Suscripciones",
+    summaryContributions: "Aportes recurrentes",
+    summaryGoals: "Plan de metas",
+    summaryEssential: "Fijos esenciales",
+    summaryBuffer: "Colchón protegido",
+    summaryAvailable: "Disponible para categorías flexibles",
+    deficitWarning: (amount: string) =>
+      `Este plan queda corto por ${amount} - algo de lo anterior tiene que ceder antes de poder asignar categorías flexibles.`,
+
+    step4Title: "Planifica las categorías flexibles",
+    suggested: "Sugerido",
+    basisLastBudget: "último presupuesto",
+    basisAverage: "promedio",
+    basisNone: "sin historial suficiente",
+    flexibleAllocated: "Asignado",
+    flexibleUnallocated: "Sin asignar",
+    flexibleOverallocated: (amount: string) => `${amount} sobreasignado`,
+    safeToSpendPerDayEstimate: "Estimado seguro para gastar por día",
+    noFlexibleCategoriesConfigured:
+      "No hay categorías flexibles disponibles - cada categoría de gasto es fija esencial o está excluida.",
+    acknowledgeDeficitLabel:
+      "Entiendo que este plan queda corto y algo de lo anterior debe cambiar, o el gasto será más ajustado de lo planeado.",
+
+    step5Title: "Confirma tu plan",
+    confirmSnapshotsNote:
+      "Los saldos reportados se registran solo para auditoría - nunca cambian el saldo de la cuenta.",
+    confirmIncomeNote: (count: number, amount: string) =>
+      `Se crearán ${count} transacción${count === 1 ? "" : "es"} de ingreso por un total de ${amount}.`,
+    confirmBudgetsNote: (count: number) =>
+      `Se crearán o actualizarán ${count} presupuesto${count === 1 ? "" : "s"} de categoría para este periodo.`,
+    confirmReservedNote:
+      "Las suscripciones, los aportes recurrentes y los montos de metas quedan reservados en el plan, pero no se registran como transacciones o aportes reales.",
+    acknowledgeZeroBufferLabel: "Entiendo que este plan no deja colchón protegido.",
+    confirmPlan: "Confirmar plan",
+    checkinConfirmed: "Chequeo de pago confirmado",
+    editConfirmedPlanNote:
+      "Ya confirmaste el chequeo de este periodo - guardar de nuevo lo actualiza en su lugar.",
+
+    couldNotReadPlan: "No se pudo leer el plan - intenta de nuevo",
+    noActiveAccounts: "Agrega al menos una cuenta activa antes de hacer el chequeo",
+    acknowledgeDeficitFirst: "Reconoce la advertencia de déficit o sobreasignación antes de confirmar",
+    acknowledgeZeroBufferFirst: "Reconoce la advertencia de colchón en cero antes de confirmar",
   },
 } as const satisfies Dictionary;
