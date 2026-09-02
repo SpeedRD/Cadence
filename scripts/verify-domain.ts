@@ -572,10 +572,12 @@ async function main() {
       id: outRow.id, date: "2026-08-20", amount: "5000", currency: "DOP", type: "EXTERNAL_TRANSFER",
       accountId: extAccount.id, categoryId: "", note: "Sent to Mom", transferDirection: "OUT",
     });
-    if (flipBackParsed.success) {
-      const { id: flipBackId, ...flipBackValues } = flipBackParsed.data;
-      await prisma.transaction.update({ where: { id: flipBackId! }, data: flipBackValues });
-    }
+    if (!flipBackParsed.success) throw new Error("fixture setup failed: flipBackParsed");
+    const { id: flipBackId, ...flipBackValues } = flipBackParsed.data;
+    await prisma.transaction.update({ where: { id: flipBackId! }, data: flipBackValues });
+    const afterFlipBack = await prisma.transaction.findUniqueOrThrow({ where: { id: outRow.id } });
+    eq("update: flipped-back row's transferDirection is OUT again", afterFlipBack.transferDirection, "OUT");
+    eq("update: flipped-back row is still editable", transactionEditBlock(afterFlipBack), null);
 
     // -- update: reassigning accountId moves the effect to the new account --
     const balanceOldBefore = await balanceOf(extAccount.id);
@@ -596,10 +598,11 @@ async function main() {
       id: inRow.id, date: "2026-08-21", amount: "2000", currency: "DOP", type: "EXTERNAL_TRANSFER",
       accountId: extAccount.id, categoryId: "", note: "Dad's pass-through funds", transferDirection: "IN",
     });
-    if (moveBackParsed.success) {
-      const { id: moveBackId, ...moveBackValues } = moveBackParsed.data;
-      await prisma.transaction.update({ where: { id: moveBackId! }, data: moveBackValues });
-    }
+    if (!moveBackParsed.success) throw new Error("fixture setup failed: moveBackParsed");
+    const { id: moveBackId, ...moveBackValues } = moveBackParsed.data;
+    await prisma.transaction.update({ where: { id: moveBackId! }, data: moveBackValues });
+    const afterMoveBack = await prisma.transaction.findUniqueOrThrow({ where: { id: inRow.id } });
+    eq("update: moved-back row is on extAccount again", afterMoveBack.accountId, extAccount.id);
 
     // -- delete: an EXTERNAL_TRANSFER row is a single row, never a paired delete --
     const beforeDeleteCount = await prisma.transaction.count({ where: { accountId: extAccount.id } });
@@ -608,6 +611,7 @@ async function main() {
     // Mirrors deleteTransactionAction exactly: transferId is null, so it
     // takes the single-row `else` branch, never the multi-row
     // `deleteMany({ transferId })` branch used for internal transfer legs.
+    eq("delete: the row being deleted has a null transferId before branching", toDelete.transferId, null);
     if (toDelete.transferId) {
       await prisma.transaction.deleteMany({ where: { transferId: toDelete.transferId } });
     } else {
@@ -617,6 +621,7 @@ async function main() {
     eq("delete: exactly one row is removed, not a paired transfer delete", beforeDeleteCount - afterDeleteCount, 1);
     const stillThere = await prisma.transaction.findUnique({ where: { id: inRow.id } });
     check("delete: the other EXTERNAL_TRANSFER row on the same account is untouched", stillThere !== null);
+    eq("delete: the sibling row's account is unchanged", stillThere?.accountId, extAccount.id);
     eq(
       "delete: deleting the 5000 OUT row raises the account balance by exactly 5000",
       round2((await balanceOf(extAccount.id)) - balanceBeforeDelete),
