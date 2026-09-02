@@ -39,6 +39,7 @@ import {
   scaleFlexibleSuggestions,
 } from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
+import { num } from "../src/lib/money";
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL ?? "" }),
@@ -634,6 +635,342 @@ async function main() {
   check("permanent delete succeeds once no history remains", cleanDelete.ok === true);
   const gone = await prisma.account.findUnique({ where: { id: archiveTestAccount.id } });
   check("the account is actually gone", gone === null);
+
+  console.log("\n== payday check-in (database) ==");
+  const { getPaydayCheckinDraft, confirmPaydayCheckin } = await import("../src/lib/data/payday");
+  const { getSettings } = await import("../src/lib/auth");
+
+  const paydaySettings = await getSettings();
+  const paydayContext = {
+    displayCurrency: "USD" as const,
+    language: "en" as const,
+    rates,
+    today: civilDate(2026, 8, 15),
+    currentPeriod: periodForDate(civilDate(2026, 8, 15)),
+    bufferPercent: paydaySettings.bufferPercent,
+    bufferFloorAmount: num(paydaySettings.bufferFloorAmount),
+    bufferFloorCurrency: paydaySettings.bufferFloorCurrency,
+  };
+
+  const paydayChecking = await prisma.account.create({
+    data: { name: "Verify Payday Checking", currency: "USD", type: "CHECKING" },
+  });
+  const paydayEuro = await prisma.account.create({
+    data: { name: "Verify Payday Euro", currency: "EUR", type: "CHECKING" },
+  });
+  await prisma.transaction.createMany({
+    data: [
+      { date: civilDate(2026, 8, 1), amount: 1000, currency: "USD", type: "INCOME", accountId: paydayChecking.id, source: "MANUAL" },
+      { date: civilDate(2026, 8, 5), amount: 200, currency: "USD", type: "EXPENSE", accountId: paydayChecking.id, source: "MANUAL" },
+      { date: civilDate(2026, 8, 2), amount: 100, currency: "EUR", type: "INCOME", accountId: paydayEuro.id, source: "MANUAL" },
+    ],
+  });
+
+  const billsCategory = await prisma.category.findFirstOrThrow({ where: { name: "Bills" } });
+  await prisma.category.update({ where: { id: billsCategory.id }, data: { isEssentialFixed: true } });
+  const groceriesForPayday = await prisma.category.findFirstOrThrow({ where: { name: "Groceries" } });
+  const subsCategoryForPayday = await prisma.category.findFirstOrThrow({ where: { name: "Subscriptions" } });
+  const savingsCategoryForPayday = await prisma.category.findFirstOrThrow({ where: { name: "Savings/Investment" } });
+
+  const paydaySub = await prisma.recurringItem.create({
+    data: { name: "Verify Payday Netflix", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 20), active: true, categoryId: subsCategoryForPayday.id },
+  });
+  const paydayContribution = await prisma.recurringItem.create({
+    data: { name: "Verify Payday Auto-Invest", amount: 100, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 20), active: true },
+  });
+
+  const datedGoal = await prisma.goal.create({
+    data: { name: "Verify Payday Dated Goal", targetAmount: 1000, currency: "USD", targetDate: civilDate(2026, 10, 15) },
+  });
+  const undatedGoal = await prisma.goal.create({
+    data: { name: "Verify Payday Undated Goal", targetAmount: 1000, currency: "USD" },
+  });
+
+  console.log("\n-- draft assembly --");
+  const draft = await getPaydayCheckinDraft(paydayContext);
+  eq(
+    "opened exactly on a payday, the plan targets the next period, not the one ending today",
+    `${draft.periodRef.year}-${draft.periodRef.month}-${draft.periodRef.period}`,
+    "2026-8-B",
+  );
+  check(
+    "dynamic active accounts include a newly created account",
+    draft.accounts.some((a) => a.accountId === paydayChecking.id),
+  );
+  eq(
+    "the draft's ledger balance is transaction-derived, matching getAccountBalances",
+    draft.accounts.find((a) => a.accountId === paydayChecking.id)?.expectedLedgerBalance,
+    800,
+  );
+  check(
+    "a subscription due in the plan period is reserved separately from contributions",
+    draft.subscriptions.some((s) => s.recurringItemId === paydaySub.id) &&
+      !draft.contributions.some((c) => c.recurringItemId === paydaySub.id),
+  );
+  check(
+    "a recurring contribution due in the plan period is reserved separately from subscriptions",
+    draft.contributions.some((c) => c.recurringItemId === paydayContribution.id) &&
+      !draft.subscriptions.some((s) => s.recurringItemId === paydayContribution.id),
+  );
+  check(
+    "only the dated goal is reserved - the undated goal is not automatically included",
+    draft.goals.some((g) => g.goalId === datedGoal.id) && !draft.goals.some((g) => g.goalId === undatedGoal.id),
+  );
+  check(
+    "a category marked essential fixed appears in essentialCategories, not flexibleCategories",
+    draft.essentialCategories.some((c) => c.categoryId === billsCategory.id) &&
+      !draft.flexibleCategories.some((c) => c.categoryId === billsCategory.id),
+  );
+  check(
+    "the Subscriptions category is never offered as an essential or flexible suggestion",
+    !draft.essentialCategories.some((c) => c.categoryId === subsCategoryForPayday.id) &&
+      !draft.flexibleCategories.some((c) => c.categoryId === subsCategoryForPayday.id),
+  );
+  check(
+    "the Savings/Investment category is never offered as an essential or flexible suggestion",
+    !draft.essentialCategories.some((c) => c.categoryId === savingsCategoryForPayday.id) &&
+      !draft.flexibleCategories.some((c) => c.categoryId === savingsCategoryForPayday.id),
+  );
+  check(
+    "a non-essential expense category appears as a flexible suggestion",
+    draft.flexibleCategories.some((c) => c.categoryId === groceriesForPayday.id),
+  );
+
+  await prisma.account.update({
+    where: { id: paydayEuro.id },
+    data: { status: "ARCHIVED", archivedAt: paydayContext.today },
+  });
+  const draftAfterArchive = await getPaydayCheckinDraft(paydayContext);
+  check(
+    "archiving an account removes it from the next check-in's active list",
+    !draftAfterArchive.accounts.some((a) => a.accountId === paydayEuro.id),
+  );
+  await prisma.account.update({ where: { id: paydayEuro.id }, data: { status: "ACTIVE", archivedAt: null } });
+
+  console.log("\n-- already-logged subscriptions are excluded from the reserved total, but still listed --");
+  const dedupSub = await prisma.recurringItem.create({
+    data: { name: "Verify Payday Spotify", amount: 12, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 22), active: true, categoryId: subsCategoryForPayday.id },
+  });
+  const dedupTransaction = await prisma.transaction.create({
+    data: { date: civilDate(2026, 8, 18), amount: 12, currency: "USD", type: "EXPENSE", accountId: paydayChecking.id, categoryId: subsCategoryForPayday.id, note: "Verify Payday Spotify", source: "MANUAL" },
+  });
+  const draftWithDedup = await getPaydayCheckinDraft(paydayContext);
+  const dedupItem = draftWithDedup.subscriptions.find((s) => s.recurringItemId === dedupSub.id);
+  check(
+    "an already-logged subscription still appears in the list, flagged as already logged",
+    Boolean(dedupItem) && dedupItem!.alreadyLogged === true,
+  );
+  const stillDueItem = draftWithDedup.subscriptions.find((s) => s.recurringItemId === paydaySub.id);
+  check(
+    "a still-due subscription in the same draft is not flagged as already logged",
+    Boolean(stillDueItem) && stillDueItem!.alreadyLogged === false,
+  );
+  eq(
+    "the already-logged item is excluded from subscriptionsTotal - only the still-due Netflix item counts",
+    draftWithDedup.subscriptionsTotal,
+    15,
+  );
+  await prisma.transaction.delete({ where: { id: dedupTransaction.id } });
+  await prisma.recurringItem.delete({ where: { id: dedupSub.id } });
+
+  console.log("\n-- confirming a plan --");
+  const draftForConfirm = await getPaydayCheckinDraft(paydayContext);
+  const initialPayload = {
+    year: draftForConfirm.periodRef.year,
+    month: draftForConfirm.periodRef.month,
+    period: draftForConfirm.periodRef.period,
+    accounts: draftForConfirm.accounts.map((a) => ({
+      accountId: a.accountId,
+      reportedBalance: a.expectedLedgerBalance + (a.accountId === paydayChecking.id ? 50 : 0),
+      incomeEntered: a.accountId === paydayChecking.id ? 500 : 0,
+      incomeNote: a.accountId === paydayChecking.id ? "Salary" : null,
+    })),
+    goals: draftForConfirm.goals.map((g) => ({ goalId: g.goalId, plannedAmount: g.recommendedAmount })),
+    essentialCategories: draftForConfirm.essentialCategories.map((c) => ({
+      categoryId: c.categoryId,
+      plannedAmount: c.suggestedAmount,
+    })),
+    flexibleCategories: draftForConfirm.flexibleCategories.map((c) => ({
+      categoryId: c.categoryId,
+      plannedAmount: c.suggestedAmount,
+    })),
+    buffer: draftForConfirm.suggestedBuffer,
+    includedCarryover: 0,
+    acknowledgedDeficit: true,
+    acknowledgedZeroBuffer: true,
+  };
+
+  const confirmResult = await confirmPaydayCheckin(initialPayload, paydayContext);
+  check("confirming a payday check-in succeeds", confirmResult.ok === true);
+
+  const checkinRow = await prisma.paydayCheckin.findFirst({
+    where: { year: draftForConfirm.periodRef.year, month: draftForConfirm.periodRef.month, period: draftForConfirm.periodRef.period },
+  });
+  check("exactly one confirmed PaydayCheckin row exists for the period", Boolean(checkinRow) && checkinRow!.status === "CONFIRMED");
+
+  const checkingSnapshot = await prisma.paydayAccountSnapshot.findFirst({
+    where: { paydayCheckinId: checkinRow!.id, accountId: paydayChecking.id },
+  });
+  eq("the snapshot stores the expected ledger balance for audit", num(checkingSnapshot!.expectedLedgerBalance), 800);
+  eq("the snapshot stores the reported balance separately from the ledger balance", num(checkingSnapshot!.reportedBalance), 850);
+  eq("the difference is reported minus expected - a diagnostic figure only", num(checkingSnapshot!.difference), 50);
+
+  const balancesAfterConfirm = await getAccountBalances(paydayContext, { status: "ACTIVE" });
+  const checkingBalanceAfterConfirm = balancesAfterConfirm.find((a) => a.id === paydayChecking.id)!;
+  eq(
+    "the reconciliation difference never changes the transaction-derived ledger balance - only the new income transaction does",
+    checkingBalanceAfterConfirm.balance,
+    1300,
+  );
+
+  const incomeTransaction = await prisma.transaction.findFirst({ where: { accountId: paydayChecking.id, source: "PAYDAY_CHECKIN" } });
+  check("a confirmed check-in creates an INCOME transaction sourced as PAYDAY_CHECKIN", Boolean(incomeTransaction));
+  eq("the income transaction amount matches what was entered", num(incomeTransaction!.amount), 500);
+  eq(
+    "the income transaction is dated with today's business date",
+    toISODate(incomeTransaction!.date),
+    toISODate(paydayContext.today),
+  );
+
+  const euroIncomeTransaction = await prisma.transaction.findFirst({ where: { accountId: paydayEuro.id, source: "PAYDAY_CHECKIN" } });
+  check("zero/blank income for an active account is valid and creates no income transaction", euroIncomeTransaction === null);
+
+  const goalContributionsAfterConfirm = await prisma.goalContribution.count({ where: { goalId: datedGoal.id } });
+  eq("confirming a plan never creates an actual GoalContribution row", goalContributionsAfterConfirm, 0);
+
+  const subscriptionExpenseAfterConfirm = await prisma.transaction.count({
+    where: { accountId: paydayChecking.id, type: "EXPENSE", note: { contains: "Netflix" } },
+  });
+  eq("confirming a plan never creates an actual expense transaction for a reserved subscription", subscriptionExpenseAfterConfirm, 0);
+
+  const goalAllocation = await prisma.paydayPlanAllocation.findFirst({
+    where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id },
+  });
+  check(
+    "the goal's roadmap recommendation is recorded in the allocation audit trail",
+    Boolean(goalAllocation) && num(goalAllocation!.recommendedAmount) > 0,
+  );
+
+  const essentialAndFlexibleIds = [
+    ...draftForConfirm.essentialCategories.map((c) => c.categoryId),
+    ...draftForConfirm.flexibleCategories.map((c) => c.categoryId),
+  ];
+  const budgetRowsAfterConfirm = await prisma.budget.count({
+    where: {
+      year: draftForConfirm.periodRef.year,
+      month: draftForConfirm.periodRef.month,
+      period: draftForConfirm.periodRef.period,
+      categoryId: { in: essentialAndFlexibleIds },
+    },
+  });
+  eq(
+    "an essential/flexible category Budget row is created for every reserved category",
+    budgetRowsAfterConfirm,
+    essentialAndFlexibleIds.length,
+  );
+
+  console.log("\n-- revisiting a confirmed check-in --");
+  const updatedPayload = {
+    ...initialPayload,
+    accounts: initialPayload.accounts.map((a) =>
+      a.accountId === paydayChecking.id ? { ...a, incomeEntered: 750, incomeNote: "Salary + bonus" } : a,
+    ),
+  };
+  const reconfirmResult = await confirmPaydayCheckin(updatedPayload, paydayContext);
+  check("re-confirming the same period succeeds", reconfirmResult.ok === true);
+
+  const checkinCountAfterReconfirm = await prisma.paydayCheckin.count({
+    where: { year: draftForConfirm.periodRef.year, month: draftForConfirm.periodRef.month, period: draftForConfirm.periodRef.period },
+  });
+  eq("re-confirming the same period never creates a second PaydayCheckin row", checkinCountAfterReconfirm, 1);
+
+  const snapshotCountAfterReconfirm = await prisma.paydayAccountSnapshot.count({
+    where: { paydayCheckinId: checkinRow!.id, accountId: paydayChecking.id },
+  });
+  eq("re-confirming never creates a duplicate snapshot for the same account", snapshotCountAfterReconfirm, 1);
+
+  const incomeTransactionCountAfterReconfirm = await prisma.transaction.count({
+    where: { accountId: paydayChecking.id, source: "PAYDAY_CHECKIN" },
+  });
+  eq("re-confirming updates the existing income transaction instead of creating another", incomeTransactionCountAfterReconfirm, 1);
+
+  const updatedIncomeTransaction = await prisma.transaction.findFirst({ where: { accountId: paydayChecking.id, source: "PAYDAY_CHECKIN" } });
+  eq("the updated income transaction reflects the newly entered amount", num(updatedIncomeTransaction!.amount), 750);
+
+  console.log("\n-- zeroing income removes the transaction, never leaves a stale one --");
+  const zeroedPayload = {
+    ...initialPayload,
+    accounts: initialPayload.accounts.map((a) =>
+      a.accountId === paydayChecking.id ? { ...a, incomeEntered: 0, incomeNote: null } : a,
+    ),
+  };
+  await confirmPaydayCheckin(zeroedPayload, paydayContext);
+  const incomeTransactionAfterZeroing = await prisma.transaction.findFirst({ where: { accountId: paydayChecking.id, source: "PAYDAY_CHECKIN" } });
+  check("zeroing income on re-confirm removes the previously created income transaction", incomeTransactionAfterZeroing === null);
+
+  console.log("\n-- deficit and zero-buffer acknowledgement gates --");
+  const deficitPayload = {
+    ...zeroedPayload,
+    flexibleCategories: draftForConfirm.flexibleCategories.map((c) => ({
+      categoryId: c.categoryId,
+      plannedAmount: c.suggestedAmount + 100000,
+    })),
+    acknowledgedDeficit: false,
+  };
+  const deficitResult = await confirmPaydayCheckin(deficitPayload, paydayContext);
+  check("confirming an overallocated plan without acknowledging the deficit is rejected", deficitResult.ok === false && deficitResult.reason === "deficit_not_acknowledged");
+  const deficitResultAcknowledged = await confirmPaydayCheckin({ ...deficitPayload, acknowledgedDeficit: true }, paydayContext);
+  check("acknowledging the deficit allows the same overallocated plan through", deficitResultAcknowledged.ok === true);
+
+  const zeroBufferPayload = { ...zeroedPayload, buffer: 0, acknowledgedDeficit: true, acknowledgedZeroBuffer: false };
+  const zeroBufferResult = await confirmPaydayCheckin(zeroBufferPayload, paydayContext);
+  check("confirming a zero-buffer plan without acknowledging it is rejected", zeroBufferResult.ok === false && zeroBufferResult.reason === "zero_buffer_not_acknowledged");
+
+  console.log("\n-- multi-currency income totals --");
+  const eurIncomePayload = {
+    ...zeroedPayload,
+    accounts: zeroedPayload.accounts.map((a) => (a.accountId === paydayEuro.id ? { ...a, incomeEntered: 20 } : a)),
+  };
+  await confirmPaydayCheckin(eurIncomePayload, paydayContext);
+  const checkinAfterEur = await prisma.paydayCheckin.findFirst({
+    where: { year: draftForConfirm.periodRef.year, month: draftForConfirm.periodRef.month, period: draftForConfirm.periodRef.period },
+  });
+  eq(
+    "multi-currency income is converted through USD before summing into the check-in total",
+    num(checkinAfterEur!.totalIncome),
+    40,
+  );
+
+  console.log("\n-- a lowered goal amount is preserved, never silently raised back --");
+  const lowGoalPayload = {
+    ...zeroedPayload,
+    goals: draftForConfirm.goals.map((g) => ({ goalId: g.goalId, plannedAmount: 5 })),
+    acknowledgedDeficit: true,
+  };
+  await confirmPaydayCheckin(lowGoalPayload, paydayContext);
+  const lowGoalAllocation = await prisma.paydayPlanAllocation.findFirst({
+    where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id },
+  });
+  eq(
+    "a user-lowered goal planned amount is stored exactly as entered",
+    num(lowGoalAllocation!.plannedAmount),
+    5,
+  );
+  check(
+    "the roadmap recommendation stays recorded alongside it, never overwritten to match",
+    Boolean(lowGoalAllocation) && num(lowGoalAllocation!.recommendedAmount) > 5,
+  );
+
+  console.log("\n-- payday check-in cleanup --");
+  await prisma.paydayPlanAllocation.deleteMany({ where: { paydayCheckinId: checkinRow!.id } });
+  await prisma.paydayAccountSnapshot.deleteMany({ where: { paydayCheckinId: checkinRow!.id } });
+  await prisma.paydayCheckin.deleteMany({ where: { id: checkinRow!.id } });
+  await prisma.transaction.deleteMany({ where: { accountId: { in: [paydayChecking.id, paydayEuro.id] } } });
+  await prisma.account.deleteMany({ where: { id: { in: [paydayChecking.id, paydayEuro.id] } } });
+  await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Payday" } } });
+  await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Payday" } } });
+  await prisma.category.update({ where: { id: billsCategory.id }, data: { isEssentialFixed: false } });
+  console.log("  ok   payday fixtures removed");
 
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
