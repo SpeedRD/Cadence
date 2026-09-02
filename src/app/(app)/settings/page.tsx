@@ -1,4 +1,4 @@
-import { LogOut, Mail, RefreshCw } from "lucide-react";
+import { LogOut, Mail, RefreshCw, Tags } from "lucide-react";
 import Link from "next/link";
 
 import { ActionButton } from "@/components/form/action-button";
@@ -23,6 +23,7 @@ import { num } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { logoutAction } from "@/server/actions/auth";
 import { recalculateGoalsAction } from "@/server/actions/settings";
+import { backfillCategorizationAction } from "@/server/actions/transactions";
 
 export const metadata = { title: "Settings - Cadence" };
 
@@ -144,6 +145,21 @@ export default async function SettingsPage() {
             <ActionButton action={recalculateGoalsAction} size="sm">
               <RefreshCw className="size-3.5" />
               {t.recalculateGoalTotals}
+            </ActionButton>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t.categorizeHistory}</CardTitle>
+            <CardDescription>
+              {t.categorizeHistoryDescription}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ActionButton action={backfillCategorizationAction} size="sm">
+              <Tags className="size-3.5" />
+              {t.categorizeHistoryAction}
             </ActionButton>
           </CardContent>
         </Card>

@@ -1600,6 +1600,109 @@ async function main() {
     }
   }
 
+  console.log("\n-- backfillUncategorizedTransactions (historical CSV imports) --");
+  {
+    const { backfillUncategorizedTransactions } = await import("../src/lib/categorization");
+
+    const categoryByName = new Map(
+      (await prisma.category.findMany({ select: { id: true, name: true } })).map((c) => [c.name, c.id]),
+    );
+    const shoppingId = categoryByName.get("Shopping")!;
+    const transportId = categoryByName.get("Transport")!;
+    const diningId = categoryByName.get("Dining")!;
+    const entertainmentId = categoryByName.get("Entertainment")!;
+
+    const backfillAccount = await prisma.account.create({
+      data: { name: "Verify Backfill", currency: "USD", type: "CHECKING" },
+    });
+
+    const uncategorizedAmazon = await prisma.transaction.create({
+      data: { date: civilDate(2026, 3, 5), amount: 55, currency: "USD", type: "EXPENSE", accountId: backfillAccount.id, categoryId: null, note: "AMAZON.COM*A1B2C3D4", source: "CSV" },
+    });
+    const uncategorizedTransport = await prisma.transaction.create({
+      data: { date: civilDate(2026, 3, 6), amount: 40, currency: "USD", type: "EXPENSE", accountId: backfillAccount.id, categoryId: null, note: "SHELL OIL 12345678", source: "CSV" },
+    });
+    const uncategorizedDining = await prisma.transaction.create({
+      data: { date: civilDate(2026, 3, 7), amount: 25, currency: "USD", type: "EXPENSE", accountId: backfillAccount.id, categoryId: null, note: "MCDONALD'S #3021", source: "CSV" },
+    });
+    const uncategorizedUnknown = await prisma.transaction.create({
+      data: { date: civilDate(2026, 3, 8), amount: 60, currency: "USD", type: "EXPENSE", accountId: backfillAccount.id, categoryId: null, note: "BOB'S WIDGET FACTORY", source: "CSV" },
+    });
+    const alreadyCategorized = await prisma.transaction.create({
+      data: { date: civilDate(2026, 3, 9), amount: 30, currency: "USD", type: "EXPENSE", accountId: backfillAccount.id, categoryId: entertainmentId, note: "AMAZON.COM*Z9Y8X7", source: "CSV" },
+    });
+    const uncategorizedIncome = await prisma.transaction.create({
+      data: { date: civilDate(2026, 3, 10), amount: 200, currency: "USD", type: "INCOME", accountId: backfillAccount.id, categoryId: null, note: "AMAZON.COM REFUND", source: "MANUAL" },
+    });
+    const transferId = crypto.randomUUID();
+    await prisma.$transaction([
+      prisma.transaction.create({
+        data: { date: civilDate(2026, 3, 11), amount: 75, currency: "USD", type: "TRANSFER", accountId: backfillAccount.id, categoryId: null, transferId, transferDirection: "OUT", note: "SHELL OIL transfer-shaped note", source: "MANUAL" },
+      }),
+      prisma.transaction.create({
+        data: { date: civilDate(2026, 3, 11), amount: 75, currency: "USD", type: "TRANSFER", accountId: backfillAccount.id, categoryId: null, transferId, transferDirection: "IN", note: "SHELL OIL transfer-shaped note", source: "MANUAL" },
+      }),
+    ]);
+
+    const firstRunCount = await backfillUncategorizedTransactions();
+
+    const reloadedAmazon = await prisma.transaction.findUnique({ where: { id: uncategorizedAmazon.id } });
+    eq("an existing uncategorized Amazon expense becomes Shopping", reloadedAmazon?.categoryId, shoppingId);
+
+    const reloadedTransport = await prisma.transaction.findUnique({ where: { id: uncategorizedTransport.id } });
+    eq("an existing uncategorized transport merchant becomes Transport", reloadedTransport?.categoryId, transportId);
+
+    const reloadedDining = await prisma.transaction.findUnique({ where: { id: uncategorizedDining.id } });
+    eq("an existing uncategorized dining merchant becomes Dining", reloadedDining?.categoryId, diningId);
+
+    const reloadedUnknown = await prisma.transaction.findUnique({ where: { id: uncategorizedUnknown.id } });
+    eq("an unknown merchant remains uncategorized after the backfill", reloadedUnknown?.categoryId, null);
+
+    const reloadedAlreadyCategorized = await prisma.transaction.findUnique({ where: { id: alreadyCategorized.id } });
+    eq(
+      "an existing manually/explicitly categorized transaction is never changed by the backfill",
+      reloadedAlreadyCategorized?.categoryId,
+      entertainmentId,
+    );
+
+    const reloadedIncome = await prisma.transaction.findUnique({ where: { id: uncategorizedIncome.id } });
+    eq("income is never categorized by the backfill, even with a matching merchant note", reloadedIncome?.categoryId, null);
+
+    const reloadedTransferLegs = await prisma.transaction.findMany({ where: { transferId } });
+    check(
+      "transfer legs are never touched by the backfill, even with a matching merchant-shaped note",
+      reloadedTransferLegs.length === 2 && reloadedTransferLegs.every((leg) => leg.categoryId === null),
+    );
+
+    eq(
+      "the backfill only changes rows that were null - it categorized exactly the 3 matchable uncategorized rows, not the already-categorized/income/transfer rows",
+      firstRunCount,
+      3,
+    );
+
+    const secondRunCount = await backfillUncategorizedTransactions();
+    eq("running the backfill again finds nothing left to do - it's idempotent", secondRunCount, 0);
+
+    const afterSecondRun = await prisma.transaction.findMany({
+      where: { id: { in: [uncategorizedAmazon.id, uncategorizedTransport.id, uncategorizedDining.id, uncategorizedUnknown.id, alreadyCategorized.id, uncategorizedIncome.id] } },
+      select: { id: true, categoryId: true },
+    });
+    const afterSecondRunById = new Map(afterSecondRun.map((t) => [t.id, t.categoryId]));
+    check(
+      "a second run produces the exact same result as the first run - no row changes on re-run",
+      afterSecondRunById.get(uncategorizedAmazon.id) === shoppingId &&
+        afterSecondRunById.get(uncategorizedTransport.id) === transportId &&
+        afterSecondRunById.get(uncategorizedDining.id) === diningId &&
+        afterSecondRunById.get(uncategorizedUnknown.id) === null &&
+        afterSecondRunById.get(alreadyCategorized.id) === entertainmentId &&
+        afterSecondRunById.get(uncategorizedIncome.id) === null,
+    );
+
+    await prisma.transaction.deleteMany({ where: { accountId: backfillAccount.id } });
+    await prisma.account.delete({ where: { id: backfillAccount.id } });
+    console.log("  ok   backfill fixtures removed");
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });

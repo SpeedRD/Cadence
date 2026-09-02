@@ -521,6 +521,10 @@ export const en = {
     goalProgressDescription:
       "Goal totals are cached for speed. Contributions are the source of truth - rebuild the cache from them if anything looks off.",
     recalculateGoalTotals: "Recalculate goal totals",
+    categorizeHistory: "Transaction categorization",
+    categorizeHistoryDescription:
+      "Imports from before automatic categorization was added may still be Uncategorized. Run the same merchant rules against them now - manually categorized transactions are never touched.",
+    categorizeHistoryAction: "Categorize uncategorized expenses",
     emailConnections: "Email connections",
     emailConnectionsDescription:
       "Gmail and Outlook accounts Cadence pulls transactional emails from, staged on /review before they become transactions.",
@@ -545,6 +549,10 @@ export const en = {
     disconnect: "Disconnect",
     connectAccount: (label: string) => `Connect ${label} account`,
     goalsRecalculated: (count: number) => `Recalculated ${count} goal${count === 1 ? "" : "s"}`,
+    categorizationBackfilled: (count: number) =>
+      count === 0
+        ? "No uncategorized expenses matched a rule"
+        : `Categorized ${count} transaction${count === 1 ? "" : "s"}`,
     showingIn: (code: string) => `Showing amounts in ${code}`,
     nothingToDisconnect: "Nothing to disconnect",
     connectionNoLongerExists: "That connection no longer exists",

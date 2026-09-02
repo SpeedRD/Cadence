@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 
 import { getSettings, requireAuth } from "@/lib/auth";
+import { backfillUncategorizedTransactions } from "@/lib/categorization";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { transactionEditBlock } from "@/lib/transactions";
@@ -68,6 +69,19 @@ export async function deleteTransactionAction(
 
   revalidateApp();
   return done(t.transactionDeleted);
+}
+
+/** One-time cleanup: categorize existing Uncategorized expenses using the same rules CSV import applies. */
+export async function backfillCategorizationAction(
+  _previous: ActionState,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).settingsPage;
+  const count = await backfillUncategorizedTransactions();
+  revalidateApp();
+  return done(t.categorizationBackfilled(count));
 }
 
 /**

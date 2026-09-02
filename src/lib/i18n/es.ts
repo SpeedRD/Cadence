@@ -527,6 +527,10 @@ export const es = {
     goalProgressDescription:
       "Los totales de las metas se cachean por velocidad. Los aportes son la fuente de verdad: reconstruye la caché a partir de ellos si algo se ve mal.",
     recalculateGoalTotals: "Recalcular totales de metas",
+    categorizeHistory: "Categorización de transacciones",
+    categorizeHistoryDescription:
+      "Las importaciones anteriores a la categorización automática pueden seguir sin categoría. Aplica ahora las mismas reglas de comercio - las transacciones categorizadas manualmente nunca se modifican.",
+    categorizeHistoryAction: "Categorizar gastos sin categoría",
     emailConnections: "Conexiones de correo",
     emailConnectionsDescription:
       "Cuentas de Gmail y Outlook desde las que Cadence extrae correos transaccionales, puestas en /review antes de convertirse en transacciones.",
@@ -552,6 +556,10 @@ export const es = {
     connectAccount: (label: string) => `Conectar cuenta de ${label}`,
     goalsRecalculated: (count: number) =>
       `Se ${count === 1 ? "recalculó" : "recalcularon"} ${count} meta${count === 1 ? "" : "s"}`,
+    categorizationBackfilled: (count: number) =>
+      count === 0
+        ? "Ningún gasto sin categoría coincidió con una regla"
+        : `Se ${count === 1 ? "categorizó" : "categorizaron"} ${count} transacción${count === 1 ? "" : "es"}`,
     showingIn: (code: string) => `Mostrando montos en ${code}`,
     nothingToDisconnect: "Nada que desconectar",
     connectionNoLongerExists: "Esa conexión ya no existe",
