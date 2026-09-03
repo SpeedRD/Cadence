@@ -54,7 +54,13 @@ be set per account to seed its starting balance before tracked transactions begi
 
 **Recurring subscriptions and investment contributions** — Track bills and
 recurring savings/investment contributions separately; both factor into
-safe-to-spend and the payday check-in for the period they fall in.
+safe-to-spend and the payday check-in for the period they fall in. Each item is
+tied to an account (and a contribution to a goal) and is posted automatically
+when it comes due: a subscription becomes an expense on that account, a
+contribution becomes the same expense plus a logged goal contribution. A daily
+Vercel Cron (`/api/cron/recurring`) does the posting, and opening the app runs
+the same catch-up, so a day the cron missed is never lost. An item missing its
+account or goal is flagged on the Recurring page and skipped rather than posted.
 
 **Savings goals** — Target amount, optional target date, and a roadmap of what each
 pay period needs to carry to hit it.
@@ -184,7 +190,7 @@ the authoritative source for "today" and pay-period boundaries.
 | `SESSION_SECRET` | Core app | Signs the session cookie |
 | `APP_TIMEZONE` | Core app | IANA timezone for resolving pay periods; defaults to `America/Santo_Domingo` |
 | `OAUTH_ENCRYPTION_KEY` | Email automation | Encrypts stored OAuth tokens at rest |
-| `CRON_SECRET` | Email automation | Bearer token required by the ingestion cron route |
+| `CRON_SECRET` | Core app / Email automation | Bearer token required by the cron routes (`/api/cron/recurring` posts due recurring items; `/api/cron/ingest` syncs email) |
 | `APP_URL` | Email automation (production) | Canonical production origin used to build the stable Gmail OAuth redirect URI |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Email automation | Gmail OAuth |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Email automation | Outlook OAuth |
@@ -213,6 +219,9 @@ them. See [DEPLOY.md](./DEPLOY.md) for the full Supabase migration walkthrough.
 - No native mobile app; the responsive web app works from mobile browsers.
 - The bundled Vercel Cron schedule runs the ingestion route once daily; the
   in-app "Sync now" button can be used any time in between.
+- Recurring items post on their due date via the daily recurring cron, or on the
+  next app visit if the cron did not run; a long backlog (an item untouched for
+  months) catches up at most 24 occurrences per run.
 
 ## Project status
 

@@ -206,6 +206,7 @@ function GroupCard({
     kind: "SUBSCRIPTION",
     nextDate: toISODate(group.inferredNextDate),
     categoryId: subscriptionsId ?? "none",
+    accountId,
     note: group.sampleNote,
   };
 
@@ -381,6 +382,7 @@ function GroupCard({
               {group.possibleSubscription ? (
                 <RecurringDialog
                   categories={categories}
+                  accounts={accounts}
                   values={recurringValues}
                   locale={locale}
                   trigger={

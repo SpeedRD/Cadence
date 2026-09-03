@@ -5,6 +5,7 @@ import {
   PenLine,
   ArrowRightLeft,
   CircleSmall,
+  Repeat,
   Wallet,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -19,6 +20,7 @@ const SOURCE_ICONS: Record<string, LucideIcon> = {
   OUTLOOK: Mail,
   PAYPAL: CreditCard,
   PAYDAY_CHECKIN: Wallet,
+  RECURRING: Repeat,
 };
 
 /**

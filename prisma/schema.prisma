@@ -48,6 +48,9 @@ enum TransactionSource {
   PAYPAL
   PAYDAY_CHECKIN
   OPENING_BALANCE
+  /// Posted automatically from a RecurringItem on its due date - see
+  /// postDueRecurringItems() in src/lib/recurring-posting.ts.
+  RECURRING
 }
 
 /// Which leg of a transfer a row is (OUT on the source leg, IN on the
@@ -93,13 +96,13 @@ model Settings {
   displayCurrency            String    @default("USD")
   language                   String    @default("en")
   /// Payday planner: default protected buffer = max(bufferPercent% of income, bufferFloorAmount).
-  bufferPercent               Int       @default(10)
-  bufferFloorAmount           Decimal   @default(2000) @db.Decimal(14, 2)
-  bufferFloorCurrency         String    @default("DOP")
-  carryoverIncludedByDefault  Boolean   @default(true)
+  bufferPercent              Int       @default(10)
+  bufferFloorAmount          Decimal   @default(2000) @db.Decimal(14, 2)
+  bufferFloorCurrency        String    @default("DOP")
+  carryoverIncludedByDefault Boolean   @default(true)
   /// The civil date (APP_TIMEZONE) the user last dismissed the auto-opened
   /// payday check-in prompt, so it doesn't force-open again the same day.
-  checkinPromptDismissedOn    DateTime? @db.Date
+  checkinPromptDismissedOn   DateTime? @db.Date
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
 }
@@ -115,6 +118,7 @@ model Account {
   transactions       Transaction[]
   stagedTransactions StagedTransaction[]
   paydaySnapshots    PaydayAccountSnapshot[]
+  recurringItems     RecurringItem[]
 
   @@index([name])
   @@index([status, name])
@@ -238,6 +242,11 @@ model Budget {
   @@index([year, month, period])
 }
 
+/// Automatic posting (src/lib/recurring-posting.ts) charges each due
+/// occurrence as a RECURRING-source EXPENSE from `accountId`; a CONTRIBUTION
+/// additionally logs a GoalContribution on `goalId`. Both links are nullable so
+/// pre-existing rows survive, but an item missing the link its kind needs is
+/// skipped (never advanced) by the posting job until the user sets it.
 model RecurringItem {
   id           String             @id @default(cuid())
   name         String
@@ -248,17 +257,27 @@ model RecurringItem {
   nextDate     DateTime           @db.Date
   active       Boolean            @default(true)
   categoryId   String?
+  /// The account each posted occurrence is charged to. Required for posting.
+  accountId    String?
+  /// CONTRIBUTION only: the goal each posted occurrence is logged against.
+  /// Ignored for SUBSCRIPTION items.
+  goalId       String?
   note         String?
   /// Set by Phase 2 auto-detection; unused for now.
   detectedFrom TransactionSource?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
-  category          Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category          Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  account           Account?               @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  goal              Goal?                  @relation(fields: [goalId], references: [id], onDelete: SetNull)
   paydayAllocations PaydayPlanAllocation[]
+  goalContributions GoalContribution[]
 
   @@index([active, nextDate])
   @@index([kind])
+  @@index([accountId])
+  @@index([goalId])
 }
 
 model Goal {
@@ -275,20 +294,28 @@ model Goal {
 
   contributions     GoalContribution[]
   paydayAllocations PaydayPlanAllocation[]
+  recurringItems    RecurringItem[]
 }
 
 model GoalContribution {
-  id        String   @id @default(cuid())
-  goalId    String
-  amount    Decimal  @db.Decimal(14, 2)
-  currency  String
-  date      DateTime @db.Date
-  note      String?
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  goalId          String
+  amount          Decimal  @db.Decimal(14, 2)
+  currency        String
+  date            DateTime @db.Date
+  note            String?
+  /// Set only when recurring posting created this row automatically (see
+  /// src/lib/recurring-posting.ts); null for manually-logged contributions.
+  /// The monthly savings/investing calculation uses it to avoid counting an
+  /// auto-posted contribution twice (once via its Transaction, once here).
+  recurringItemId String?
+  createdAt       DateTime @default(now())
 
-  goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  goal          Goal           @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)
 
   @@index([goalId, date])
+  @@index([recurringItemId])
 }
 
 /// Raw USD-based rates from open.er-api.com. rate = units of targetCurrency per

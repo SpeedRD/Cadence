@@ -50,6 +50,38 @@ export function AccountSelect({
   );
 }
 
+export function GoalSelect({
+  id,
+  name,
+  goals,
+  defaultValue,
+  common,
+}: {
+  id?: string;
+  name: string;
+  goals: Option[];
+  defaultValue?: string;
+  common: Pick<Dictionary["common"], "pickAGoal">;
+}) {
+  return (
+    <Select name={name} defaultValue={defaultValue}>
+      <SelectTrigger id={id} className="w-full">
+        <SelectValue placeholder={common.pickAGoal} />
+      </SelectTrigger>
+      <SelectContent>
+        {goals.map((goal) => (
+          <SelectItem key={goal.id} value={goal.id}>
+            {goal.name}
+            {goal.currency ? (
+              <span className="text-muted-foreground">{goal.currency}</span>
+            ) : null}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function CategorySelect({
   id,
   name,

@@ -18,10 +18,17 @@
  *                        monthly-equivalent amount for a completed month, or
  *                        nothing (see committedStillDueThisMonth) for the month
  *                        in progress.
- *   savings/investing  = GoalContribution rows + active CONTRIBUTION recurring
- *                        items (actual-or-scheduled, same rule as committed) +
- *                        actual EXPENSE transactions categorized Savings/Investment
- *                        that weren't already matched to a recurring item.
+ *   savings/investing  = GoalContribution rows not created by recurring posting
+ *                        (recurringItemId null - i.e. manually logged) + active
+ *                        CONTRIBUTION recurring items (actual-or-scheduled, same
+ *                        rule as committed) + actual EXPENSE transactions
+ *                        categorized Savings/Investment that weren't already
+ *                        matched to a recurring item. An auto-posted contribution
+ *                        occurrence writes both an EXPENSE Transaction and a
+ *                        GoalContribution (src/lib/recurring-posting.ts); the
+ *                        Transaction is what the recurring-item term matches, so
+ *                        its GoalContribution twin is left out of the first term
+ *                        to count that occurrence exactly once.
  *   transfers & income = never read by this module (all queries filter to EXPENSE).
  *
  * Subscription/contribution matching limitations (documented once, here):
@@ -237,8 +244,11 @@ async function computeMonthActuals(
       where: { type: "EXPENSE", date: { gte: window.start, lte: rangeEnd } },
       select: { id: true, amount: true, currency: true, categoryId: true, note: true },
     }),
+    // Auto-posted contributions (recurringItemId set) are already represented
+    // by their EXPENSE Transaction via the recurring-item term; only manually
+    // logged rows are summed here. See the module doc comment.
     prisma.goalContribution.findMany({
-      where: { date: { gte: window.start, lte: rangeEnd } },
+      where: { date: { gte: window.start, lte: rangeEnd }, recurringItemId: null },
       select: { amount: true, currency: true },
     }),
   ]);

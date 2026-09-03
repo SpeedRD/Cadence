@@ -26,11 +26,20 @@ export default async function RecurringPage() {
   const context = await getAppContext();
   const t = getDictionary(context.language).recurring;
   const common = getDictionary(context.language).common;
-  const [data, categories] = await Promise.all([
+  const [data, categories, accounts, goals] = await Promise.all([
     listRecurringItems(context),
     prisma.category.findMany({
       orderBy: { name: "asc" },
       select: { id: true, name: true, color: true },
+    }),
+    prisma.account.findMany({
+      where: { status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, currency: true },
+    }),
+    prisma.goal.findMany({
+      orderBy: [{ achievedAt: "asc" }, { name: "asc" }],
+      select: { id: true, name: true, currency: true },
     }),
   ]);
 
@@ -45,6 +54,8 @@ export default async function RecurringPage() {
         actions={
           <RecurringDialog
             categories={categories}
+            accounts={accounts}
+            goals={goals}
             values={{ nextDate: today, currency }}
             locale={context.language}
             trigger={
@@ -81,6 +92,8 @@ export default async function RecurringPage() {
               <RecurringList
                 rows={data.subscriptions}
                 categories={categories}
+                accounts={accounts}
+                goals={goals}
                 displayCurrency={currency}
                 today={context.today}
                 locale={context.language}
@@ -101,6 +114,8 @@ export default async function RecurringPage() {
             <CardAction>
               <RecurringDialog
                 categories={categories}
+                accounts={accounts}
+                goals={goals}
                 values={{ nextDate: today, currency, kind: "CONTRIBUTION" }}
                 locale={context.language}
                 trigger={
@@ -122,6 +137,8 @@ export default async function RecurringPage() {
               <RecurringList
                 rows={data.contributions}
                 categories={categories}
+                accounts={accounts}
+                goals={goals}
                 displayCurrency={currency}
                 today={context.today}
                 locale={context.language}

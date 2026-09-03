@@ -1,11 +1,15 @@
 "use client";
 
+import { useState } from "react";
+
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
 import {
+  AccountSelect,
   CategorySelect,
   CurrencySelect,
   EnumSelect,
+  GoalSelect,
   type Option,
 } from "@/components/form/selects";
 import { Input } from "@/components/ui/input";
@@ -23,19 +27,26 @@ export interface RecurringFormValues {
   kind?: string;
   nextDate: string;
   categoryId?: string | null;
+  accountId?: string | null;
+  goalId?: string | null;
   note?: string | null;
   active?: boolean;
 }
 
 export function RecurringDialog({
   categories,
+  accounts,
+  goals = [],
   values,
   trigger,
-  open,
+  open: controlledOpen,
   onOpenChange,
   locale,
 }: {
   categories: Option[];
+  accounts: Option[];
+  /** Optional only for callers that can only ever create a subscription. */
+  goals?: Option[];
   values: RecurringFormValues;
   trigger?: React.ReactNode;
   open?: boolean;
@@ -45,6 +56,37 @@ export function RecurringDialog({
   const editing = Boolean(values.id);
   const t = getDictionary(locale).recurring;
   const common = getDictionary(locale).common;
+  const [kind, setKind] = useState(values.kind ?? "SUBSCRIPTION");
+  const isContribution = kind === "CONTRIBUTION";
+
+  // Same controlled/uncontrolled resolution and reset-on-open dance as
+  // TransactionDialog: the Kind <Select> is uncontrolled and remounts (back to
+  // its defaultValue) every time the dialog re-opens, so `kind` must be reset
+  // in lockstep or a cancelled "Contribution" pick would keep the goal field
+  // showing while the Select says "Subscription".
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = onOpenChange ?? setUncontrolledOpen;
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setKind(values.kind ?? "SUBSCRIPTION");
+  }
+
+  // An existing item whose link is missing (or points at an account that is no
+  // longer active) must show up as unset, never quietly fall back to the first
+  // option - that is how the user notices it is not posting. Only a brand-new
+  // item gets the first account as a convenience; a goal is always an
+  // explicit choice.
+  const knownAccount = accounts.some((account) => account.id === values.accountId);
+  const accountDefault = knownAccount
+    ? (values.accountId ?? undefined)
+    : editing
+      ? undefined
+      : accounts[0]?.id;
+  const goalDefault = goals.some((goal) => goal.id === values.goalId)
+    ? (values.goalId ?? undefined)
+    : undefined;
 
   return (
     <FormDialog
@@ -56,7 +98,7 @@ export function RecurringDialog({
       savedMessage={editing ? t.itemUpdated : t.itemAdded}
       trigger={trigger}
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={setOpen}
     >
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
       <input
@@ -82,6 +124,7 @@ export function RecurringDialog({
             options={RECURRING_KINDS}
             labels={common.recurringKindLabels}
             defaultValue={values.kind ?? "SUBSCRIPTION"}
+            onValueChange={setKind}
           />
         </Field>
         <Field label={t.frequency} htmlFor="recurring-frequency">
@@ -113,7 +156,7 @@ export function RecurringDialog({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label={t.nextDue} htmlFor="recurring-next">
+        <Field label={t.nextDue} htmlFor="recurring-next" hint={t.nextDueHint}>
           <Input
             id="recurring-next"
             type="date"
@@ -131,6 +174,33 @@ export function RecurringDialog({
             common={common}
           />
         </Field>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={common.account} htmlFor="recurring-account" hint={t.accountHint}>
+          <AccountSelect
+            id="recurring-account"
+            name="accountId"
+            accounts={accounts}
+            defaultValue={accountDefault}
+            common={common}
+          />
+        </Field>
+        {isContribution ? (
+          <Field
+            label={t.goal}
+            htmlFor="recurring-goal"
+            hint={goals.length === 0 ? t.noGoalsYet : t.goalHint}
+          >
+            <GoalSelect
+              id="recurring-goal"
+              name="goalId"
+              goals={goals}
+              defaultValue={goalDefault}
+              common={common}
+            />
+          </Field>
+        ) : null}
       </div>
 
       <Field label={common.note} htmlFor="recurring-note">

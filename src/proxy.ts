@@ -10,7 +10,7 @@ const PUBLIC_PATHS = new Set(["/login"]);
  * route handler) instead of the PIN session - Vercel Cron never carries our
  * session cookie.
  */
-const BEARER_AUTH_PATHS = new Set(["/api/cron/ingest"]);
+const BEARER_AUTH_PATHS = new Set(["/api/cron/ingest", "/api/cron/recurring"]);
 
 /**
  * Gate every route behind the PIN session. This is the optimistic check - each

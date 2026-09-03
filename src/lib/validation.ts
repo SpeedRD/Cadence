@@ -174,22 +174,51 @@ export const budgetSchema = z.object({
   currency,
 });
 
-export const recurringSchema = z.object({
-  id: z.string().trim().optional(),
-  name: z.string().trim().min(1, "Name the item").max(80),
-  amount: positiveAmount,
-  currency,
-  frequency: z.enum(RECURRING_FREQUENCIES),
-  kind: z.enum(RECURRING_KINDS),
-  nextDate: isoDate,
-  categoryId: optionalId,
-  note: optionalText,
-  active: z
-    .string()
-    .trim()
-    .optional()
-    .transform((value) => value === "on" || value === "true"),
-});
+/**
+ * Automatic posting (src/lib/recurring-posting.ts) needs an account for every
+ * item and a goal for a contribution, so the form refuses to save without
+ * them - an item that saved fine but never posted would be the worst outcome.
+ * The goal field is not rendered for a subscription, so it may be absent from
+ * the FormData entirely and is normalized to null regardless of what was
+ * submitted (a stale pick from switching Kind back never survives).
+ */
+export const recurringSchema = z
+  .object({
+    id: z.string().trim().optional(),
+    name: z.string().trim().min(1, "Name the item").max(80),
+    amount: positiveAmount,
+    currency,
+    frequency: z.enum(RECURRING_FREQUENCIES),
+    kind: z.enum(RECURRING_KINDS),
+    nextDate: isoDate,
+    categoryId: optionalId,
+    accountId: optionalId,
+    goalId: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (!value || value === "none" ? null : value)),
+    note: optionalText,
+    active: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => value === "on" || value === "true"),
+  })
+  .transform((value, ctx) => {
+    if (value.accountId === null) {
+      ctx.addIssue({ code: "custom", message: "Pick an account", path: ["accountId"] });
+      return z.NEVER;
+    }
+    if (value.kind === "CONTRIBUTION") {
+      if (value.goalId === null) {
+        ctx.addIssue({ code: "custom", message: "Pick a goal", path: ["goalId"] });
+        return z.NEVER;
+      }
+      return { ...value, accountId: value.accountId, goalId: value.goalId };
+    }
+    return { ...value, accountId: value.accountId, goalId: null };
+  });
 
 export const goalSchema = z.object({
   id: z.string().trim().optional(),
@@ -324,6 +353,7 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Pick an account before approving": "Elige una cuenta antes de aprobar",
   "Add at least one active account": "Agrega al menos una cuenta activa",
   "Pick a direction": "Elige una dirección",
+  "Pick a goal": "Elige una meta",
   "Check the form and try again": "Revisa el formulario e intenta de nuevo",
 };
 

@@ -801,14 +801,21 @@ async function main() {
   );
   await prisma.budget.delete({ where: { id: displayBudget.id } });
 
-  const { advanceDueRecurringItems } = await import("../src/lib/recurring");
-  const advanced = await advanceDueRecurringItems(context.today);
-  check("overdue recurring items roll forward", advanced >= 1);
+  // Overdue items are no longer silently rolled forward: the posting job
+  // (src/lib/recurring-posting.ts) either posts them or, when the item lacks
+  // the account/goal it needs, leaves them where they are and reports them.
+  const { postDueRecurringItems: catchUpRecurring } = await import("../src/lib/recurring-posting");
+  const catchUp = await catchUpRecurring(context.today);
+  eq(
+    "an overdue item with no account is reported as skipped rather than rolled",
+    catchUp.skipped.find((item) => item.name === "Verify past due")?.reason,
+    "missing_account",
+  );
   const rolled = await prisma.recurringItem.findFirst({ where: { name: "Verify past due" } });
-  eq("rolled to the next occurrence", toISODate(rolled!.nextDate), "2026-09-05");
+  eq("a skipped item keeps its overdue nextDate", toISODate(rolled!.nextDate), "2026-08-05");
 
   const summaryAfter = await getPeriodSummary(context.currentPeriod, context);
-  eq("a rolled item is no longer committed this period", summaryAfter.committed, 15);
+  eq("an overdue, unposted item is not counted as committed this period", summaryAfter.committed, 15);
 
   console.log("\n== monthly spending pace ==");
   // Clear earlier sections' fixtures that would otherwise leak into these
@@ -2579,12 +2586,197 @@ async function main() {
     );
   }
 
+  console.log("\n== recurring form validation ==");
+  {
+    const { firstError: firstValidationError, recurringSchema } = await import("../src/lib/validation");
+    const baseForm = { name: "Verify Sub", amount: "10", currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: "2026-09-01", categoryId: "none", note: "", active: "true" };
+    const noAccount = recurringSchema.safeParse({ ...baseForm, accountId: "" });
+    eq("a subscription without an account is rejected", noAccount.success ? "accepted" : noAccount.error.issues[0]?.message, "Pick an account");
+    const withAccount = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1" });
+    eq("a subscription with an account (and no goal field at all) saves", withAccount.success ? withAccount.data.accountId : "rejected", "acc_1");
+    eq("a subscription never keeps a goal", withAccount.success ? withAccount.data.goalId : "rejected", null);
+    const staleGoal = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", goalId: "goal_1" });
+    eq("a stale goal left over from switching Kind back is dropped", staleGoal.success ? staleGoal.data.goalId : "rejected", null);
+    const contributionNoGoal = recurringSchema.safeParse({ ...baseForm, kind: "CONTRIBUTION", accountId: "acc_1", goalId: "" });
+    eq("a contribution without a goal is rejected", contributionNoGoal.success ? "accepted" : contributionNoGoal.error.issues[0]?.message, "Pick a goal");
+    eq("the goal error is translated for the Spanish UI", contributionNoGoal.success ? "accepted" : firstValidationError(contributionNoGoal.error, "es"), "Elige una meta");
+    const contributionNoAccount = recurringSchema.safeParse({ ...baseForm, kind: "CONTRIBUTION", accountId: "none", goalId: "goal_1" });
+    eq("a contribution without an account is rejected", contributionNoAccount.success ? "accepted" : contributionNoAccount.error.issues[0]?.message, "Pick an account");
+    const contribution = recurringSchema.safeParse({ ...baseForm, kind: "CONTRIBUTION", accountId: "acc_1", goalId: "goal_1" });
+    eq("a contribution with both links saves with both", contribution.success ? `${contribution.data.accountId}:${contribution.data.goalId}` : "rejected", "acc_1:goal_1");
+  }
+
+  console.log("\n== recurring posting ==");
+  {
+    const { MAX_OCCURRENCES_PER_ITEM, postDueRecurringItems } = await import(
+      "../src/lib/recurring-posting"
+    );
+    const postingToday = civilDate(2026, 8, 20);
+    const postingAccount = await prisma.account.create({
+      data: { name: "Verify Posting Account", currency: "USD", type: "CHECKING" },
+    });
+    const archivedPostingAccount = await prisma.account.create({
+      data: { name: "Verify Posting Archived", currency: "USD", type: "CHECKING", status: "ARCHIVED", archivedAt: new Date() },
+    });
+    const postingGoal = await prisma.goal.create({
+      data: { name: "Verify Posting Goal", targetAmount: 5000, currency: "USD" },
+    });
+    const postingSubsCategory = await prisma.category.findFirst({ where: { name: "Subscriptions" } });
+    const base = { currency: "USD", frequency: "MONTHLY" as const, active: true };
+    const monthlySub = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting Netflix", amount: 15, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 6, 15), accountId: postingAccount.id, categoryId: postingSubsCategory?.id ?? null },
+    });
+    const contribution = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting Auto-Invest", amount: 100, kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 20), accountId: postingAccount.id, goalId: postingGoal.id },
+    });
+    const noAccountSub = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting No Account", amount: 9, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 5) },
+    });
+    const noGoalContribution = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting No Goal", amount: 50, kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 1), accountId: postingAccount.id },
+    });
+    const bareContribution = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting Bare Contribution", amount: 50, kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 1) },
+    });
+    const archivedSub = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting Archived Sub", amount: 7, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 10), accountId: archivedPostingAccount.id },
+    });
+    const pausedSub = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting Paused", amount: 8, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 7, 1), accountId: postingAccount.id, active: false },
+    });
+    const futureSub = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting Future", amount: 11, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 21), accountId: postingAccount.id },
+    });
+    // Jan 1 + 33 weeks = Aug 20, so 34 weekly occurrences are due on Aug 20.
+    const weeklyBacklog = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting Weekly Backlog", amount: 5, kind: "SUBSCRIPTION", frequency: "WEEKLY", nextDate: civilDate(2026, 1, 1), accountId: postingAccount.id },
+    });
+    const postedFor = (itemId: string) =>
+      prisma.transaction.findMany({
+        where: { source: "RECURRING", externalId: { startsWith: `${itemId}:` } },
+        orderBy: { date: "asc" },
+      });
+    const nextDateOf = async (itemId: string) =>
+      toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: itemId } })).nextDate);
+
+    // Savings/investing for August before anything is posted, so the checks
+    // below can assert exact deltas regardless of what else the database holds.
+    // For a completed month the still-unposted contribution item is already
+    // represented by its scheduled monthly amount (100), so posting it must
+    // leave the total unchanged: the actual replaces the scheduled amount.
+    const augustWindow = monthWindow({ year: 2026, month: 8 });
+    const augustContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 8, 31), currentPeriod: periodForDate(civilDate(2026, 8, 31)) };
+    const contributionForMatch = [{ ...contribution, amount: num(contribution.amount) }];
+    const augustSavingsBefore = (await classifyCompletedMonth(augustWindow, augustContext, contributionForMatch, categoryMeta)).savingsInvesting;
+
+    const firstRun = await postDueRecurringItems(postingToday);
+    eq("summary reports the reference day", firstRun.today, "2026-08-20");
+    eq("three linked items posted", firstRun.itemsPosted, 3);
+    eq("3 monthly + 1 contribution + 24 capped weekly transactions created", firstRun.transactionsCreated, 28);
+    eq("one goal contribution created", firstRun.goalContributionsCreated, 1);
+    eq("four unlinked/archived items skipped", firstRun.itemsSkipped, 4);
+    eq("one item hit the per-run cap with occurrences still due", firstRun.itemsCapped, 1);
+
+    const netflixRows = await postedFor(monthlySub.id);
+    eq("one transaction per elapsed monthly occurrence", netflixRows.length, 3);
+    eq("occurrences are dated on their own due dates", netflixRows.map((row) => toISODate(row.date)).join(","), "2026-06-15,2026-07-15,2026-08-15");
+    const netflixFirst = netflixRows[0];
+    eq("posted row is an EXPENSE", netflixFirst.type, "EXPENSE");
+    eq("posted row carries the RECURRING source", netflixFirst.source, "RECURRING");
+    eq("posted row is charged to the item's account", netflixFirst.accountId, postingAccount.id);
+    eq("posted row keeps the item's category", netflixFirst.categoryId, postingSubsCategory?.id ?? null);
+    eq("posted row uses the item's amount", num(netflixFirst.amount), 15);
+    eq("posted row uses the item's currency", netflixFirst.currency, "USD");
+    eq("posted row's note is the item name", netflixFirst.note, "Verify Posting Netflix");
+    eq("posted row's externalId pins the item and due date", netflixFirst.externalId, `${monthlySub.id}:2026-06-15`);
+    eq("monthly item advanced past today", await nextDateOf(monthlySub.id), "2026-09-15");
+
+    const contributionRows = await postedFor(contribution.id);
+    eq("a contribution due today posts exactly once", contributionRows.length, 1);
+    eq("the contribution's outgoing transaction is an EXPENSE from its account", `${contributionRows[0].type}:${contributionRows[0].accountId}`, `EXPENSE:${postingAccount.id}`);
+    const goalRows = await prisma.goalContribution.findMany({ where: { goalId: postingGoal.id } });
+    eq("one GoalContribution logged on the item's goal", goalRows.length, 1);
+    eq("GoalContribution matches the item amount/currency/date", `${num(goalRows[0]?.amount)}:${goalRows[0]?.currency}:${toISODate(goalRows[0]!.date)}`, "100:USD:2026-08-20");
+    eq("GoalContribution note is the item name", goalRows[0]?.note, "Verify Posting Auto-Invest");
+    eq("Goal.savedAmount was recomputed from contributions", num((await prisma.goal.findUniqueOrThrow({ where: { id: postingGoal.id } })).savedAmount), 100);
+    eq("contribution item advanced to next month", await nextDateOf(contribution.id), "2026-09-20");
+    eq("an auto-posted GoalContribution is linked back to its recurring item", goalRows[0]?.recurringItemId, contribution.id);
+
+    // The posted occurrence is one real contribution represented by two rows
+    // (the EXPENSE Transaction the matcher finds, and the GoalContribution).
+    // Savings/investing must count it once, not once per row.
+    const augustSavingsAfterPosting = (await classifyCompletedMonth(augustWindow, augustContext, contributionForMatch, categoryMeta)).savingsInvesting;
+    eq("an auto-posted contribution is counted exactly once in savings/investing", round2(augustSavingsAfterPosting - augustSavingsBefore), 0);
+    // A manually-logged contribution has no recurring item behind it and keeps
+    // counting on its own, exactly as before.
+    const manualContribution = await prisma.goalContribution.create({
+      data: { goalId: postingGoal.id, amount: 40, currency: "USD", date: civilDate(2026, 8, 12), note: "Verify Posting Manual Top-up" },
+    });
+    eq("a manually-logged GoalContribution carries no recurring item link", manualContribution.recurringItemId, null);
+    const augustSavingsWithManual = (await classifyCompletedMonth(augustWindow, augustContext, contributionForMatch, categoryMeta)).savingsInvesting;
+    eq("a manually-logged contribution still counts in full alongside the auto-posted one", round2(augustSavingsWithManual - augustSavingsBefore), 40);
+    await prisma.goalContribution.delete({ where: { id: manualContribution.id } });
+
+    const skipReason = (itemId: string) => firstRun.skipped.find((item) => item.id === itemId)?.reason;
+    eq("subscription without an account is skipped", skipReason(noAccountSub.id), "missing_account");
+    eq("contribution without a goal is skipped", skipReason(noGoalContribution.id), "missing_goal");
+    eq("contribution with neither link is skipped", skipReason(bareContribution.id), "missing_account_and_goal");
+    eq("subscription on an archived account is skipped", skipReason(archivedSub.id), "account_archived");
+    eq("skipped entries carry the item name for the cron log", firstRun.skipped.find((item) => item.id === noAccountSub.id)?.name, "Verify Posting No Account");
+    eq("a skipped item is never advanced", await nextDateOf(noAccountSub.id), "2026-08-05");
+    eq("a skipped contribution is never advanced", await nextDateOf(noGoalContribution.id), "2026-08-01");
+    eq("a skipped archived-account item is never advanced", await nextDateOf(archivedSub.id), "2026-08-10");
+    eq("nothing is posted for skipped items", (await prisma.transaction.count({ where: { source: "RECURRING", externalId: { in: [`${noAccountSub.id}:2026-08-05`, `${noGoalContribution.id}:2026-08-01`, `${bareContribution.id}:2026-08-01`, `${archivedSub.id}:2026-08-10`] } } })), 0);
+    eq("nothing is posted to the archived account", await prisma.transaction.count({ where: { accountId: archivedPostingAccount.id } }), 0);
+    check("a paused item is neither posted nor reported", firstRun.skipped.every((item) => item.id !== pausedSub.id) && (await postedFor(pausedSub.id)).length === 0);
+    eq("a paused item keeps its date", await nextDateOf(pausedSub.id), "2026-07-01");
+    eq("an item due tomorrow is untouched", `${(await postedFor(futureSub.id)).length}:${await nextDateOf(futureSub.id)}`, "0:2026-08-21");
+
+    eq("a long backlog posts at most the cap per run", (await postedFor(weeklyBacklog.id)).length, MAX_OCCURRENCES_PER_ITEM);
+    eq("the cap is 24 occurrences", MAX_OCCURRENCES_PER_ITEM, 24);
+    eq("the capped item's nextDate sits at the first unposted occurrence", await nextDateOf(weeklyBacklog.id), "2026-06-18");
+
+    const secondRun = await postDueRecurringItems(postingToday);
+    eq("second run posts only the backlog remainder", secondRun.transactionsCreated, 10);
+    eq("second run posts no further goal contributions", secondRun.goalContributionsCreated, 0);
+    eq("second run finishes the backlog", `${(await postedFor(weeklyBacklog.id)).length}:${await nextDateOf(weeklyBacklog.id)}`, "34:2026-08-27");
+    eq("already-posted items are not posted again", `${(await postedFor(monthlySub.id)).length}:${(await postedFor(contribution.id)).length}`, "3:1");
+    eq("the same four items are still reported as skipped", secondRun.itemsSkipped, 4);
+    const thirdRun = await postDueRecurringItems(postingToday);
+    eq("a fully caught-up run posts nothing", `${thirdRun.itemsPosted}:${thirdRun.transactionsCreated}:${thirdRun.goalContributionsCreated}`, "0:0:0");
+
+    // Two overlapping runs (cron + a page load) must never double-post: the
+    // nextDate compare-and-swap inside each occurrence's transaction lets
+    // exactly one of them claim each occurrence.
+    const contended = await prisma.recurringItem.create({
+      data: { ...base, name: "Verify Posting Contended", amount: 3, kind: "CONTRIBUTION", nextDate: civilDate(2026, 5, 20), accountId: postingAccount.id, goalId: postingGoal.id },
+    });
+    const [runA, runB] = await Promise.all([postDueRecurringItems(postingToday), postDueRecurringItems(postingToday)]);
+    eq("overlapping runs together post each occurrence exactly once", runA.transactionsCreated + runB.transactionsCreated, 4);
+    eq("overlapping runs create exactly one transaction per occurrence", (await postedFor(contended.id)).length, 4);
+    eq("overlapping runs create exactly one goal contribution per occurrence", await prisma.goalContribution.count({ where: { goalId: postingGoal.id, note: "Verify Posting Contended" } }), 4);
+    eq("the contended item lands on the right nextDate", await nextDateOf(contended.id), "2026-09-20");
+    eq("Goal.savedAmount reflects both items' contributions", num((await prisma.goal.findUniqueOrThrow({ where: { id: postingGoal.id } })).savedAmount), 112);
+
+    // Once the missing link is set, the skipped item catches up from its
+    // original (never advanced) nextDate.
+    await prisma.recurringItem.update({ where: { id: noAccountSub.id }, data: { accountId: postingAccount.id } });
+    const fixedRun = await postDueRecurringItems(postingToday);
+    eq("linking the account lets the item post from its original due date", (await postedFor(noAccountSub.id)).map((row) => toISODate(row.date)).join(","), "2026-08-05");
+    eq("the fixed item is no longer skipped", fixedRun.skipped.some((item) => item.id === noAccountSub.id), false);
+
+    await prisma.transaction.deleteMany({ where: { accountId: { in: [postingAccount.id, archivedPostingAccount.id] } } });
+    await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Posting" } } });
+    await prisma.goal.delete({ where: { id: postingGoal.id } });
+    await prisma.account.deleteMany({ where: { id: { in: [postingAccount.id, archivedPostingAccount.id] } } });
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });
   await prisma.budget.deleteMany({ where: { year: 2026, month: { in: [8, 9] } } });
   await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify" } } });
-  await prisma.goal.deleteMany({ where: { name: "Verify Goal" } });
+  await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify" } } });
   console.log("  ok   test rows removed");
 
   console.log(failures === 0 ? "\nAll checks passed.\n" : `\n${failures} CHECK(S) FAILED\n`);

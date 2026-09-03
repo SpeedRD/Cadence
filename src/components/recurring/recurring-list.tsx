@@ -29,12 +29,16 @@ import type { RecurringRow } from "@/lib/data/recurring";
 export function RecurringList({
   rows,
   categories,
+  accounts,
+  goals,
   displayCurrency,
   today,
   locale,
 }: {
   rows: RecurringRow[];
   categories: Option[];
+  accounts: Option[];
+  goals: Option[];
   displayCurrency: string;
   today: Date;
   locale: Locale;
@@ -74,12 +78,22 @@ export function RecurringList({
                     {t.paused}
                   </span>
                 ) : null}
+                {row.active && row.needs ? (
+                  <span
+                    className="rounded-full bg-destructive/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-destructive"
+                    title={t.needsHint}
+                  >
+                    {row.needs === "account" ? t.needsAccount : t.needsGoal}
+                  </span>
+                ) : null}
               </div>
               <p className="text-[0.6875rem] text-muted-foreground">
                 {labelFor(common.frequencyLabels, row.frequency)} · {t.nextLabel}{" "}
                 {formatDate(row.nextDate)}
                 {row.active ? ` (${formatRelativeDays(today, row.nextDate, common)})` : ""}
                 {row.categoryName ? ` · ${row.categoryName}` : ""}
+                {row.accountName ? ` · ${row.accountName}` : ""}
+                {row.goalName ? ` · ${row.goalName}` : ""}
               </p>
             </div>
 
@@ -138,6 +152,8 @@ export function RecurringList({
       {editing ? (
         <RecurringDialog
           categories={categories}
+          accounts={accounts}
+          goals={goals}
           open
           onOpenChange={(next) => !next && setEditing(null)}
           locale={locale}
@@ -150,6 +166,8 @@ export function RecurringList({
             kind: editing.kind,
             nextDate: toISODate(editing.nextDate),
             categoryId: editing.categoryId ?? "none",
+            accountId: editing.accountId,
+            goalId: editing.goalId,
             note: editing.note,
             active: editing.active,
           }}
