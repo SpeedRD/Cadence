@@ -22,6 +22,7 @@ import {
   appTimeZone,
   civilDate,
   civilDateInZone,
+  daysInMonth,
   DEFAULT_APP_TIMEZONE,
   formatDate,
   toISODate,
@@ -1044,13 +1045,64 @@ async function main() {
   eq("monthsUsed matches the wired window count", wiredAverage.monthsUsed, expectedWindows.length);
 
   console.log("\n== payday planner (pure) ==");
-  eq("the 15th is a payday date", isPaydayDate(civilDate(2026, 8, 15)), true);
-  eq("Aug 31 is a payday date", isPaydayDate(civilDate(2026, 8, 31)), true);
-  eq("Feb 28 2026 (non-leap) is a payday date", isPaydayDate(civilDate(2026, 2, 28)), true);
-  eq("Feb 29 2024 (leap) is a payday date", isPaydayDate(civilDate(2024, 2, 29)), true);
+  // Sep 2026: the 15th is a Tuesday and the 30th a Wednesday, so neither
+  // boundary shifts - the weekday baseline.
+  eq("a weekday 15th is a payday date (Tue Sep 15 2026)", isPaydayDate(civilDate(2026, 9, 15)), true);
+  eq("the day before a weekday 15th is not a payday date", isPaydayDate(civilDate(2026, 9, 14)), false);
+  eq("the day after a weekday 15th is not a payday date", isPaydayDate(civilDate(2026, 9, 16)), false);
+  eq("a weekday last day is a payday date (Wed Sep 30 2026)", isPaydayDate(civilDate(2026, 9, 30)), true);
+  eq("the day before a weekday last day is not a payday date", isPaydayDate(civilDate(2026, 9, 29)), false);
+
+  eq("Aug 31 2026 (Monday) is a payday date", isPaydayDate(civilDate(2026, 8, 31)), true);
+  eq("Feb 29 2024 (leap, Thursday) is a payday date", isPaydayDate(civilDate(2024, 2, 29)), true);
   eq("Feb 28 2024 (leap, not last day) is not a payday date", isPaydayDate(civilDate(2024, 2, 28)), false);
-  eq("the 16th is not a payday date", isPaydayDate(civilDate(2026, 8, 16)), false);
   eq("the 1st is not a payday date", isPaydayDate(civilDate(2026, 8, 1)), false);
+
+  // A boundary on a weekend is paid the preceding Friday: Saturday moves back
+  // one day, Sunday two.
+  // Aug 2026: the 15th is a Saturday.
+  eq("a Saturday 15th pays on the Friday before (Aug 14 2026)", isPaydayDate(civilDate(2026, 8, 14)), true);
+  eq("a Saturday 15th is not itself a payday date", isPaydayDate(civilDate(2026, 8, 15)), false);
+  eq("the Sunday after a Saturday 15th is not a payday date", isPaydayDate(civilDate(2026, 8, 16)), false);
+
+  // Mar 2026: the 15th is a Sunday, and the 31st a Tuesday.
+  eq("a Sunday 15th pays on the Friday two days before (Mar 13 2026)", isPaydayDate(civilDate(2026, 3, 13)), true);
+  eq("the Saturday before a Sunday 15th is not a payday date", isPaydayDate(civilDate(2026, 3, 14)), false);
+  eq("a Sunday 15th is not itself a payday date", isPaydayDate(civilDate(2026, 3, 15)), false);
+  eq("that month's weekday last day still pays on the day (Tue Mar 31 2026)", isPaydayDate(civilDate(2026, 3, 31)), true);
+
+  // Jan 2026: the 31st is a Saturday, the 15th a Thursday.
+  eq("a Saturday last day pays on the Friday before (Jan 30 2026)", isPaydayDate(civilDate(2026, 1, 30)), true);
+  eq("a Saturday last day is not itself a payday date", isPaydayDate(civilDate(2026, 1, 31)), false);
+  eq("that month's weekday 15th is unaffected (Thu Jan 15 2026)", isPaydayDate(civilDate(2026, 1, 15)), true);
+
+  // May 2026: the 31st is a Sunday, the 15th a Friday.
+  eq("a Sunday last day pays on the Friday two days before (May 29 2026)", isPaydayDate(civilDate(2026, 5, 29)), true);
+  eq("the Saturday before a Sunday last day is not a payday date", isPaydayDate(civilDate(2026, 5, 30)), false);
+  eq("a Sunday last day is not itself a payday date", isPaydayDate(civilDate(2026, 5, 31)), false);
+
+  // Feb 2026: both boundaries land on a weekend (Sun 15th, Sat 28th).
+  eq("both weekend boundaries shift in the same month (Fri Feb 13 2026)", isPaydayDate(civilDate(2026, 2, 13)), true);
+  eq("both weekend boundaries shift in the same month (Fri Feb 27 2026)", isPaydayDate(civilDate(2026, 2, 27)), true);
+  eq("a Sunday 15th in that month is not a payday date", isPaydayDate(civilDate(2026, 2, 15)), false);
+  eq("a Saturday last day in that month is not a payday date", isPaydayDate(civilDate(2026, 2, 28)), false);
+
+  {
+    // Every month of 2026 has exactly two paydays, both on weekdays.
+    let paydayCount = 0;
+    let weekendPaydays = 0;
+    for (let month = 1; month <= 12; month += 1) {
+      for (let dayOfMonth = 1; dayOfMonth <= daysInMonth(2026, month); dayOfMonth += 1) {
+        const date = civilDate(2026, month, dayOfMonth);
+        if (!isPaydayDate(date)) continue;
+        paydayCount += 1;
+        const weekday = date.getUTCDay();
+        if (weekday === 0 || weekday === 6) weekendPaydays += 1;
+      }
+    }
+    eq("2026 has exactly two paydays a month", paydayCount, 24);
+    eq("no 2026 payday falls on a weekend", weekendPaydays, 0);
+  }
 
   eq("buffer = 10% of income when that beats the floor", defaultProtectedBuffer(50000, 10, 2000), 5000);
   eq("buffer falls back to the floor when 10% of income is smaller", defaultProtectedBuffer(1000, 10, 2000), 2000);
@@ -1361,8 +1413,10 @@ async function main() {
     displayCurrency: "USD" as const,
     language: "en" as const,
     rates,
-    today: civilDate(2026, 8, 15),
-    currentPeriod: periodForDate(civilDate(2026, 8, 15)),
+    // Aug 15 2026 is a Saturday, so this period's payday is the Friday before
+    // it - that is the day the check-in opens and plans the next period.
+    today: civilDate(2026, 8, 14),
+    currentPeriod: periodForDate(civilDate(2026, 8, 14)),
     bufferPercent: paydaySettings.bufferPercent,
     bufferFloorAmount: num(paydaySettings.bufferFloorAmount),
     bufferFloorCurrency: paydaySettings.bufferFloorCurrency,

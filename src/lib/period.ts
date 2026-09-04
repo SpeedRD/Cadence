@@ -39,12 +39,35 @@ export interface PeriodInfo extends PeriodRef {
 
 export const PERIOD_A_LAST_DAY = 15;
 
-/** True on the 15th or the actual last calendar day of the month (Feb/leap-year safe). */
+/**
+ * A pay boundary that lands on a weekend is paid on the preceding Friday:
+ * Saturday moves back 1 day, Sunday 2. Weekdays are returned untouched, and
+ * neither shift can cross out of the month (the earliest boundary is the 15th).
+ * Weekends only - deliberately no holiday calendar.
+ */
+function payDayOfMonth(year: number, month: number, boundaryDay: number): number {
+  const weekday = civilDate(year, month, boundaryDay).getUTCDay();
+  if (weekday === 6) return boundaryDay - 1; // Saturday -> Friday
+  if (weekday === 0) return boundaryDay - 2; // Sunday -> Friday
+  return boundaryDay;
+}
+
+/**
+ * True on the day the user is actually paid for a period boundary: the 15th or
+ * the real last calendar day of the month (Feb/leap-year safe), each pulled
+ * back to the preceding Friday when it falls on a weekend. The period's own
+ * start/end dates are unaffected - only what counts as payday moves.
+ */
 export function isPaydayDate(date: Date): boolean {
   const day = startOfDay(date);
   const dayOfMonth = day.getUTCDate();
-  const lastDay = daysInMonth(day.getUTCFullYear(), day.getUTCMonth() + 1);
-  return dayOfMonth === PERIOD_A_LAST_DAY || dayOfMonth === lastDay;
+  const year = day.getUTCFullYear();
+  const month = day.getUTCMonth() + 1;
+  const lastDay = daysInMonth(year, month);
+  return (
+    dayOfMonth === payDayOfMonth(year, month, PERIOD_A_LAST_DAY) ||
+    dayOfMonth === payDayOfMonth(year, month, lastDay)
+  );
 }
 
 /** Which pay period a date falls into, with that month's real start/end dates. */
