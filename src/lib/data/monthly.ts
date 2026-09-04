@@ -22,7 +22,10 @@
  *                        for them + CONTRIBUTION charges (same actual-or-
  *                        scheduled rule as committed) + EXPENSE transactions
  *                        categorized Savings/Investment that nothing else
- *                        already accounted for.
+ *                        already accounted for. A hand-logged contribution's
+ *                        own Transaction (source MANUAL, externalId
+ *                        "goal-contribution:<id>") is never read as spending:
+ *                        its GoalContribution already counts the money.
  *   transfers & income = never read by this module (all queries filter to EXPENSE).
  *
  * How a charge is recognised, in order:
@@ -52,6 +55,7 @@ import { num, round2, sum } from "@/lib/money";
 import { daysElapsedInMonth, monthForDate, monthWindow, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
 import { monthlyEquivalent, owedOccurrences } from "@/lib/recurring";
+import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
 import type { CategoryLine } from "@/lib/data/period-summary";
@@ -349,6 +353,22 @@ async function computeMonthActuals(
       .filter((key): key is string => key !== null && postedExternalIds.has(key)),
   );
 
+  // A hand-logged contribution that moved money is likewise one event as two
+  // rows: the GoalContribution, counted below in goalContributionTotal, and the
+  // MANUAL Transaction it wrote (see manualContributionExternalId). The
+  // Transaction is set aside here so it is neither lifestyle spending nor a
+  // heuristic match for some CONTRIBUTION item that happens to share its amount.
+  const manualContributionTwinIds = new Set(
+    transactions
+      .filter(
+        (tx) =>
+          tx.source === "MANUAL" &&
+          tx.externalId !== null &&
+          tx.externalId.startsWith(MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX),
+      )
+      .map((tx) => tx.id),
+  );
+
   let committedActual = 0;
   let contributionActual = 0;
   const actualSubscriptionItemIds = new Set<string>();
@@ -378,7 +398,9 @@ async function computeMonthActuals(
 
   // Whatever posting did not already account for falls to the heuristic, which
   // is all that is available for a charge Cadence did not write itself.
-  const unposted = matchable.filter((tx) => !postedTransactionIds.has(tx.id));
+  const unposted = matchable.filter(
+    (tx) => !postedTransactionIds.has(tx.id) && !manualContributionTwinIds.has(tx.id),
+  );
   const subscriptionItems = recurringItems.filter((item) => item.kind === "SUBSCRIPTION");
   const contributionItems = recurringItems.filter((item) => item.kind === "CONTRIBUTION");
 
@@ -401,6 +423,7 @@ async function computeMonthActuals(
 
   const accountedForIds = new Set([
     ...postedTransactionIds,
+    ...manualContributionTwinIds,
     ...subscriptionMatch.matchedTransactionIds,
     ...contributionMatch.matchedTransactionIds,
   ]);

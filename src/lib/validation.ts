@@ -243,8 +243,26 @@ export const goalSchema = z.object({
   targetDate: optionalIsoDate,
 });
 
+/**
+ * A contribution moves money out of an account (see logManualContribution), so
+ * the account is required the same way the transaction form requires one; the
+ * server action then checks it still exists and is active.
+ */
 export const contributionSchema = z.object({
   goalId: z.string().trim().min(1),
+  accountId: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value, ctx) => {
+      // Absent (nothing rendered), "" (nothing picked) and "none" all mean the
+      // same thing to the user, so they get the same message.
+      if (!value || value === "none") {
+        ctx.addIssue({ code: "custom", message: "Pick an account" });
+        return z.NEVER;
+      }
+      return value;
+    }),
   amount: positiveAmount,
   date: isoDate,
   note: optionalText,

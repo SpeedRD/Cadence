@@ -2,17 +2,22 @@
 
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
+import { AccountSelect, type Option } from "@/components/form/selects";
 import { markGoalAchieved } from "@/components/goals/goal-achieved";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { addContributionAction } from "@/server/actions/goals";
 
-/** Contributions are recorded in the goal's own currency. */
+/**
+ * Contributions are recorded in the goal's own currency; the money leaves the
+ * chosen account as an expense in that account's currency.
+ */
 export function ContributionDialog({
   goalId,
   goalName,
   currency,
+  accounts,
   defaultDate,
   trigger,
   locale,
@@ -20,6 +25,8 @@ export function ContributionDialog({
   goalId: string;
   goalName: string;
   currency: string;
+  /** Active accounts only - a new row is never filed against an archived one. */
+  accounts: Option[];
   defaultDate: string;
   trigger: React.ReactNode;
   locale: Locale;
@@ -64,6 +71,17 @@ export function ContributionDialog({
           />
         </Field>
       </div>
+
+      {/* No default: which account the money leaves is an explicit choice,
+          never the first one in the list. Required by contributionSchema. */}
+      <Field label={common.account} htmlFor="contribution-account" hint={t.contributionAccountHint}>
+        <AccountSelect
+          id="contribution-account"
+          name="accountId"
+          accounts={accounts}
+          common={common}
+        />
+      </Field>
 
       <Field label={common.note} htmlFor="contribution-note">
         <Textarea

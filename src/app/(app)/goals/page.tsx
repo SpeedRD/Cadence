@@ -22,7 +22,14 @@ export const metadata = { title: "Goals - Cadence" };
 
 export default async function GoalsPage() {
   const context = await getAppContext();
-  const goals = await listGoals(context);
+  const [goals, accounts] = await Promise.all([
+    listGoals(context),
+    prisma.account.findMany({
+      where: { status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, currency: true },
+    }),
+  ]);
   const today = toISODate(context.today);
   const t = getDictionary(context.language).goals;
   const common = getDictionary(context.language).common;
@@ -169,6 +176,7 @@ export default async function GoalsPage() {
                     goalId={goal.id}
                     goalName={goal.name}
                     currency={goal.currency}
+                    accounts={accounts}
                     defaultDate={today}
                     locale={context.language}
                     trigger={

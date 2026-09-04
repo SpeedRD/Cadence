@@ -120,6 +120,7 @@ model Account {
   paydaySnapshots    PaydayAccountSnapshot[]
   paydayAllocations  PaydayPlanAllocation[]
   recurringItems     RecurringItem[]
+  goalContributions  GoalContribution[]
 
   @@index([name])
   @@index([status, name])
@@ -324,13 +325,23 @@ model GoalContribution {
   /// Transaction in the monthly savings/investing calculation, so the pair is
   /// counted once whether or not the item still exists.
   recurringExternalId String?
+  /// The account the money left when this contribution was logged by hand,
+  /// paired with an EXPENSE Transaction (source MANUAL, externalId
+  /// "goal-contribution:<this row's id>") that carries the same money in the
+  /// account's own currency - see logManualContribution in src/lib/goals.ts.
+  /// Null for rows logged before contributions moved real money (nothing to
+  /// backfill: they never had a source account) and for auto-posted rows,
+  /// whose account is the RecurringItem's.
+  accountId       String?
   createdAt       DateTime @default(now())
 
   goal          Goal           @relation(fields: [goalId], references: [id], onDelete: Cascade)
   recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)
+  account       Account?       @relation(fields: [accountId], references: [id], onDelete: SetNull)
 
   @@index([goalId, date])
   @@index([recurringItemId])
+  @@index([accountId])
   @@index([recurringExternalId])
 }
 

@@ -300,6 +300,8 @@ export const en = {
     categoryNoLongerExists: "That category no longer exists",
     transferNoLongerExists: "That transfer no longer exists",
     editFromTransferForm: "Edit this transfer from the transfer form",
+    editContributionFromGoal:
+      "This expense is a goal contribution - change it from the goal's page so the goal's progress stays in step",
     editOpeningBalanceFromAccounts:
       "This is an account's opening balance - change it from the Accounts page so it stays separate from income and spending",
     openingBalance: "Opening balance",
@@ -551,6 +553,7 @@ export const en = {
     addTo: (name: string) => `Add to ${name}`,
     contributionDialogDescription: "Contributions are the source of truth for goal progress.",
     amountWithCurrency: (code: string) => `Amount (${code})`,
+    contributionAccountHint: "The money leaves this account as an expense, converted to its currency if it differs.",
     goalUpdated: "Goal updated",
     goalCreated: "Goal created",
     goalDeleted: "Goal deleted",

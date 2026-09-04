@@ -26,6 +26,8 @@ export interface TransactionRow {
   displayAmount: number;
   type: string;
   source: string;
+  /** Read by transactionEditBlock to recognise the expense a goal contribution wrote. */
+  externalId: string | null;
   note: string | null;
   transferId: string | null;
   transferDirection: string | null;
@@ -114,6 +116,7 @@ export async function listTransactions(
       ),
       type: transaction.type,
       source: transaction.source,
+      externalId: transaction.externalId,
       note: transaction.note,
       transferId: transaction.transferId,
       transferDirection: transaction.transferDirection,

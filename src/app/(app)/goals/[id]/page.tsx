@@ -38,7 +38,14 @@ export default async function GoalDetailPage({
 }) {
   const { id } = await params;
   const context = await getAppContext();
-  const detail = await getGoalDetail(id, context);
+  const [detail, accounts] = await Promise.all([
+    getGoalDetail(id, context),
+    prisma.account.findMany({
+      where: { status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, currency: true },
+    }),
+  ]);
   if (!detail) notFound();
   const planRef = planPeriodRef(context);
   const confirmedCheckin = await prisma.paydayCheckin.findFirst({
@@ -79,6 +86,7 @@ export default async function GoalDetailPage({
               goalId={summary.id}
               goalName={summary.name}
               currency={summary.currency}
+              accounts={accounts}
               defaultDate={today}
               locale={context.language}
               trigger={

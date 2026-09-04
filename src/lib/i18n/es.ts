@@ -303,6 +303,8 @@ export const es = {
     categoryNoLongerExists: "Esa categoría ya no existe",
     transferNoLongerExists: "Esa transferencia ya no existe",
     editFromTransferForm: "Edita esta transferencia desde el formulario de transferencias",
+    editContributionFromGoal:
+      "Este gasto es un aporte a una meta: cámbialo desde la página de la meta para que su progreso se mantenga al día",
     editOpeningBalanceFromAccounts:
       "Este es el saldo inicial de una cuenta: cámbialo desde la página de Cuentas para que se mantenga separado de ingresos y gastos",
     openingBalance: "Saldo inicial",
@@ -555,6 +557,7 @@ export const es = {
     addTo: (name: string) => `Agregar a ${name}`,
     contributionDialogDescription: "Los aportes son la fuente de verdad del progreso de la meta.",
     amountWithCurrency: (code: string) => `Monto (${code})`,
+    contributionAccountHint: "El dinero sale de esta cuenta como un gasto, convertido a su moneda si es diferente.",
     goalUpdated: "Meta actualizada",
     goalCreated: "Meta creada",
     goalDeleted: "Meta eliminada",

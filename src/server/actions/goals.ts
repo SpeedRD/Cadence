@@ -1,9 +1,15 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
-import { rebuildGoalSaved, recomputeGoalSaved } from "@/lib/goals";
+import {
+  logManualContribution,
+  rebuildGoalSaved,
+  recomputeGoalSaved,
+  removeContribution,
+} from "@/lib/goals";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
+import { checkReferences } from "@/lib/references";
 import {
   contributionSchema,
   firstError,
@@ -55,7 +61,8 @@ export async function deleteGoalAction(
 
 /**
  * Contributions are the source of truth; the cached Goal.savedAmount is rebuilt
- * from them after every write.
+ * from them after every write. A contribution also moves the money out of the
+ * chosen account - see logManualContribution for the paired Transaction.
  */
 export async function addContributionAction(
   _previous: ActionState,
@@ -73,15 +80,22 @@ export async function addContributionAction(
     select: { id: true, currency: true },
   });
   if (!goal) return fail(t.goalNoLongerExists);
+  // Same check the transaction form runs: the account must still exist and,
+  // since this writes a new row against it, still be active.
+  const referenceError = await checkReferences(
+    getDictionary(locale).transactions,
+    [parsed.data.accountId],
+    null,
+    true,
+  );
+  if (referenceError) return fail(referenceError);
 
-  await prisma.goalContribution.create({
-    data: {
-      goalId: goal.id,
-      amount: parsed.data.amount,
-      currency: goal.currency,
-      date: parsed.data.date,
-      note: parsed.data.note,
-    },
+  await logManualContribution({
+    goalId: goal.id,
+    accountId: parsed.data.accountId,
+    amount: parsed.data.amount,
+    date: parsed.data.date,
+    note: parsed.data.note,
   });
   const { justAchieved } = await rebuildGoalSaved(goal.id);
 
@@ -103,11 +117,11 @@ export async function deleteContributionAction(
   const id = String(formData.get("id") ?? "").trim();
   const contribution = await prisma.goalContribution.findUnique({
     where: { id },
-    select: { goalId: true },
+    select: { id: true, goalId: true, accountId: true },
   });
   if (!contribution) return fail(t.contributionNoLongerExists);
 
-  await prisma.goalContribution.delete({ where: { id } });
+  await removeContribution(contribution);
   await recomputeGoalSaved(contribution.goalId);
 
   revalidateApp();

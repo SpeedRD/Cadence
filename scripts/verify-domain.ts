@@ -283,12 +283,16 @@ async function main() {
 
   console.log("\n== transaction edit guard ==");
   const { transactionEditBlock, balanceSign, isCashflow } = await import("../src/lib/transactions");
-  eq("an opening balance can't be edited through the transaction form", transactionEditBlock({ type: "OPENING_BALANCE", transferId: null }), "opening_balance");
-  eq("a transfer leg can't be edited through the transaction form", transactionEditBlock({ type: "TRANSFER", transferId: "t1" }), "transfer");
-  eq("an ordinary expense can be edited", transactionEditBlock({ type: "EXPENSE", transferId: null }), null);
-  eq("an ordinary income can be edited", transactionEditBlock({ type: "INCOME", transferId: null }), null);
-  eq("an outgoing external transfer can be edited (single row, never paired)", transactionEditBlock({ type: "EXTERNAL_TRANSFER", transferId: null }), null);
-  eq("an incoming external transfer can be edited (single row, never paired)", transactionEditBlock({ type: "EXTERNAL_TRANSFER", transferId: null }), null);
+  const plain = { transferId: null, source: "MANUAL", externalId: null };
+  eq("an opening balance can't be edited through the transaction form", transactionEditBlock({ ...plain, type: "OPENING_BALANCE" }), "opening_balance");
+  eq("a transfer leg can't be edited through the transaction form", transactionEditBlock({ ...plain, type: "TRANSFER", transferId: "t1" }), "transfer");
+  eq("an ordinary expense can be edited", transactionEditBlock({ ...plain, type: "EXPENSE" }), null);
+  eq("an ordinary income can be edited", transactionEditBlock({ ...plain, type: "INCOME" }), null);
+  eq("an outgoing external transfer can be edited (single row, never paired)", transactionEditBlock({ ...plain, type: "EXTERNAL_TRANSFER" }), null);
+  eq("an incoming external transfer can be edited (single row, never paired)", transactionEditBlock({ ...plain, type: "EXTERNAL_TRANSFER" }), null);
+  eq("a goal contribution's expense can't be edited through the transaction form", transactionEditBlock({ ...plain, type: "EXPENSE", externalId: "goal-contribution:c1" }), "goal_contribution");
+  eq("the prefix only counts under source MANUAL", transactionEditBlock({ ...plain, type: "EXPENSE", source: "CSV", externalId: "goal-contribution:c1" }), null);
+  eq("a RECURRING externalId is not a goal contribution twin", transactionEditBlock({ ...plain, type: "EXPENSE", source: "RECURRING", externalId: "item:2026-08-01" }), null);
   eq("balanceSign(EXTERNAL_TRANSFER, OUT) is -1, same shape as an outgoing internal transfer leg", balanceSign("EXTERNAL_TRANSFER", "OUT"), -1);
   eq("balanceSign(EXTERNAL_TRANSFER, IN) is +1, same shape as an incoming internal transfer leg", balanceSign("EXTERNAL_TRANSFER", "IN"), 1);
   eq("isCashflow(EXTERNAL_TRANSFER) is false - it never counts as income or spending", isCashflow("EXTERNAL_TRANSFER"), false);
@@ -3000,6 +3004,117 @@ async function main() {
     await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Posting" } } });
     await prisma.goal.delete({ where: { id: postingGoal.id } });
     await prisma.account.deleteMany({ where: { id: { in: [postingAccount.id, archivedPostingAccount.id] } } });
+  }
+
+  console.log("\n== manual goal contributions move real money ==");
+  {
+    // addContributionAction/deleteContributionAction are auth-gated "use
+    // server" actions, so these checks exercise the same steps they perform:
+    // validate via contributionSchema, then logManualContribution /
+    // removeContribution, then the goal rebuild.
+    const goalsLib = await import("../src/lib/goals");
+    const validationLib = await import("../src/lib/validation");
+    const { monthWindow: monthWindowOf } = await import("../src/lib/month");
+    const contribAccount = await prisma.account.create({
+      data: { name: "Verify Contribution Account", currency: "USD", type: "CHECKING" },
+    });
+    const contribGoal = await prisma.goal.create({
+      data: { name: "Verify Contribution Goal", targetAmount: 100000, currency: "DOP" },
+    });
+    const savingsCat = await prisma.category.findFirstOrThrow({ where: { isSavingsDefault: true } });
+    const contribContext = {
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today: civilDate(2026, 8, 31),
+      currentPeriod: periodForDate(civilDate(2026, 8, 31)),
+    };
+    const contribBalance = async () =>
+      (await getAccountBalances(contribContext, { status: "ALL" })).find((a) => a.id === contribAccount.id)?.balance ?? 0;
+    const augustWindowForContrib = monthWindowOf({ year: 2026, month: 8 });
+    const augustBefore = await classifyCompletedMonth(augustWindowForContrib, contribContext, [], categoryMeta);
+    const balanceBefore = await contribBalance();
+
+    const missingAccount = validationLib.contributionSchema.safeParse({ goalId: contribGoal.id, amount: "3000", date: "2026-08-12", note: "" });
+    eq("contributionSchema refuses a contribution with no account field", missingAccount.success ? "ok" : missingAccount.error.issues[0]?.message, "Pick an account");
+    const emptyAccount = validationLib.contributionSchema.safeParse({ goalId: contribGoal.id, accountId: "", amount: "3000", date: "2026-08-12", note: "" });
+    eq("contributionSchema refuses an empty account pick", emptyAccount.success ? "ok" : emptyAccount.error.issues[0]?.message, "Pick an account");
+    const parsedContribution = validationLib.contributionSchema.safeParse({ goalId: contribGoal.id, accountId: contribAccount.id, amount: "3000", date: "2026-08-12", note: "Verify top-up" });
+    check("contributionSchema accepts a contribution with an account", parsedContribution.success);
+    if (!parsedContribution.success) throw new Error("contributionSchema rejected the fixture");
+
+    // 3000 DOP into a USD account at the fixed 60 DOP/USD rate above = 50 USD.
+    const logged = await goalsLib.logManualContribution({ ...parsedContribution.data }, rates);
+    await goalsLib.rebuildGoalSaved(contribGoal.id);
+    const loggedRow = await prisma.goalContribution.findUniqueOrThrow({ where: { id: logged.contributionId } });
+    eq("GoalContribution keeps the goal's currency and the amount as typed", `${num(loggedRow.amount)}:${loggedRow.currency}`, "3000:DOP");
+    eq("GoalContribution records the source account", loggedRow.accountId, contribAccount.id);
+    eq("a manual contribution carries no recurring link", `${loggedRow.recurringItemId}:${loggedRow.recurringExternalId}`, "null:null");
+    eq("Goal.savedAmount was rebuilt from the new row", num((await prisma.goal.findUniqueOrThrow({ where: { id: contribGoal.id } })).savedAmount), 3000);
+    const twin = await prisma.transaction.findUnique({
+      where: { source_externalId: { source: "MANUAL", externalId: (await import("../src/lib/transactions")).manualContributionExternalId(logged.contributionId) } },
+    });
+    check("the paired Transaction is found by its goal-contribution externalId", twin !== null);
+    eq("the paired Transaction is the one logManualContribution reported", twin?.id, logged.transactionId);
+    eq("the paired Transaction is an EXPENSE from the chosen account", `${twin?.type}:${twin?.accountId}`, `EXPENSE:${contribAccount.id}`);
+    eq("the paired Transaction is converted into the account's currency", `${num(twin?.amount)}:${twin?.currency}`, "50:USD");
+    eq("the paired Transaction is dated on the contribution date", twin ? toISODate(twin.date) : null, "2026-08-12");
+    eq("the paired Transaction is a MANUAL row", twin?.source, "MANUAL");
+    eq("the paired Transaction's note is the goal's name", twin?.note, "Verify Contribution Goal");
+    eq("the paired Transaction is filed under the Savings/Investment category", twin?.categoryId, savingsCat.id);
+    eq("the account balance dropped by the converted amount", round2(balanceBefore - (await contribBalance())), 50);
+
+    const augustWith = await classifyCompletedMonth(augustWindowForContrib, contribContext, [], categoryMeta);
+    eq("monthly savings/investing counts the contribution once, not once per row", round2(augustWith.savingsInvesting - augustBefore.savingsInvesting), 50);
+    eq("the paired Transaction is not lifestyle spending", round2(augustWith.lifestyle - augustBefore.lifestyle), 0);
+
+    // Same-currency path: no conversion, and the twin still carries the key.
+    const usdGoal = await prisma.goal.create({ data: { name: "Verify Contribution USD Goal", targetAmount: 500, currency: "USD" } });
+    const sameCurrency = await goalsLib.logManualContribution({ goalId: usdGoal.id, accountId: contribAccount.id, amount: 12.5, date: civilDate(2026, 8, 13), note: null });
+    const sameTwin = await prisma.transaction.findUniqueOrThrow({ where: { id: sameCurrency.transactionId } });
+    eq("a same-currency contribution writes the amount unconverted", `${num(sameTwin.amount)}:${sameTwin.currency}`, "12.5:USD");
+
+    // Deleting the contribution takes its Transaction with it.
+    await goalsLib.removeContribution({ id: logged.contributionId, accountId: loggedRow.accountId });
+    await goalsLib.recomputeGoalSaved(contribGoal.id);
+    eq("removing the contribution deletes the GoalContribution", await prisma.goalContribution.count({ where: { id: logged.contributionId } }), 0);
+    eq("removing the contribution deletes its paired Transaction", await prisma.transaction.count({ where: { id: logged.transactionId } }), 0);
+    eq("Goal.savedAmount is back to zero", num((await prisma.goal.findUniqueOrThrow({ where: { id: contribGoal.id } })).savedAmount), 0);
+    await goalsLib.removeContribution({ id: sameCurrency.contributionId, accountId: contribAccount.id });
+    eq("the account balance is back where it started", round2((await contribBalance()) - balanceBefore), 0);
+
+    // Deleting from the ledger side: the paired expense takes its contribution
+    // with it, the same outcome as removing it from the goal's history. This is
+    // what deleteTransactionAction does once it recognises the row.
+    const { manualContributionIdFromTransaction: twinContributionId } = await import("../src/lib/transactions");
+    const fromLedger = await goalsLib.logManualContribution({ goalId: contribGoal.id, accountId: contribAccount.id, amount: 1200, date: civilDate(2026, 8, 16), note: null }, rates);
+    await goalsLib.rebuildGoalSaved(contribGoal.id);
+    const ledgerRow = await prisma.transaction.findUniqueOrThrow({ where: { id: fromLedger.transactionId } });
+    eq("the ledger row resolves back to its contribution id", twinContributionId(ledgerRow), fromLedger.contributionId);
+    eq("an ordinary manual row resolves to no contribution", twinContributionId({ source: "MANUAL", externalId: null }), null);
+    eq("the ledger row is blocked from the generic edit form", (await import("../src/lib/transactions")).transactionEditBlock(ledgerRow), "goal_contribution");
+    const ledgerContribution = await prisma.goalContribution.findUniqueOrThrow({ where: { id: fromLedger.contributionId }, select: { id: true, goalId: true, accountId: true } });
+    await goalsLib.removeContribution(ledgerContribution);
+    await goalsLib.recomputeGoalSaved(ledgerContribution.goalId);
+    eq("deleting from the ledger removes the Transaction", await prisma.transaction.count({ where: { id: fromLedger.transactionId } }), 0);
+    eq("deleting from the ledger removes the GoalContribution with it", await prisma.goalContribution.count({ where: { id: fromLedger.contributionId } }), 0);
+    eq("the goal's progress drops accordingly", num((await prisma.goal.findUniqueOrThrow({ where: { id: contribGoal.id } })).savedAmount), 0);
+
+    // A row from before contributions had an account deletes alone, and a twin
+    // already removed from the ledger by hand does not block the delete.
+    const legacy = await prisma.goalContribution.create({ data: { goalId: contribGoal.id, amount: 100, currency: "DOP", date: civilDate(2026, 8, 14) } });
+    const unrelated = await prisma.transaction.create({ data: { date: civilDate(2026, 8, 14), amount: 1, currency: "USD", type: "EXPENSE", accountId: contribAccount.id, source: "MANUAL" } });
+    await goalsLib.removeContribution({ id: legacy.id, accountId: legacy.accountId });
+    eq("a contribution with no account deletes on its own", await prisma.goalContribution.count({ where: { id: legacy.id } }), 0);
+    eq("deleting an account-less contribution touches no transactions", await prisma.transaction.count({ where: { id: unrelated.id } }), 1);
+    const orphaned = await goalsLib.logManualContribution({ goalId: contribGoal.id, accountId: contribAccount.id, amount: 600, date: civilDate(2026, 8, 15), note: null }, rates);
+    await prisma.transaction.delete({ where: { id: orphaned.transactionId } });
+    await goalsLib.removeContribution({ id: orphaned.contributionId, accountId: contribAccount.id });
+    eq("a contribution whose twin was already removed from the ledger still deletes", await prisma.goalContribution.count({ where: { id: orphaned.contributionId } }), 0);
+
+    await prisma.transaction.deleteMany({ where: { accountId: contribAccount.id } });
+    await prisma.goal.deleteMany({ where: { id: { in: [contribGoal.id, usdGoal.id] } } });
+    await prisma.account.delete({ where: { id: contribAccount.id } });
   }
 
   console.log("\n== cleanup ==");

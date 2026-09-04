@@ -1,7 +1,102 @@
-import { convert } from "@/lib/currency";
+import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
+import { manualContributionExternalId } from "@/lib/transactions";
+
+export interface ManualContributionInput {
+  goalId: string;
+  /** Must already be checked to exist and be active (see checkReferences). */
+  accountId: string;
+  /** In the goal's own currency, exactly as typed. */
+  amount: number;
+  date: Date;
+  note: string | null;
+}
+
+/**
+ * Logs a contribution by hand, moving the money for real: one outgoing EXPENSE
+ * Transaction from the chosen account (source MANUAL, denominated in the
+ * account's currency, converted from the goal's at today's rate when they
+ * differ, filed under the Savings/Investment category so period budgets and
+ * the monthly pace treat it as saving rather than spending, note = the goal's
+ * name so the ledger reads like the auto-posted rows do) and the
+ * GoalContribution itself, in the goal's currency exactly as entered and
+ * pointing back at the account. Both rows land in one database transaction, so
+ * a failure leaves neither. Goal.savedAmount is not rebuilt here - the caller
+ * does that after this commits, as before.
+ */
+export async function logManualContribution(
+  input: ManualContributionInput,
+  rates?: RateTable,
+): Promise<{ contributionId: string; transactionId: string }> {
+  const [goal, account, savingsCategory] = await Promise.all([
+    prisma.goal.findUniqueOrThrow({
+      where: { id: input.goalId },
+      select: { id: true, name: true, currency: true },
+    }),
+    prisma.account.findUniqueOrThrow({
+      where: { id: input.accountId },
+      select: { id: true, currency: true },
+    }),
+    prisma.category.findFirst({ where: { isSavingsDefault: true }, select: { id: true } }),
+  ]);
+  // Fetched before the transaction: getRateTable can call the rate service and
+  // upsert ExchangeRate rows, neither of which belongs inside a write.
+  const table =
+    rates ?? (goal.currency === account.currency ? IDENTITY_RATES : await getRateTable());
+  const accountAmount = round2(convert(input.amount, goal.currency, account.currency, table));
+
+  return prisma.$transaction(async (tx) => {
+    const contribution = await tx.goalContribution.create({
+      data: {
+        goalId: goal.id,
+        accountId: account.id,
+        amount: input.amount,
+        currency: goal.currency,
+        date: input.date,
+        note: input.note,
+      },
+      select: { id: true },
+    });
+    const transaction = await tx.transaction.create({
+      data: {
+        date: input.date,
+        amount: accountAmount,
+        currency: account.currency,
+        type: "EXPENSE",
+        accountId: account.id,
+        categoryId: savingsCategory?.id ?? null,
+        note: goal.name,
+        source: "MANUAL",
+        externalId: manualContributionExternalId(contribution.id),
+      },
+      select: { id: true },
+    });
+    return { contributionId: contribution.id, transactionId: transaction.id };
+  });
+}
+
+/**
+ * Removes a contribution and, when it moved real money, the Transaction it
+ * wrote, together. A row with no accountId (logged before contributions had
+ * one, or auto-posted) has nothing paired and is deleted on its own. deleteMany
+ * rather than delete for the twin: the user may already have removed it from
+ * the ledger, and that must not block removing the contribution.
+ */
+export async function removeContribution(contribution: {
+  id: string;
+  accountId: string | null;
+}): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.goalContribution.delete({ where: { id: contribution.id } });
+    if (contribution.accountId !== null) {
+      await tx.transaction.deleteMany({
+        where: { source: "MANUAL", externalId: manualContributionExternalId(contribution.id) },
+      });
+    }
+  });
+}
 
 /**
  * Recompute Goal.savedAmount from its contributions - the source of truth - and

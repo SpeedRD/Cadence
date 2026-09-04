@@ -6,7 +6,12 @@ import { getSettings, requireAuth } from "@/lib/auth";
 import { backfillUncategorizedTransactions } from "@/lib/categorization";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
-import { transactionEditBlock } from "@/lib/transactions";
+import { recomputeGoalSaved, removeContribution } from "@/lib/goals";
+import { checkReferences } from "@/lib/references";
+import {
+  manualContributionIdFromTransaction,
+  transactionEditBlock,
+} from "@/lib/transactions";
 import {
   firstError,
   formObject,
@@ -15,38 +20,6 @@ import {
 } from "@/lib/validation";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
-
-/**
- * Confirms the rows a write is about to point at actually exist, and that a new
- * row is not being filed against an archived account. Without this a stale id -
- * a category deleted in another tab, an account archived since the form
- * opened - reached the database and came back as a raw foreign-key error.
- * Editing an existing row accepts an archived account, since its history has to
- * stay editable; only creating something new requires an active one.
- */
-async function checkReferences(
-  t: ReturnType<typeof getDictionary>["transactions"],
-  accountIds: string[],
-  categoryId: string | null,
-  requireActiveAccounts: boolean,
-): Promise<string | null> {
-  for (const accountId of accountIds) {
-    const account = await prisma.account.findUnique({
-      where: { id: accountId },
-      select: { status: true },
-    });
-    if (!account) return t.accountNoLongerExists;
-    if (requireActiveAccounts && account.status !== "ACTIVE") return t.accountNoLongerActive;
-  }
-  if (categoryId) {
-    const category = await prisma.category.findUnique({
-      where: { id: categoryId },
-      select: { id: true },
-    });
-    if (!category) return t.categoryNoLongerExists;
-  }
-  return null;
-}
 
 export async function saveTransactionAction(
   _previous: ActionState,
@@ -70,6 +43,7 @@ export async function saveTransactionAction(
     const block = transactionEditBlock(existing);
     if (block === "transfer") return fail(t.editFromTransferForm);
     if (block === "opening_balance") return fail(t.editOpeningBalanceFromAccounts);
+    if (block === "goal_contribution") return fail(t.editContributionFromGoal);
     await prisma.transaction.update({ where: { id }, data: values });
   } else {
     await prisma.transaction.create({ data: { ...values, source: "MANUAL" } });
@@ -94,10 +68,27 @@ export async function deleteTransactionAction(
   if (!existing) return fail(t.transactionNoLongerExists);
 
   // Deleting one leg of a transfer removes both, so balances stay consistent.
+  // Likewise the expense a goal contribution wrote takes the GoalContribution
+  // with it - the same outcome as removing it from the goal's own history -
+  // and the goal's cached progress is rebuilt afterwards, as that path does.
+  const contributionId = manualContributionIdFromTransaction(existing);
   if (existing.transferId) {
     await prisma.transaction.deleteMany({
       where: { transferId: existing.transferId },
     });
+  } else if (contributionId !== null) {
+    const contribution = await prisma.goalContribution.findUnique({
+      where: { id: contributionId },
+      select: { id: true, goalId: true, accountId: true },
+    });
+    if (contribution) {
+      await removeContribution(contribution);
+      await recomputeGoalSaved(contribution.goalId);
+    } else {
+      // The contribution is already gone (its goal was deleted, say); only the
+      // orphaned ledger row is left to remove.
+      await prisma.transaction.delete({ where: { id } });
+    }
   } else {
     await prisma.transaction.delete({ where: { id } });
   }
