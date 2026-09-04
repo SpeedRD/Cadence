@@ -1,3 +1,4 @@
+import { TriangleAlert } from "lucide-react";
 import Link from "next/link";
 
 import { NavLinks } from "@/components/shell/nav-links";
@@ -6,6 +7,8 @@ import { LanguageSwitcher } from "@/components/shell/language-switcher";
 import { LogoutButton } from "@/components/shell/logout-button";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { PeriodRail } from "@/components/period-rail";
+import { formatDateTimeInAppZone } from "@/lib/date";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import type { AppContext } from "@/lib/data/context";
 import { getDictionary } from "@/lib/i18n";
@@ -18,10 +21,18 @@ export function AppShell({
   context: AppContext;
   children: React.ReactNode;
 }) {
-  const { currentPeriod } = context;
+  const { currentPeriod, rates } = context;
   const t = getDictionary(context.language);
   const remaining = daysRemainingInPeriod(context.today, currentPeriod);
   const elapsed = daysElapsedInPeriod(context.today, currentPeriod);
+  // Every page in this group renders converted totals, so the one notice that
+  // they are running on rates that could not be refreshed belongs here rather
+  // than on each card. Same wall clock the Settings page shows.
+  const staleRatesNote = rates.stale
+    ? rates.fetchedAt
+      ? t.shell.staleRatesSince(formatDateTimeInAppZone(rates.fetchedAt))
+      : t.shell.staleRatesNeverFetched
+    : null;
 
   return (
     <div className="flex min-h-dvh">
@@ -72,6 +83,13 @@ export function AppShell({
         </header>
 
         <main className="mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 sm:px-6 sm:py-8">
+          {staleRatesNote ? (
+            <Alert className="mb-5 border-[var(--warning)]/40 text-[var(--warning)]">
+              <TriangleAlert />
+              <AlertTitle>{t.shell.staleRatesTitle}</AlertTitle>
+              <AlertDescription>{staleRatesNote}</AlertDescription>
+            </Alert>
+          ) : null}
           {children}
         </main>
       </div>

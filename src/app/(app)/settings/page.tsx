@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/card";
 import { getSettings } from "@/lib/auth";
 import { CURRENCIES, CURRENCY_LABELS, formatRate } from "@/lib/currency";
-import { appTimeZone } from "@/lib/date";
+import { appTimeZone, formatDateTimeInAppZone } from "@/lib/date";
 import { getAppContext } from "@/lib/data/context";
 import { getDictionary } from "@/lib/i18n";
 import { num } from "@/lib/money";
@@ -77,7 +77,7 @@ export default async function SettingsPage() {
             </dl>
             <p className="text-xs text-muted-foreground">
               {context.rates.fetchedAt
-                ? t.lastFetched(context.rates.fetchedAt.toISOString().slice(0, 16).replace("T", " "))
+                ? t.lastFetched(formatDateTimeInAppZone(context.rates.fetchedAt))
                 : t.noRatesFetched}
               {context.rates.stale
                 ? t.rateServiceUnreachable

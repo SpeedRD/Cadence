@@ -381,9 +381,9 @@ async function main() {
   eq("spent excludes transfers", summary.spent, 30);
   eq("income excludes transfers", summary.income, 100);
   eq("overall budget wins over category totals", summary.periodBudget, 500);
-  eq("committed counts only items due before period end", summary.committed, 15);
-  eq("safe to spend = budget - spent - committed", summary.safeToSpend, 455);
-  eq("per day over the 12 remaining days", summary.safeToSpendPerDay, Math.round((455 / 12) * 100) / 100);
+  eq("committed counts what the period still owes, overdue included (15 + 99)", summary.committed, 114);
+  eq("safe to spend = budget - spent, with committed outflows not subtracted twice", summary.safeToSpend, 470);
+  eq("per day over the 12 remaining days", summary.safeToSpendPerDay, Math.round((470 / 12) * 100) / 100);
 
   let duplicateOverall = false;
   try {
@@ -818,7 +818,11 @@ async function main() {
   eq("a skipped item keeps its overdue nextDate", toISODate(rolled!.nextDate), "2026-08-05");
 
   const summaryAfter = await getPeriodSummary(context.currentPeriod, context);
-  eq("an overdue, unposted item is not counted as committed this period", summaryAfter.committed, 15);
+  eq(
+    "an overdue, unposted item is still owed and stays in committed (15 + 99)",
+    summaryAfter.committed,
+    114,
+  );
 
   console.log("\n== monthly spending pace ==");
   // Clear earlier sections' fixtures that would otherwise leak into these
@@ -930,16 +934,16 @@ async function main() {
   await prisma.goalContribution.create({ data: { goalId: monthlyGoal.id, amount: 50, currency: "USD", date: civilDate(2026, 7, 11) } });
   await prisma.recurringItem.createMany({
     data: [
-      { name: "Verify Netflix Monthly", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 7), active: true, categoryId: subscriptionsCategory.id },
-      { name: "Verify Spotify Monthly", amount: 10, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 25), active: true },
-      { name: "Verify Auto-Invest", amount: 100, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 1), active: true },
+      { name: "Verify Netflix Monthly", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 7), active: true, categoryId: subscriptionsCategory.id, createdAt: civilDate(2026, 1, 1) },
+      { name: "Verify Spotify Monthly", amount: 10, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 25), active: true, createdAt: civilDate(2026, 1, 1) },
+      { name: "Verify Auto-Invest", amount: 100, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 1), active: true, createdAt: civilDate(2026, 1, 1) },
     ],
   });
 
   const monthlyContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 7, 31), currentPeriod: periodForDate(civilDate(2026, 7, 31)) };
   const recurringForMatch = (await prisma.recurringItem.findMany({
     where: { active: true, kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] }, name: { startsWith: "Verify" } },
-    select: { id: true, name: true, amount: true, currency: true, categoryId: true, kind: true, frequency: true, nextDate: true },
+    select: { id: true, name: true, amount: true, currency: true, categoryId: true, kind: true, frequency: true, nextDate: true, anchorDay: true, createdAt: true },
   })).map((item) => ({ ...item, amount: Number(item.amount) }));
   const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
 
@@ -989,11 +993,11 @@ async function main() {
   eq("projected lifestyle = (spent so far / days elapsed) * days in month", pace.projectedLifestyle, 62);
   eq("committed so far is the matched Netflix charge only, no scheduled fallback for the current month", pace.committedSpentSoFar, 15);
   eq(
-    "still-due excludes items already matched and items whose next date has already passed (HBO), includes EUR/DOP conversions",
+    "still-due keeps an overdue unposted item (HBO 8) but drops the occurrence Netflix's charge settled, and converts EUR/DOP",
     pace.committedStillDueThisMonth,
-    60,
+    68,
   );
-  eq("projected normal spending = projected lifestyle + committed so far + still due", pace.projectedNormalSpending, 137);
+  eq("projected normal spending = projected lifestyle + committed so far + still due", pace.projectedNormalSpending, 145);
   eq("savings/investing this month is actual only, never projected", pace.savingsInvestingSoFar, 25);
 
   await prisma.transaction.deleteMany({ where: { accountId: monthlyAccount.id } });
@@ -1641,7 +1645,7 @@ async function main() {
     eq(
       "same category with no comparable budget falls back to categorized spending history (priority 2)",
       JSON.stringify(suggestions.get(transportCat.id)),
-      JSON.stringify({ amount: 30, basis: "average" }), // (80 + 100) / HISTORY_PERIODS(6)
+      JSON.stringify({ amount: 60, basis: "average" }), // (80 + 100) / the 3 comparable periods since this category first had spending
     );
     eq(
       "no useful history produces zero (priority 3/4), never a fabricated guess",
@@ -1675,13 +1679,13 @@ async function main() {
       { id: transportCat.id, suggested: suggestions.get(transportCat.id)!.amount },
     ];
     const rawTotal = rawSuggestions.reduce((sum, s) => sum + s.suggested, 0);
-    eq("raw recommendations total 180 before any scaling", rawTotal, 180);
+    eq("raw recommendations total 210 before any scaling", rawTotal, 210);
 
     const comfortablyAvailable = scaleFlexibleSuggestions(rawSuggestions, 500);
     eq(
       "recommendations that already fit the available money pass through unscaled",
       JSON.stringify(comfortablyAvailable.map((s) => s.scaled)),
-      JSON.stringify([150, 30]),
+      JSON.stringify([150, 60]),
     );
 
     const tightlyAvailable = scaleFlexibleSuggestions(rawSuggestions, 90);
@@ -1691,7 +1695,12 @@ async function main() {
     const rawRatio = rawSuggestions[0].suggested / rawSuggestions[1].suggested;
     const scaledDining = tightlyAvailable.find((s) => s.id === diningCat.id)!.scaled;
     const scaledTransport = tightlyAvailable.find((s) => s.id === transportCat.id)!.scaled;
-    eq("proportional scaling preserves the relative ratio between categories", scaledDining / scaledTransport, rawRatio);
+    // Scaled amounts are rounded to whole cents, so the ratio survives to within
+    // that rounding rather than exactly.
+    check(
+      "proportional scaling preserves the relative ratio between categories",
+      Math.abs(scaledDining / scaledTransport - rawRatio) < 0.01,
+    );
 
     const negativeAvailable = scaleFlexibleSuggestions(rawSuggestions, -50);
     check(
@@ -1944,10 +1953,14 @@ async function main() {
     draftAfterCurrencySwitch.flexibleCategories.find((c) => c.categoryId === reconfirmedFlexibleCategoryId)?.plannedAmount,
     round2(convert(45, "USD", "EUR", rates)),
   );
+  // The prior period has no budget here, so the server measured no carryover at
+  // all and clamped the 10 the payload asked for down to nothing before storing
+  // it. The conversion path itself is covered by the category and goal checks
+  // just above, which do have a stored amount to convert.
   eq(
-    "the already-confirmed carryover amount is also converted, not left raw",
+    "a carryover the server did not measure is clamped away rather than persisted",
     draftAfterCurrencySwitch.includedCarryover,
-    round2(convert(10, "USD", "EUR", rates)),
+    0,
   );
   const goalAfterCurrencySwitch = draftAfterCurrencySwitch.goals.find((g) => g.goalId === datedGoal.id);
   const goalBeforeCurrencySwitch = draftAfterManualEdit.goals.find((g) => g.goalId === datedGoal.id)!;
@@ -2845,7 +2858,7 @@ async function main() {
       data: { ...base, name: "Verify Posting Netflix", amount: 15, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 6, 15), accountId: postingAccount.id, categoryId: postingSubsCategory?.id ?? null },
     });
     const contribution = await prisma.recurringItem.create({
-      data: { ...base, name: "Verify Posting Auto-Invest", amount: 100, kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 20), accountId: postingAccount.id, goalId: postingGoal.id },
+      data: { ...base, name: "Verify Posting Auto-Invest", amount: 100, kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 20), accountId: postingAccount.id, goalId: postingGoal.id, createdAt: civilDate(2026, 1, 1) },
     });
     const noAccountSub = await prisma.recurringItem.create({
       data: { ...base, name: "Verify Posting No Account", amount: 9, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 5) },

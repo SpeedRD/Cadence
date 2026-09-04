@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { GoalCard } from "@/components/dashboard/goal-card";
 import { MonthlyPaceCard } from "@/components/dashboard/monthly-pace-card";
+import { NotPostingAlert } from "@/components/dashboard/not-posting-alert";
 import { PaydayCheckinCard } from "@/components/dashboard/payday-checkin-card";
 import { PeriodHero } from "@/components/dashboard/period-hero";
 import { UpcomingList } from "@/components/dashboard/upcoming-list";
@@ -16,7 +17,7 @@ import { getMonthlyPace } from "@/lib/data/monthly";
 import { getPaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary } from "@/lib/i18n";
 import { summarizePaydayDraft } from "@/lib/payday";
-import { daysElapsedInPeriod, isPaydayDate, periodKey } from "@/lib/period";
+import { daysElapsedInPeriod, isAfterPaydayInPeriod, periodKey } from "@/lib/period";
 
 export const metadata = { title: "Dashboard - Cadence" };
 
@@ -36,8 +37,13 @@ export default async function DashboardPage() {
   const dismissedToday = settings.checkinPromptDismissedOn
     ? isSameDay(settings.checkinPromptDismissedOn, context.today)
     : false;
+  // Same window as planPeriodRef: from the day the pay lands (pulled back off a
+  // weekend) until the period ends, so a Friday-shifted payday still prompts on
+  // the weekend that follows it rather than only on the Friday itself.
   const shouldAutoOpenCheckin =
-    isPaydayDate(context.today) && !paydayDraft.isEditingConfirmed && !dismissedToday;
+    isAfterPaydayInPeriod(context.today) &&
+    !paydayDraft.isEditingConfirmed &&
+    !dismissedToday;
   // Only once the *current* period's check-in is confirmed and no overall
   // budget exists yet: the draft plans the next period on a payday date, and a
   // suggestion for a different period than the hero shows would mislead.
@@ -50,6 +56,9 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {context.recurringPosting ? (
+        <NotPostingAlert posting={context.recurringPosting} t={t} />
+      ) : null}
       <PaydayCheckinCard
         draft={paydayDraft}
         rates={context.rates}

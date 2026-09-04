@@ -77,9 +77,15 @@ function SubscriptionRow({
     <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
       <span>
         {item.name}{" "}
-        <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate)}</span>
+        <span className="text-xs text-muted-foreground">
+          {formatDayMonth(item.nextDate)}
+          {item.occurrenceCount > 1
+            ? ` · ${t.chargesThisPeriod(item.occurrenceCount, formatMoney(item.perOccurrenceAmount, item.currency))}`
+            : ""}
+        </span>
       </span>
       <span className="flex items-center gap-1.5">
+        {item.overdue ? <AlreadyLoggedBadge label={t.overdueBadge} /> : null}
         {item.alreadyLogged ? <AlreadyLoggedBadge label={t.alreadyPaidThisPeriod} /> : null}
         <span className="figure">{formatMoney(item.nativeAmount, item.currency)}</span>
         <Select
@@ -282,6 +288,7 @@ export function StepCommitments({
                   <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate)}</span>
                 </span>
                 <span className="flex items-center gap-1.5">
+                  {item.overdue ? <AlreadyLoggedBadge label={t.overdueBadge} /> : null}
                   {item.alreadyLogged ? <AlreadyLoggedBadge label={t.alreadyPaidThisPeriod} /> : null}
                   <span className="figure">{formatMoney(item.amount, displayCurrency)}</span>
                 </span>

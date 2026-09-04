@@ -16,6 +16,8 @@ export interface RecurringRow {
   displayAmount: number;
   monthlyDisplayAmount: number;
   nextDate: Date;
+  /** The row's version when it was read, so the edit form can refuse a stale save. */
+  updatedAt: Date;
   active: boolean;
   note: string | null;
   categoryId: string | null;
@@ -63,6 +65,7 @@ export async function listRecurringItems(context: AppContext) {
         monthlyEquivalent(displayAmount, item.frequency),
       ),
       nextDate: item.nextDate,
+      updatedAt: item.updatedAt,
       active: item.active,
       note: item.note,
       categoryId: item.categoryId,

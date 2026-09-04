@@ -36,6 +36,7 @@ export function StepBalances({
                 <p className="text-sm font-medium">{account.name}</p>
                 <p className="text-xs text-muted-foreground">
                   {t.ledgerBalance}: {formatMoney(account.expectedLedgerBalance, account.currency)}
+                  {account.readOnly ? ` · ${t.archivedAccountNote}` : ""}
                 </p>
               </div>
               <div className="w-40">
@@ -45,6 +46,7 @@ export function StepBalances({
                     value={account.reportedBalance}
                     onChange={(value) => onChange(account.accountId, value)}
                     allowNegative
+                    disabled={account.readOnly}
                   />
                 </Field>
               </div>

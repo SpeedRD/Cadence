@@ -1,6 +1,6 @@
 import { stripHtml } from "@/lib/email/html";
 
-import type { EmailCandidate } from "@/lib/email/types";
+import type { EmailCandidate, EmailCandidateBatch } from "@/lib/email/types";
 
 /** Raw fetch, not `@azure/msal-node` - see the note in `oauth/microsoft.ts`. */
 const API_BASE = "https://graph.microsoft.com/v1.0/me/messages";
@@ -19,10 +19,13 @@ interface GraphMessage {
 export async function listRecentOutlookCandidates(
   accessToken: string,
   since: Date,
-): Promise<EmailCandidate[]> {
+): Promise<EmailCandidateBatch> {
   const params = new URLSearchParams({
     $filter: `receivedDateTime ge ${since.toISOString()}`,
-    $orderby: "receivedDateTime desc",
+    // Oldest first, which Graph supports directly: a run has to start at the
+    // bottom of the window so that whatever its cap leaves behind is newer than
+    // the cursor the run stores, and therefore still inside the next window.
+    $orderby: "receivedDateTime asc",
     $top: String(OUTLOOK_FETCH_CAP),
     $select: "internetMessageId,subject,from,receivedDateTime,body",
   });
@@ -33,10 +36,21 @@ export async function listRecentOutlookCandidates(
   if (!response.ok) {
     throw new Error(`Graph message list failed: ${response.status}`);
   }
-  const data = (await response.json()) as { value?: GraphMessage[] };
+  const data = (await response.json()) as {
+    value?: GraphMessage[];
+    "@odata.nextLink"?: string;
+  };
+  const messages = data.value ?? [];
+
+  // A next link means the window holds more than this page. A page that came
+  // back full is treated the same way even without one, because being a page
+  // behind only costs a re-fetch that the (source, externalId) dedup absorbs,
+  // while wrongly declaring the window exhausted would skip what the page cut.
+  const truncated =
+    Boolean(data["@odata.nextLink"]) || messages.length >= OUTLOOK_FETCH_CAP;
 
   const candidates: EmailCandidate[] = [];
-  for (const message of data.value ?? []) {
+  for (const message of messages) {
     if (!message.internetMessageId) continue;
     const from = message.from?.emailAddress?.address ?? "";
     const bodyContent = message.body?.content ?? "";
@@ -54,5 +68,5 @@ export async function listRecentOutlookCandidates(
       bodyText: bodyText.slice(0, 12_000),
     });
   }
-  return candidates;
+  return { candidates, truncated };
 }

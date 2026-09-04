@@ -24,6 +24,8 @@ import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
 import { availableForFlexibleCategories, planAccountBuffers } from "@/lib/payday";
 import { confirmPaydayCheckinAction } from "@/server/actions/payday";
+
+import type { PaydayAcknowledgementState } from "@/lib/data/payday";
 import { reassignRecurringAccountAction } from "@/server/actions/recurring";
 
 const STEP_COUNT = 5;
@@ -50,6 +52,17 @@ export function PaydayCheckinDialog({
   const [reassigningItemId, setReassigningItemId] = useState<string | null>(null);
   const [state, formAction, pending] = useActionState(confirmPaydayCheckinAction, null);
   const handled = useRef<number | undefined>(undefined);
+  // What the server measured when it last refused, kept alongside the plan that
+  // produced it. The figures further down come from the rates this dialog
+  // rendered with, and a rate refresh between render and submit can move
+  // `available` across zero - the server then waits for an acknowledgement this
+  // dialog never drew a checkbox for. Holding its verdict lets the user tick
+  // the box and confirm instead of having to reload.
+  const [serverVerdict, setServerVerdict] = useState<{
+    at?: number;
+    plan: PaydayCheckinDraft;
+    value: PaydayAcknowledgementState | null;
+  }>({ plan: draft, value: null });
 
   // Re-seed from the freshest server-loaded draft every time the dialog
   // opens. Adjusting state during render (rather than in an effect) avoids
@@ -63,6 +76,7 @@ export function PaydayCheckinDialog({
       setStep(1);
       setAcknowledgedDeficit(false);
       setAcknowledgedZeroBuffer(false);
+      setServerVerdict({ plan: draft, value: null });
     }
   }
 
@@ -72,8 +86,19 @@ export function PaydayCheckinDialog({
     if (state.ok) {
       toast.success(state.message ?? t.checkinConfirmed);
       onOpenChange(false);
+      return;
     }
   }, [state, onOpenChange, t.checkinConfirmed]);
+
+  // Adjusted during render rather than in an effect, the same pattern as the
+  // reopen reset above.
+  if (state && state.at !== serverVerdict.at) {
+    setServerVerdict({ at: state.at, plan, value: state.acknowledgements ?? null });
+  } else if (serverVerdict.value !== null && plan !== serverVerdict.plan) {
+    // Edited since; the server's verdict no longer describes this plan.
+    setServerVerdict({ at: serverVerdict.at, plan, value: null });
+  }
+  const serverAcknowledgements = serverVerdict.value;
 
   const totalIncome = round2(
     plan.accounts.reduce(
@@ -119,8 +144,12 @@ export function PaydayCheckinDialog({
     essentialFixed: essentialFixedTotal,
     buffer: plannedBuffer,
   });
-  const needsDeficitAck = available < 0 || flexibleTotal > Math.max(0, available);
-  const needsZeroBufferAck = plannedBuffer <= 0;
+  const needsDeficitAck =
+    available < 0 ||
+    flexibleTotal > Math.max(0, available) ||
+    (serverAcknowledgements?.needsDeficitAck ?? false);
+  const needsZeroBufferAck =
+    plannedBuffer <= 0 || (serverAcknowledgements?.needsZeroBufferAck ?? false);
   const incomeTransactionCount = plan.accounts.filter((a) => a.incomeEntered > 0).length;
   const budgetCount = plan.essentialCategories.length + plan.flexibleCategories.length;
   const allocatedCategoryCount = [...plan.essentialCategories, ...plan.flexibleCategories].filter(

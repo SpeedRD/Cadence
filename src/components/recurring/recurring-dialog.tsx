@@ -20,6 +20,8 @@ import { saveRecurringAction } from "@/server/actions/recurring";
 
 export interface RecurringFormValues {
   id?: string;
+  /** The item's updatedAt when this form was built, so a stale save is refused. */
+  updatedAt?: string;
   name?: string;
   amount?: number;
   currency?: string;
@@ -101,6 +103,9 @@ export function RecurringDialog({
       onOpenChange={setOpen}
     >
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
+      {values.updatedAt ? (
+        <input type="hidden" name="updatedAt" value={values.updatedAt} />
+      ) : null}
       <input
         type="hidden"
         name="active"

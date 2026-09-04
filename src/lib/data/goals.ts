@@ -1,5 +1,5 @@
 import { convert } from "@/lib/currency";
-import { addDays } from "@/lib/date";
+import { addDays, maxDate } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import {
   nextPeriod,
@@ -9,8 +9,48 @@ import {
   type PeriodInfo,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
+import { owedOccurrences } from "@/lib/recurring";
 
 import type { AppContext } from "@/lib/data/context";
+
+/** One goal's scheduled recurring funding for the current period, per item currency. */
+type DueContributions = Map<string, { amount: number; currency: string }[]>;
+
+/**
+ * What the recurring contributions aimed at each goal will already put into it
+ * this period. A goal being fed automatically needs that much less set aside by
+ * hand, and counting both made the payday planner reserve the same goal twice.
+ */
+async function loadDueContributionsByGoal(context: AppContext): Promise<DueContributions> {
+  const items = await prisma.recurringItem.findMany({
+    where: {
+      active: true,
+      kind: "CONTRIBUTION",
+      goalId: { not: null },
+      nextDate: { lte: context.currentPeriod.end },
+    },
+    select: {
+      goalId: true,
+      amount: true,
+      currency: true,
+      frequency: true,
+      nextDate: true,
+      anchorDay: true,
+    },
+  });
+
+  const from = maxDate(context.today, context.currentPeriod.start);
+  const byGoal: DueContributions = new Map();
+  for (const item of items) {
+    const goalId = item.goalId as string;
+    const occurrences = owedOccurrences(item, from, context.currentPeriod.end).length;
+    if (occurrences === 0) continue;
+    const entries = byGoal.get(goalId) ?? [];
+    entries.push({ amount: num(item.amount) * occurrences, currency: item.currency });
+    byGoal.set(goalId, entries);
+  }
+  return byGoal;
+}
 
 /**
  * Native fields (targetAmount/savedAmount/remaining/perPeriod/pacePerPeriod)
@@ -62,6 +102,7 @@ function summarize(
   },
   contributions: { amount: unknown; date: Date }[],
   context: AppContext,
+  dueContributions: DueContributions,
 ): GoalSummary {
   const targetAmount = num(goal.targetAmount as never);
   const savedAmount = num(goal.savedAmount as never);
@@ -72,7 +113,13 @@ function summarize(
   let periodsLeft: number | null = null;
   if (goal.targetDate && remaining > 0) {
     periodsLeft = periodsRemaining(context.today, goal.targetDate);
-    perPeriod = round2(remaining / Math.max(1, periodsLeft));
+    // Net of whatever a recurring contribution is already putting in this
+    // period, so this figure is what still has to be found by hand.
+    const scheduled = (dueContributions.get(goal.id) ?? []).reduce(
+      (total, entry) => total + convert(entry.amount, entry.currency, goal.currency, context.rates),
+      0,
+    );
+    perPeriod = round2(Math.max(0, remaining / Math.max(1, periodsLeft) - scheduled));
   }
 
   // No target date: infer pace from history and project a finish date.
@@ -138,23 +185,29 @@ function countPeriodsInclusive(from: PeriodInfo, to: PeriodInfo): number {
 }
 
 export async function listGoals(context: AppContext): Promise<GoalSummary[]> {
-  const goals = await prisma.goal.findMany({
-    include: { contributions: { select: { amount: true, date: true } } },
-    orderBy: [{ achievedAt: "asc" }, { createdAt: "asc" }],
-  });
-  return goals.map((goal) => summarize(goal, goal.contributions, context));
+  const [goals, dueContributions] = await Promise.all([
+    prisma.goal.findMany({
+      include: { contributions: { select: { amount: true, date: true } } },
+      orderBy: [{ achievedAt: "asc" }, { createdAt: "asc" }],
+    }),
+    loadDueContributionsByGoal(context),
+  ]);
+  return goals.map((goal) => summarize(goal, goal.contributions, context, dueContributions));
 }
 
 export async function getGoalDetail(id: string, context: AppContext) {
-  const goal = await prisma.goal.findUnique({
-    where: { id },
-    include: {
-      contributions: { orderBy: [{ date: "desc" }, { createdAt: "desc" }] },
-    },
-  });
+  const [goal, dueContributions] = await Promise.all([
+    prisma.goal.findUnique({
+      where: { id },
+      include: {
+        contributions: { orderBy: [{ date: "desc" }, { createdAt: "desc" }] },
+      },
+    }),
+    loadDueContributionsByGoal(context),
+  ]);
   if (!goal) return null;
 
-  const summary = summarize(goal, goal.contributions, context);
+  const summary = summarize(goal, goal.contributions, context, dueContributions);
   const contributions = goal.contributions.map((contribution) => ({
     id: contribution.id,
     amount: num(contribution.amount),

@@ -165,6 +165,7 @@ export function RecurringList({
             frequency: editing.frequency,
             kind: editing.kind,
             nextDate: toISODate(editing.nextDate),
+            updatedAt: editing.updatedAt.toISOString(),
             categoryId: editing.categoryId ?? "none",
             accountId: editing.accountId,
             goalId: editing.goalId,

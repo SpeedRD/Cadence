@@ -16,6 +16,38 @@ import {
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
+/**
+ * Confirms the rows a write is about to point at actually exist, and that a new
+ * row is not being filed against an archived account. Without this a stale id -
+ * a category deleted in another tab, an account archived since the form
+ * opened - reached the database and came back as a raw foreign-key error.
+ * Editing an existing row accepts an archived account, since its history has to
+ * stay editable; only creating something new requires an active one.
+ */
+async function checkReferences(
+  t: ReturnType<typeof getDictionary>["transactions"],
+  accountIds: string[],
+  categoryId: string | null,
+  requireActiveAccounts: boolean,
+): Promise<string | null> {
+  for (const accountId of accountIds) {
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { status: true },
+    });
+    if (!account) return t.accountNoLongerExists;
+    if (requireActiveAccounts && account.status !== "ACTIVE") return t.accountNoLongerActive;
+  }
+  if (categoryId) {
+    const category = await prisma.category.findUnique({
+      where: { id: categoryId },
+      select: { id: true },
+    });
+    if (!category) return t.categoryNoLongerExists;
+  }
+  return null;
+}
+
 export async function saveTransactionAction(
   _previous: ActionState,
   formData: FormData,
@@ -28,6 +60,9 @@ export async function saveTransactionAction(
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const { id, ...values } = parsed.data;
+
+  const referenceError = await checkReferences(t, [values.accountId], values.categoryId, !id);
+  if (referenceError) return fail(referenceError);
 
   if (id) {
     const existing = await prisma.transaction.findUnique({ where: { id } });
@@ -103,6 +138,14 @@ export async function saveTransferAction(
 
   const { transferId, date, amount, currency, fromAccountId, toAccountId, note } =
     parsed.data;
+
+  const referenceError = await checkReferences(
+    t,
+    [fromAccountId, toAccountId],
+    null,
+    !transferId,
+  );
+  if (referenceError) return fail(referenceError);
 
   if (transferId) {
     const legs = await prisma.transaction.findMany({ where: { transferId } });

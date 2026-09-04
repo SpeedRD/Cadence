@@ -44,9 +44,14 @@ export function UpcomingList({
             </span>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm">{item.name}</p>
-              <p className="text-[0.6875rem] text-muted-foreground">
+              <p
+                className={cn(
+                  "text-[0.6875rem]",
+                  item.overdue ? "text-[var(--warning)]" : "text-muted-foreground",
+                )}
+              >
                 {formatDayMonth(item.nextDate)} ·{" "}
-                {formatRelativeDays(today, item.nextDate, common)}
+                {item.overdue ? t.overdueNotPosted : formatRelativeDays(today, item.nextDate, common)}
                 {isContribution ? t.contributionSuffix : ""}
               </p>
             </div>

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { balanceSign } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
+import { Prisma } from "@/generated/prisma/client";
 import type { AccountStatus, AccountType } from "@/generated/prisma/enums";
 
 export interface AccountBalance {
@@ -122,30 +123,54 @@ export async function setOpeningBalance(
   date: Date,
 ): Promise<SetOpeningBalanceResult> {
   const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
-  const [existing, otherCount] = await Promise.all([
-    prisma.transaction.findFirst({ where: { accountId, type: "OPENING_BALANCE" } }),
-    prisma.transaction.count({ where: { accountId, type: { not: "OPENING_BALANCE" } } }),
-  ]);
-  if (otherCount > 0) return { ok: false, reason: "has_history" };
 
-  if (existing) {
-    await prisma.transaction.update({
-      where: { id: existing.id },
-      data: { amount, date, currency: account.currency },
+  // The history check and the find-then-write run inside one transaction, and
+  // the partial unique index added alongside this
+  // ("Transaction_account_opening_balance_key") backstops it: two submits that
+  // both find no existing row can no longer both insert one and silently double
+  // the account's balance.
+  const write = (): Promise<SetOpeningBalanceResult> =>
+    prisma.$transaction(async (tx) => {
+      const otherCount = await tx.transaction.count({
+        where: { accountId, type: { not: "OPENING_BALANCE" } },
+      });
+      if (otherCount > 0) return { ok: false, reason: "has_history" };
+
+      const existing = await tx.transaction.findFirst({
+        where: { accountId, type: "OPENING_BALANCE" },
+      });
+      if (existing) {
+        await tx.transaction.update({
+          where: { id: existing.id },
+          data: { amount, date, currency: account.currency },
+        });
+      } else {
+        await tx.transaction.create({
+          data: {
+            accountId,
+            amount,
+            date,
+            currency: account.currency,
+            type: "OPENING_BALANCE",
+            source: "OPENING_BALANCE",
+          },
+        });
+      }
+      return { ok: true };
     });
-  } else {
-    await prisma.transaction.create({
-      data: {
-        accountId,
-        amount,
-        date,
-        currency: account.currency,
-        type: "OPENING_BALANCE",
-        source: "OPENING_BALANCE",
-      },
-    });
+
+  try {
+    return await write();
+  } catch (error) {
+    // The index rejected our insert because a concurrent request created the
+    // row first. Retrying now takes the update path, which is what a double
+    // submit means: the last amount entered wins, exactly as when the row
+    // already existed.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return write();
+    }
+    throw error;
   }
-  return { ok: true };
 }
 
 export async function archiveAccount(accountId: string): Promise<void> {

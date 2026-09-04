@@ -7,9 +7,23 @@ import { prisma } from "@/lib/prisma";
 import { firstError, paydayConfirmSchema } from "@/lib/validation";
 
 import { getAppContext } from "@/lib/data/context";
-import { confirmPaydayCheckin } from "@/lib/data/payday";
+import {
+  confirmPaydayCheckin,
+  type PaydayAcknowledgementState,
+} from "@/lib/data/payday";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
+
+/**
+ * The confirm action's state, widened with what the server measured when it
+ * refused. The wizard renders its acknowledgements from the client's own
+ * arithmetic, which can disagree with the server's if the exchange rates were
+ * refreshed in between; handing back the server's verdict lets the dialog draw
+ * the missing checkbox instead of stranding the user until they reload.
+ */
+export type PaydayActionState =
+  | (NonNullable<ActionState> & { acknowledgements?: PaydayAcknowledgementState })
+  | null;
 
 /**
  * Thin "use server" wrapper: auth, JSON-payload parsing/validation, and
@@ -23,9 +37,9 @@ import { done, fail, revalidateApp, type ActionState } from "./utils";
  * here.
  */
 export async function confirmPaydayCheckinAction(
-  _previous: ActionState,
+  _previous: PaydayActionState,
   formData: FormData,
-): Promise<ActionState> {
+): Promise<PaydayActionState> {
   await requireAuth();
   const context = await getAppContext();
   const settings = await getSettings();
@@ -49,8 +63,11 @@ export async function confirmPaydayCheckinAction(
   });
   if (!result.ok) {
     if (result.reason === "no_active_accounts") return fail(t.noActiveAccounts);
-    if (result.reason === "deficit_not_acknowledged") return fail(t.acknowledgeDeficitFirst);
-    return fail(t.acknowledgeZeroBufferFirst);
+    const message =
+      result.reason === "deficit_not_acknowledged"
+        ? t.acknowledgeDeficitFirst
+        : t.acknowledgeZeroBufferFirst;
+    return { ...fail(message)!, acknowledgements: result.acknowledgements };
   }
 
   revalidateApp();

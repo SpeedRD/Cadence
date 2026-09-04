@@ -9,6 +9,7 @@ import { getRateTable } from "@/lib/rates";
 import {
   describeRecurringPosting,
   postDueRecurringItems,
+  type RecurringPostingSummary,
 } from "@/lib/recurring-posting";
 
 export interface AppContext {
@@ -17,6 +18,14 @@ export interface AppContext {
   rates: RateTable;
   today: Date;
   currentPeriod: PeriodInfo;
+  /**
+   * What this request's catch-up posting did, so a page can show the items
+   * that are not posting rather than leaving them to the server log. Skipped
+   * and failed items are never advanced, so every later request re-reports
+   * them until the user fixes the item. Optional: callers that build a context
+   * by hand (scripts) have no posting run behind them.
+   */
+  recurringPosting?: RecurringPostingSummary | null;
 }
 
 /**
@@ -29,10 +38,11 @@ export interface AppContext {
  */
 export const getAppContext = cache(async (): Promise<AppContext> => {
   const now = today();
+  let recurringPosting: RecurringPostingSummary | null = null;
   try {
-    const posting = await postDueRecurringItems(now);
-    if (posting.itemsPosted > 0 || posting.itemsFailed > 0) {
-      console.log(describeRecurringPosting(posting));
+    recurringPosting = await postDueRecurringItems(now);
+    if (recurringPosting.itemsPosted > 0 || recurringPosting.itemsFailed > 0) {
+      console.log(describeRecurringPosting(recurringPosting));
     }
   } catch (error) {
     console.error("[recurring] catch-up posting failed", error);
@@ -44,5 +54,6 @@ export const getAppContext = cache(async (): Promise<AppContext> => {
     rates,
     today: now,
     currentPeriod: periodForDate(now),
+    recurringPosting,
   };
 });

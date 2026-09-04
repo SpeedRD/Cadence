@@ -34,6 +34,7 @@ export function PaydayAmountInput({
   id,
   ariaLabel,
   className,
+  disabled = false,
 }: {
   value: number;
   onChange: (value: number) => void;
@@ -41,6 +42,7 @@ export function PaydayAmountInput({
   id?: string;
   ariaLabel?: string;
   className?: string;
+  disabled?: boolean;
 }) {
   const [text, setText] = useState(String(value));
   const [prevValue, setPrevValue] = useState(value);
@@ -57,6 +59,7 @@ export function PaydayAmountInput({
     <Input
       id={id}
       aria-label={ariaLabel}
+      disabled={disabled}
       inputMode="decimal"
       className={cn("font-mono text-right", className)}
       value={text}

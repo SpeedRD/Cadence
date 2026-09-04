@@ -13,8 +13,7 @@
  * sends is trusted as a "recommended" figure.
  */
 import { getSettings } from "@/lib/auth";
-import { convert } from "@/lib/currency";
-import { maxDate } from "@/lib/date";
+import { convert, isSameMoney } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import {
   availableForFlexibleCategories,
@@ -25,7 +24,7 @@ import {
 } from "@/lib/payday";
 import {
   daysRemainingInPeriod,
-  isPaydayDate,
+  isAfterPaydayInPeriod,
   nextPeriod,
   periodInfo,
   periodsRemaining,
@@ -55,15 +54,29 @@ export interface PaydayAccountDraft {
   incomeNote: string;
   /** The configured buffer floor converted to this account's own currency, so the step can recompute its buffer as income is edited. */
   bufferFloor: number;
+  /**
+   * The account has been archived since this check-in recorded income for it.
+   * Its figures still count - the money was received - but there is nothing
+   * left to edit, so the wizard shows them without letting them be changed.
+   */
+  readOnly: boolean;
 }
 
 export interface PaydayCommittedDraft {
   recurringItemId: string;
   name: string;
+  /** Everything this item owes in the plan period, in the display currency. */
   amount: number;
+  /** The same total in the item's own currency - what its account has to cover. */
   nativeAmount: number;
+  /** One charge in the item's own currency, for a row that owes several. */
+  perOccurrenceAmount: number;
+  /** How many charges the plan period owes. */
+  occurrenceCount: number;
   currency: string;
   nextDate: Date;
+  /** Its due date has passed and automatic posting has not cleared it. */
+  overdue: boolean;
   alreadyLogged: boolean;
   /** The account funding this item - reassignable from Step 3, which writes RecurringItem.accountId. */
   accountId: string | null;
@@ -128,13 +141,19 @@ export interface PaydayCheckinDraft {
 }
 
 /**
- * The period a check-in opened right now plans for: the *next* period when
- * today is exactly a payday date (the 15th/last day, i.e. the last day of the
- * period that's ending), otherwise the period containing today (covers
- * opening the wizard a few days into an already-current period).
+ * The period a check-in opened right now plans for: the *next* period once the
+ * current period's pay has landed, otherwise the period containing today
+ * (covers opening the wizard a few days into an already-current period).
+ *
+ * "Once the pay has landed" is a stretch of days, not a single date. A boundary
+ * falling on a weekend is paid on the preceding Friday, so on the Saturday and
+ * Sunday after it the money is already in hand while the ending period still
+ * contains today. Testing for the payday alone sent those days back to planning
+ * the period that was ending - and confirming there rewrites the paycheck that
+ * period's check-in had already recorded.
  */
 export function planPeriodRef(context: AppContext): PeriodRef {
-  return isPaydayDate(context.today)
+  return isAfterPaydayInPeriod(context.today)
     ? nextPeriod(context.currentPeriod)
     : context.currentPeriod;
 }
@@ -176,7 +195,11 @@ export async function getCategorySuggestions(
 
   const remaining = categoryIds.filter((id) => !lastBudgetByCategory.has(id));
   const historicalTotals = new Map<string, number>();
-  const historicalNonZero = new Set<string>();
+  // How many of the comparable periods to average over: the ones from a
+  // category's oldest recorded spending forward. Dividing by the full lookback
+  // treated every period before the category existed as a zero-spend month and
+  // pulled the suggestion down towards nothing.
+  const historicalPeriodCount = new Map<string, number>();
   if (remaining.length > 0) {
     // HISTORY_PERIODS comparable (same-half) periods, starting at
     // comparableRef and stepping one full cycle back each time, fetched in
@@ -192,21 +215,26 @@ export async function getCategorySuggestions(
     const summaries = await Promise.all(
       cursors.map((ref) => getPeriodSummary(periodInfo(ref), context)),
     );
-    for (const summary of summaries) {
+    // `summaries` runs newest first, so the oldest period with any spending is
+    // the furthest index the average should reach back to.
+    summaries.forEach((summary, index) => {
       for (const line of summary.categories) {
         if (!line.categoryId || !remaining.includes(line.categoryId)) continue;
         historicalTotals.set(line.categoryId, (historicalTotals.get(line.categoryId) ?? 0) + line.spent);
-        if (line.spent > 0) historicalNonZero.add(line.categoryId);
+        if (line.spent > 0) {
+          historicalPeriodCount.set(line.categoryId, index + 1);
+        }
       }
-    }
+    });
   }
 
   for (const id of categoryIds) {
     const fromBudget = lastBudgetByCategory.get(id);
     if (fromBudget !== undefined) {
       result.set(id, { amount: fromBudget, basis: "last_budget" });
-    } else if (historicalNonZero.has(id)) {
-      result.set(id, { amount: round2((historicalTotals.get(id) ?? 0) / HISTORY_PERIODS), basis: "average" });
+    } else if (historicalPeriodCount.has(id)) {
+      const periods = historicalPeriodCount.get(id) ?? HISTORY_PERIODS;
+      result.set(id, { amount: round2((historicalTotals.get(id) ?? 0) / periods), basis: "average" });
     } else {
       result.set(id, { amount: 0, basis: "none" });
     }
@@ -229,14 +257,34 @@ export async function getAvailableCarryover(
   return { amount: round2(Math.max(0, prevSummary.safeToSpend)), basis: "prior_period_budget" };
 }
 
+/**
+ * An account's ledger balance with this check-in's own income taken back out,
+ * so "expected" means the same thing on a first confirm and on a re-confirm.
+ * Only a snapshot that actually created an income Transaction has anything to
+ * subtract.
+ */
+function ledgerBefore(
+  balance: number,
+  snapshot:
+    | { incomeEntered: { toString(): string } | number; incomeTransactionId: string | null }
+    | undefined
+    | null,
+): number {
+  if (!snapshot?.incomeTransactionId) return round2(balance);
+  return round2(balance - num(snapshot.incomeEntered));
+}
+
 function toCommittedDraft(item: CommittedItem, alreadyLoggedIds: Set<string>): PaydayCommittedDraft {
   return {
     recurringItemId: item.id,
     name: item.name,
     amount: item.amount,
     nativeAmount: item.nativeAmount,
+    perOccurrenceAmount: item.perOccurrenceAmount,
+    occurrenceCount: item.occurrenceCount,
     currency: item.currency,
     nextDate: item.nextDate,
+    overdue: item.overdue,
     alreadyLogged: alreadyLoggedIds.has(item.id),
     accountId: item.accountId,
   };
@@ -282,7 +330,10 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     plannedPeriodExpenses,
     existingBudgetRows,
   ] = await Promise.all([
-    getAccountBalances(context, { status: "ACTIVE" }),
+    // Every account, not only the active ones: a check-in that recorded income
+    // for an account archived since must keep showing it, or that income
+    // silently vanishes from the plan's totals.
+    getAccountBalances(context, { status: "ALL" }),
     getPeriodSummary(plan, context),
     listGoals(context),
     prisma.category.findMany({
@@ -303,7 +354,9 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       where: {
         active: true,
         kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] },
-        nextDate: { gte: maxDate(context.today, plan.start), lte: plan.end },
+        // No lower bound: an overdue item is still owed and still appears in
+        // the plan's committed list, so it needs an already-paid verdict too.
+        nextDate: { lte: plan.end },
       },
       select: {
         id: true,
@@ -359,15 +412,27 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     ]),
   );
 
-  const accountDrafts: PaydayAccountDraft[] = accounts.map((account) => {
+  // Active accounts are always offered; an archived one appears only when this
+  // check-in already recorded something for it, and then read-only.
+  const draftableAccounts = accounts.filter(
+    (account) => account.status === "ACTIVE" || existingSnapshotByAccount.has(account.id),
+  );
+  const accountDrafts: PaydayAccountDraft[] = draftableAccounts.map((account) => {
     const snapshot = existingSnapshotByAccount.get(account.id);
     return {
+      readOnly: account.status !== "ACTIVE",
       accountId: account.id,
       name: account.name,
       currency: account.currency,
       type: account.type,
-      expectedLedgerBalance: account.balance,
-      reportedBalance: snapshot ? num(snapshot.reportedBalance) : account.balance,
+      // The ledger balance to reconcile against is the one *before* this
+      // check-in's own income landed. Re-opening a confirmed check-in would
+      // otherwise compare the reported balance against a ledger that already
+      // contains the paycheck this very screen is recording, so the same
+      // reported figure read as a match on the first pass and as a shortfall
+      // on the second.
+      expectedLedgerBalance: ledgerBefore(account.balance, snapshot),
+      reportedBalance: snapshot ? num(snapshot.reportedBalance) : ledgerBefore(account.balance, snapshot),
       incomeEntered: snapshot ? num(snapshot.incomeEntered) : 0,
       incomeNote: snapshot?.incomeNote ?? "",
       // Each account's buffer is computed in its own currency, so the floor
@@ -398,6 +463,15 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     contributions.filter((i) => !i.alreadyLogged).reduce((sum, i) => sum + i.amount, 0),
   );
 
+  // A goal already fed by a recurring contribution this period does not also
+  // need its full roadmap amount set aside: reserving both put the same goal in
+  // the plan twice and shrank what was left for the flexible categories.
+  const dueContributionByGoal = new Map<string, number>();
+  for (const item of planSummary.committedItems) {
+    if (item.kind !== "CONTRIBUTION" || !item.goalId) continue;
+    dueContributionByGoal.set(item.goalId, (dueContributionByGoal.get(item.goalId) ?? 0) + item.amount);
+  }
+
   const goals: PaydayGoalDraft[] = allGoals
     .filter((g) => g.targetDate && !g.achievedAt && g.remaining > 0)
     .map((g) => {
@@ -408,7 +482,9 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       // period rather than today's (see planPeriodRef()) - so recompute here
       // anchored to plan.start instead of trusting the pre-computed fields.
       const periodsLeft = Math.max(1, periodsRemaining(plan.start, g.targetDate as Date));
-      const recommendedAmount = round2(g.displayRemaining / periodsLeft);
+      const recommendedAmount = round2(
+        Math.max(0, g.displayRemaining / periodsLeft - (dueContributionByGoal.get(g.id) ?? 0)),
+      );
       return {
         goalId: g.id,
         name: g.name,
@@ -536,11 +612,27 @@ export interface ConfirmPaydayCheckinContext extends AppContext {
   bufferFloorCurrency: string;
 }
 
+/**
+ * What the server measured when it refused to confirm, so the wizard can put
+ * the right acknowledgement in front of the user instead of asking for a
+ * reload. The client works from the rates it rendered with; a refresh between
+ * render and submit can move `available` across zero, and the checkbox the
+ * server is waiting for is then one the client never drew.
+ */
+export interface PaydayAcknowledgementState {
+  available: number;
+  needsDeficitAck: boolean;
+  needsZeroBufferAck: boolean;
+}
+
 export type ConfirmPaydayCheckinResult =
   | { ok: true }
   | { ok: false; reason: "no_active_accounts" }
-  | { ok: false; reason: "deficit_not_acknowledged" }
-  | { ok: false; reason: "zero_buffer_not_acknowledged" };
+  | {
+      ok: false;
+      reason: "deficit_not_acknowledged" | "zero_buffer_not_acknowledged";
+      acknowledgements: PaydayAcknowledgementState;
+    };
 
 export type ConfirmPaydayCheckinInput = z.infer<typeof paydayConfirmSchema>;
 
@@ -574,8 +666,9 @@ export async function confirmPaydayCheckin(
     carryover,
     recurringForMatchRows,
     plannedPeriodExpenses,
+    existingCheckinSnapshots,
   ] = await Promise.all([
-    getAccountBalances(context, { status: "ACTIVE" }),
+    getAccountBalances(context, { status: "ALL" }),
     getPeriodSummary(plan, context),
     listGoals(context),
     prisma.category.findMany({
@@ -589,7 +682,9 @@ export async function confirmPaydayCheckin(
       where: {
         active: true,
         kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] },
-        nextDate: { gte: maxDate(context.today, plan.start), lte: plan.end },
+        // No lower bound: an overdue item is still owed and still appears in
+        // the plan's committed list, so it needs an already-paid verdict too.
+        nextDate: { lte: plan.end },
       },
       select: {
         id: true,
@@ -606,8 +701,17 @@ export async function confirmPaydayCheckin(
       where: { type: "EXPENSE", date: { gte: plan.start, lte: plan.end } },
       select: { id: true, amount: true, currency: true, categoryId: true, note: true },
     }),
+    // Read before the write so income already recorded for an account archived
+    // since can be carried into the totals rather than dropped.
+    prisma.paydayCheckin.findFirst({
+      where: { year: planRef.year, month: planRef.month, period: planRef.period },
+      select: { snapshots: { select: { accountId: true, incomeEntered: true, currency: true } } },
+    }),
   ]);
-  const liveAccountById = new Map(liveAccounts.map((a) => [a.id, a]));
+  // Only an active account can be edited; the rest are carried as they stand.
+  const liveAccountById = new Map(
+    liveAccounts.filter((a) => a.status === "ACTIVE").map((a) => [a.id, a]),
+  );
   const essentialById = new Map(essentialCategories.map((c) => [c.id, c]));
   const flexibleById = new Map(flexibleCategories.map((c) => [c.id, c]));
   // One combined call over both category lists, same as getPaydayCheckinDraft
@@ -622,11 +726,21 @@ export async function confirmPaydayCheckin(
   const accountInputs = input.accounts.filter((a) => liveAccountById.has(a.accountId));
   if (accountInputs.length === 0) return { ok: false, reason: "no_active_accounts" };
 
+  // Income recorded against an account that has since been archived. Its
+  // snapshot is left untouched below, so the figure it holds has to keep
+  // counting here too or re-confirming would quietly write it out of the plan.
+  const archivedIncome = (existingCheckinSnapshots?.snapshots ?? [])
+    .filter((snapshot) => !liveAccountById.has(snapshot.accountId))
+    .reduce(
+      (sum, snapshot) =>
+        sum + convert(num(snapshot.incomeEntered), snapshot.currency, context.displayCurrency, context.rates),
+      0,
+    );
   const totalIncome = round2(
     accountInputs.reduce((sum, a) => {
       const account = liveAccountById.get(a.accountId)!;
       return sum + convert(a.incomeEntered, account.currency, context.displayCurrency, context.rates);
-    }, 0),
+    }, archivedIncome),
   );
 
   const forMatch = recurringForMatchRows.map((item) => ({ ...item, amount: num(item.amount) }));
@@ -654,6 +768,12 @@ export async function confirmPaydayCheckin(
     const goal = goalById.get(g.goalId);
     return Boolean(goal && goal.targetDate && !goal.achievedAt);
   });
+  const dueContributionByGoal = new Map<string, number>();
+  for (const item of planSummary.committedItems) {
+    if (item.kind !== "CONTRIBUTION" || !item.goalId) continue;
+    dueContributionByGoal.set(item.goalId, (dueContributionByGoal.get(item.goalId) ?? 0) + item.amount);
+  }
+
   // Planned goal amounts arrive in the display currency (see PaydayGoalDraft).
   const goalPlanTotal = round2(goalInputs.reduce((sum, g) => sum + g.plannedAmount, 0));
 
@@ -689,9 +809,16 @@ export async function confirmPaydayCheckin(
   );
   const protectedBuffer = bufferPlan.total;
 
+  // The wizard only ever offers "all of it" or "none of it", so anything else -
+  // most realistically a draft left open while the previous period kept moving -
+  // is clamped to what this run actually measured before it is used or stored.
+  const includedCarryover = round2(
+    Math.min(Math.max(0, input.includedCarryover), carryover.amount),
+  );
+
   const available = availableForFlexibleCategories({
     income: totalIncome,
-    includedCarryover: input.includedCarryover,
+    includedCarryover,
     subscriptions: subscriptionsTotal,
     recurringContributions: contributionsTotal,
     goalPlan: goalPlanTotal,
@@ -700,16 +827,25 @@ export async function confirmPaydayCheckin(
   });
 
   const needsDeficitAck = available < 0 || flexibleTotal > Math.max(0, available);
+  const needsZeroBufferAck = protectedBuffer <= 0;
+  const acknowledgements: PaydayAcknowledgementState = {
+    available,
+    needsDeficitAck,
+    needsZeroBufferAck,
+  };
   if (needsDeficitAck && !input.acknowledgedDeficit) {
-    return { ok: false, reason: "deficit_not_acknowledged" };
+    return { ok: false, reason: "deficit_not_acknowledged", acknowledgements };
   }
-  if (protectedBuffer <= 0 && !input.acknowledgedZeroBuffer) {
-    return { ok: false, reason: "zero_buffer_not_acknowledged" };
+  if (needsZeroBufferAck && !input.acknowledgedZeroBuffer) {
+    return { ok: false, reason: "zero_buffer_not_acknowledged", acknowledgements };
   }
 
   const checkinDate = context.today;
 
   await prisma.$transaction(async (tx) => {
+    // upsert on the (year, month, period) unique key rather than find-then-
+    // create: two confirmations of the same period racing each other used to
+    // let both find nothing and the loser hit a raw constraint error.
     const existingCheckin = await tx.paydayCheckin.findFirst({
       where: { year: planRef.year, month: planRef.month, period: planRef.period },
     });
@@ -720,20 +856,35 @@ export async function confirmPaydayCheckin(
             checkinDate,
             currency: context.displayCurrency,
             totalIncome,
-            includedCarryover: input.includedCarryover,
+            includedCarryover,
             protectedBuffer,
             status: "CONFIRMED",
           },
         })
-      : await tx.paydayCheckin.create({
-          data: {
+      : await tx.paydayCheckin.upsert({
+          where: {
+            year_month_period: {
+              year: planRef.year,
+              month: planRef.month,
+              period: planRef.period,
+            },
+          },
+          update: {
+            checkinDate,
+            currency: context.displayCurrency,
+            totalIncome,
+            includedCarryover,
+            protectedBuffer,
+            status: "CONFIRMED",
+          },
+          create: {
             year: planRef.year,
             month: planRef.month,
             period: planRef.period,
             checkinDate,
             currency: context.displayCurrency,
             totalIncome,
-            includedCarryover: input.includedCarryover,
+            includedCarryover,
             protectedBuffer,
             status: "CONFIRMED",
           },
@@ -741,10 +892,13 @@ export async function confirmPaydayCheckin(
 
     for (const accountInput of accountInputs) {
       const account = liveAccountById.get(accountInput.accountId)!;
-      const difference = round2(accountInput.reportedBalance - account.balance);
       const existingSnapshot = await tx.paydayAccountSnapshot.findFirst({
         where: { paydayCheckinId: checkin.id, accountId: account.id },
       });
+      // Measured against the ledger without this check-in's own income, so a
+      // re-confirm reconciles against the same figure the first confirm did.
+      const expectedLedgerBalance = ledgerBefore(account.balance, existingSnapshot);
+      const difference = round2(accountInput.reportedBalance - expectedLedgerBalance);
 
       let incomeTransactionId = existingSnapshot?.incomeTransactionId ?? null;
       if (accountInput.incomeEntered > 0) {
@@ -775,7 +929,7 @@ export async function confirmPaydayCheckin(
       }
 
       const snapshotData = {
-        expectedLedgerBalance: account.balance,
+        expectedLedgerBalance,
         reportedBalance: accountInput.reportedBalance,
         difference,
         incomeEntered: accountInput.incomeEntered,
@@ -820,7 +974,11 @@ export async function confirmPaydayCheckin(
         // trust listGoals()'s today-anchored perPeriod for the audit-trail
         // recommendedAmount here.
         const periodsLeft = Math.max(1, periodsRemaining(plan.start, goal.targetDate as Date));
-        const recommendedAmount = round2(goal.displayRemaining / periodsLeft);
+        // Netted against the recurring contributions already aimed at this
+        // goal, exactly as getPaydayCheckinDraft does.
+        const recommendedAmount = round2(
+          Math.max(0, goal.displayRemaining / periodsLeft - (dueContributionByGoal.get(goal.id) ?? 0)),
+        );
         return {
           paydayCheckinId: checkin.id,
           type: "GOAL" as const,
@@ -865,7 +1023,7 @@ export async function confirmPaydayCheckin(
         paydayCheckinId: checkin.id,
         type: "CARRYOVER" as const,
         recommendedAmount: carryover.amount,
-        plannedAmount: input.includedCarryover,
+        plannedAmount: includedCarryover,
         currency: context.displayCurrency,
         basis: carryover.basis,
       },
@@ -881,6 +1039,23 @@ export async function confirmPaydayCheckin(
           categoryId: categoryInput.categoryId,
         },
       });
+      // A budget the user never touched arrives back as its own stored amount
+      // converted into the display currency (see existingBudgetByCategory in
+      // getPaydayCheckinDraft). Writing that back would re-denominate a row
+      // nobody edited, at today's rate, on every confirmation. Same guard, and
+      // the same reason, as saveBudgetAction in src/server/actions/budgets.ts.
+      const untouched =
+        existingBudget !== null &&
+        existingBudget.currency !== context.displayCurrency &&
+        isSameMoney(
+          categoryInput.plannedAmount,
+          context.displayCurrency,
+          num(existingBudget.amount),
+          existingBudget.currency,
+          context.rates,
+        );
+      if (untouched) continue;
+
       if (existingBudget) {
         await tx.budget.update({
           where: { id: existingBudget.id },

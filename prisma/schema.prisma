@@ -256,6 +256,13 @@ model RecurringItem {
   frequency    RecurringFrequency
   kind         RecurringKind
   nextDate     DateTime           @db.Date
+  /// The day of the month this item is really due on. advanceDate() clamps to
+  /// this rather than to the previous occurrence's day, so a short February can
+  /// never drag every later occurrence back with it. Set from the date the user
+  /// picks and only ever rewritten by an explicit edit - automatic posting
+  /// never touches it. Null only for rows written outside the app, where
+  /// posting falls back to the occurrence's own day (the pre-anchor behaviour).
+  anchorDay    Int?
   active       Boolean            @default(true)
   categoryId   String?
   /// The account each posted occurrence is charged to. Required for posting.
@@ -307,9 +314,16 @@ model GoalContribution {
   note            String?
   /// Set only when recurring posting created this row automatically (see
   /// src/lib/recurring-posting.ts); null for manually-logged contributions.
-  /// The monthly savings/investing calculation uses it to avoid counting an
-  /// auto-posted contribution twice (once via its Transaction, once here).
+  /// Only good for finding the item that is still there - the FK nulls this on
+  /// delete, so classification must not depend on it (see recurringExternalId).
   recurringItemId String?
+  /// The externalId of the Transaction this row was posted alongside, i.e.
+  /// "<recurringItemId>:<YYYY-MM-DD>". A plain string with no foreign key, so
+  /// deleting the RecurringItem cannot erase it the way it erases
+  /// recurringItemId. This is what pairs an auto-posted contribution with its
+  /// Transaction in the monthly savings/investing calculation, so the pair is
+  /// counted once whether or not the item still exists.
+  recurringExternalId String?
   createdAt       DateTime @default(now())
 
   goal          Goal           @relation(fields: [goalId], references: [id], onDelete: Cascade)
@@ -317,6 +331,7 @@ model GoalContribution {
 
   @@index([goalId, date])
   @@index([recurringItemId])
+  @@index([recurringExternalId])
 }
 
 /// Raw USD-based rates from open.er-api.com. rate = units of targetCurrency per

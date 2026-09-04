@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { formatDateTimeInAppZone } from "@/lib/date";
 import type { Dictionary } from "@/lib/i18n";
 import { disconnectEmailAction } from "@/server/actions/connections";
 
@@ -16,7 +17,7 @@ import type { ConnectionRow } from "@/lib/data/connections";
 
 function formatSyncedAt(date: Date | null, t: Dictionary["settingsPage"]): string {
   if (!date) return t.neverSynced;
-  return t.lastSynced(date.toISOString().slice(0, 16).replace("T", " "));
+  return t.lastSynced(formatDateTimeInAppZone(date));
 }
 
 export function ProviderConnections({

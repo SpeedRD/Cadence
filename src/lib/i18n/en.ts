@@ -85,6 +85,11 @@ export const en = {
     toggleThemeAria: "Toggle light and dark mode",
     displayCurrencyLabel: "Display currency",
     languageLabel: "Language",
+    staleRatesTitle: "Converted figures may be out of date",
+    staleRatesSince: (datetime: string) =>
+      `Exchange rates could not be refreshed, so every converted amount still uses the rates fetched ${datetime}.`,
+    staleRatesNeverFetched:
+      "Exchange rates could not be refreshed and none have been fetched yet, so every converted amount is an estimate.",
   },
   login: {
     createSubtitle:
@@ -101,8 +106,34 @@ export const en = {
     entriesMustMatch: "Both entries must match",
     pinDoesNotMatch: "That PIN doesn't match",
   },
+  errorPage: {
+    genericTitle: "Something went wrong",
+    genericDescription:
+      "That page could not be loaded. Nothing was changed - try again, and if it keeps happening the server log has the details.",
+    ratesTitle: "Exchange rates couldn't be loaded",
+    ratesDescription:
+      "Cadence will not show a converted figure it cannot stand behind, so this page is on hold. Rates are fetched again on the next request - try again in a few minutes.",
+    tryAgain: "Try again",
+  },
   dashboard: {
+    notPostingTitle: (count: number) =>
+      count === 1
+        ? "1 recurring item is not posting"
+        : `${count} recurring items are not posting`,
+    notPostingDescription:
+      "These are still due, so nothing has been charged for them and they are missing from your committed total.",
+    notPostingItem: (name: string, reason: string, date: string) =>
+      `${name} - ${reason}, due ${date}`,
+    notPostingReasonMissingAccount: "no account set",
+    notPostingReasonMissingGoal: "no goal set",
+    notPostingReasonMissingAccountAndGoal: "no account or goal set",
+    notPostingReasonAccountArchived: "its account is archived",
+    notPostingReasonFailed: "last run failed",
+    notPostingLink: "Fix on the recurring page",
     goalsHeading: "Goals",
+    overdueNotPosted: "overdue, not posted yet",
+    plusOutsideBudget: (amount: string) =>
+      `plus ${amount} on subscriptions and savings, which the budget does not cover`,
     allGoals: "All goals",
     noGoalsTitle: "No goals yet",
     noGoalsDescription:
@@ -265,6 +296,8 @@ export const en = {
     couldNotReadRows: "Could not read the parsed rows",
     accountNoLongerExists: "That account no longer exists",
     transactionNoLongerExists: "That transaction no longer exists",
+    accountNoLongerActive: "That account is archived - pick an active one",
+    categoryNoLongerExists: "That category no longer exists",
     transferNoLongerExists: "That transfer no longer exists",
     editFromTransferForm: "Edit this transfer from the transfer form",
     editOpeningBalanceFromAccounts:
@@ -407,6 +440,7 @@ export const en = {
     saveAria: (label: string) => `Save ${label}`,
     budgetCleared: "Budget cleared",
     budgetSaved: "Budget saved",
+    saveCollided: "Another save landed first. Try again.",
     pickPeriodFirst: "Pick a period first",
     noBudgetToCopy: "The previous period has no budget to copy",
     everyBudgetAlreadyCopied: "This period already has every budget from last period",
@@ -457,6 +491,10 @@ export const en = {
     itemDeleted: "Recurring item deleted",
     itemNoLongerExists: "That item no longer exists",
     accountNoLongerActive: "That account is no longer active",
+    categoryNoLongerExists: "That category no longer exists",
+    goalNoLongerExists: "That goal no longer exists",
+    itemChangedElsewhere:
+      "This item changed somewhere else while the form was open. Reopen it and make the change again.",
     itemPaused: "Paused",
     itemResumed: "Resumed",
   },
@@ -571,7 +609,7 @@ export const en = {
     exchangeRates: "Exchange rates",
     exchangeRatesDescription: "USD-based, cached for 24 hours, cross rates derived through USD.",
     usdTo: (code: string) => `USD to ${code}`,
-    lastFetched: (datetime: string) => `Last fetched ${datetime} UTC`,
+    lastFetched: (datetime: string) => `Last fetched ${datetime}`,
     noRatesFetched: "No rates fetched yet",
     rateServiceUnreachable: " · the rate service was unreachable, using the last known values",
     goalProgress: "Goal progress",
@@ -598,7 +636,7 @@ export const en = {
     gmailDescription: "Reads receipts, invoices and subscription emails (gmail.readonly).",
     outlookDescription: "Reads the same kinds of emails via Microsoft Graph (Mail.Read).",
     neverSynced: "Never synced",
-    lastSynced: (datetime: string) => `Last synced ${datetime} UTC`,
+    lastSynced: (datetime: string) => `Last synced ${datetime}`,
     noAccountConnected: "No account connected yet.",
     disconnectTitle: (email: string) => `Disconnect ${email}?`,
     disconnectDescription:
@@ -728,6 +766,9 @@ export const en = {
     unfundedSubscriptionsDescription:
       "These are due before next payday but their account received no income this check-in. Move them to an account that did.",
     alreadyPaidThisPeriod: "Already paid this period",
+    archivedAccountNote: "archived, kept for the record",
+    overdueBadge: "Overdue",
+    chargesThisPeriod: (count: number, each: string) => `${count} charges of ${each}`,
     goalsHeading: "Goal roadmap",
     noGoalsWithTarget: "No dated goals to reserve for this period.",
     roadmapAmount: "Roadmap amount",

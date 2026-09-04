@@ -11,6 +11,13 @@ import { budgetSchema, firstError, formObject } from "@/lib/validation";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
+import { Prisma } from "@/generated/prisma/client";
+
+/** True for the unique-constraint violation two concurrent saves of one budget race into. */
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
 /**
  * One budget per (year, month, period, categoryId). The overall budget uses a
  * null categoryId, which a plain composite UNIQUE cannot keep unique - the
@@ -52,15 +59,40 @@ export async function saveBudgetAction(
     return done(t.budgetSaved);
   }
 
-  if (existing) {
-    await prisma.budget.update({
-      where: { id: existing.id },
-      data: { amount, currency },
-    });
-  } else {
-    await prisma.budget.create({
-      data: { year, month, period, categoryId, amount, currency },
-    });
+  // The unique index (and the partial one covering the overall budget) already
+  // makes a duplicate impossible; without this the loser of a race just saw a
+  // raw constraint error. One retry is enough - by then the row exists, so the
+  // second attempt takes the update path.
+  const write = async () => {
+    const row = await prisma.budget.findFirst({ where: { year, month, period, categoryId } });
+    if (row) {
+      await prisma.budget.update({ where: { id: row.id }, data: { amount, currency } });
+    } else {
+      await prisma.budget.create({
+        data: { year, month, period, categoryId, amount, currency },
+      });
+    }
+  };
+
+  try {
+    if (existing) {
+      await prisma.budget.update({
+        where: { id: existing.id },
+        data: { amount, currency },
+      });
+    } else {
+      await prisma.budget.create({
+        data: { year, month, period, categoryId, amount, currency },
+      });
+    }
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    try {
+      await write();
+    } catch (retryError) {
+      if (!isUniqueViolation(retryError)) throw retryError;
+      return fail(t.saveCollided);
+    }
   }
 
   revalidateApp();

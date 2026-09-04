@@ -13,42 +13,45 @@
  * Classification rules (see AGENTS.md for the full spec):
  *   lifestyle          = EXPENSE transactions, not Savings/Investment category,
  *                        not matched to a subscription/contribution recurring item.
- *   committed          = active SUBSCRIPTION recurring items - actual matched
- *                        transaction when found, else the item's scheduled
- *                        monthly-equivalent amount for a completed month, or
- *                        nothing (see committedStillDueThisMonth) for the month
- *                        in progress.
- *   savings/investing  = GoalContribution rows not created by recurring posting
- *                        (recurringItemId null - i.e. manually logged) + active
- *                        CONTRIBUTION recurring items (actual-or-scheduled, same
- *                        rule as committed) + actual EXPENSE transactions
- *                        categorized Savings/Investment that weren't already
- *                        matched to a recurring item. An auto-posted contribution
- *                        occurrence writes both an EXPENSE Transaction and a
- *                        GoalContribution (src/lib/recurring-posting.ts); the
- *                        Transaction is what the recurring-item term matches, so
- *                        its GoalContribution twin is left out of the first term
- *                        to count that occurrence exactly once.
+ *   committed          = SUBSCRIPTION charges - every RECURRING transaction the
+ *                        posting job wrote for one, plus, only for a month with
+ *                        no such charge, the item's scheduled monthly-equivalent
+ *                        amount (nothing at all for the month in progress; see
+ *                        committedStillDueThisMonth).
+ *   savings/investing  = GoalContribution rows with no Transaction standing in
+ *                        for them + CONTRIBUTION charges (same actual-or-
+ *                        scheduled rule as committed) + EXPENSE transactions
+ *                        categorized Savings/Investment that nothing else
+ *                        already accounted for.
  *   transfers & income = never read by this module (all queries filter to EXPENSE).
  *
- * Subscription/contribution matching limitations (documented once, here):
- *   Cadence has no stored link between a RecurringItem and the Transaction that
- *   pays it, so matching is heuristic: same currency, amount within one cent,
- *   and either the same category as the recurring item or a note containing the
- *   item's normalized name. A transaction can satisfy at most one recurring
- *   item. A real charge logged under a different category with no matching note
- *   text, or a recurring item whose configured amount has drifted from the real
- *   charge, will not be matched - it falls back to the recurring item's
- *   scheduled amount for completed months (never fabricated for the current,
- *   in-progress month). Only currently-active recurring items are considered,
- *   since Cadence does not keep a history of when an item was paused.
+ * How a charge is recognised, in order:
+ *
+ *   1. A transaction the posting job wrote carries "<itemId>:<YYYY-MM-DD>" in
+ *      externalId, and the GoalContribution posted beside it carries the same
+ *      key. That pairing is read first and is the reliable half of this module:
+ *      it holds however the RecurringItem is edited, paused or deleted
+ *      afterwards, because none of that can change a key already written. It
+ *      also means an auto-posted contribution's two rows are one event, counted
+ *      once, whether or not the item behind them still exists.
+ *   2. Anything else is heuristic, because Cadence has no link between an item
+ *      and a charge it did not write itself: same currency, amount within one
+ *      cent, and either the item's category or its name in the note. See
+ *      matchRecurringToTransactions for what that deliberately refuses to match.
+ *
+ * A real charge logged under a different category with no matching note text,
+ * or an item whose configured amount has drifted from the real charge, will not
+ * be matched by step 2 - the month then falls back to the item's scheduled
+ * amount, and only for months the item already existed in. Only currently
+ * active items are considered for that fallback, since Cadence does not keep a
+ * history of when an item was paused.
  */
 import { convert } from "@/lib/currency";
-import { minDate } from "@/lib/date";
+import { addDays, minDate } from "@/lib/date";
 import { num, round2, sum } from "@/lib/money";
 import { daysElapsedInMonth, monthForDate, monthWindow, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
-import { monthlyEquivalent } from "@/lib/recurring";
+import { monthlyEquivalent, owedOccurrences } from "@/lib/recurring";
 
 import type { AppContext } from "@/lib/data/context";
 import type { CategoryLine } from "@/lib/data/period-summary";
@@ -82,6 +85,12 @@ export interface RecurringForMatch {
   nextDate: Date;
 }
 
+/** A recurring item with the extra schedule/history fields month maths needs. */
+export interface RecurringForMonth extends RecurringForMatch {
+  anchorDay: number | null;
+  createdAt: Date;
+}
+
 interface MatchableTransaction {
   id: string;
   amount: number;
@@ -99,12 +108,30 @@ function normalizeForMatch(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+/** Currency, amount and category: everything a category-only match can see. */
+function shapeKey(item: RecurringForMatch): string {
+  return `${item.currency}|${item.amount.toFixed(2)}|${item.categoryId ?? ""}`;
+}
+
 /**
  * Matches recurring items (subscriptions or contributions) to actual expense
  * transactions in the same set, so a real charge and its recurring item are
  * never both counted. See the module doc comment for the matching rule and its
- * limitations. Each transaction satisfies at most one item; items are matched
- * in the order given.
+ * limitations. A transaction satisfies at most one item.
+ *
+ * Three things this is careful about:
+ *
+ *   - An item takes *every* transaction it matches, not just the first. A
+ *     weekly subscription charged four times in a month is four charges of that
+ *     item, and counting one left the other three to be read as lifestyle
+ *     spending and then projected.
+ *   - Items are matched in id order, never in the order the database happened
+ *     to return them, so which of two candidates wins a contested transaction
+ *     is stable between requests.
+ *   - When two items share a currency, an amount and a category, those three
+ *     cannot tell them apart, so for both of them a category match alone is not
+ *     enough and the item's name must appear in the note. Without that, a $50
+ *     doctor's visit filed under Health could satisfy a $50 gym membership.
  */
 export function matchRecurringToTransactions(
   items: RecurringForMatch[],
@@ -113,29 +140,48 @@ export function matchRecurringToTransactions(
   const matchedTransactionIds = new Set<string>();
   const actualNativeByItemId = new Map<string, number>();
 
-  for (const item of items) {
+  const ordered = [...items].sort((a, b) => a.id.localeCompare(b.id));
+  const shapeCounts = new Map<string, number>();
+  for (const item of ordered) {
+    const key = shapeKey(item);
+    shapeCounts.set(key, (shapeCounts.get(key) ?? 0) + 1);
+  }
+
+  for (const item of ordered) {
     const normalizedName = normalizeForMatch(item.name);
-    const match = transactions.find((tx) => {
-      if (matchedTransactionIds.has(tx.id)) return false;
-      if (tx.currency !== item.currency) return false;
-      if (Math.abs(tx.amount - item.amount) > AMOUNT_MATCH_TOLERANCE) return false;
-      const categoryMatches = item.categoryId !== null && tx.categoryId === item.categoryId;
+    const categoryIsAmbiguous = (shapeCounts.get(shapeKey(item)) ?? 0) > 1;
+
+    for (const tx of transactions) {
+      if (matchedTransactionIds.has(tx.id)) continue;
+      if (tx.currency !== item.currency) continue;
+      if (Math.abs(tx.amount - item.amount) > AMOUNT_MATCH_TOLERANCE) continue;
       const nameMatches =
         normalizedName.length > 0 &&
         Boolean(tx.note) &&
         normalizeForMatch(tx.note as string).includes(normalizedName);
-      return categoryMatches || nameMatches;
-    });
-    if (match) {
-      matchedTransactionIds.add(match.id);
-      actualNativeByItemId.set(item.id, (actualNativeByItemId.get(item.id) ?? 0) + match.amount);
+      const categoryMatches =
+        item.categoryId !== null && tx.categoryId === item.categoryId && !categoryIsAmbiguous;
+      if (!nameMatches && !categoryMatches) continue;
+
+      matchedTransactionIds.add(tx.id);
+      actualNativeByItemId.set(item.id, (actualNativeByItemId.get(item.id) ?? 0) + tx.amount);
     }
   }
 
   return { matchedTransactionIds, actualNativeByItemId };
 }
 
-async function loadActiveRecurringForMatch(): Promise<RecurringForMatch[]> {
+/**
+ * The RecurringItem id encoded in a RECURRING transaction's externalId
+ * ("<itemId>:<YYYY-MM-DD>", see recurringExternalId). Splitting on the last
+ * colon is safe: the date part never contains one and cuid ids never do.
+ */
+export function recurringItemIdFromExternalId(externalId: string): string | null {
+  const separator = externalId.lastIndexOf(":");
+  return separator > 0 ? externalId.slice(0, separator) : null;
+}
+
+async function loadActiveRecurringForMatch(): Promise<RecurringForMonth[]> {
   const items = await prisma.recurringItem.findMany({
     where: { active: true, kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] } },
     select: {
@@ -147,6 +193,8 @@ async function loadActiveRecurringForMatch(): Promise<RecurringForMatch[]> {
       kind: true,
       frequency: true,
       nextDate: true,
+      anchorDay: true,
+      createdAt: true,
     },
   });
   return items.map((item) => ({ ...item, amount: num(item.amount) }));
@@ -158,10 +206,22 @@ async function loadCategoryMeta(): Promise<CategoryMeta[]> {
   });
 }
 
-/** The earliest date Cadence has any recorded financial activity for. */
+/**
+ * The earliest date Cadence has any recorded financial *activity* for.
+ *
+ * Only cashflow counts. An OPENING_BALANCE dated "as of" some date long before
+ * the user started using Cadence is a starting position, not a month of
+ * spending, and letting it in opened months of fabricated history: every one of
+ * them scored zero lifestyle spending while still collecting each recurring
+ * item's scheduled amount, which both deflated the lifestyle average and
+ * inflated the committed one.
+ */
 async function getFirstActivityDate(): Promise<Date | null> {
   const [txMin, goalMin] = await Promise.all([
-    prisma.transaction.aggregate({ _min: { date: true } }),
+    prisma.transaction.aggregate({
+      _min: { date: true },
+      where: { type: { in: ["EXPENSE", "INCOME"] } },
+    }),
     prisma.goalContribution.aggregate({ _min: { date: true } }),
   ]);
   const dates = [txMin._min.date, goalMin._min.date].filter((d): d is Date => Boolean(d));
@@ -219,8 +279,9 @@ interface MonthActuals {
   contributionActual: number;
   savingsFromCategory: number;
   goalContributionTotal: number;
-  matchedSubscriptionItemIds: Set<string>;
-  matchedContributionItemIds: Set<string>;
+  /** Items with at least one real charge in the window, so no scheduled amount may stand in for them. */
+  actualSubscriptionItemIds: Set<string>;
+  actualContributionItemIds: Set<string>;
 }
 
 /**
@@ -235,21 +296,29 @@ async function computeMonthActuals(
   window: MonthWindow,
   throughDate: Date,
   context: AppContext,
-  recurringItems: RecurringForMatch[],
+  recurringItems: RecurringForMonth[],
   categories: CategoryMeta[],
 ): Promise<MonthActuals> {
   const rangeEnd = minDate(window.end, throughDate);
   const [transactions, goalContributions] = await Promise.all([
     prisma.transaction.findMany({
       where: { type: "EXPENSE", date: { gte: window.start, lte: rangeEnd } },
-      select: { id: true, amount: true, currency: true, categoryId: true, note: true },
+      select: {
+        id: true,
+        amount: true,
+        currency: true,
+        categoryId: true,
+        note: true,
+        source: true,
+        externalId: true,
+      },
     }),
-    // Auto-posted contributions (recurringItemId set) are already represented
-    // by their EXPENSE Transaction via the recurring-item term; only manually
-    // logged rows are summed here. See the module doc comment.
+    // Every contribution in the window; which of them are already represented
+    // by a Transaction is decided below, by pairing keys rather than by the
+    // recurringItemId foreign key (see the module doc comment).
     prisma.goalContribution.findMany({
-      where: { date: { gte: window.start, lte: rangeEnd }, recurringItemId: null },
-      select: { amount: true, currency: true },
+      where: { date: { gte: window.start, lte: rangeEnd } },
+      select: { amount: true, currency: true, recurringExternalId: true },
     }),
   ]);
 
@@ -263,27 +332,75 @@ async function computeMonthActuals(
     categoryId: tx.categoryId,
     note: tx.note,
   }));
+  const itemById = new Map(recurringItems.map((item) => [item.id, item]));
 
+  // An auto-posted occurrence is one event written as two rows. The pairing key
+  // both rows carry survives anything that can happen to the RecurringItem
+  // afterwards - editing its amount, pausing it, deleting it - which is exactly
+  // what reading the item's current fields did not.
+  const postedExternalIds = new Set(
+    transactions
+      .filter((tx) => tx.source === "RECURRING" && tx.externalId !== null)
+      .map((tx) => tx.externalId as string),
+  );
+  const pairedContributionKeys = new Set(
+    goalContributions
+      .map((contribution) => contribution.recurringExternalId)
+      .filter((key): key is string => key !== null && postedExternalIds.has(key)),
+  );
+
+  let committedActual = 0;
+  let contributionActual = 0;
+  const actualSubscriptionItemIds = new Set<string>();
+  const actualContributionItemIds = new Set<string>();
+  const postedTransactionIds = new Set<string>();
+
+  for (const tx of transactions) {
+    if (tx.source !== "RECURRING" || tx.externalId === null) continue;
+    const itemId = recurringItemIdFromExternalId(tx.externalId);
+    const item = itemId ? itemById.get(itemId) : undefined;
+    // A contribution is known by its GoalContribution twin first and by the
+    // item's kind second, so an occurrence stays savings even after the item
+    // behind it is gone.
+    const isContribution =
+      pairedContributionKeys.has(tx.externalId) || item?.kind === "CONTRIBUTION";
+    const amount = toDisplay(num(tx.amount), tx.currency);
+
+    if (isContribution) {
+      contributionActual += amount;
+      if (itemId) actualContributionItemIds.add(itemId);
+    } else {
+      committedActual += amount;
+      if (itemId) actualSubscriptionItemIds.add(itemId);
+    }
+    postedTransactionIds.add(tx.id);
+  }
+
+  // Whatever posting did not already account for falls to the heuristic, which
+  // is all that is available for a charge Cadence did not write itself.
+  const unposted = matchable.filter((tx) => !postedTransactionIds.has(tx.id));
   const subscriptionItems = recurringItems.filter((item) => item.kind === "SUBSCRIPTION");
   const contributionItems = recurringItems.filter((item) => item.kind === "CONTRIBUTION");
 
-  const subscriptionMatch = matchRecurringToTransactions(subscriptionItems, matchable);
-  const remaining = matchable.filter((tx) => !subscriptionMatch.matchedTransactionIds.has(tx.id));
+  const subscriptionMatch = matchRecurringToTransactions(subscriptionItems, unposted);
+  const remaining = unposted.filter((tx) => !subscriptionMatch.matchedTransactionIds.has(tx.id));
   const contributionMatch = matchRecurringToTransactions(contributionItems, remaining);
 
-  let committedActual = 0;
   for (const item of subscriptionItems) {
     const native = subscriptionMatch.actualNativeByItemId.get(item.id);
-    if (native !== undefined) committedActual += toDisplay(native, item.currency);
+    if (native === undefined) continue;
+    committedActual += toDisplay(native, item.currency);
+    actualSubscriptionItemIds.add(item.id);
   }
-
-  let contributionActual = 0;
   for (const item of contributionItems) {
     const native = contributionMatch.actualNativeByItemId.get(item.id);
-    if (native !== undefined) contributionActual += toDisplay(native, item.currency);
+    if (native === undefined) continue;
+    contributionActual += toDisplay(native, item.currency);
+    actualContributionItemIds.add(item.id);
   }
 
-  const matchedTransactionIds = new Set([
+  const accountedForIds = new Set([
+    ...postedTransactionIds,
     ...subscriptionMatch.matchedTransactionIds,
     ...contributionMatch.matchedTransactionIds,
   ]);
@@ -294,7 +411,7 @@ async function computeMonthActuals(
   const lifestyleByCategoryMap = new Map<string | null, { name: string; color: string; total: number }>();
 
   for (const tx of matchable) {
-    if (matchedTransactionIds.has(tx.id)) continue;
+    if (accountedForIds.has(tx.id)) continue;
     const category = tx.categoryId ? categoryById.get(tx.categoryId) : undefined;
     const amount = toDisplay(tx.amount, tx.currency);
     if (category?.isSavingsDefault) {
@@ -322,8 +439,16 @@ async function computeMonthActuals(
     }))
     .sort((a, b) => b.spent - a.spent);
 
+  // Only the contributions with no Transaction standing in for them, so an
+  // auto-posted occurrence counts once however its recurring item ended up.
   const goalContributionTotal = sum(
-    goalContributions.map((contribution) => toDisplay(num(contribution.amount), contribution.currency)),
+    goalContributions
+      .filter(
+        (contribution) =>
+          contribution.recurringExternalId === null ||
+          !postedExternalIds.has(contribution.recurringExternalId),
+      )
+      .map((contribution) => toDisplay(num(contribution.amount), contribution.currency)),
   );
 
   return {
@@ -333,8 +458,8 @@ async function computeMonthActuals(
     contributionActual,
     savingsFromCategory,
     goalContributionTotal,
-    matchedSubscriptionItemIds: new Set(subscriptionMatch.actualNativeByItemId.keys()),
-    matchedContributionItemIds: new Set(contributionMatch.actualNativeByItemId.keys()),
+    actualSubscriptionItemIds,
+    actualContributionItemIds,
   };
 }
 
@@ -356,24 +481,32 @@ export interface MonthlyBreakdown {
 export async function classifyCompletedMonth(
   window: MonthWindow,
   context: AppContext,
-  recurringItems: RecurringForMatch[],
+  recurringItems: RecurringForMonth[],
   categories: CategoryMeta[],
 ): Promise<MonthlyBreakdown> {
   const actuals = await computeMonthActuals(window, window.end, context, recurringItems, categories);
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
 
+  // An item cannot have cost anything in a month that ended before it existed,
+  // so its scheduled amount must not stand in for one. Without this a new
+  // subscription rewrote every month of history behind it.
+  const existedIn = (item: RecurringForMonth) =>
+    item.createdAt.getTime() <= window.end.getTime();
+
   let committed = actuals.committedActual;
   for (const item of recurringItems) {
     if (item.kind !== "SUBSCRIPTION") continue;
-    if (actuals.matchedSubscriptionItemIds.has(item.id)) continue;
+    if (actuals.actualSubscriptionItemIds.has(item.id)) continue;
+    if (!existedIn(item)) continue;
     committed += toDisplay(monthlyEquivalent(item.amount, item.frequency), item.currency);
   }
 
   let savingsInvesting = actuals.contributionActual + actuals.savingsFromCategory + actuals.goalContributionTotal;
   for (const item of recurringItems) {
     if (item.kind !== "CONTRIBUTION") continue;
-    if (actuals.matchedContributionItemIds.has(item.id)) continue;
+    if (actuals.actualContributionItemIds.has(item.id)) continue;
+    if (!existedIn(item)) continue;
     savingsInvesting += toDisplay(monthlyEquivalent(item.amount, item.frequency), item.currency);
   }
 
@@ -496,13 +629,24 @@ export async function getCurrentMonthPace(context: AppContext): Promise<MonthlyP
 
   const projectedLifestyle = round2((actuals.lifestyle / Math.max(daysElapsed, 1)) * window.totalDays);
 
+  // Every occurrence still ahead this month, not just the next one: a weekly
+  // subscription owes the rest of its month, and an item that has already been
+  // charged once keeps whatever it owes after that. Occurrences already posted
+  // are behind nextDate and so are never counted twice.
+  const stillDueFrom = addDays(context.today, 1);
   let committedStillDueThisMonth = 0;
   for (const item of recurringItems) {
     if (item.kind !== "SUBSCRIPTION") continue;
-    if (actuals.matchedSubscriptionItemIds.has(item.id)) continue;
-    if (item.nextDate.getTime() > context.today.getTime() && item.nextDate.getTime() <= window.end.getTime()) {
-      committedStillDueThisMonth += toDisplay(item.amount, item.currency);
-    }
+    const occurrences = owedOccurrences(item, stillDueFrom, window.end);
+    // owedOccurrences also reports an outstanding date behind the window, which
+    // is right for "what is owed" but not here: if the item has already been
+    // charged this month, that charge is in committedSpentSoFar and the
+    // outstanding occurrence it settled would be counted a second time. Only
+    // that one occurrence is dropped - everything still ahead stays.
+    const stillDue = actuals.actualSubscriptionItemIds.has(item.id)
+      ? occurrences.filter((due) => due.getTime() >= stillDueFrom.getTime())
+      : occurrences;
+    committedStillDueThisMonth += stillDue.length * toDisplay(item.amount, item.currency);
   }
   committedStillDueThisMonth = round2(committedStillDueThisMonth);
 

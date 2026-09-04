@@ -127,6 +127,13 @@ export function PeriodHero({
             <p className="figure text-2xl">
               {formatMoney(summary.spent, currency)}
             </p>
+            {summary.totalSpent > summary.spent ? (
+              <p className="text-[0.6875rem] text-muted-foreground">
+                {t.plusOutsideBudget(
+                  formatMoney(summary.totalSpent - summary.spent, currency),
+                )}
+              </p>
+            ) : null}
             <Meter
               value={summary.spent}
               max={summary.periodBudget}

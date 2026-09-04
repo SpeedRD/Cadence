@@ -87,6 +87,11 @@ export const es = {
     toggleThemeAria: "Cambiar modo claro y oscuro",
     displayCurrencyLabel: "Moneda de visualización",
     languageLabel: "Idioma",
+    staleRatesTitle: "Las cifras convertidas pueden estar desactualizadas",
+    staleRatesSince: (datetime: string) =>
+      `Las tasas de cambio no se pudieron actualizar, así que todo monto convertido sigue usando las tasas obtenidas el ${datetime}.`,
+    staleRatesNeverFetched:
+      "Las tasas de cambio no se pudieron actualizar y aún no se ha obtenido ninguna, así que todo monto convertido es una estimación.",
   },
   login: {
     createSubtitle:
@@ -103,8 +108,34 @@ export const es = {
     entriesMustMatch: "Ambas entradas deben coincidir",
     pinDoesNotMatch: "Ese PIN no coincide",
   },
+  errorPage: {
+    genericTitle: "Algo salió mal",
+    genericDescription:
+      "No se pudo cargar esta página. No se cambió nada; vuelve a intentarlo y, si sigue ocurriendo, el registro del servidor tiene los detalles.",
+    ratesTitle: "No se pudieron cargar las tasas de cambio",
+    ratesDescription:
+      "Cadence no muestra una cifra convertida que no pueda respaldar, así que esta página queda en pausa. Las tasas se vuelven a consultar en la siguiente solicitud; inténtalo de nuevo en unos minutos.",
+    tryAgain: "Intentar de nuevo",
+  },
   dashboard: {
+    notPostingTitle: (count: number) =>
+      count === 1
+        ? "1 elemento recurrente no se está registrando"
+        : `${count} elementos recurrentes no se están registrando`,
+    notPostingDescription:
+      "Siguen pendientes, así que no se ha cobrado nada por ellos y faltan en tu total comprometido.",
+    notPostingItem: (name: string, reason: string, date: string) =>
+      `${name} - ${reason}, vence el ${date}`,
+    notPostingReasonMissingAccount: "sin cuenta asignada",
+    notPostingReasonMissingGoal: "sin meta asignada",
+    notPostingReasonMissingAccountAndGoal: "sin cuenta ni meta asignadas",
+    notPostingReasonAccountArchived: "su cuenta está archivada",
+    notPostingReasonFailed: "la última ejecución falló",
+    notPostingLink: "Arreglar en la página de recurrentes",
     goalsHeading: "Metas",
+    overdueNotPosted: "vencido, aún sin registrar",
+    plusOutsideBudget: (amount: string) =>
+      `más ${amount} en suscripciones y ahorro, que el presupuesto no cubre`,
     allGoals: "Todas las metas",
     noGoalsTitle: "Aún no hay metas",
     noGoalsDescription:
@@ -268,6 +299,8 @@ export const es = {
     couldNotReadRows: "No se pudieron leer las filas procesadas",
     accountNoLongerExists: "Esa cuenta ya no existe",
     transactionNoLongerExists: "Esa transacción ya no existe",
+    accountNoLongerActive: "Esa cuenta está archivada; elige una activa",
+    categoryNoLongerExists: "Esa categoría ya no existe",
     transferNoLongerExists: "Esa transferencia ya no existe",
     editFromTransferForm: "Edita esta transferencia desde el formulario de transferencias",
     editOpeningBalanceFromAccounts:
@@ -410,6 +443,7 @@ export const es = {
     saveAria: (label: string) => `Guardar ${label}`,
     budgetCleared: "Presupuesto eliminado",
     budgetSaved: "Presupuesto guardado",
+    saveCollided: "Otro guardado llegó primero. Intenta de nuevo.",
     pickPeriodFirst: "Elige primero un periodo",
     noBudgetToCopy: "El periodo anterior no tiene presupuesto para copiar",
     everyBudgetAlreadyCopied: "Este periodo ya tiene todos los presupuestos del periodo anterior",
@@ -461,6 +495,10 @@ export const es = {
     itemDeleted: "Elemento recurrente eliminado",
     itemNoLongerExists: "Ese elemento ya no existe",
     accountNoLongerActive: "Esa cuenta ya no está activa",
+    categoryNoLongerExists: "Esa categoría ya no existe",
+    goalNoLongerExists: "Esa meta ya no existe",
+    itemChangedElsewhere:
+      "Este elemento cambió en otro lugar mientras el formulario estaba abierto. Ábrelo de nuevo y repite el cambio.",
     itemPaused: "Pausado",
     itemResumed: "Reanudado",
   },
@@ -577,7 +615,7 @@ export const es = {
     exchangeRates: "Tasas de cambio",
     exchangeRatesDescription: "Basadas en USD, cacheadas por 24 horas; las tasas cruzadas se derivan a través de USD.",
     usdTo: (code: string) => `USD a ${code}`,
-    lastFetched: (datetime: string) => `Última actualización ${datetime} UTC`,
+    lastFetched: (datetime: string) => `Última actualización ${datetime}`,
     noRatesFetched: "Aún no se han obtenido tasas",
     rateServiceUnreachable: " · el servicio de tasas no estaba disponible; se usan los últimos valores conocidos",
     goalProgress: "Progreso de metas",
@@ -604,7 +642,7 @@ export const es = {
     gmailDescription: "Lee recibos, facturas y correos de suscripción (gmail.readonly).",
     outlookDescription: "Lee los mismos tipos de correos vía Microsoft Graph (Mail.Read).",
     neverSynced: "Nunca sincronizado",
-    lastSynced: (datetime: string) => `Última sincronización ${datetime} UTC`,
+    lastSynced: (datetime: string) => `Última sincronización ${datetime}`,
     noAccountConnected: "Aún no hay ninguna cuenta conectada.",
     disconnectTitle: (email: string) => `¿Desconectar ${email}?`,
     disconnectDescription:
@@ -735,6 +773,9 @@ export const es = {
     unfundedSubscriptionsDescription:
       "Vencen antes del próximo pago pero su cuenta no recibió ingreso en este chequeo. Muévelas a una que sí.",
     alreadyPaidThisPeriod: "Ya pagado este período",
+    archivedAccountNote: "archivada, se conserva como registro",
+    overdueBadge: "Vencido",
+    chargesThisPeriod: (count: number, each: string) => `${count} cargos de ${each}`,
     goalsHeading: "Hoja de ruta de metas",
     noGoalsWithTarget: "No hay metas con fecha para reservar en este periodo.",
     roadmapAmount: "Monto de la hoja de ruta",

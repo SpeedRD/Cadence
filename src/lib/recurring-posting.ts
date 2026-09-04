@@ -7,17 +7,35 @@
  *   SUBSCRIPTION  -> an EXPENSE Transaction (source RECURRING) charged to the
  *                    item's account on the occurrence's due date.
  *   CONTRIBUTION  -> the same outgoing Transaction from the item's account, plus
- *                    a GoalContribution on the item's goal (tagged with
- *                    recurringItemId so monthly savings/investing does not
- *                    count the pair twice), after which the goal's cached
- *                    savedAmount is rebuilt via recomputeGoalSaved (the same
- *                    helper the manual "Log contribution" flow uses).
+ *                    a GoalContribution on the item's goal, converted once into
+ *                    the goal's own currency and tagged with the same
+ *                    externalId the Transaction carries so monthly
+ *                    savings/investing does not count the pair twice. The
+ *                    goal's cached savedAmount is then rebuilt via
+ *                    recomputeGoalSaved (the helper the manual "Log
+ *                    contribution" flow uses).
  *
  * An item missing the link its kind needs (account for both kinds, goal for a
  * contribution) or pointing at an archived account is skipped outright - not
  * posted and, crucially, not advanced - and reported in the returned summary so
  * the cron log and the UI can show it. It catches up from its original due date
  * once the user fixes it.
+ *
+ * Two occurrences are claimed (rolled forward) without writing a ledger row:
+ *
+ *   already logged  -> the charge is already in the ledger from another source
+ *                      (an approved email receipt, a CSV import, a manual
+ *                      entry). Posting it again would duplicate real money, so
+ *                      the occurrence is consumed instead. Judged over the pay
+ *                      period the occurrence falls in, with the same matcher,
+ *                      so this job and the payday check-in's "Already paid this
+ *                      period" badge always reach the same verdict. See
+ *                      findLoggedCharge.
+ *   already posted  -> a RECURRING row for this exact (item, due date) already
+ *                      exists, so the unique key would reject a second one.
+ *                      Rolling forward anyway is what keeps an item whose
+ *                      nextDate was moved back onto a posted day from failing
+ *                      the same write on every future run, for ever.
  *
  * Exactly one code path posts: the daily cron route (/api/cron/recurring) and
  * the per-request catch-up in getAppContext() both call postDueRecurringItems.
@@ -26,10 +44,16 @@
  * transaction that writes its rows, and the Transaction's (source, externalId)
  * unique key pins each (item, due date) pair as a second guard.
  */
+import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
 import { startOfDay, toISODate } from "@/lib/date";
 import { recomputeGoalSaved } from "@/lib/goals";
+import { num, round2 } from "@/lib/money";
+import { periodForDate } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
+import { getRateTable } from "@/lib/rates";
 import { advanceDate } from "@/lib/recurring";
+
+import { matchRecurringToTransactions } from "@/lib/data/monthly";
 
 import type { RecurringKind } from "@/generated/prisma/enums";
 
@@ -72,6 +96,10 @@ export interface RecurringPostingSummary {
   goalContributionsCreated: number;
   itemsSkipped: number;
   skipped: SkippedRecurringItem[];
+  /** Occurrences rolled forward without posting because the charge was already in the ledger. */
+  occurrencesAlreadyLogged: number;
+  /** Occurrences rolled forward whose RECURRING row already existed. */
+  occurrencesAlreadyPosted: number;
   /** Items that hit MAX_OCCURRENCES_PER_ITEM and still have occurrences due. */
   itemsCapped: number;
   /** Items whose posting threw; the run carries on with the rest. */
@@ -82,7 +110,10 @@ export interface RecurringPostingSummary {
 async function loadDueItems(today: Date) {
   return prisma.recurringItem.findMany({
     where: { active: true, nextDate: { lte: today } },
-    include: { account: { select: { status: true } } },
+    include: {
+      account: { select: { status: true } },
+      goal: { select: { currency: true } },
+    },
     orderBy: { nextDate: "asc" },
   });
 }
@@ -104,18 +135,115 @@ export function recurringExternalId(itemId: string, due: Date): string {
   return `${itemId}:${toISODate(due)}`;
 }
 
+interface LoggedCharge {
+  id: string;
+  date: Date;
+  amount: unknown;
+  currency: string;
+  categoryId: string | null;
+  note: string | null;
+}
+
 /**
- * Posts one occurrence atomically. Returns null when another run already
- * claimed it (its nextDate no longer equals `due`), in which case nothing was
- * written by this call.
+ * Every expense on this item's account that could be one of its occurrences
+ * already paid through another route, across every pay period the backlog this
+ * run might post touches. RECURRING rows are excluded: those are this job's own
+ * output, and an occurrence that already has one is handled by the claim itself.
+ */
+async function loadLoggedCharges(item: DueItem, today: Date): Promise<LoggedCharge[]> {
+  if (!item.accountId) return [];
+  return prisma.transaction.findMany({
+    where: {
+      type: "EXPENSE",
+      accountId: item.accountId,
+      source: { not: "RECURRING" },
+      date: {
+        gte: periodForDate(item.nextDate).start,
+        lte: periodForDate(today).end,
+      },
+    },
+    select: { id: true, date: true, amount: true, currency: true, categoryId: true, note: true },
+  });
+}
+
+/**
+ * The already-logged charge that covers this occurrence, or null.
+ *
+ * Both the predicate and the candidate set are the payday check-in's: the same
+ * matcher (src/lib/data/monthly.ts - same currency, amount to the cent, and
+ * either the item's category or its name in the note) over the same window (the
+ * pay period the occurrence falls in, exactly what getPaydayCheckinDraft scopes
+ * its `alreadyLogged` query to). Sharing the predicate but not the window was
+ * enough to disagree: a charge logged nine days before its due date read as
+ * "Already paid this period" in the check-in while this job, looking only a few
+ * days either side, still posted a duplicate for it.
+ *
+ * A period-wide window is wider than a weekly cadence, so it can no longer be
+ * the window that stops two occurrences of one item claiming the same charge.
+ * `consumed` does that instead, and does it exactly: one logged charge answers
+ * for one occurrence, whatever the cadence.
+ */
+function findLoggedCharge(
+  item: DueItem,
+  due: Date,
+  charges: LoggedCharge[],
+  consumed: ReadonlySet<string>,
+): string | null {
+  const period = periodForDate(due);
+  const candidates = charges
+    .filter(
+      (charge) =>
+        !consumed.has(charge.id) &&
+        charge.date.getTime() >= period.start.getTime() &&
+        charge.date.getTime() <= period.end.getTime(),
+    )
+    .map((charge) => ({
+      id: charge.id,
+      amount: num(charge.amount as never),
+      currency: charge.currency,
+      categoryId: charge.categoryId,
+      note: charge.note,
+    }));
+  if (candidates.length === 0) return null;
+
+  const { matchedTransactionIds } = matchRecurringToTransactions(
+    [
+      {
+        id: item.id,
+        name: item.name,
+        amount: num(item.amount),
+        currency: item.currency,
+        categoryId: item.categoryId,
+        kind: item.kind,
+        frequency: item.frequency,
+        nextDate: item.nextDate,
+      },
+    ],
+    candidates,
+  );
+  const [matched] = matchedTransactionIds;
+  return matched ?? null;
+}
+
+/** What claiming one occurrence did, once the compare-and-swap succeeded. */
+type OccurrenceResult = "posted" | "already_logged" | "already_posted";
+
+/**
+ * Claims one occurrence atomically and writes its rows unless they would
+ * duplicate money that is already recorded. Returns null when another run
+ * already claimed it (its nextDate no longer equals `due`), in which case
+ * nothing was written by this call.
  */
 async function postOccurrence(
   item: DueItem,
   accountId: string,
   due: Date,
-): Promise<{ goalContribution: boolean } | null> {
-  const next = advanceDate(due, item.frequency);
+  alreadyLogged: boolean,
+  rates: RateTable,
+): Promise<{ result: OccurrenceResult; goalContribution: boolean } | null> {
+  const next = advanceDate(due, item.frequency, item.anchorDay);
   const goalId = item.kind === "CONTRIBUTION" ? item.goalId : null;
+  const externalId = recurringExternalId(item.id, due);
 
   const outcome = await prisma.$transaction(async (tx) => {
     const claimed = await tx.recurringItem.updateMany({
@@ -123,6 +251,24 @@ async function postOccurrence(
       data: { nextDate: next },
     });
     if (claimed.count === 0) return null;
+
+    // The charge reached the ledger from somewhere else. The occurrence is
+    // still consumed - the item moves on - but posting it would double it.
+    if (alreadyLogged) {
+      return { result: "already_logged" as const, goalContribution: false };
+    }
+
+    // This occurrence's rows already exist (its nextDate was moved back onto a
+    // day that had been posted). Creating the Transaction would violate
+    // (source, externalId) and roll back the claim with it, leaving the item to
+    // fail identically on every future run. Keep the roll-forward instead.
+    const posted = await tx.transaction.findUnique({
+      where: { source_externalId: { source: "RECURRING", externalId } },
+      select: { id: true },
+    });
+    if (posted) {
+      return { result: "already_posted" as const, goalContribution: false };
+    }
 
     await tx.transaction.create({
       data: {
@@ -134,26 +280,38 @@ async function postOccurrence(
         categoryId: item.categoryId,
         note: item.name,
         source: "RECURRING",
-        externalId: recurringExternalId(item.id, due),
+        externalId,
       },
     });
 
-    if (!goalId) return { goalContribution: false };
-    // recurringItemId marks this row as the counterpart of the Transaction
-    // above, so the monthly savings/investing calculation counts the
-    // occurrence once (see src/lib/data/monthly.ts). Manual contributions
-    // never set it.
+    if (!goalId) return { result: "posted" as const, goalContribution: false };
+    // Contributions are stored in the goal's own currency, exactly as the
+    // manual "Log contribution" flow does. Storing the item's currency instead
+    // would leave recomputeGoalSaved re-converting this row at whatever rate
+    // happens to be current on every later rebuild, so the goal's savedAmount -
+    // and with it achievedAt - would drift with the exchange rate rather than
+    // with the money. Converting once, here, fixes the row at the rate on the
+    // day it was posted.
+    const goalCurrency = item.goal?.currency ?? item.currency;
+    const contributionAmount = round2(
+      convert(num(item.amount), item.currency, goalCurrency, rates),
+    );
+    // recurringExternalId is the same key as the Transaction's externalId
+    // above, and unlike recurringItemId it is not nulled when the item is
+    // deleted - that is what lets the monthly savings/investing calculation
+    // keep counting this occurrence once (see src/lib/data/monthly.ts).
     await tx.goalContribution.create({
       data: {
         goalId,
-        amount: item.amount,
-        currency: item.currency,
+        amount: contributionAmount,
+        currency: goalCurrency,
         date: due,
         note: item.name,
         recurringItemId: item.id,
+        recurringExternalId: externalId,
       },
     });
-    return { goalContribution: true };
+    return { result: "posted" as const, goalContribution: true };
   });
 
   // The cache rebuild reads through the shared client, so it runs after the
@@ -183,10 +341,22 @@ export async function postDueRecurringItems(
     goalContributionsCreated: 0,
     itemsSkipped: 0,
     skipped: [],
+    occurrencesAlreadyLogged: 0,
+    occurrencesAlreadyPosted: 0,
     itemsCapped: 0,
     itemsFailed: 0,
     failed: [],
   };
+
+  // Only a contribution whose currency differs from its goal's needs a rate at
+  // all, so a run with nothing to convert never touches the rate service.
+  const needsRates = due.some(
+    (item) =>
+      item.kind === "CONTRIBUTION" &&
+      item.goal !== null &&
+      item.goal.currency !== item.currency,
+  );
+  const rates = needsRates ? await getRateTable() : IDENTITY_RATES;
 
   for (const item of due) {
     const reason = skipReasonFor(item);
@@ -203,21 +373,42 @@ export async function postDueRecurringItems(
     }
 
     let posted = 0;
+    let claimed = 0;
     let occurrence = item.nextDate;
     try {
+      const charges = await loadLoggedCharges(item, today);
+      // One logged charge covers one occurrence: once it has answered for an
+      // occurrence it leaves the candidate pool, so a single manual entry can
+      // never suppress a whole period of a weekly item.
+      const consumed = new Set<string>();
       for (
         let i = 0;
         i < MAX_OCCURRENCES_PER_ITEM && occurrence.getTime() <= today.getTime();
         i += 1
       ) {
-        const outcome = await postOccurrence(item, item.accountId, occurrence);
+        const loggedChargeId = findLoggedCharge(item, occurrence, charges, consumed);
+        const outcome = await postOccurrence(
+          item,
+          item.accountId,
+          occurrence,
+          loggedChargeId !== null,
+          rates,
+        );
         // Someone else (an overlapping run) owns this item now; leave the
         // rest of its backlog to them rather than racing for each occurrence.
         if (!outcome) break;
-        posted += 1;
-        summary.transactionsCreated += 1;
-        if (outcome.goalContribution) summary.goalContributionsCreated += 1;
-        occurrence = advanceDate(occurrence, item.frequency);
+        if (loggedChargeId !== null) consumed.add(loggedChargeId);
+        claimed += 1;
+        if (outcome.result === "posted") {
+          posted += 1;
+          summary.transactionsCreated += 1;
+          if (outcome.goalContribution) summary.goalContributionsCreated += 1;
+        } else if (outcome.result === "already_logged") {
+          summary.occurrencesAlreadyLogged += 1;
+        } else {
+          summary.occurrencesAlreadyPosted += 1;
+        }
+        occurrence = advanceDate(occurrence, item.frequency, item.anchorDay);
       }
     } catch (error) {
       summary.itemsFailed += 1;
@@ -231,7 +422,7 @@ export async function postDueRecurringItems(
 
     if (posted > 0) summary.itemsPosted += 1;
     if (
-      posted === MAX_OCCURRENCES_PER_ITEM &&
+      claimed === MAX_OCCURRENCES_PER_ITEM &&
       occurrence.getTime() <= today.getTime()
     ) {
       summary.itemsCapped += 1;
@@ -254,6 +445,16 @@ export function describeRecurringPosting(summary: RecurringPostingSummary): stri
   const parts = [
     `${plural(summary.itemsPosted, "item")} posted (${plural(summary.transactionsCreated, "transaction")}, ${plural(summary.goalContributionsCreated, "goal contribution")})`,
   ];
+  if (summary.occurrencesAlreadyLogged > 0) {
+    parts.push(
+      `${plural(summary.occurrencesAlreadyLogged, "occurrence")} already logged elsewhere, rolled forward without posting`,
+    );
+  }
+  if (summary.occurrencesAlreadyPosted > 0) {
+    parts.push(
+      `${plural(summary.occurrencesAlreadyPosted, "occurrence")} already posted, rolled forward`,
+    );
+  }
   if (summary.itemsSkipped > 0) {
     const details = summary.skipped
       .map((item) => `${item.name} (${SKIP_REASON_TEXT[item.reason]})`)

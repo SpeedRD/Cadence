@@ -3,7 +3,7 @@ import { z } from "zod";
 import { CURRENCIES } from "@/lib/currency";
 import { fromISODate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
-import { parseAmountInput, type ParsedAmount } from "@/lib/money";
+import { AMOUNT_MAX, parseAmountInput, round2, type ParsedAmount } from "@/lib/money";
 import {
   ACCOUNT_TYPES,
   RECURRING_FREQUENCIES,
@@ -185,6 +185,16 @@ export const budgetSchema = z.object({
 export const recurringSchema = z
   .object({
     id: z.string().trim().optional(),
+    /** RecurringItem.updatedAt as the edit form saw it, so saveRecurringAction can refuse a stale write. */
+    updatedAt: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => {
+        if (!value) return null;
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+      }),
     name: z.string().trim().min(1, "Name the item").max(80),
     amount: positiveAmount,
     currency,
@@ -210,14 +220,19 @@ export const recurringSchema = z
       ctx.addIssue({ code: "custom", message: "Pick an account", path: ["accountId"] });
       return z.NEVER;
     }
+    // The due date the user picked is also the item's anchor day: posting
+    // advances nextDate but never rewrites anchorDay, so only an explicit edit
+    // here can re-anchor an item. This is the one place app writes set it, so
+    // no create or update path can leave it unset (see RecurringItem.anchorDay).
+    const anchorDay = value.nextDate.getUTCDate();
     if (value.kind === "CONTRIBUTION") {
       if (value.goalId === null) {
         ctx.addIssue({ code: "custom", message: "Pick a goal", path: ["goalId"] });
         return z.NEVER;
       }
-      return { ...value, accountId: value.accountId, goalId: value.goalId };
+      return { ...value, anchorDay, accountId: value.accountId, goalId: value.goalId };
     }
-    return { ...value, accountId: value.accountId, goalId: null };
+    return { ...value, anchorDay, accountId: value.accountId, goalId: null };
   });
 
 export const goalSchema = z.object({
@@ -245,6 +260,50 @@ export const recurringAccountSchema = z.object({
   accountId: z.string().trim().min(1, "Pick an account"),
 });
 
+/**
+ * A money figure inside the payday payload. Unlike the form schemas above these
+ * arrive as JSON numbers, so they need the bounds the text parser applies:
+ * anything past a Decimal(14,2) column fails inside the write transaction as a
+ * raw overflow, and a third decimal place would be summed at full precision but
+ * stored rounded, leaving the totals and the rows that make them up disagreeing.
+ */
+const planAmount = z
+  .number()
+  .finite()
+  .min(0)
+  .max(AMOUNT_MAX)
+  .transform(round2);
+
+/** The same, for a reported balance, which may legitimately be negative. */
+const signedPlanAmount = z
+  .number()
+  .finite()
+  .min(-AMOUNT_MAX)
+  .max(AMOUNT_MAX)
+  .transform(round2);
+
+/**
+ * Keeps one entry per id, the last one winning, which is what the Budget write
+ * did anyway. A repeated id would otherwise be summed twice into the plan
+ * totals and write two allocation rows for one category.
+ */
+function dedupeBy<T>(key: (entry: T) => string) {
+  return (entries: T[]): T[] => {
+    const byKey = new Map<string, T>();
+    for (const entry of entries) byKey.set(key(entry), entry);
+    return [...byKey.values()];
+  };
+}
+
+const plannedCategories = z
+  .array(
+    z.object({
+      categoryId: z.string().trim().min(1),
+      plannedAmount: planAmount,
+    }),
+  )
+  .transform(dedupeBy((entry) => entry.categoryId));
+
 export const paydayConfirmSchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100),
   month: z.coerce.number().int().min(1).max(12),
@@ -253,31 +312,24 @@ export const paydayConfirmSchema = z.object({
     .array(
       z.object({
         accountId: z.string().trim().min(1),
-        reportedBalance: z.number(),
-        incomeEntered: z.number().min(0),
+        reportedBalance: signedPlanAmount,
+        incomeEntered: planAmount,
         incomeNote: z.string().max(200).nullable(),
       }),
     )
-    .min(1, "Add at least one active account"),
-  goals: z.array(
-    z.object({
-      goalId: z.string().trim().min(1),
-      plannedAmount: z.number().min(0),
-    }),
-  ),
-  essentialCategories: z.array(
-    z.object({
-      categoryId: z.string().trim().min(1),
-      plannedAmount: z.number().min(0),
-    }),
-  ),
-  flexibleCategories: z.array(
-    z.object({
-      categoryId: z.string().trim().min(1),
-      plannedAmount: z.number().min(0),
-    }),
-  ),
-  includedCarryover: z.number(),
+    .min(1, "Add at least one active account")
+    .transform(dedupeBy((entry) => entry.accountId)),
+  goals: z
+    .array(
+      z.object({
+        goalId: z.string().trim().min(1),
+        plannedAmount: planAmount,
+      }),
+    )
+    .transform(dedupeBy((entry) => entry.goalId)),
+  essentialCategories: plannedCategories,
+  flexibleCategories: plannedCategories,
+  includedCarryover: signedPlanAmount,
   acknowledgedDeficit: z.boolean(),
   acknowledgedZeroBuffer: z.boolean(),
 });

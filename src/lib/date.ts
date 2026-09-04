@@ -97,6 +97,27 @@ export function today(): Date {
   return civilDateInZone(new Date(), appTimeZone());
 }
 
+/**
+ * "YYYY-MM-DD HH:MM" for a timestamp, in APP_TIMEZONE.
+ *
+ * For an instant, not a calendar day: a fetched-at or synced-at moment, which
+ * is stored as a real timestamp and so has a wall clock the user recognises.
+ * Rendering those in UTC put them hours away from the clock on the wall.
+ */
+export function formatDateTimeInAppZone(instant: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: appTimeZone(),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(instant);
+  const part = (type: string) => parts.find((piece) => piece.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
+}
+
 /** "YYYY-MM-DD" for a UTC-midnight date. */
 export function toISODate(date: Date): string {
   return date.toISOString().slice(0, 10);

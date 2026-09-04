@@ -38,8 +38,45 @@ export const IDENTITY_RATES: RateTable = {
 };
 
 /**
+ * Raised when a rate table carries no usable rate for a currency `convert()`
+ * was asked about. `getRateTable()` guarantees a positive rate for every code
+ * in CURRENCIES, and every write path validates currency through
+ * `z.enum(CURRENCIES)` in `src/lib/validation.ts`, so a table missing a rate
+ * for a currency that reached a row is a data-integrity violation, not an
+ * expected branch - hence a throw rather than a fallback value.
+ */
+/** The digest MissingRateError carries across the server/client boundary. */
+export const MISSING_RATE_DIGEST = "CADENCE_MISSING_RATE";
+
+export class MissingRateError extends Error {
+  readonly currency: string;
+
+  /**
+   * Next.js replaces a server error's message with a generic one before handing
+   * it to a client error boundary in production, but it forwards a digest the
+   * error already carries rather than generating its own (see
+   * next/dist/server/app-render/create-error-handler.js - the hash is only
+   * computed when `err.digest` is unset). A stable digest is therefore what lets
+   * src/app/(app)/error.tsx recognise this in a production build, not only in
+   * development where the message survives.
+   */
+  readonly digest = MISSING_RATE_DIGEST;
+
+  constructor(currency: string) {
+    super(`No exchange rate available for ${currency}`);
+    this.name = "MissingRateError";
+    this.currency = currency;
+  }
+}
+
+/**
  * Convert through USD, so a pair like EUR -> DOP works without a stored
  * EUR -> DOP rate: amount / rate[USD->from] * rate[USD->to].
+ *
+ * A missing or unusable rate throws instead of returning `amount` untouched:
+ * returning it would let, say, a DOP row be summed into a USD total at face
+ * value with nothing shown to the user - a wrong number is worse than a
+ * failed render, and `confirmPaydayCheckin` would persist it.
  */
 export function convert(
   amount: number,
@@ -50,8 +87,14 @@ export function convert(
   if (from === to) return amount;
   const fromRate = table.rates[from];
   const toRate = table.rates[to];
-  if (!fromRate || !toRate) return amount;
+  if (!isUsableRate(fromRate)) throw new MissingRateError(from);
+  if (!isUsableRate(toRate)) throw new MissingRateError(to);
   return (amount / fromRate) * toRate;
+}
+
+/** A rate is usable only as a finite, strictly positive number. */
+function isUsableRate(rate: number | undefined): rate is number {
+  return typeof rate === "number" && Number.isFinite(rate) && rate > 0;
 }
 
 /**

@@ -17,6 +17,8 @@ export interface UpcomingItem {
   nativeAmount: number;
   currency: string;
   nextDate: Date;
+  /** Its due date has passed and automatic posting has not been able to clear it. */
+  overdue: boolean;
   categoryName: string | null;
 }
 
@@ -33,13 +35,13 @@ export async function getDashboardData(
 ): Promise<DashboardData> {
   const [summary, upcomingRows, goals] = await Promise.all([
     getPeriodSummary(context.currentPeriod, context),
+    // No lower bound on nextDate: an item the posting job could not clear is
+    // still owed, and dropping it the day after it fell due was how an unposted
+    // subscription quietly left both this list and the committed total.
     prisma.recurringItem.findMany({
       where: {
         active: true,
-        nextDate: {
-          gte: context.today,
-          lte: addDays(context.today, UPCOMING_WINDOW_DAYS),
-        },
+        nextDate: { lte: addDays(context.today, UPCOMING_WINDOW_DAYS) },
       },
       include: { category: { select: { name: true } } },
       orderBy: { nextDate: "asc" },
@@ -62,6 +64,7 @@ export async function getDashboardData(
     nativeAmount: num(item.amount),
     currency: item.currency,
     nextDate: item.nextDate,
+    overdue: item.nextDate.getTime() < context.today.getTime(),
     categoryName: item.category?.name ?? null,
   }));
 

@@ -70,6 +70,28 @@ export function isPaydayDate(date: Date): boolean {
   );
 }
 
+/** The day of the month `ref`'s own pay lands on, pulled back off a weekend. */
+export function paydayOfPeriod(ref: PeriodRef): number {
+  const boundaryDay =
+    ref.period === "A" ? PERIOD_A_LAST_DAY : daysInMonth(ref.year, ref.month);
+  return payDayOfMonth(ref.year, ref.month, boundaryDay);
+}
+
+/**
+ * True from the day this period's pay lands until the period ends - the whole
+ * stretch during which planning should already be looking at the *next* period.
+ *
+ * isPaydayDate() answers a narrower question ("is today a payday?") and is the
+ * wrong test for planning: when a boundary is pulled back to the preceding
+ * Friday, the Saturday and Sunday after it are past the pay but still inside
+ * the ending period, and would otherwise send the planner back to a period
+ * whose money has already been budgeted.
+ */
+export function isAfterPaydayInPeriod(date: Date): boolean {
+  const day = startOfDay(date);
+  return day.getUTCDate() >= paydayOfPeriod(periodForDate(day));
+}
+
 /** Which pay period a date falls into, with that month's real start/end dates. */
 export function periodForDate(date: Date): PeriodInfo {
   const day = startOfDay(date);

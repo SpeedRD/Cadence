@@ -3,7 +3,7 @@ import { listRecentGmailCandidates } from "@/lib/email/gmail";
 import { listRecentOutlookCandidates } from "@/lib/email/outlook";
 import { getValidAccessToken } from "@/lib/email/tokens";
 import { isTransactionalEmail } from "@/lib/email/filters";
-import type { EmailCandidate } from "@/lib/email/types";
+import type { EmailCandidate, EmailCandidateBatch } from "@/lib/email/types";
 import { parseTransactionEmail } from "@/lib/llm/parse-transaction-email";
 import { prisma } from "@/lib/prisma";
 import { SETTINGS_ID } from "@/lib/auth";
@@ -18,12 +18,22 @@ export const DEFAULT_LOOKBACK_DAYS = 30;
  * Caps LLM calls (and wall time) per account per sync run - each candidate is
  * one Claude request, so this keeps a single "Sync now" click, and a single
  * Vercel Cron invocation, inside typical serverless function time limits. A
- * mailbox with a bigger backlog catches up over a few syncs.
+ * mailbox with a bigger backlog catches up over a few syncs: a run takes the
+ * oldest candidates in its window and moves `lastSyncedAt` only as far as it
+ * actually got, so the remainder is still in front of the next run.
  */
 export const MAX_CANDIDATES_PER_ACCOUNT = 20;
 
 /** How many emails are parsed by the LLM at once. */
 const PARSE_CONCURRENCY = 4;
+
+/**
+ * How far the stuck-cursor fallback in `nextWindowStart` steps. Gmail's `after:`
+ * takes whole seconds and the fetcher asks for one second of overlap on top, so
+ * a smaller step would leave the next run querying for exactly the same
+ * messages and the cursor would crawl a millisecond per sync.
+ */
+const STUCK_CURSOR_STEP_MS = 2_000;
 
 export interface IngestionResult {
   accountsSynced: number;
@@ -52,10 +62,72 @@ async function fetchCandidates(
   connection: EmailConnection,
   accessToken: string,
   since: Date,
-): Promise<EmailCandidate[]> {
+): Promise<EmailCandidateBatch> {
   return connection.provider === "GMAIL"
     ? listRecentGmailCandidates(accessToken, since)
     : listRecentOutlookCandidates(accessToken, since);
+}
+
+/**
+ * Picks the window's new lower bound. `lastSyncedAt` may only move to an instant
+ * the run genuinely dealt with, meaning every message older than it was either
+ * staged or turned down by the transactional filter. That is what makes a
+ * backlog drain instead of disappear: whatever a capped run leaves behind is
+ * newer than the instant returned here, so the next run still sees it.
+ *
+ * Returns null when the run learned nothing it can safely act on, in which case
+ * the caller leaves `lastSyncedAt` alone and retries the same window.
+ */
+function nextWindowStart(input: {
+  now: Date;
+  since: Date;
+  /** Everything the provider returned, oldest first. */
+  candidates: EmailCandidate[];
+  /** The transactional subset this run actually parsed, oldest first. */
+  processed: EmailCandidate[];
+  /** True when MAX_CANDIDATES_PER_ACCOUNT left transactional messages unparsed. */
+  cappedByAccountLimit: boolean;
+  /** True when the provider could not return the whole window. */
+  providerTruncated: boolean;
+}): Date | null {
+  const { now, since, candidates, processed, cappedByAccountLimit, providerTruncated } =
+    input;
+
+  if (!cappedByAccountLimit && !providerTruncated) {
+    // The provider handed back the whole window and every transactional message
+    // in it was parsed, so the run is caught up to the moment it started.
+    return now;
+  }
+
+  // Something was deliberately left for the next run. When the per-account cap
+  // bit, the newest instant fully dealt with is the newest message parsed,
+  // because the transactional messages left over are all newer than it.
+  // Otherwise the provider truncated its own list, and the newest message it
+  // returned is the boundary: everything up to there was either parsed or
+  // rejected by the filter, and rejection is a final answer, not a deferral.
+  const boundary = cappedByAccountLimit
+    ? processed.at(-1)?.receivedAt
+    : candidates.at(-1)?.receivedAt;
+  if (!boundary) {
+    // A truncated fetch that yielded no usable candidate means the fetch itself
+    // gave out part-way, not that the window is empty. Holding the bound where
+    // it is re-runs the same window instead of stepping over messages nothing
+    // has looked at yet.
+    return null;
+  }
+  if (boundary.getTime() > since.getTime()) {
+    // Both providers filter inclusively, so the boundary message itself comes
+    // back next run and the (source, externalId) dedup absorbs it - which is
+    // what keeps messages sharing that exact instant from being skipped.
+    return boundary;
+  }
+
+  // The boundary is at or behind the window's start, which takes more messages
+  // sharing a single instant than one run can fetch. Any bound that stays there
+  // repeats this run for ever, so step far enough to change what the provider
+  // returns: that gives up whatever else shares those two seconds, where
+  // stalling would give up everything after them.
+  return new Date(since.getTime() + STUCK_CURSOR_STEP_MS);
 }
 
 async function syncConnection(
@@ -69,10 +141,21 @@ async function syncConnection(
     new Date(now.getTime() - DEFAULT_LOOKBACK_DAYS * 86_400_000);
 
   const accessToken = await getValidAccessToken(connection);
-  const candidates = await fetchCandidates(connection, accessToken, since);
-  const transactional = candidates
-    .filter((candidate) => isTransactionalEmail(candidate.subject, candidate.from))
-    .slice(0, MAX_CANDIDATES_PER_ACCOUNT);
+  const batch = await fetchCandidates(connection, accessToken, since);
+  // Both fetchers return the oldest slice of the window, oldest first; sorting
+  // again keeps the drain order right whatever a provider does with ties.
+  const candidates = [...batch.candidates].sort(
+    (a, b) => a.receivedAt.getTime() - b.receivedAt.getTime(),
+  );
+
+  const allTransactional = candidates.filter((candidate) =>
+    isTransactionalEmail(candidate.subject, candidate.from),
+  );
+  // Oldest first, so the ones the cap leaves behind are newer than everything
+  // parsed here and stay inside the next run's window rather than falling out
+  // of it for ever.
+  const transactional = allTransactional.slice(0, MAX_CANDIDATES_PER_ACCOUNT);
+  const cappedByAccountLimit = allTransactional.length > transactional.length;
 
   const parsedRows = await mapWithConcurrency(
     transactional,
@@ -118,10 +201,20 @@ async function syncConnection(
     ? await prisma.stagedTransaction.createMany({ data: rows, skipDuplicates: true })
     : { count: 0 };
 
-  await prisma.emailConnection.update({
-    where: { id: connection.id },
-    data: { lastSyncedAt: now },
+  const windowStart = nextWindowStart({
+    now,
+    since,
+    candidates,
+    processed: transactional,
+    cappedByAccountLimit,
+    providerTruncated: batch.truncated,
   });
+  if (windowStart) {
+    await prisma.emailConnection.update({
+      where: { id: connection.id },
+      data: { lastSyncedAt: windowStart },
+    });
+  }
 
   return { scanned: transactional.length, staged: result.count };
 }

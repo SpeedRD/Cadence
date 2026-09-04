@@ -80,7 +80,7 @@ export default async function ReportsPage() {
         <CardContent className="grid gap-6 sm:grid-cols-3">
           <Stat
             label={t.thisPeriod}
-            value={formatMoney(summary.spent, summary.currency)}
+            value={formatMoney(summary.totalSpent, summary.currency)}
             hint={t.categoriesTouched(spendingLines.length)}
           />
           <Stat
