@@ -25,6 +25,8 @@ export interface CommittedItem {
   currency: string;
   nextDate: Date;
   categoryName: string | null;
+  /** The account this item is funded from, if one is set - the payday planner groups due items by it. */
+  accountId: string | null;
 }
 
 export interface PeriodSummary {
@@ -130,6 +132,7 @@ export async function getPeriodSummary(
     currency: item.currency,
     nextDate: item.nextDate,
     categoryName: item.category?.name ?? null,
+    accountId: item.accountId,
   }));
   const committed = round2(
     committedItems.reduce((total, item) => total + item.amount, 0),

@@ -454,6 +454,7 @@ export const es = {
     itemAdded: "Elemento recurrente agregado",
     itemDeleted: "Elemento recurrente eliminado",
     itemNoLongerExists: "Ese elemento ya no existe",
+    accountNoLongerActive: "Esa cuenta ya no está activa",
     itemPaused: "Pausado",
     itemResumed: "Reanudado",
   },
@@ -708,6 +709,25 @@ export const es = {
     contributionsDue: "Aportes recurrentes antes del próximo pago",
     noSubscriptionsDue: "No hay suscripciones antes del próximo pago.",
     noContributionsDue: "No hay aportes recurrentes antes del próximo pago.",
+    bufferByAccountHeading: "Colchón protegido por cuenta",
+    bufferByAccountDescription:
+      "Cada cuenta guarda su propio colchón del ingreso que recibió. Mueve una suscripción a otra cuenta para cambiar lo que tiene que cubrir.",
+    noIncomeAccountsYet:
+      "Aún no hay ingresos registrados - anota en el paso 2 lo que recibió cada cuenta para ver su colchón.",
+    accountIncomeReceived: "Ingreso recibido",
+    accountSubscriptionsDue: "Suscripciones por pagar",
+    accountLeftAfterSubscriptions: "Queda tras las suscripciones",
+    accountSuggestedBuffer: "Colchón sugerido",
+    accountNoSubscriptionsDue: "Nada por pagar desde esta cuenta antes del próximo pago.",
+    accountAboveBuffer: (amount: string) => `${amount} por encima de su colchón`,
+    accountBelowBuffer: (amount: string) =>
+      `Pagar todo lo que vence aquí quedaría corto por ${amount}.`,
+    accountBelowBufferWithAlternative: (amount: string, accountName: string) =>
+      `Pagar todo lo que vence aquí quedaría corto por ${amount} - ${accountName} tiene más margen este periodo.`,
+    subscriptionAccountLabel: (name: string) => `Cuenta para ${name}`,
+    unfundedSubscriptionsHeading: "Sin una cuenta con ingreso que las cubra",
+    unfundedSubscriptionsDescription:
+      "Vencen antes del próximo pago pero su cuenta no recibió ingreso en este chequeo. Muévelas a una que sí.",
     alreadyPaidThisPeriod: "Ya pagado este período",
     goalsHeading: "Hoja de ruta de metas",
     noGoalsWithTarget: "No hay metas con fecha para reservar en este periodo.",
@@ -716,11 +736,7 @@ export const es = {
     goalOnTrack: "Al día con la hoja de ruta",
     goalBehind: (amount: string) => `${amount} por detrás de la hoja de ruta`,
     goalAhead: (amount: string) => `${amount} por delante de la hoja de ruta`,
-    protectedBufferHeading: "Colchón protegido",
-    bufferSuggested: (amount: string) => `Sugerido ${amount}`,
     bufferZeroWarning: "Este plan no deja colchón protegido para gastos imprevistos.",
-    bufferBelowFloorWarning: (floor: string) =>
-      `Esto está por debajo de tu mínimo configurado de ${floor}.`,
     essentialCategoriesHeading: "Gastos fijos esenciales",
     noEssentialCategoriesConfigured:
       "Aún no hay categorías marcadas como fijas esenciales - configúralas en Ajustes.",

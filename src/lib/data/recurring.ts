@@ -98,3 +98,15 @@ export async function listRecurringItems(context: AppContext) {
     contributionsMonthly: monthlyTotal(contributions),
   };
 }
+
+/**
+ * The one write for "which account funds this recurring item" - the same
+ * RecurringItem.accountId the Recurring page's form saves, so the payday
+ * check-in's per-account reassignment moves the very row that page lists
+ * rather than keeping a plan-local override. Returns false when the item is
+ * gone (deleted in another tab while the wizard was open).
+ */
+export async function setRecurringItemAccount(id: string, accountId: string): Promise<boolean> {
+  const updated = await prisma.recurringItem.updateMany({ where: { id }, data: { accountId } });
+  return updated.count > 0;
+}

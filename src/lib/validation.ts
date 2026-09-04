@@ -239,6 +239,12 @@ export const settingsSchema = z.object({
   displayCurrency: currency,
 });
 
+/** Just the account link of an existing recurring item - Step 3's per-account reassignment, which edits the same RecurringItem.accountId the Recurring page's form does. */
+export const recurringAccountSchema = z.object({
+  id: z.string().trim().min(1),
+  accountId: z.string().trim().min(1, "Pick an account"),
+});
+
 export const paydayConfirmSchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100),
   month: z.coerce.number().int().min(1).max(12),
@@ -271,7 +277,6 @@ export const paydayConfirmSchema = z.object({
       plannedAmount: z.number().min(0),
     }),
   ),
-  buffer: z.number().min(0),
   includedCarryover: z.number(),
   acknowledgedDeficit: z.boolean(),
   acknowledgedZeroBuffer: z.boolean(),

@@ -3,7 +3,9 @@
 import { getSettings, requireAuth } from "@/lib/auth";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
-import { firstError, formObject, recurringSchema } from "@/lib/validation";
+import { firstError, formObject, recurringAccountSchema, recurringSchema } from "@/lib/validation";
+
+import { setRecurringItemAccount } from "@/lib/data/recurring";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
@@ -63,4 +65,33 @@ export async function toggleRecurringAction(
   });
   revalidateApp();
   return done(item.active ? t.itemPaused : t.itemResumed);
+}
+
+/**
+ * Repoints one recurring item at another account - the account field of
+ * saveRecurringAction's form on its own, for the payday check-in's Step 3
+ * where reassigning a subscription is the whole edit. Same column, same
+ * revalidation, so the Recurring page shows the change immediately.
+ */
+export async function reassignRecurringAccountAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).recurring;
+  const parsed = recurringAccountSchema.safeParse(formObject(formData));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
+
+  const account = await prisma.account.findFirst({
+    where: { id: parsed.data.accountId, status: "ACTIVE" },
+  });
+  if (!account) return fail(t.accountNoLongerActive);
+  if (!(await setRecurringItemAccount(parsed.data.id, parsed.data.accountId))) {
+    return fail(t.itemNoLongerExists);
+  }
+
+  revalidateApp();
+  return done(t.itemUpdated);
 }

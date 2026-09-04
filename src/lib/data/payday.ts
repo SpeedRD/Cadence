@@ -18,8 +18,10 @@ import { maxDate } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import {
   availableForFlexibleCategories,
-  defaultProtectedBuffer,
+  planAccountBuffers,
   scaleFlexibleSuggestions,
+  type AccountBufferAccount,
+  type AccountBufferSubscription,
 } from "@/lib/payday";
 import {
   daysRemainingInPeriod,
@@ -51,6 +53,8 @@ export interface PaydayAccountDraft {
   reportedBalance: number;
   incomeEntered: number;
   incomeNote: string;
+  /** The configured buffer floor converted to this account's own currency, so the step can recompute its buffer as income is edited. */
+  bufferFloor: number;
 }
 
 export interface PaydayCommittedDraft {
@@ -61,6 +65,8 @@ export interface PaydayCommittedDraft {
   currency: string;
   nextDate: Date;
   alreadyLogged: boolean;
+  /** The account funding this item - reassignable from Step 3, which writes RecurringItem.accountId. */
+  accountId: string | null;
 }
 
 /**
@@ -105,9 +111,15 @@ export interface PaydayCheckinDraft {
   goals: PaydayGoalDraft[];
   essentialCategories: PaydayCategoryDraft[];
   flexibleCategories: PaydayCategoryDraft[];
-  suggestedBuffer: number;
+  /** Settings.bufferPercent, so Step 3 recomputes each account's buffer live as income is edited. */
+  bufferPercent: number;
+  /**
+   * Every income account's own suggested buffer summed into displayCurrency.
+   * Computed, never chosen: Step 3 shows one recommendation per account and
+   * confirming writes one BUFFER allocation per account, with this sum landing
+   * in PaydayCheckin.protectedBuffer for everything that reads a single figure.
+   */
   plannedBuffer: number;
-  bufferFloor: number;
   availableCarryover: number;
   carryoverBasis: CarryoverBasis;
   includedCarryover: number;
@@ -226,6 +238,30 @@ function toCommittedDraft(item: CommittedItem, alreadyLoggedIds: Set<string>): P
     currency: item.currency,
     nextDate: item.nextDate,
     alreadyLogged: alreadyLoggedIds.has(item.id),
+    accountId: item.accountId,
+  };
+}
+
+/** The draft rows Step 3's per-account buffer view is computed from, in the shape planAccountBuffers() takes. */
+function bufferInputs(
+  accounts: PaydayAccountDraft[],
+  subscriptions: PaydayCommittedDraft[],
+): { accounts: AccountBufferAccount[]; subscriptions: AccountBufferSubscription[] } {
+  return {
+    accounts: accounts.map((account) => ({
+      accountId: account.accountId,
+      name: account.name,
+      currency: account.currency,
+      income: account.incomeEntered,
+      bufferFloor: account.bufferFloor,
+    })),
+    subscriptions: subscriptions.map((item) => ({
+      recurringItemId: item.recurringItemId,
+      accountId: item.accountId,
+      nativeAmount: item.nativeAmount,
+      currency: item.currency,
+      alreadyLogged: item.alreadyLogged,
+    })),
   };
 }
 
@@ -334,6 +370,12 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
       reportedBalance: snapshot ? num(snapshot.reportedBalance) : account.balance,
       incomeEntered: snapshot ? num(snapshot.incomeEntered) : 0,
       incomeNote: snapshot?.incomeNote ?? "",
+      // Each account's buffer is computed in its own currency, so the floor
+      // has to be converted once per account rather than to the display
+      // currency and then compared across currencies.
+      bufferFloor: round2(
+        convert(num(settings.bufferFloorAmount), settings.bufferFloorCurrency, account.currency, context.rates),
+      ),
     };
   });
   const totalIncome = round2(
@@ -406,14 +448,15 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
   });
   const essentialFixedTotal = round2(essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
 
-  const bufferFloor = round2(
-    convert(num(settings.bufferFloorAmount), settings.bufferFloorCurrency, context.displayCurrency, context.rates),
-  );
-  const suggestedBuffer = defaultProtectedBuffer(totalIncome, settings.bufferPercent, bufferFloor);
-  const existingBufferAlloc = existingAllocationByKey.get("BUFFER:");
-  const plannedBuffer = existingBufferAlloc
-    ? round2(convert(num(existingBufferAlloc.plannedAmount), existingBufferAlloc.currency, context.displayCurrency, context.rates))
-    : suggestedBuffer;
+  // The buffer is a recommendation per income account, not a stored choice, so
+  // it is always recomputed from the income in this draft - never read back
+  // from the confirmed check-in's BUFFER allocations.
+  const bufferInput = bufferInputs(accountDrafts, subscriptions);
+  const plannedBuffer = planAccountBuffers(bufferInput.accounts, bufferInput.subscriptions, {
+    bufferPercent: settings.bufferPercent,
+    displayCurrency: context.displayCurrency,
+    rates: context.rates,
+  }).total;
 
   const includedCarryover = existing
     ? round2(convert(num(existing.includedCarryover), existing.currency, context.displayCurrency, context.rates))
@@ -467,9 +510,8 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     goals,
     essentialCategories,
     flexibleCategories,
-    suggestedBuffer,
+    bufferPercent: settings.bufferPercent,
     plannedBuffer,
-    bufferFloor,
     availableCarryover: carryover.amount,
     carryoverBasis: carryover.basis,
     includedCarryover,
@@ -620,10 +662,32 @@ export async function confirmPaydayCheckin(
   const flexibleInputs = input.flexibleCategories.filter((c) => flexibleById.has(c.categoryId));
   const flexibleTotal = round2(flexibleInputs.reduce((sum, c) => sum + c.plannedAmount, 0));
 
-  const bufferFloor = round2(
-    convert(context.bufferFloorAmount, context.bufferFloorCurrency, context.displayCurrency, context.rates),
+  // The protected buffer is never sent by the client: it is one recommendation
+  // per income account, recomputed here from the same live data Step 3 shows,
+  // and summed into the check-in's currency for PaydayCheckin.protectedBuffer.
+  const bufferPlan = planAccountBuffers(
+    accountInputs.map((a) => {
+      const account = liveAccountById.get(a.accountId)!;
+      return {
+        accountId: account.id,
+        name: account.name,
+        currency: account.currency,
+        income: a.incomeEntered,
+        bufferFloor: round2(
+          convert(context.bufferFloorAmount, context.bufferFloorCurrency, account.currency, context.rates),
+        ),
+      };
+    }),
+    subscriptionItems.map((item) => ({
+      recurringItemId: item.id,
+      accountId: item.accountId,
+      nativeAmount: item.nativeAmount,
+      currency: item.currency,
+      alreadyLogged: alreadyLoggedIds.has(item.id),
+    })),
+    { bufferPercent: context.bufferPercent, displayCurrency: context.displayCurrency, rates: context.rates },
   );
-  const recommendedBuffer = defaultProtectedBuffer(totalIncome, context.bufferPercent, bufferFloor);
+  const protectedBuffer = bufferPlan.total;
 
   const available = availableForFlexibleCategories({
     income: totalIncome,
@@ -632,14 +696,14 @@ export async function confirmPaydayCheckin(
     recurringContributions: contributionsTotal,
     goalPlan: goalPlanTotal,
     essentialFixed: essentialFixedTotal,
-    buffer: input.buffer,
+    buffer: protectedBuffer,
   });
 
   const needsDeficitAck = available < 0 || flexibleTotal > Math.max(0, available);
   if (needsDeficitAck && !input.acknowledgedDeficit) {
     return { ok: false, reason: "deficit_not_acknowledged" };
   }
-  if (input.buffer <= 0 && !input.acknowledgedZeroBuffer) {
+  if (protectedBuffer <= 0 && !input.acknowledgedZeroBuffer) {
     return { ok: false, reason: "zero_buffer_not_acknowledged" };
   }
 
@@ -657,7 +721,7 @@ export async function confirmPaydayCheckin(
             currency: context.displayCurrency,
             totalIncome,
             includedCarryover: input.includedCarryover,
-            protectedBuffer: input.buffer,
+            protectedBuffer,
             status: "CONFIRMED",
           },
         })
@@ -670,7 +734,7 @@ export async function confirmPaydayCheckin(
             currency: context.displayCurrency,
             totalIncome,
             includedCarryover: input.includedCarryover,
-            protectedBuffer: input.buffer,
+            protectedBuffer,
             status: "CONFIRMED",
           },
         });
@@ -735,6 +799,7 @@ export async function confirmPaydayCheckin(
         paydayCheckinId: checkin.id,
         type: "SUBSCRIPTION" as const,
         recurringItemId: item.id,
+        accountId: item.accountId,
         recommendedAmount: item.nativeAmount,
         plannedAmount: item.nativeAmount,
         currency: item.currency,
@@ -784,14 +849,18 @@ export async function confirmPaydayCheckin(
         currency: context.displayCurrency,
         basis: suggestionsByCategory.get(c.categoryId)?.basis ?? "none",
       })),
-      {
+      // One BUFFER row per account with income, each in that account's own
+      // currency. PaydayCheckin.protectedBuffer above is their sum in the
+      // check-in's currency, so readers of that single figure are unaffected.
+      ...bufferPlan.accounts.map((plan) => ({
         paydayCheckinId: checkin.id,
         type: "BUFFER" as const,
-        recommendedAmount: recommendedBuffer,
-        plannedAmount: input.buffer,
-        currency: context.displayCurrency,
+        accountId: plan.accountId,
+        recommendedAmount: plan.suggestedBuffer,
+        plannedAmount: plan.suggestedBuffer,
+        currency: plan.currency,
         basis: "buffer_formula",
-      },
+      })),
       {
         paydayCheckinId: checkin.id,
         type: "CARRYOVER" as const,

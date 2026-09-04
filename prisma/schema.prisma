@@ -118,6 +118,7 @@ model Account {
   transactions       Transaction[]
   stagedTransactions StagedTransaction[]
   paydaySnapshots    PaydayAccountSnapshot[]
+  paydayAllocations  PaydayPlanAllocation[]
   recurringItems     RecurringItem[]
 
   @@index([name])
@@ -404,6 +405,10 @@ model PaydayPlanAllocation {
   categoryId        String?
   goalId            String?
   recurringItemId   String?
+  /// Which account this line is funded from - set on the per-account BUFFER
+  /// rows and stamped onto each SUBSCRIPTION row from its recurring item at
+  /// confirm time. Null for lines that aren't tied to one account.
+  accountId         String?
   recommendedAmount Decimal              @db.Decimal(14, 2)
   plannedAmount     Decimal              @db.Decimal(14, 2)
   currency          String
@@ -415,6 +420,8 @@ model PaydayPlanAllocation {
   category      Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   goal          Goal?          @relation(fields: [goalId], references: [id], onDelete: SetNull)
   recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)
+  account       Account?       @relation(fields: [accountId], references: [id], onDelete: SetNull)
 
   @@index([paydayCheckinId, type])
+  @@index([accountId])
 }

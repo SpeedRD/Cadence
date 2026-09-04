@@ -38,6 +38,7 @@ import {
 import {
   availableForFlexibleCategories,
   defaultProtectedBuffer,
+  planAccountBuffers,
   scaleFlexibleSuggestions,
 } from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
@@ -1081,6 +1082,56 @@ async function main() {
     -6000,
   );
 
+  {
+    const bufferAccounts = [
+      { accountId: "bsc", name: "BSC", currency: "USD", income: 1000, bufferFloor: 33.33 },
+      { accountId: "popular", name: "Popular", currency: "DOP", income: 30000, bufferFloor: 2000 },
+      { accountId: "cash", name: "Cash", currency: "USD", income: 0, bufferFloor: 33.33 },
+    ];
+    const bufferSubs = [
+      { recurringItemId: "rent", accountId: "bsc", nativeAmount: 950, currency: "USD", alreadyLogged: false },
+      { recurringItemId: "netflix", accountId: "bsc", nativeAmount: 500, currency: "USD", alreadyLogged: true },
+      { recurringItemId: "gym", accountId: null, nativeAmount: 40, currency: "USD", alreadyLogged: false },
+      { recurringItemId: "phone", accountId: "cash", nativeAmount: 25, currency: "USD", alreadyLogged: false },
+    ];
+    const perAccount = planAccountBuffers(bufferAccounts, bufferSubs, {
+      bufferPercent: 10,
+      displayCurrency: "USD",
+      rates,
+    });
+    const bsc = perAccount.accounts.find((a) => a.accountId === "bsc")!;
+    const popular = perAccount.accounts.find((a) => a.accountId === "popular")!;
+    eq("an account with no income entered gets no buffer row of its own", perAccount.accounts.length, 2);
+    eq("each account's buffer is 10% of its own income, not a share of the total", bsc.suggestedBuffer, 100);
+    eq("a second account's buffer is computed in its own currency", popular.suggestedBuffer, 3000);
+    eq(
+      "an already-paid subscription is not counted against its account's buffer a second time",
+      bsc.subscriptionsTotal,
+      950,
+    );
+    check(
+      "an account whose due subscriptions would breach its own buffer is flagged with the shortfall",
+      bsc.belowBuffer === true && bsc.shortfall === 50,
+      JSON.stringify({ belowBuffer: bsc.belowBuffer, shortfall: bsc.shortfall }),
+    );
+    eq("the flagged account names the account with the most room this period", bsc.suggestedAccountName, "Popular");
+    check(
+      "an account that stays above its own buffer is not flagged and reports its headroom",
+      popular.belowBuffer === false && popular.headroom === 27000,
+      JSON.stringify({ belowBuffer: popular.belowBuffer, headroom: popular.headroom }),
+    );
+    eq(
+      "subscriptions with no account, or on an account with no income, stay listed as unassigned",
+      perAccount.unassignedRecurringItemIds.join(","),
+      "gym,phone",
+    );
+    eq(
+      "the per-account buffers sum into the display currency for the single protectedBuffer figure",
+      perAccount.total,
+      150,
+    );
+  }
+
   const suggestions = [
     { id: "groceries", suggested: 6000 },
     { id: "dining", suggested: 3000 },
@@ -1293,7 +1344,7 @@ async function main() {
   const savingsCategoryForPayday = await prisma.category.findFirstOrThrow({ where: { name: "Savings/Investment" } });
 
   const paydaySub = await prisma.recurringItem.create({
-    data: { name: "Verify Payday Netflix", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 20), active: true, categoryId: subsCategoryForPayday.id },
+    data: { name: "Verify Payday Netflix", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 20), active: true, categoryId: subsCategoryForPayday.id, accountId: paydayChecking.id },
   });
   const paydayContribution = await prisma.recurringItem.create({
     data: { name: "Verify Payday Auto-Invest", amount: 100, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 20), active: true },
@@ -1354,6 +1405,17 @@ async function main() {
   check(
     "a non-essential expense category appears as a flexible suggestion",
     draft.flexibleCategories.some((c) => c.categoryId === groceriesForPayday.id),
+  );
+
+  eq(
+    "a subscription draft carries the account funding it, so Step 3 can group by account",
+    draft.subscriptions.find((s) => s.recurringItemId === paydaySub.id)?.accountId,
+    paydayChecking.id,
+  );
+  eq(
+    "each account draft carries the buffer floor converted into that account's own currency",
+    draft.accounts.find((a) => a.accountId === paydayEuro.id)?.bufferFloor,
+    round2(convert(num(paydaySettings.bufferFloorAmount), paydaySettings.bufferFloorCurrency, "EUR", rates)),
   );
 
   await prisma.account.update({
@@ -1579,7 +1641,6 @@ async function main() {
       categoryId: c.categoryId,
       plannedAmount: c.suggestedAmount,
     })),
-    buffer: draftForConfirm.suggestedBuffer,
     includedCarryover: 0,
     acknowledgedDeficit: true,
     acknowledgedZeroBuffer: true,
@@ -1635,6 +1696,57 @@ async function main() {
     "the goal's roadmap recommendation is recorded in the allocation audit trail",
     Boolean(goalAllocation) && num(goalAllocation!.recommendedAmount) > 0,
   );
+
+  console.log("\n-- the protected buffer is one recommendation per account with income --");
+  const checkingBufferFloorInUsd = round2(
+    convert(num(paydaySettings.bufferFloorAmount), paydaySettings.bufferFloorCurrency, "USD", rates),
+  );
+  const expectedCheckingBuffer = defaultProtectedBuffer(500, paydaySettings.bufferPercent, checkingBufferFloorInUsd);
+  const bufferAllocations = await prisma.paydayPlanAllocation.findMany({
+    where: { paydayCheckinId: checkinRow!.id, type: "BUFFER" },
+  });
+  eq("only an account that received income gets a buffer allocation", bufferAllocations.length, 1);
+  eq("the buffer allocation is stamped with the account it protects", bufferAllocations[0]?.accountId, paydayChecking.id);
+  eq("the buffer allocation is recorded in that account's own currency", bufferAllocations[0]?.currency, "USD");
+  eq(
+    "the buffer is that account's own income-based recommendation, not a share of the total",
+    num(bufferAllocations[0]!.recommendedAmount),
+    expectedCheckingBuffer,
+  );
+  eq(
+    "PaydayCheckin.protectedBuffer stays a single figure - the per-account buffers summed into the check-in's currency",
+    num(checkinRow!.protectedBuffer),
+    expectedCheckingBuffer,
+  );
+  const subscriptionAllocation = await prisma.paydayPlanAllocation.findFirst({
+    where: { paydayCheckinId: checkinRow!.id, type: "SUBSCRIPTION", recurringItemId: paydaySub.id },
+  });
+  eq(
+    "a subscription allocation is stamped with the account its recurring item is funded from",
+    subscriptionAllocation?.accountId,
+    paydayChecking.id,
+  );
+
+  console.log("\n-- reassigning a subscription's account from the check-in --");
+  const { setRecurringItemAccount, listRecurringItems } = await import("../src/lib/data/recurring");
+  check("reassigning an existing item reports the write", (await setRecurringItemAccount(paydaySub.id, paydayEuro.id)) === true);
+  const draftAfterReassign = await getPaydayCheckinDraft(paydayContext);
+  eq(
+    "the check-in draft immediately shows the subscription under its new account",
+    draftAfterReassign.subscriptions.find((s) => s.recurringItemId === paydaySub.id)?.accountId,
+    paydayEuro.id,
+  );
+  const recurringAfterReassign = await listRecurringItems(paydayContext);
+  eq(
+    "the Recurring page reads back the same row - one account field, not a plan-local override",
+    recurringAfterReassign.subscriptions.find((r) => r.id === paydaySub.id)?.accountId,
+    paydayEuro.id,
+  );
+  check(
+    "reassigning an item that no longer exists reports no write instead of throwing",
+    (await setRecurringItemAccount("verify-missing-recurring-item", paydayChecking.id)) === false,
+  );
+  await setRecurringItemAccount(paydaySub.id, paydayChecking.id);
 
   const essentialAndFlexibleIds = [
     ...draftForConfirm.essentialCategories.map((c) => c.categoryId),
@@ -1712,9 +1824,16 @@ async function main() {
   const eurPaydayContext = { ...paydayContext, displayCurrency: "EUR" as const };
   const draftAfterCurrencySwitch = await getPaydayCheckinDraft(eurPaydayContext);
   eq(
-    "the stored buffer is converted from the currency it was confirmed in, not read back raw",
+    "the buffer is recomputed from each account's own income and summed into the newly selected display currency",
     draftAfterCurrencySwitch.plannedBuffer,
-    round2(convert(updatedPayload.buffer, "USD", "EUR", rates)),
+    round2(
+      convert(
+        defaultProtectedBuffer(750, paydaySettings.bufferPercent, checkingBufferFloorInUsd),
+        "USD",
+        "EUR",
+        rates,
+      ),
+    ),
   );
   eq(
     "a stored essential category amount is converted from the currency it was confirmed in, not read back raw",

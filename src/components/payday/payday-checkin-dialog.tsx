@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { SubmitButton } from "@/components/form/submit-button";
@@ -22,8 +22,9 @@ import { convert, type RateTable } from "@/lib/currency";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
-import { availableForFlexibleCategories } from "@/lib/payday";
+import { availableForFlexibleCategories, planAccountBuffers } from "@/lib/payday";
 import { confirmPaydayCheckinAction } from "@/server/actions/payday";
+import { reassignRecurringAccountAction } from "@/server/actions/recurring";
 
 const STEP_COUNT = 5;
 
@@ -46,6 +47,7 @@ export function PaydayCheckinDialog({
   const [plan, setPlan] = useState<PaydayCheckinDraft>(draft);
   const [acknowledgedDeficit, setAcknowledgedDeficit] = useState(false);
   const [acknowledgedZeroBuffer, setAcknowledgedZeroBuffer] = useState(false);
+  const [reassigningItemId, setReassigningItemId] = useState<string | null>(null);
   const [state, formAction, pending] = useActionState(confirmPaydayCheckinAction, null);
   const handled = useRef<number | undefined>(undefined);
 
@@ -79,6 +81,31 @@ export function PaydayCheckinDialog({
       0,
     ),
   );
+  // Step 3's buffer is per account and computed, never typed, so it is derived
+  // here from the income entered in step 2 and each subscription's current
+  // account - exactly what confirmPaydayCheckin() recomputes server-side.
+  const bufferPlan = useMemo(
+    () =>
+      planAccountBuffers(
+        plan.accounts.map((a) => ({
+          accountId: a.accountId,
+          name: a.name,
+          currency: a.currency,
+          income: a.incomeEntered,
+          bufferFloor: a.bufferFloor,
+        })),
+        plan.subscriptions.map((item) => ({
+          recurringItemId: item.recurringItemId,
+          accountId: item.accountId,
+          nativeAmount: item.nativeAmount,
+          currency: item.currency,
+          alreadyLogged: item.alreadyLogged,
+        })),
+        { bufferPercent: plan.bufferPercent, displayCurrency: plan.displayCurrency, rates },
+      ),
+    [plan.accounts, plan.subscriptions, plan.bufferPercent, plan.displayCurrency, rates],
+  );
+  const plannedBuffer = bufferPlan.total;
   // Goal planned amounts are already in plan.displayCurrency (PaydayGoalDraft).
   const goalPlanTotal = round2(plan.goals.reduce((sum, g) => sum + g.plannedAmount, 0));
   const essentialFixedTotal = round2(plan.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
@@ -90,10 +117,10 @@ export function PaydayCheckinDialog({
     recurringContributions: plan.contributionsTotal,
     goalPlan: goalPlanTotal,
     essentialFixed: essentialFixedTotal,
-    buffer: plan.plannedBuffer,
+    buffer: plannedBuffer,
   });
   const needsDeficitAck = available < 0 || flexibleTotal > Math.max(0, available);
-  const needsZeroBufferAck = plan.plannedBuffer <= 0;
+  const needsZeroBufferAck = plannedBuffer <= 0;
   const incomeTransactionCount = plan.accounts.filter((a) => a.incomeEntered > 0).length;
   const budgetCount = plan.essentialCategories.length + plan.flexibleCategories.length;
   const allocatedCategoryCount = [...plan.essentialCategories, ...plan.flexibleCategories].filter(
@@ -130,6 +157,38 @@ export function PaydayCheckinDialog({
     }));
   }
 
+  /**
+   * Repoints a subscription at another account through the Recurring page's own
+   * write path, and moves it in the open wizard right away so every affected
+   * account's buffer recalculates without a reload. A rejected write puts the
+   * row back where it was rather than leaving the step showing a change the
+   * database never took.
+   */
+  async function reassignSubscription(recurringItemId: string, accountId: string) {
+    const previousAccountId =
+      plan.subscriptions.find((s) => s.recurringItemId === recurringItemId)?.accountId ?? null;
+    if (previousAccountId === accountId) return;
+    const moveTo = (target: string | null) =>
+      setPlan((prev) => ({
+        ...prev,
+        subscriptions: prev.subscriptions.map((s) =>
+          s.recurringItemId === recurringItemId ? { ...s, accountId: target } : s,
+        ),
+      }));
+
+    moveTo(accountId);
+    setReassigningItemId(recurringItemId);
+    const formData = new FormData();
+    formData.set("id", recurringItemId);
+    formData.set("accountId", accountId);
+    const result = await reassignRecurringAccountAction(null, formData);
+    setReassigningItemId(null);
+    if (result?.error) {
+      moveTo(previousAccountId);
+      toast.error(result.error);
+    }
+  }
+
   const canConfirm =
     (!needsDeficitAck || acknowledgedDeficit) && (!needsZeroBufferAck || acknowledgedZeroBuffer);
 
@@ -152,7 +211,6 @@ export function PaydayCheckinDialog({
       categoryId: c.categoryId,
       plannedAmount: c.plannedAmount,
     })),
-    buffer: plan.plannedBuffer,
     includedCarryover: plan.includedCarryover,
     acknowledgedDeficit,
     acknowledgedZeroBuffer,
@@ -198,14 +256,16 @@ export function PaydayCheckinDialog({
             ) : null}
             {step === 3 ? (
               <StepCommitments
+                accounts={plan.accounts}
                 subscriptions={plan.subscriptions}
                 contributions={plan.contributions}
                 goals={plan.goals}
                 essentialCategories={plan.essentialCategories}
                 displayCurrency={plan.displayCurrency}
-                bufferFloor={plan.bufferFloor}
-                suggestedBuffer={plan.suggestedBuffer}
-                plannedBuffer={plan.plannedBuffer}
+                bufferPlan={bufferPlan}
+                plannedBuffer={plannedBuffer}
+                reassigningItemId={reassigningItemId}
+                onReassignSubscription={reassignSubscription}
                 availableCarryover={plan.availableCarryover}
                 carryoverBasis={plan.carryoverBasis}
                 includedCarryover={plan.includedCarryover}
@@ -217,10 +277,10 @@ export function PaydayCheckinDialog({
                 available={available}
                 onGoalChange={updateGoal}
                 onEssentialChange={updateEssential}
-                onBufferChange={(value) => setPlan((prev) => ({ ...prev, plannedBuffer: value }))}
                 onCarryoverChange={(value) =>
                   setPlan((prev) => ({ ...prev, includedCarryover: value }))
                 }
+                pickAnAccountLabel={common.pickAnAccount}
                 t={t}
               />
             ) : null}

@@ -450,6 +450,7 @@ export const en = {
     itemAdded: "Recurring item added",
     itemDeleted: "Recurring item deleted",
     itemNoLongerExists: "That item no longer exists",
+    accountNoLongerActive: "That account is no longer active",
     itemPaused: "Paused",
     itemResumed: "Resumed",
   },
@@ -701,6 +702,25 @@ export const en = {
     contributionsDue: "Recurring contributions due before next payday",
     noSubscriptionsDue: "No subscriptions due before next payday.",
     noContributionsDue: "No recurring contributions due before next payday.",
+    bufferByAccountHeading: "Protected buffer by account",
+    bufferByAccountDescription:
+      "Each account keeps its own buffer out of the income it received. Move a subscription to another account to change what it has to cover.",
+    noIncomeAccountsYet:
+      "No income recorded yet - enter what each account received in step 2 to see its buffer.",
+    accountIncomeReceived: "Income received",
+    accountSubscriptionsDue: "Subscriptions due",
+    accountLeftAfterSubscriptions: "Left after subscriptions",
+    accountSuggestedBuffer: "Suggested buffer",
+    accountNoSubscriptionsDue: "Nothing due from this account before next payday.",
+    accountAboveBuffer: (amount: string) => `${amount} above its buffer`,
+    accountBelowBuffer: (amount: string) =>
+      `Posting everything due here would fall short by ${amount}.`,
+    accountBelowBufferWithAlternative: (amount: string, accountName: string) =>
+      `Posting everything due here would fall short by ${amount} - ${accountName} has more room this period.`,
+    subscriptionAccountLabel: (name: string) => `Account for ${name}`,
+    unfundedSubscriptionsHeading: "Not covered by an account with income",
+    unfundedSubscriptionsDescription:
+      "These are due before next payday but their account received no income this check-in. Move them to an account that did.",
     alreadyPaidThisPeriod: "Already paid this period",
     goalsHeading: "Goal roadmap",
     noGoalsWithTarget: "No dated goals to reserve for this period.",
@@ -709,10 +729,7 @@ export const en = {
     goalOnTrack: "On track with the roadmap",
     goalBehind: (amount: string) => `${amount} behind the target roadmap`,
     goalAhead: (amount: string) => `${amount} ahead of the target roadmap`,
-    protectedBufferHeading: "Protected buffer",
-    bufferSuggested: (amount: string) => `Suggested ${amount}`,
     bufferZeroWarning: "This plan leaves no protected buffer for unexpected spending.",
-    bufferBelowFloorWarning: (floor: string) => `This is below your configured floor of ${floor}.`,
     essentialCategoriesHeading: "Essential fixed spending",
     noEssentialCategoriesConfigured:
       "No categories are marked essential fixed yet - configure them in Settings.",

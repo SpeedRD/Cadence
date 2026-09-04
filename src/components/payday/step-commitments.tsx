@@ -4,14 +4,23 @@ import { Field } from "@/components/form/field";
 import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { formatMoney } from "@/lib/currency";
 import { formatDayMonth } from "@/lib/date";
 import { round2 } from "@/lib/money";
 import type { Dictionary } from "@/lib/i18n";
+import type { AccountBufferBreakdown } from "@/lib/payday";
 import type {
   CarryoverBasis,
+  PaydayAccountDraft,
   PaydayCategoryDraft,
   PaydayCommittedDraft,
   PaydayGoalDraft,
@@ -44,15 +53,68 @@ function AmountInput({
   );
 }
 
+/**
+ * One due subscription inside its account's buffer block. The account picker
+ * writes RecurringItem.accountId through the same action the Recurring page
+ * uses, so the change outlives this wizard.
+ */
+function SubscriptionRow({
+  item,
+  accounts,
+  pending,
+  onReassign,
+  pickAnAccountLabel,
+  t,
+}: {
+  item: PaydayCommittedDraft;
+  accounts: PaydayAccountDraft[];
+  pending: boolean;
+  onReassign: (recurringItemId: string, accountId: string) => void;
+  pickAnAccountLabel: string;
+  t: Dictionary["payday"];
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+      <span>
+        {item.name}{" "}
+        <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate)}</span>
+      </span>
+      <span className="flex items-center gap-1.5">
+        {item.alreadyLogged ? <AlreadyLoggedBadge label={t.alreadyPaidThisPeriod} /> : null}
+        <span className="figure">{formatMoney(item.nativeAmount, item.currency)}</span>
+        <Select
+          value={item.accountId ?? undefined}
+          onValueChange={(accountId) => onReassign(item.recurringItemId, accountId)}
+          disabled={pending}
+        >
+          <SelectTrigger size="sm" className="w-36" aria-label={t.subscriptionAccountLabel(item.name)}>
+            <SelectValue placeholder={pickAnAccountLabel} />
+          </SelectTrigger>
+          <SelectContent>
+            {accounts.map((account) => (
+              <SelectItem key={account.accountId} value={account.accountId}>
+                {account.name}
+                <span className="text-muted-foreground">{account.currency}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </span>
+    </div>
+  );
+}
+
 export function StepCommitments({
+  accounts,
   subscriptions,
   contributions,
   goals,
   essentialCategories,
   displayCurrency,
-  bufferFloor,
-  suggestedBuffer,
+  bufferPlan,
   plannedBuffer,
+  reassigningItemId,
+  onReassignSubscription,
   availableCarryover,
   carryoverBasis,
   includedCarryover,
@@ -64,18 +126,21 @@ export function StepCommitments({
   available,
   onGoalChange,
   onEssentialChange,
-  onBufferChange,
   onCarryoverChange,
+  pickAnAccountLabel,
   t,
 }: {
+  accounts: PaydayAccountDraft[];
   subscriptions: PaydayCommittedDraft[];
   contributions: PaydayCommittedDraft[];
   goals: PaydayGoalDraft[];
   essentialCategories: PaydayCategoryDraft[];
   displayCurrency: string;
-  bufferFloor: number;
-  suggestedBuffer: number;
+  bufferPlan: AccountBufferBreakdown;
   plannedBuffer: number;
+  /** The subscription whose account write is still in flight - its picker stays disabled until it lands. */
+  reassigningItemId: string | null;
+  onReassignSubscription: (recurringItemId: string, accountId: string) => void;
   availableCarryover: number;
   carryoverBasis: CarryoverBasis;
   includedCarryover: number;
@@ -87,33 +152,118 @@ export function StepCommitments({
   available: number;
   onGoalChange: (goalId: string, plannedAmount: number) => void;
   onEssentialChange: (categoryId: string, plannedAmount: number) => void;
-  onBufferChange: (value: number) => void;
   onCarryoverChange: (value: number) => void;
+  pickAnAccountLabel: string;
   t: Dictionary["payday"];
 }) {
+  const subscriptionById = new Map(subscriptions.map((item) => [item.recurringItemId, item]));
+  const unfundedSubscriptions = bufferPlan.unassignedRecurringItemIds
+    .map((id) => subscriptionById.get(id))
+    .filter((item) => item !== undefined);
+
   return (
     <div className="space-y-4">
       <Card size="sm">
         <CardHeader>
-          <CardTitle>{t.subscriptionsDue}</CardTitle>
+          <CardTitle>{t.bufferByAccountHeading}</CardTitle>
+          <CardDescription>{t.bufferByAccountDescription}</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-1.5">
+        <CardContent className="space-y-3">
+          {bufferPlan.accounts.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t.noIncomeAccountsYet}</p>
+          ) : (
+            bufferPlan.accounts.map((plan) => {
+              const items = plan.recurringItemIds
+                .map((id) => subscriptionById.get(id))
+                .filter((item) => item !== undefined);
+              return (
+                <div key={plan.accountId} className="space-y-2 rounded-lg border border-border/70 p-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="text-sm font-medium">{plan.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t.accountSuggestedBuffer}:{" "}
+                      <span className="figure">{formatMoney(plan.suggestedBuffer, plan.currency)}</span>
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    <span>
+                      {t.accountIncomeReceived}:{" "}
+                      <span className="figure">{formatMoney(plan.income, plan.currency)}</span>
+                    </span>
+                    <span>
+                      {t.accountSubscriptionsDue}:{" "}
+                      <span className="figure">-{formatMoney(plan.subscriptionsTotal, plan.currency)}</span>
+                    </span>
+                    <span>
+                      {t.accountLeftAfterSubscriptions}:{" "}
+                      <span className="figure">{formatMoney(plan.remaining, plan.currency)}</span>
+                    </span>
+                  </div>
+                  {items.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">{t.accountNoSubscriptionsDue}</p>
+                  ) : (
+                    items.map((item) => (
+                      <SubscriptionRow
+                        key={item.recurringItemId}
+                        item={item}
+                        accounts={accounts}
+                        pending={reassigningItemId === item.recurringItemId}
+                        onReassign={onReassignSubscription}
+                        pickAnAccountLabel={pickAnAccountLabel}
+                        t={t}
+                      />
+                    ))
+                  )}
+                  {plan.belowBuffer ? (
+                    <Alert variant="destructive">
+                      <AlertDescription>
+                        {plan.suggestedAccountName
+                          ? t.accountBelowBufferWithAlternative(
+                              formatMoney(plan.shortfall, plan.currency),
+                              plan.suggestedAccountName,
+                            )
+                          : t.accountBelowBuffer(formatMoney(plan.shortfall, plan.currency))}
+                      </AlertDescription>
+                    </Alert>
+                  ) : (
+                    <p className="text-xs text-[var(--good)]">
+                      {t.accountAboveBuffer(formatMoney(plan.headroom, plan.currency))}
+                    </p>
+                  )}
+                </div>
+              );
+            })
+          )}
+
+          {unfundedSubscriptions.length > 0 ? (
+            <div className="space-y-2 rounded-lg border border-dashed border-border/70 p-3">
+              <div>
+                <p className="text-sm font-medium">{t.unfundedSubscriptionsHeading}</p>
+                <p className="text-xs text-muted-foreground">{t.unfundedSubscriptionsDescription}</p>
+              </div>
+              {unfundedSubscriptions.map((item) => (
+                <SubscriptionRow
+                  key={item.recurringItemId}
+                  item={item}
+                  accounts={accounts}
+                  pending={reassigningItemId === item.recurringItemId}
+                  onReassign={onReassignSubscription}
+                  pickAnAccountLabel={pickAnAccountLabel}
+                  t={t}
+                />
+              ))}
+            </div>
+          ) : null}
+
           {subscriptions.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t.noSubscriptionsDue}</p>
-          ) : (
-            subscriptions.map((item) => (
-              <div key={item.recurringItemId} className="flex items-center justify-between text-sm">
-                <span>
-                  {item.name}{" "}
-                  <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate)}</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  {item.alreadyLogged ? <AlreadyLoggedBadge label={t.alreadyPaidThisPeriod} /> : null}
-                  <span className="figure">{formatMoney(item.amount, displayCurrency)}</span>
-                </span>
-              </div>
-            ))
-          )}
+          ) : null}
+
+          {plannedBuffer <= 0 ? (
+            <Alert variant="destructive">
+              <AlertDescription>{t.bufferZeroWarning}</AlertDescription>
+            </Alert>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -179,31 +329,6 @@ export function StepCommitments({
               );
             })
           )}
-        </CardContent>
-      </Card>
-
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>{t.protectedBufferHeading}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">
-              {t.bufferSuggested(formatMoney(suggestedBuffer, displayCurrency))}
-            </p>
-            <AmountInput value={plannedBuffer} onChange={onBufferChange} ariaLabel={t.protectedBufferHeading} />
-          </div>
-          {plannedBuffer <= 0 ? (
-            <Alert variant="destructive">
-              <AlertDescription>{t.bufferZeroWarning}</AlertDescription>
-            </Alert>
-          ) : plannedBuffer < bufferFloor ? (
-            <Alert variant="destructive">
-              <AlertDescription>
-                {t.bufferBelowFloorWarning(formatMoney(bufferFloor, displayCurrency))}
-              </AlertDescription>
-            </Alert>
-          ) : null}
         </CardContent>
       </Card>
 
