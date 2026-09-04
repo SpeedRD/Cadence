@@ -40,9 +40,14 @@ export function TrendChart({
               tabIndex={0}
               aria-label={`${point.period.longLabel}: ${t.tooltipOut(formatMoney(point.spent, currency))}`}
             >
+              {/* Capped and edge-anchored: a centred w-max tooltip on the first
+                  or last bar reaches past the card, which clips it (Card is
+                  overflow-hidden). The end bars anchor to their own edge
+                  instead, and the cap keeps the middle ones inside on a phone. */}
               <div
                 className={cn(
-                  "pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-max -translate-x-1/2 rounded-md bg-popover px-2 py-1.5 text-xs opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity group-hover:opacity-100 group-focus:opacity-100",
+                  "pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-max max-w-44 -translate-x-1/2 rounded-md bg-popover px-2 py-1.5 text-xs opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity group-hover:opacity-100 group-focus:opacity-100 sm:max-w-56",
+                  "group-first:left-0 group-first:translate-x-0 group-last:right-0 group-last:left-auto group-last:translate-x-0",
                 )}
               >
                 <p className="font-medium">{point.period.label}</p>

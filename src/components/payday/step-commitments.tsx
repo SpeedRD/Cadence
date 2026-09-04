@@ -75,7 +75,7 @@ function SubscriptionRow({
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-      <span>
+      <span className="min-w-0 flex-1">
         {item.name}{" "}
         <span className="text-xs text-muted-foreground">
           {formatDayMonth(item.nextDate)}
@@ -84,7 +84,9 @@ function SubscriptionRow({
             : ""}
         </span>
       </span>
-      <span className="flex items-center gap-1.5">
+      {/* Wraps on a phone: badge + amount + a fixed-width account picker is
+          wider than the buffer block at 375px if this row cannot break. */}
+      <span className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:flex-nowrap">
         {item.overdue ? <AlreadyLoggedBadge label={t.overdueBadge} /> : null}
         {item.alreadyLogged ? <AlreadyLoggedBadge label={t.alreadyPaidThisPeriod} /> : null}
         <span className="figure">{formatMoney(item.nativeAmount, item.currency)}</span>
@@ -93,7 +95,11 @@ function SubscriptionRow({
           onValueChange={(accountId) => onReassign(item.recurringItemId, accountId)}
           disabled={pending}
         >
-          <SelectTrigger size="sm" className="w-36" aria-label={t.subscriptionAccountLabel(item.name)}>
+          <SelectTrigger
+            size="sm"
+            className="w-full min-w-0 sm:w-36"
+            aria-label={t.subscriptionAccountLabel(item.name)}
+          >
             <SelectValue placeholder={pickAnAccountLabel} />
           </SelectTrigger>
           <SelectContent>
@@ -310,8 +316,8 @@ export function StepCommitments({
               const variance = round2(goal.plannedAmount - goal.recommendedAmount);
               return (
                 <div key={goal.goalId} className="space-y-1">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium">{goal.name}</p>
                       <p className="text-xs text-muted-foreground">
                         {t.roadmapAmount}: {formatMoney(goal.recommendedAmount, displayCurrency)}

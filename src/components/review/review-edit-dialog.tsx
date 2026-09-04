@@ -45,7 +45,7 @@ export function ReviewEditDialog({
     >
       <input type="hidden" name="id" value={row.id} />
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <Field label={common.date} htmlFor="staged-date">
           <Input
             id="staged-date"
@@ -82,7 +82,7 @@ export function ReviewEditDialog({
         />
       </Field>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <Field label={common.account}>
           <AccountSelect
             name="accountId"

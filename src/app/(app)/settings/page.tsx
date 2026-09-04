@@ -65,7 +65,7 @@ export default async function SettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <dl className="grid grid-cols-3 gap-2 text-sm">
+            <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
               {CURRENCIES.map((code) => (
                 <div key={code}>
                   <dt className="eyebrow">{t.usdTo(code)}</dt>

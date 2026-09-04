@@ -54,9 +54,11 @@ export function TransactionFilters({
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    // Two columns on a phone so each control gets ~half the width instead of a
+    // fixed one that clips its longest label; the original flex row from sm up.
+    <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
       <form
-        className="relative"
+        className="relative col-span-2 sm:col-span-1"
         onSubmit={(event) => {
           event.preventDefault();
           apply({ q: query });
@@ -67,7 +69,7 @@ export function TransactionFilters({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={t.searchNotes}
-          className="h-8 w-44 pl-8"
+          className="w-full pl-8 sm:h-8 sm:w-44"
           aria-label={t.searchNotes}
         />
       </form>
@@ -76,7 +78,7 @@ export function TransactionFilters({
         value={values.account ?? ALL}
         onValueChange={(value) => apply({ account: value })}
       >
-        <SelectTrigger size="sm" className="w-36">
+        <SelectTrigger size="sm" className="w-full sm:w-44">
           <SelectValue placeholder={t.accountPlaceholder} />
         </SelectTrigger>
         <SelectContent>
@@ -93,7 +95,7 @@ export function TransactionFilters({
         value={values.category ?? ALL}
         onValueChange={(value) => apply({ category: value })}
       >
-        <SelectTrigger size="sm" className="w-36">
+        <SelectTrigger size="sm" className="w-full sm:w-44">
           <SelectValue placeholder={t.categoryPlaceholder} />
         </SelectTrigger>
         <SelectContent>
@@ -111,7 +113,7 @@ export function TransactionFilters({
         value={values.type ?? ALL}
         onValueChange={(value) => apply({ type: value })}
       >
-        <SelectTrigger size="sm" className="w-32">
+        <SelectTrigger size="sm" className="w-full sm:w-40">
           <SelectValue placeholder={t.typePlaceholder} />
         </SelectTrigger>
         <SelectContent>
@@ -128,7 +130,7 @@ export function TransactionFilters({
         value={values.source ?? ALL}
         onValueChange={(value) => apply({ source: value })}
       >
-        <SelectTrigger size="sm" className="w-32">
+        <SelectTrigger size="sm" className="w-full sm:w-40">
           <SelectValue placeholder={t.sourcePlaceholder} />
         </SelectTrigger>
         <SelectContent>
@@ -141,11 +143,11 @@ export function TransactionFilters({
         </SelectContent>
       </Select>
 
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="col-span-2 flex flex-wrap items-center gap-1.5 sm:col-span-1">
         <Input
           type="date"
           aria-label={t.fromDateAria}
-          className="h-8 w-[9.5rem] max-w-full"
+          className="w-full min-w-0 flex-1 sm:h-8 sm:w-[9.5rem] sm:flex-none"
           value={values.from ?? ""}
           onChange={(event) => apply({ from: event.target.value })}
         />
@@ -153,7 +155,7 @@ export function TransactionFilters({
         <Input
           type="date"
           aria-label={t.toDateAria}
-          className="h-8 w-[9.5rem] max-w-full"
+          className="w-full min-w-0 flex-1 sm:h-8 sm:w-[9.5rem] sm:flex-none"
           value={values.to ?? ""}
           onChange={(event) => apply({ to: event.target.value })}
         />
@@ -163,6 +165,7 @@ export function TransactionFilters({
         <Button
           variant="ghost"
           size="sm"
+          className="col-span-2 justify-self-start sm:col-span-1"
           onClick={() => {
             setQuery("");
             router.push(pathname);

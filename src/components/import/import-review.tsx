@@ -355,7 +355,7 @@ function GroupCard({
                     setChoosing(false);
                   }}
                 >
-                  <SelectTrigger size="sm" className="h-6 w-40 text-xs">
+                  <SelectTrigger size="sm" className="h-8 w-40 text-xs sm:h-6">
                     <SelectValue placeholder={common.pickACategory} />
                   </SelectTrigger>
                   <SelectContent>
@@ -483,7 +483,7 @@ function UnknownRowsPanel({
         {selected.size > 0 ? (
           <>
             <Select onValueChange={applyToSelected}>
-              <SelectTrigger size="sm" className="h-6 w-40 text-xs">
+              <SelectTrigger size="sm" className="h-8 w-40 text-xs sm:h-6">
                 <SelectValue placeholder={common.pickACategory} />
               </SelectTrigger>
               <SelectContent>

@@ -40,7 +40,8 @@ export function MonthlyTrendChart({
               tabIndex={0}
               aria-label={`${month.window.longLabel}: ${t.monthlyTooltipNormal(formatMoney(month.normalSpending, currency))}`}
             >
-              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-max -translate-x-1/2 rounded-md bg-popover px-2 py-1.5 text-xs opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity group-hover:opacity-100 group-focus:opacity-100">
+              {/* Capped and edge-anchored, same reasoning as TrendChart's tooltip. */}
+              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-max max-w-44 -translate-x-1/2 rounded-md bg-popover px-2 py-1.5 text-xs opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity group-first:left-0 group-first:translate-x-0 group-last:right-0 group-last:left-auto group-last:translate-x-0 group-hover:opacity-100 group-focus:opacity-100 sm:max-w-56">
                 <p className="font-medium">{month.window.label}</p>
                 <p className="figure text-muted-foreground">
                   {t.monthlyTooltipNormal(formatMoney(month.normalSpending, currency))}

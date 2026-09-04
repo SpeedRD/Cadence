@@ -56,7 +56,7 @@ export function MonthlyPaceCard({
               </p>
             ) : null}
 
-            <dl className="grid grid-cols-3 gap-3 border-t border-border/70 pt-3">
+            <dl className="grid grid-cols-2 gap-3 border-t border-border/70 pt-3 sm:grid-cols-3">
               <div className="space-y-1">
                 <dt className="eyebrow">{t.lifestyle}</dt>
                 <dd className="figure text-sm">{money(pace.projectedLifestyle)}</dd>

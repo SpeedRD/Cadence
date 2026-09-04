@@ -79,7 +79,7 @@ export function BudgetAmountForm({
           placeholder="0.00"
           className={cn(
             "pl-11 text-right font-mono",
-            size === "lg" ? "h-9 w-40 text-base" : "h-7 w-32 text-sm",
+            size === "lg" ? "h-9 w-40 text-base" : "h-9 w-32 text-sm sm:h-7",
           )}
         />
       </div>
