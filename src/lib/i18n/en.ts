@@ -120,6 +120,10 @@ export const en = {
     setBudgetPrompt:
       "Set a budget for this period and Cadence works out what you can spend each day after committed outflows.",
     setPeriodBudget: "Set this period's budget",
+    recommendedBudget: (amount: string) =>
+      `Recommended: ${amount} - what your payday check-in leaves for flexible categories.`,
+    recommendedShortfall: (amount: string) =>
+      `Your payday check-in leaves ${amount} for flexible categories - the plan is over-committed, so there is nothing to budget yet.`,
     spent: "Spent",
     percentOfBudget: (pct: number) => `${pct}% of budget`,
     noBudget: "no budget",
@@ -384,6 +388,8 @@ export const en = {
     noOverallSet: (total: string) =>
       `No overall budget set. Category budgets total ${total} and are used instead.`,
     clearToRemove: "Clear the field to remove the overall budget.",
+    prefilledFromCheckin: (amount: string) =>
+      `${amount} is pre-filled from your payday check-in - nothing is saved until you confirm it.`,
     spentOf: (spent: string, total: string) => `${spent} spent of ${total}`,
     committed: "Committed",
     recurringStillToCome: (n: number) =>

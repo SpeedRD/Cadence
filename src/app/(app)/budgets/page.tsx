@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMoney } from "@/lib/currency";
+import { round2 } from "@/lib/money";
 import { getAppContext } from "@/lib/data/context";
 import { getPaydayCheckinDraft, planPeriodRef } from "@/lib/data/payday";
 import { getPeriodSummary } from "@/lib/data/period-summary";
@@ -51,6 +52,14 @@ export default async function BudgetsPage({
   const period = periodInfo(requested ?? context.currentPeriod);
   const isCurrent = period.key === context.currentPeriod.key;
   const isPlanTarget = period.key === periodKey(planPeriodRef(context));
+
+  // The Dashboard hero links here with ?suggested=<amount> (its recommended
+  // overall budget from the confirmed payday check-in). It only ever pre-fills
+  // the field - the user still has to save - and is ignored once an overall
+  // budget exists or when it isn't a positive amount the form would accept.
+  const suggestedParam = typeof params.suggested === "string" ? Number(params.suggested) : NaN;
+  const suggestedBudget =
+    Number.isFinite(suggestedParam) && suggestedParam > 0 ? round2(suggestedParam) : null;
 
   const [summary, categories, paydayDraft] = await Promise.all([
     getPeriodSummary(period, context),
@@ -91,6 +100,7 @@ export default async function BudgetsPage({
     });
 
   const uncategorized = summary.categories.find((line) => line.categoryId === null);
+  const prefilledOverall = summary.overallBudget === null ? suggestedBudget : null;
 
   return (
     <div className="space-y-5">
@@ -150,16 +160,18 @@ export default async function BudgetsPage({
               month={period.month}
               period={period.period}
               categoryId={null}
-              amount={summary.overallBudget}
+              amount={summary.overallBudget ?? prefilledOverall}
               currency={summary.currency}
               label={t.overallBudgetForPeriod}
               locale={context.language}
               size="lg"
             />
             <p className="text-xs text-muted-foreground">
-              {summary.overallBudget === null
-                ? t.noOverallSet(formatMoney(summary.categoryBudgetTotal, summary.currency))
-                : t.clearToRemove}
+              {prefilledOverall !== null
+                ? t.prefilledFromCheckin(formatMoney(prefilledOverall, summary.currency))
+                : summary.overallBudget === null
+                  ? t.noOverallSet(formatMoney(summary.categoryBudgetTotal, summary.currency))
+                  : t.clearToRemove}
             </p>
             <div className="space-y-2">
               <Meter

@@ -7,11 +7,10 @@ import { toast } from "sonner";
 import { PaydayCheckinDialog } from "@/components/payday/payday-checkin-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { convert, formatMoney, type RateTable } from "@/lib/currency";
+import { formatMoney, type RateTable } from "@/lib/currency";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
-import { round2 } from "@/lib/money";
-import { availableForFlexibleCategories } from "@/lib/payday";
+import { summarizePaydayDraft } from "@/lib/payday";
 import { dismissPaydayPromptAction } from "@/server/actions/payday";
 
 /**
@@ -35,27 +34,7 @@ export function PaydayCheckinCard({
   const [open, setOpen] = useState(shouldAutoOpen);
 
   if (draft.isEditingConfirmed) {
-    const totalIncome = round2(
-      draft.accounts.reduce(
-        (sum, a) => sum + convert(a.incomeEntered, a.currency, draft.displayCurrency, rates),
-        0,
-      ),
-    );
-    // Goal planned amounts are already in draft.displayCurrency (PaydayGoalDraft).
-    const goalPlanTotal = round2(draft.goals.reduce((sum, g) => sum + g.plannedAmount, 0));
-    const essentialFixedTotal = round2(
-      draft.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0),
-    );
-    const flexibleTotal = round2(draft.flexibleCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
-    const available = availableForFlexibleCategories({
-      income: totalIncome,
-      includedCarryover: draft.includedCarryover,
-      subscriptions: draft.subscriptionsTotal,
-      recurringContributions: draft.contributionsTotal,
-      goalPlan: goalPlanTotal,
-      essentialFixed: essentialFixedTotal,
-      buffer: draft.plannedBuffer,
-    });
+    const { totalIncome, essentialFixedTotal, flexibleTotal, available } = summarizePaydayDraft(draft, rates);
 
     return (
       <Card size="sm">

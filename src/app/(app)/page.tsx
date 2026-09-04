@@ -15,7 +15,8 @@ import { getDashboardData, UPCOMING_WINDOW_DAYS } from "@/lib/data/dashboard";
 import { getMonthlyPace } from "@/lib/data/monthly";
 import { getPaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary } from "@/lib/i18n";
-import { daysElapsedInPeriod, isPaydayDate } from "@/lib/period";
+import { summarizePaydayDraft } from "@/lib/payday";
+import { daysElapsedInPeriod, isPaydayDate, periodKey } from "@/lib/period";
 
 export const metadata = { title: "Dashboard - Cadence" };
 
@@ -37,6 +38,15 @@ export default async function DashboardPage() {
     : false;
   const shouldAutoOpenCheckin =
     isPaydayDate(context.today) && !paydayDraft.isEditingConfirmed && !dismissedToday;
+  // Only once the *current* period's check-in is confirmed and no overall
+  // budget exists yet: the draft plans the next period on a payday date, and a
+  // suggestion for a different period than the hero shows would mislead.
+  const suggestedBudget =
+    paydayDraft.isEditingConfirmed &&
+    periodKey(paydayDraft.periodRef) === summary.period.key &&
+    summary.overallBudget === null
+      ? summarizePaydayDraft(paydayDraft, context.rates).available
+      : null;
 
   return (
     <div className="space-y-6">
@@ -46,7 +56,7 @@ export default async function DashboardPage() {
         locale={context.language}
         shouldAutoOpen={shouldAutoOpenCheckin}
       />
-      <PeriodHero summary={summary} elapsed={elapsed} t={t} />
+      <PeriodHero summary={summary} elapsed={elapsed} suggestedBudget={suggestedBudget} t={t} />
 
       <MonthlyPaceCard
         data={monthlyPace}

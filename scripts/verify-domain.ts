@@ -40,6 +40,7 @@ import {
   defaultProtectedBuffer,
   planAccountBuffers,
   scaleFlexibleSuggestions,
+  summarizePaydayDraft,
 } from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
 import {
@@ -1081,6 +1082,50 @@ async function main() {
     }),
     -6000,
   );
+
+  {
+    // summarizePaydayDraft is what both the Dashboard check-in summary line
+    // and the period hero's recommended overall budget read - it must convert
+    // income per account and apply the same formula as above.
+    const draftRates: RateTable = { rates: { USD: 1, DOP: 60 }, fetchedAt: new Date(), stale: false };
+    const draft = {
+      displayCurrency: "DOP",
+      accounts: [
+        { incomeEntered: 30000, currency: "DOP" },
+        { incomeEntered: 100, currency: "USD" },
+      ],
+      goals: [{ plannedAmount: 4000 }],
+      essentialCategories: [{ plannedAmount: 5000 }, { plannedAmount: 1000 }],
+      flexibleCategories: [{ plannedAmount: 2500.5 }, { plannedAmount: 0 }],
+      includedCarryover: 2000,
+      subscriptionsTotal: 3000,
+      contributionsTotal: 1500,
+      plannedBuffer: 3600,
+    } as unknown as Parameters<typeof summarizePaydayDraft>[0];
+    const summary = summarizePaydayDraft(draft, draftRates);
+    eq("draft summary converts every account's income into the display currency", summary.totalIncome, 36000);
+    eq("draft summary sums essential fixed planned amounts", summary.essentialFixedTotal, 6000);
+    eq("draft summary sums flexible planned amounts", summary.flexibleTotal, 2500.5);
+    eq(
+      "draft summary's available figure follows availableForFlexibleCategories",
+      summary.available,
+      availableForFlexibleCategories({
+        income: 36000,
+        includedCarryover: 2000,
+        subscriptions: 3000,
+        recurringContributions: 1500,
+        goalPlan: 4000,
+        essentialFixed: 6000,
+        buffer: 3600,
+      }),
+    );
+    eq("draft summary available is 19,900 for that plan", summary.available, 19900);
+    eq(
+      "an over-committed draft summarises to a negative available, not zero",
+      summarizePaydayDraft({ ...draft, plannedBuffer: 30000 }, draftRates).available,
+      -6500,
+    );
+  }
 
   {
     const bufferAccounts = [

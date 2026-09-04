@@ -8,20 +8,39 @@ import { Card } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { formatDayMonth } from "@/lib/date";
 import type { Dictionary } from "@/lib/i18n";
+import { periodKey } from "@/lib/period";
 
 import type { PeriodSummary } from "@/lib/data/period-summary";
 
 export function PeriodHero({
   summary,
   elapsed,
+  suggestedBudget = null,
   t,
 }: {
   summary: PeriodSummary;
   elapsed: number;
+  /**
+   * "Available for flexible categories" from this period's confirmed payday
+   * check-in, in summary.currency, or null when there is no confirmed check-in
+   * for this period or an overall budget is already set. May be zero or
+   * negative - shown as a shortfall, and then not carried to the budget form.
+   */
+  suggestedBudget?: number | null;
   t: Dictionary["dashboard"];
 }) {
   const { period, currency } = summary;
   const used = summary.periodBudget > 0 ? summary.spent / summary.periodBudget : 0;
+  const carriesSuggestion = suggestedBudget !== null && suggestedBudget > 0;
+  // `suggested` is read by src/app/(app)/budgets/page.tsx to pre-fill (never
+  // save) the overall budget field. A zero/negative figure is shown above but
+  // not carried: the budget form rejects negatives and 0 would be a real budget.
+  const setBudgetHref = carriesSuggestion
+    ? `/budgets?${new URLSearchParams({
+        period: periodKey(period),
+        suggested: suggestedBudget.toFixed(2),
+      })}`
+    : "/budgets";
 
   return (
     <Card className="gap-0 overflow-hidden p-0">
@@ -75,8 +94,21 @@ export function PeriodHero({
               <p className="text-sm text-muted-foreground">
                 {t.setBudgetPrompt}
               </p>
+              {suggestedBudget !== null ? (
+                <p
+                  className={
+                    carriesSuggestion
+                      ? "text-sm font-medium"
+                      : "text-sm font-medium text-[var(--critical)]"
+                  }
+                >
+                  {carriesSuggestion
+                    ? t.recommendedBudget(formatMoney(suggestedBudget, currency))
+                    : t.recommendedShortfall(formatMoney(suggestedBudget, currency))}
+                </p>
+              ) : null}
               <Button asChild size="sm">
-                <Link href="/budgets">{t.setPeriodBudget}</Link>
+                <Link href={setBudgetHref}>{t.setPeriodBudget}</Link>
               </Button>
             </div>
           )}

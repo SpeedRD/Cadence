@@ -122,6 +122,10 @@ export const es = {
     setBudgetPrompt:
       "Define un presupuesto para este periodo y Cadence calcula cuánto puedes gastar cada día después de los compromisos.",
     setPeriodBudget: "Definir el presupuesto de este periodo",
+    recommendedBudget: (amount: string) =>
+      `Recomendado: ${amount} - lo que tu revisión de día de pago deja para categorías flexibles.`,
+    recommendedShortfall: (amount: string) =>
+      `Tu revisión de día de pago deja ${amount} para categorías flexibles - el plan está sobrecomprometido, así que aún no hay nada que presupuestar.`,
     spent: "Gastado",
     percentOfBudget: (pct: number) => `${pct}% del presupuesto`,
     noBudget: "sin presupuesto",
@@ -387,6 +391,8 @@ export const es = {
     noOverallSet: (total: string) =>
       `No hay presupuesto general definido. Se usa el total de los presupuestos por categoría (${total}).`,
     clearToRemove: "Vacía el campo para eliminar el presupuesto general.",
+    prefilledFromCheckin: (amount: string) =>
+      `${amount} viene prellenado de tu revisión de día de pago - no se guarda nada hasta que lo confirmes.`,
     spentOf: (spent: string, total: string) => `${spent} gastado de ${total}`,
     committed: "Comprometido",
     recurringStillToCome: (n: number) =>

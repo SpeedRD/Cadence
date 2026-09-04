@@ -8,6 +8,8 @@
 import { convert, type RateTable } from "@/lib/currency";
 import { round2 } from "@/lib/money";
 
+import type { PaydayCheckinDraft } from "@/lib/data/payday";
+
 /** max(bufferPercent% of this check-in's income, the configured floor). Never zero unless the floor itself is zero. */
 export function defaultProtectedBuffer(
   incomeTotal: number,
@@ -43,6 +45,48 @@ export function availableForFlexibleCategories(input: FlexibleInput): number {
       input.essentialFixed -
       input.buffer,
   );
+}
+
+export interface PaydayDraftSummary {
+  /** Every account's entered income converted into draft.displayCurrency. */
+  totalIncome: number;
+  goalPlanTotal: number;
+  essentialFixedTotal: number;
+  flexibleTotal: number;
+  /** availableForFlexibleCategories() over the draft - negative when the plan is over-committed. */
+  available: number;
+}
+
+/**
+ * The headline figures for a check-in draft, in draft.displayCurrency. This is
+ * the single place that turns a PaydayCheckinDraft into "available for
+ * flexible categories": the Dashboard's confirmed check-in summary line and
+ * the period hero's recommended overall budget both read it from here, so the
+ * two can never disagree.
+ */
+export function summarizePaydayDraft(draft: PaydayCheckinDraft, rates: RateTable): PaydayDraftSummary {
+  const totalIncome = round2(
+    draft.accounts.reduce(
+      (sum, a) => sum + convert(a.incomeEntered, a.currency, draft.displayCurrency, rates),
+      0,
+    ),
+  );
+  // Goal and category planned amounts are already in draft.displayCurrency.
+  const goalPlanTotal = round2(draft.goals.reduce((sum, g) => sum + g.plannedAmount, 0));
+  const essentialFixedTotal = round2(
+    draft.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0),
+  );
+  const flexibleTotal = round2(draft.flexibleCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
+  const available = availableForFlexibleCategories({
+    income: totalIncome,
+    includedCarryover: draft.includedCarryover,
+    subscriptions: draft.subscriptionsTotal,
+    recurringContributions: draft.contributionsTotal,
+    goalPlan: goalPlanTotal,
+    essentialFixed: essentialFixedTotal,
+    buffer: draft.plannedBuffer,
+  });
+  return { totalIncome, goalPlanTotal, essentialFixedTotal, flexibleTotal, available };
 }
 
 export interface FlexibleSuggestion {
