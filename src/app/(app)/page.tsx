@@ -54,18 +54,30 @@ export default async function DashboardPage() {
       ? summarizePaydayDraft(paydayDraft, context.rates).available
       : null;
 
+  // Ordered by what the card currently is, not by what component it is. Before
+  // the check-in is confirmed it is a prompt carrying the page's primary action,
+  // and it leads. Once confirmed it becomes a read-only receipt of a decision
+  // already made (see PaydayCheckinCard's isEditingConfirmed branch) and would
+  // otherwise hold first place for the rest of the period, pushing safe-to-spend
+  // - the reason to open Cadence on an ordinary day - below the fold.
+  const checkinCard = (
+    <PaydayCheckinCard
+      draft={paydayDraft}
+      rates={context.rates}
+      locale={context.language}
+      shouldAutoOpen={shouldAutoOpenCheckin}
+    />
+  );
+  const checkinLeads = !paydayDraft.isEditingConfirmed;
+
   return (
     <div className="space-y-6">
       {context.recurringPosting ? (
         <NotPostingAlert posting={context.recurringPosting} t={t} />
       ) : null}
-      <PaydayCheckinCard
-        draft={paydayDraft}
-        rates={context.rates}
-        locale={context.language}
-        shouldAutoOpen={shouldAutoOpenCheckin}
-      />
+      {checkinLeads ? checkinCard : null}
       <PeriodHero summary={summary} elapsed={elapsed} suggestedBudget={suggestedBudget} t={t} />
+      {checkinLeads ? null : checkinCard}
 
       <MonthlyPaceCard
         data={monthlyPace}

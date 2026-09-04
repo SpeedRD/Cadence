@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { Meter } from "@/components/meter";
+import { GoalAchievedNote, GoalMeter } from "@/components/goals/goal-achieved";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { formatDate } from "@/lib/date";
@@ -38,7 +38,7 @@ export function GoalCard({
               {Math.round(goal.progress * 100)}%
             </span>
           </div>
-          <Meter value={goal.progress} max={1} status="accent" />
+          <GoalMeter goalId={goal.id} value={goal.progress} />
           <p className="text-xs text-muted-foreground">
             {t.of(formatMoney(goal.displayTarget, displayCurrency))}
             {showConverted
@@ -48,7 +48,9 @@ export function GoalCard({
         </div>
 
         {goal.achievedAt ? (
-          <p className="text-xs text-[var(--good)]">{t.reached}</p>
+          <GoalAchievedNote goalId={goal.id} className="block text-xs text-[var(--good)]">
+            {t.reached}
+          </GoalAchievedNote>
         ) : goal.targetDate && goal.displayPerPeriod !== null ? (
           <p className="text-xs text-muted-foreground">
             <span className="text-foreground figure">

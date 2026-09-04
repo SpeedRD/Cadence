@@ -3,8 +3,8 @@ import Link from "next/link";
 
 import { ContributionDialog } from "@/components/goals/contribution-dialog";
 import { GoalActions } from "@/components/goals/goal-actions";
+import { GoalAchievedNote, GoalMeter } from "@/components/goals/goal-achieved";
 import { GoalDialog } from "@/components/goals/goal-dialog";
-import { Meter } from "@/components/meter";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/stat";
 import { Button } from "@/components/ui/button";
@@ -123,9 +123,9 @@ export default async function GoalsPage() {
                       )}
                     </span>
                   </div>
-                  <Meter value={goal.progress} max={1} status="accent" size="lg" />
+                  <GoalMeter goalId={goal.id} value={goal.progress} size="lg" />
                   {goal.currency !== goal.displayCurrency ? (
-                    <p className="figure text-[0.6875rem] text-muted-foreground">
+                    <p className="figure figure-sm text-[0.6875rem] text-muted-foreground">
                       {formatMoney(goal.savedAmount, goal.currency)}{" "}
                       {t.ofAmount(formatMoney(goal.targetAmount, goal.currency))}
                     </p>
@@ -135,7 +135,9 @@ export default async function GoalsPage() {
                 <div className="flex items-end justify-between gap-3">
                   <div className="text-xs text-muted-foreground">
                     {goal.achievedAt ? (
-                      <span className="text-[var(--good)]">{t.fullyFunded}</span>
+                      <GoalAchievedNote goalId={goal.id} className="text-[var(--good)]">
+                        {t.fullyFunded}
+                      </GoalAchievedNote>
                     ) : goal.displayPerPeriod !== null ? (
                       <>
                         <span className="figure text-foreground">

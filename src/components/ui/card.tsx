@@ -36,6 +36,12 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
 function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
+      // data-slot is load-bearing, not just a hook for call sites: globals.css
+      // keys the shared heading treatment (width axis + tracking) to
+      // [data-slot="card-title"] alongside h1-h4, because this title is a div
+      // and would otherwise render at a different width and tracking than the
+      // h2 that DialogTitle renders at the very same size. Renaming the slot
+      // silently drops this title out of the app's heading style.
       data-slot="card-title"
       className={cn(
         "font-heading text-base leading-snug font-medium group-data-[size=sm]/card:text-sm",

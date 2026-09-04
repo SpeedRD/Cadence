@@ -145,7 +145,7 @@ export default async function AccountDetailPage({
                 <TableBody>
                   {rows.map((row) => (
                     <TableRow key={row.id}>
-                      <TableCell className="figure text-xs text-muted-foreground">
+                      <TableCell className="figure figure-sm text-xs text-muted-foreground">
                         {toISODate(row.date)}
                       </TableCell>
                       <TableCell>

@@ -39,6 +39,7 @@ export function FormDialog({
   open: controlledOpen,
   onOpenChange,
   savedMessage,
+  onSuccess,
 }: {
   title: string;
   description?: string;
@@ -52,6 +53,8 @@ export function FormDialog({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   savedMessage: string;
+  /** Runs once per successful submit, after the dialog closes and toasts. */
+  onSuccess?: (state: NonNullable<ActionState>) => void;
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
@@ -65,8 +68,9 @@ export function FormDialog({
       handled.current = state.at;
       setOpen(false);
       toast.success(state.message ?? savedMessage);
+      onSuccess?.(state);
     }
-  }, [state, setOpen, savedMessage]);
+  }, [state, setOpen, savedMessage, onSuccess]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

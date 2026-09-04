@@ -67,7 +67,7 @@ export function PeriodHero({
           {summary.hasBudget ? (
             <div className="space-y-2">
               <p className="eyebrow">{t.safeToSpendPerDay}</p>
-              <p className="figure text-5xl leading-none font-medium">
+              <p className="figure figure-xl text-5xl leading-none font-medium">
                 {formatMoney(summary.safeToSpendPerDay, currency)}
               </p>
               <p className="text-sm text-muted-foreground">
@@ -124,7 +124,7 @@ export function PeriodHero({
                   : t.noBudget}
               </p>
             </div>
-            <p className="figure text-2xl">
+            <p className="figure figure-lg text-2xl">
               {formatMoney(summary.spent, currency)}
             </p>
             {summary.totalSpent > summary.spent ? (

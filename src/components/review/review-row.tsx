@@ -78,7 +78,7 @@ export function ReviewRow({
 
   return (
     <TableRow>
-      <TableCell className="figure text-xs text-muted-foreground">
+      <TableCell className="figure figure-sm text-xs text-muted-foreground">
         {toISODate(row.date)}
       </TableCell>
       <TableCell className="max-w-[18rem] truncate text-sm">

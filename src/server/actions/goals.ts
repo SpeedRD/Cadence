@@ -1,7 +1,7 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
-import { recomputeGoalSaved } from "@/lib/goals";
+import { rebuildGoalSaved, recomputeGoalSaved } from "@/lib/goals";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import {
@@ -83,10 +83,13 @@ export async function addContributionAction(
       note: parsed.data.note,
     },
   });
-  await recomputeGoalSaved(goal.id);
+  const { justAchieved } = await rebuildGoalSaved(goal.id);
 
   revalidateApp();
-  return done(t.contributionLogged);
+  return done(
+    t.contributionLogged,
+    justAchieved ? { achievedGoalId: goal.id } : undefined,
+  );
 }
 
 export async function deleteContributionAction(

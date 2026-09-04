@@ -60,7 +60,7 @@ interface ParsedRow {
 function StepLabel({ index, title }: { index: string; title: string }) {
   return (
     <div className="flex items-baseline gap-2">
-      <span className="figure text-xs text-primary">{index}</span>
+      <span className="figure figure-sm text-xs text-primary">{index}</span>
       <span className="text-sm font-medium">{title}</span>
     </div>
   );
@@ -431,7 +431,7 @@ export function CsvImporter({
                         key={index}
                         className={cn(!row.valid && "opacity-50")}
                       >
-                        <TableCell className="figure text-xs">
+                        <TableCell className="figure figure-sm text-xs">
                           {row.date ? toISODate(row.date) : t.unreadable}
                         </TableCell>
                         <TableCell className="max-w-[22rem] truncate text-sm">

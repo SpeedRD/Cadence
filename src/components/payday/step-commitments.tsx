@@ -227,16 +227,18 @@ export function StepCommitments({
                     ))
                   )}
                   {plan.belowBuffer ? (
-                    <Alert variant="destructive">
-                      <AlertDescription>
-                        {plan.suggestedAccountName
-                          ? t.accountBelowBufferWithAlternative(
-                              formatMoney(plan.shortfall, plan.currency),
-                              plan.suggestedAccountName,
-                            )
-                          : t.accountBelowBuffer(formatMoney(plan.shortfall, plan.currency))}
-                      </AlertDescription>
-                    </Alert>
+                    <div className="reveal-block">
+                      <Alert variant="destructive">
+                        <AlertDescription>
+                          {plan.suggestedAccountName
+                            ? t.accountBelowBufferWithAlternative(
+                                formatMoney(plan.shortfall, plan.currency),
+                                plan.suggestedAccountName,
+                              )
+                            : t.accountBelowBuffer(formatMoney(plan.shortfall, plan.currency))}
+                        </AlertDescription>
+                      </Alert>
+                    </div>
                   ) : (
                     <p className="text-xs text-[var(--good)]">
                       {t.accountAboveBuffer(formatMoney(plan.headroom, plan.currency))}
@@ -272,9 +274,11 @@ export function StepCommitments({
           ) : null}
 
           {plannedBuffer <= 0 ? (
-            <Alert variant="destructive">
-              <AlertDescription>{t.bufferZeroWarning}</AlertDescription>
-            </Alert>
+            <div className="reveal-block">
+              <Alert variant="destructive">
+                <AlertDescription>{t.bufferZeroWarning}</AlertDescription>
+              </Alert>
+            </div>
           ) : null}
         </CardContent>
       </Card>

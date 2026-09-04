@@ -63,7 +63,7 @@ function AmountCell({
         {formatMoney(row.displayAmount, displayCurrency)}
       </span>
       {row.currency !== displayCurrency ? (
-        <p className="figure text-[0.6875rem] text-muted-foreground">
+        <p className="figure figure-sm text-[0.6875rem] text-muted-foreground">
           {formatMoney(row.amount, row.currency)}
         </p>
       ) : null}
@@ -110,7 +110,7 @@ export function TransactionTable({
           <TableBody>
             {rows.map((row) => (
               <TableRow key={row.id} className="group">
-                <TableCell className="figure text-xs text-muted-foreground">
+                <TableCell className="figure figure-sm text-xs text-muted-foreground">
                   {toISODate(row.date)}
                 </TableCell>
                 <TableCell>

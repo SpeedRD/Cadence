@@ -151,7 +151,7 @@ function AccountsTable({
                   >
                     {account.name}
                   </Link>
-                  <p className="figure text-[0.6875rem] text-muted-foreground">
+                  <p className="figure figure-sm text-[0.6875rem] text-muted-foreground">
                     {account.currency}
                     {account.status === "ARCHIVED" ? (
                       <Badge variant="outline" className="ml-1.5 align-middle">
@@ -171,7 +171,7 @@ function AccountsTable({
                     {formatMoney(account.balance, account.currency)}
                   </span>
                   {account.currency !== displayCurrency ? (
-                    <p className="figure text-[0.6875rem] text-muted-foreground">
+                    <p className="figure figure-sm text-[0.6875rem] text-muted-foreground">
                       {formatMoney(account.displayBalance, displayCurrency)}
                     </p>
                   ) : null}

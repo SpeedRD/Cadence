@@ -50,7 +50,13 @@ export function AppShell({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur">
+        {/* The app's only floating material: content scrolls under it, so the
+            blur is what keeps the strip readable rather than decoration. The
+            supports- guard matches DialogOverlay's - without backdrop-filter
+            the 85% fill alone would let rows ghost through unblurred. The
+            app-header hook is what globals.css's prefers-reduced-transparency
+            block turns solid. */}
+        <header className="app-header sticky top-0 z-30 border-b border-border/70 bg-background/85 supports-backdrop-filter:backdrop-blur">
           <div className="flex h-14 items-center gap-4 px-4 sm:px-6">
             <div className="flex min-w-0 items-center gap-3">
               <div className="hidden w-24 sm:block">

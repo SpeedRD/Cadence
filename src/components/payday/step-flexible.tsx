@@ -81,11 +81,13 @@ export function StepFlexible({
             <span className="figure">{formatMoney(perDay, displayCurrency)}</span>
           </div>
           {remaining < 0 ? (
-            <Alert variant="destructive">
-              <AlertDescription>
-                {t.flexibleOverallocated(formatMoney(Math.abs(remaining), displayCurrency))}
-              </AlertDescription>
-            </Alert>
+            <div className="reveal-block">
+              <Alert variant="destructive">
+                <AlertDescription>
+                  {t.flexibleOverallocated(formatMoney(Math.abs(remaining), displayCurrency))}
+                </AlertDescription>
+              </Alert>
+            </div>
           ) : null}
         </CardContent>
       </Card>

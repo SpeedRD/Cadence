@@ -5,6 +5,8 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -470,16 +472,20 @@ function UnknownRowsPanel({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            className="size-3.5 rounded-sm border-border accent-primary"
+        <div className="flex items-center gap-1.5">
+          <Checkbox
+            id="import-review-select-all"
             checked={allSelected}
-            onChange={toggleAll}
+            onCheckedChange={() => toggleAll()}
             aria-label={t.selectAllAria}
           />
-          {t.selectedCount(selected.size)}
-        </label>
+          <Label
+            htmlFor="import-review-select-all"
+            className="text-xs font-normal text-muted-foreground"
+          >
+            {t.selectedCount(selected.size)}
+          </Label>
+        </div>
         {selected.size > 0 ? (
           <>
             <Select onValueChange={applyToSelected}>
@@ -524,15 +530,13 @@ function UnknownRowsPanel({
               return (
                 <TableRow key={index}>
                   <TableCell>
-                    <input
-                      type="checkbox"
-                      className="size-3.5 rounded-sm border-border accent-primary"
+                    <Checkbox
                       checked={selected.has(index)}
-                      onChange={() => toggleRow(index)}
+                      onCheckedChange={() => toggleRow(index)}
                       aria-label={t.selectRowAria}
                     />
                   </TableCell>
-                  <TableCell className="figure text-xs">{toISODate(row.date)}</TableCell>
+                  <TableCell className="figure figure-sm text-xs">{toISODate(row.date)}</TableCell>
                   <TableCell className="max-w-[22rem] truncate text-sm">{row.note || "-"}</TableCell>
                   <TableCell className="text-right">
                     <span className="figure text-sm">{formatMoney(row.amount, currency)}</span>
@@ -575,7 +579,7 @@ function RowsTable({
       <TableBody>
         {rows.map((row, index) => (
           <TableRow key={index}>
-            <TableCell className="figure text-xs">{toISODate(row.date)}</TableCell>
+            <TableCell className="figure figure-sm text-xs">{toISODate(row.date)}</TableCell>
             <TableCell className="max-w-[22rem] truncate text-sm">{row.note || "-"}</TableCell>
             <TableCell className="text-right">
               <span className="figure text-sm">{formatMoney(row.amount, currency)}</span>

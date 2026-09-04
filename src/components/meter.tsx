@@ -23,12 +23,15 @@ export function Meter({
   status,
   className,
   size = "default",
+  celebrate = false,
 }: {
   value: number;
   max: number;
   status?: keyof typeof STATUS_COLOR;
   className?: string;
   size?: "default" | "lg";
+  /** A goal completing: land on a longer curve, once. See GoalMeter. */
+  celebrate?: boolean;
 }) {
   const resolved = status ?? meterStatus(value, max);
   const share = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
@@ -44,7 +47,12 @@ export function Meter({
       role="presentation"
     >
       <div
-        className="h-full rounded-full transition-[width] duration-300"
+        className={cn(
+          "h-full rounded-full transition-[width]",
+          // The completing update gets a longer land so the meter and the
+          // "fully funded" line that follows it read as one event.
+          celebrate ? "duration-[520ms] ease-[var(--ease-out)]" : "duration-300",
+        )}
         style={{
           width: `${share * 100}%`,
           backgroundColor: STATUS_COLOR[resolved],

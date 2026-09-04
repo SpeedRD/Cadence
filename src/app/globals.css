@@ -60,6 +60,12 @@
   color-scheme: light;
   --radius: 0.6rem;
 
+  /* Shared easing vocabulary. Every transition in the app cites one of these by
+     name rather than inlining an approximation; Tailwind's built-in curves are
+     too weak for deliberate motion. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
   --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
   --font-heading: var(--font-archivo), var(--font-instrument-sans), ui-sans-serif,
     sans-serif;
@@ -171,13 +177,28 @@
     font-feature-settings: "cv05" 1;
   }
 
+  /*
+    Keyed to the heading *role*, not the tag. CardTitle renders a div and
+    DialogTitle renders Radix's h2, so a tag-only selector gave the app two
+    different-looking 16px Archivo titles sitting side by side - card titles
+    at width 100 with no tracking, dialog titles at 112 with tracking. Both
+    are headings; both get the same treatment.
+  */
   h1,
   h2,
   h3,
-  h4 {
+  h4,
+  [data-slot="card-title"] {
     font-family: var(--font-heading);
     font-variation-settings: "wdth" 112;
-    letter-spacing: -0.012em;
+    /* The 14-16px case, which is most of them. */
+    letter-spacing: -0.005em;
+  }
+
+  /* 24px (PageHeader) and 30px (PinGate) want roughly four times the pull;
+     one value across the whole range was too tight at 16 and too loose at 30. */
+  h1 {
+    letter-spacing: -0.02em;
   }
 
   /* Money and dates line up column-to-column. */
@@ -193,16 +214,165 @@
     @apply font-mono text-[0.625rem] font-medium tracking-[0.14em] text-muted-foreground uppercase;
   }
 
+  /*
+    Tracking on a figure is size-specific, and on a monospace face it has to
+    be. Plex Mono's advance widths are already fixed and tuned, so the single
+    -0.025em this class used to carry closed the intercharacter space that
+    keeps 8 / 0 / 6 apart at 11px - on figures read against a bank statement -
+    while being too loose at 48px. The base is now the face's own metrics;
+    anything meaningfully above or below 14-20px opts into a step.
+  */
   .figure {
-    @apply font-mono tabular-nums tracking-tight;
+    @apply font-mono tabular-nums;
+    letter-spacing: 0;
+  }
+  /* <= 12px: the small-text bump. */
+  .figure-sm {
+    letter-spacing: 0.01em;
+  }
+  /* 24-30px. */
+  .figure-lg {
+    letter-spacing: -0.015em;
+  }
+  /* 36px and up. */
+  .figure-xl {
+    letter-spacing: -0.025em;
+  }
+
+  /*
+    Button feedback. The press must land on pointer-down, not ramp in: the 1px
+    nudge used to sit on transition-all's 150ms default, so the confirmation
+    that the interface heard you arrived ~150ms late - on the most-touched
+    surface in the app. Transform now goes in at 0ms and only eases back out on
+    release. Naming the properties also stops a blanket transition dragging
+    width and every other animatable property along with it.
+    Reduced motion: the transform drops, the colour feedback stays.
+  */
+  .btn-press {
+    /* `translate` and not just `transform`: Tailwind v4 compiles the button's
+       own active:translate-y-px into the standalone translate property, so a
+       transform-only transition would never touch the nudge. Both are listed
+       so a button that sets a real transform is covered too; both are
+       independent transform properties and stay on the compositor. */
+    transition-property: color, background-color, border-color, box-shadow, translate,
+      transform;
+    transition-duration: 150ms, 150ms, 150ms, 150ms, 140ms, 140ms;
+    transition-timing-function: ease, ease, ease, ease, var(--ease-out), var(--ease-out);
+  }
+  .btn-press:active {
+    transition-duration: 0ms;
+  }
+
+  /*
+    Payday wizard step entrance. Entry only - the outgoing step is not missed,
+    and animating it out would delay the next one. The direction class tells the
+    user whether they moved forward or back, which a plain fade cannot.
+    Reduced motion: the translate drops (see the block at the end of this file)
+    and the 150ms opacity cross-fade still marks the step change.
+  */
+  .step-enter {
+    transition:
+      opacity 200ms var(--ease-out),
+      transform 200ms var(--ease-out);
+  }
+  @starting-style {
+    .step-enter-forward {
+      opacity: 0;
+      transform: translateX(8px);
+    }
+    .step-enter-back {
+      opacity: 0;
+      transform: translateX(-8px);
+    }
+  }
+
+  /*
+    A warning or acknowledgement arriving mid-interaction. Animating the row
+    track is what bridges the reflow - a plain fade would still let everything
+    below it snap down. A transition rather than keyframes on purpose: the
+    over-allocation alert in the payday wizard toggles on keystroke, and a
+    transition retargets from its current value where keyframes would restart.
+    Opacity only on the visual axis, no translate, so a mid-typing toggle
+    cannot wobble the layout sideways.
+    Reduced motion: rows snap to full height, opacity still cross-fades.
+  */
+  .reveal-block {
+    display: grid;
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transition:
+      grid-template-rows 180ms var(--ease-out),
+      opacity 180ms var(--ease-out);
+  }
+  .reveal-block > * {
+    overflow: hidden;
+    min-height: 0;
+  }
+  @starting-style {
+    .reveal-block {
+      grid-template-rows: 0fr;
+      opacity: 0;
+    }
+  }
+
+  /*
+    The line that appears when a goal is fully funded, and only on the
+    contribution that actually crossed the target (see GoalAchievedNote). It
+    lands after the meter has finished filling, so the two read as one event
+    rather than two. Deliberately restrained - no bounce, no confetti.
+    Reduced motion: no delay, no translate, a 150ms cross-fade in place.
+  */
+  .goal-achieved-note {
+    transition:
+      opacity 260ms var(--ease-out) 480ms,
+      transform 260ms var(--ease-out) 480ms;
+  }
+  @starting-style {
+    .goal-achieved-note {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .goal-achieved-note {
+      transition-delay: 0ms !important;
+    }
   }
 }
 
+/*
+  Reduced motion means gentler, not none. Transform-, size- and position-based
+  motion is dropped (nothing vestibular survives), but the opacity cross-fade
+  that tells the user *something changed* is kept - removing it too would leave
+  state changes teleporting with no cue at all.
+*/
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
+    transition-property: opacity !important;
+    transition-duration: 150ms !important;
+  }
+}
+
+/*
+  Reduced transparency. The app has exactly two translucent layers - the
+  sticky header and the dialog scrim - and both go solid here rather than
+  losing the job they do. The header becomes opaque background, so dense rows
+  stop showing through the one strip of chrome. The overlay drops its blur and
+  compensates with a heavier scrim: "dim to focus" has to survive without the
+  blur doing half the separating. Unlayered on purpose, so it wins over the
+  Tailwind utilities that set these on the elements themselves.
+*/
+@media (prefers-reduced-transparency: reduce) {
+  .app-header {
+    background: var(--background);
+    backdrop-filter: none;
+  }
+
+  [data-slot="dialog-overlay"] {
+    background: rgb(0 0 0 / 0.35);
+    backdrop-filter: none;
   }
 }

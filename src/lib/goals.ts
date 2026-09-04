@@ -5,7 +5,8 @@ import { getRateTable } from "@/lib/rates";
 
 /**
  * Recompute Goal.savedAmount from its contributions - the source of truth - and
- * write the cached value back.
+ * write the cached value back. Thin wrapper over rebuildGoalSaved() for the
+ * callers that only need the total.
  *
  * Contributions are normally already in the goal's own currency: the manual
  * flow forces it, and recurring posting converts once when it writes the row
@@ -20,11 +21,28 @@ import { getRateTable } from "@/lib/rates";
  * back and forth with it.
  */
 export async function recomputeGoalSaved(goalId: string): Promise<number> {
+  return (await rebuildGoalSaved(goalId)).saved;
+}
+
+/**
+ * The same rebuild, reporting whether *this* call is the one that crossed the
+ * target - i.e. the goal had no achievedAt going in and has one coming out.
+ *
+ * It has to be decided in here rather than by comparing before/after from the
+ * caller: the row lock above is what makes the answer single-valued. Two
+ * contributions landing together are serialised by it, so the first sees a null
+ * achievedAt and reports the crossing, and the second sees the timestamp the
+ * first wrote and reports nothing. A caller reading achievedAt outside the lock
+ * could have both report it.
+ */
+export async function rebuildGoalSaved(
+  goalId: string,
+): Promise<{ saved: number; justAchieved: boolean }> {
   const exists = await prisma.goal.findUnique({
     where: { id: goalId },
     select: { id: true },
   });
-  if (!exists) return 0;
+  if (!exists) return { saved: 0, justAchieved: false };
 
   // Fetched before the transaction on purpose: getRateTable can call the rate
   // service and upsert ExchangeRate rows, and neither belongs inside a lock.
@@ -40,7 +58,7 @@ export async function recomputeGoalSaved(goalId: string): Promise<number> {
       where: { id: goalId },
       select: { currency: true, targetAmount: true, achievedAt: true },
     });
-    if (!goal) return 0;
+    if (!goal) return { saved: 0, justAchieved: false };
 
     const contributions = await tx.goalContribution.findMany({
       where: { goalId },
@@ -70,7 +88,7 @@ export async function recomputeGoalSaved(goalId: string): Promise<number> {
       },
     });
 
-    return saved;
+    return { saved, justAchieved: achieved && goal.achievedAt === null };
   });
 }
 

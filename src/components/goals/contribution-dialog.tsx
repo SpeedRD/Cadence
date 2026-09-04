@@ -2,6 +2,7 @@
 
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
+import { markGoalAchieved } from "@/components/goals/goal-achieved";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -35,6 +36,10 @@ export function ContributionDialog({
       cancelLabel={common.cancel}
       savedMessage={t.contributionLogged}
       trigger={trigger}
+      onSuccess={(state) => {
+        // Only ever set on the contribution that crossed the target.
+        if (state.achievedGoalId) markGoalAchieved(state.achievedGoalId);
+      }}
     >
       <input type="hidden" name="goalId" value={goalId} />
 

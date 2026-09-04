@@ -2,6 +2,8 @@
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { formatMoney } from "@/lib/currency";
 import type { Dictionary } from "@/lib/i18n";
 
@@ -56,27 +58,43 @@ export function StepConfirm({
         </CardContent>
       </Card>
 
+      {/* These two are what unlock a disabled Confirm on a plan the user is
+          knowingly underfunding, so they get the app's own control rather than
+          the browser's - same ring and focus treatment as every other input in
+          the wizard. Checkbox and Label are siblings, not nested: the Radix
+          root is a button, and htmlFor is what makes the text clickable. */}
       {needsDeficitAck ? (
-        <label className="flex items-start gap-2.5 text-sm">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={acknowledgedDeficit}
-            onChange={(event) => onAcknowledgeDeficitChange(event.target.checked)}
-          />
-          {t.acknowledgeDeficitLabel}
-        </label>
+        <div className="reveal-block">
+          <div className="flex items-start gap-2.5">
+            <Checkbox
+              id="acknowledge-deficit"
+              className="mt-0.5"
+              checked={acknowledgedDeficit}
+              onCheckedChange={(checked) => onAcknowledgeDeficitChange(checked === true)}
+            />
+            <Label htmlFor="acknowledge-deficit" className="block text-sm leading-snug font-normal">
+              {t.acknowledgeDeficitLabel}
+            </Label>
+          </div>
+        </div>
       ) : null}
       {needsZeroBufferAck ? (
-        <label className="flex items-start gap-2.5 text-sm">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={acknowledgedZeroBuffer}
-            onChange={(event) => onAcknowledgeZeroBufferChange(event.target.checked)}
-          />
-          {t.acknowledgeZeroBufferLabel}
-        </label>
+        <div className="reveal-block">
+          <div className="flex items-start gap-2.5">
+            <Checkbox
+              id="acknowledge-zero-buffer"
+              className="mt-0.5"
+              checked={acknowledgedZeroBuffer}
+              onCheckedChange={(checked) => onAcknowledgeZeroBufferChange(checked === true)}
+            />
+            <Label
+              htmlFor="acknowledge-zero-buffer"
+              className="block text-sm leading-snug font-normal"
+            >
+              {t.acknowledgeZeroBufferLabel}
+            </Label>
+          </div>
+        </div>
       ) : null}
 
       {formError ? (

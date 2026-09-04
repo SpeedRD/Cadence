@@ -109,7 +109,7 @@ export default async function GoalDetailPage({
         <CardContent className="space-y-6">
           <div className="space-y-2">
             <div className="flex items-baseline justify-between gap-3">
-              <span className="figure text-3xl">
+              <span className="figure figure-lg text-3xl">
                 {formatMoney(summary.displaySaved, display)}
               </span>
               <span className="text-sm text-muted-foreground tnum">
@@ -218,7 +218,7 @@ export default async function GoalDetailPage({
               <TableBody>
                 {contributions.map((contribution) => (
                   <TableRow key={contribution.id}>
-                    <TableCell className="figure text-xs text-muted-foreground">
+                    <TableCell className="figure figure-sm text-xs text-muted-foreground">
                       {toISODate(contribution.date)}
                     </TableCell>
                     <TableCell className="text-sm">

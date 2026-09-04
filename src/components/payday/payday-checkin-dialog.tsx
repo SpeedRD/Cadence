@@ -23,6 +23,7 @@ import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
 import { availableForFlexibleCategories, planAccountBuffers } from "@/lib/payday";
+import { cn } from "@/lib/utils";
 import { confirmPaydayCheckinAction } from "@/server/actions/payday";
 
 import type { PaydayAcknowledgementState } from "@/lib/data/payday";
@@ -46,6 +47,14 @@ export function PaydayCheckinDialog({
   const t = getDictionary(locale).payday;
   const common = getDictionary(locale).common;
   const [step, setStep] = useState(1);
+  // Which way the last step change went, so the incoming step enters from the
+  // side the user came from. Set alongside setStep in the same event, so the
+  // render that draws the new step already knows its direction.
+  const [stepDir, setStepDir] = useState(1);
+  const goToStep = (next: number) => {
+    setStepDir(next > step ? 1 : -1);
+    setStep(next);
+  };
   const [plan, setPlan] = useState<PaydayCheckinDraft>(draft);
   const [acknowledgedDeficit, setAcknowledgedDeficit] = useState(false);
   const [acknowledgedZeroBuffer, setAcknowledgedZeroBuffer] = useState(false);
@@ -74,6 +83,7 @@ export function PaydayCheckinDialog({
     if (open) {
       setPlan(draft);
       setStep(1);
+      setStepDir(1);
       setAcknowledgedDeficit(false);
       setAcknowledgedZeroBuffer(false);
       setServerVerdict({ plan: draft, value: null });
@@ -270,7 +280,17 @@ export function PaydayCheckinDialog({
           }}
         >
           <input type="hidden" name="payload" value={payload} />
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          {/* Keyed on `step` so each step mounts fresh: that is what lets
+              @starting-style animate the entrance, and it also resets this
+              scroller to the top - without the key, advancing from a
+              scrolled-down step 3 opened step 4 part-way down. */}
+          <div
+            key={step}
+            className={cn(
+              "step-enter min-h-0 flex-1 overflow-y-auto pr-1",
+              stepDir > 0 ? "step-enter-forward" : "step-enter-back",
+            )}
+          >
             {step === 1 ? (
               <StepBalances
                 accounts={plan.accounts}
@@ -350,7 +370,7 @@ export function PaydayCheckinDialog({
           <DialogFooter className="items-center sm:justify-between">
             <div className="flex gap-2">
               {step > 1 ? (
-                <Button type="button" variant="ghost" onClick={() => setStep((s) => s - 1)}>
+                <Button type="button" variant="ghost" onClick={() => goToStep(step - 1)}>
                   {t.back}
                 </Button>
               ) : (
@@ -360,7 +380,7 @@ export function PaydayCheckinDialog({
               )}
             </div>
             {step < STEP_COUNT ? (
-              <Button type="button" onClick={() => setStep((s) => s + 1)}>
+              <Button type="button" onClick={() => goToStep(step + 1)}>
                 {t.next}
               </Button>
             ) : (

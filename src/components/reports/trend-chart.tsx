@@ -25,7 +25,7 @@ export function TrendChart({
   return (
     <div className="space-y-3">
       <div className="flex items-baseline justify-between text-xs text-muted-foreground">
-        <span className="figure">{formatMoney(max, currency)}</span>
+        <span className="figure figure-sm">{formatMoney(max, currency)}</span>
         <span>{t.peakPeriod}</span>
       </div>
 
@@ -51,10 +51,10 @@ export function TrendChart({
                 )}
               >
                 <p className="font-medium">{point.period.label}</p>
-                <p className="figure text-muted-foreground">
+                <p className="figure figure-sm text-muted-foreground">
                   {t.tooltipOut(formatMoney(point.spent, currency))}
                 </p>
-                <p className="figure text-muted-foreground">
+                <p className="figure figure-sm text-muted-foreground">
                   {t.tooltipIn(formatMoney(point.income, currency))}
                 </p>
               </div>
