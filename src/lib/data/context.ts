@@ -38,16 +38,25 @@ export interface AppContext {
  */
 export const getAppContext = cache(async (): Promise<AppContext> => {
   const now = today();
-  let recurringPosting: RecurringPostingSummary | null = null;
-  try {
-    recurringPosting = await postDueRecurringItems(now);
-    if (recurringPosting.itemsPosted > 0 || recurringPosting.itemsFailed > 0) {
-      console.log(describeRecurringPosting(recurringPosting));
+
+  const runRecurringPosting = async (): Promise<RecurringPostingSummary | null> => {
+    try {
+      const summary = await postDueRecurringItems(now);
+      if (summary.itemsPosted > 0 || summary.itemsFailed > 0) {
+        console.log(describeRecurringPosting(summary));
+      }
+      return summary;
+    } catch (error) {
+      console.error("[recurring] catch-up posting failed", error);
+      return null;
     }
-  } catch (error) {
-    console.error("[recurring] catch-up posting failed", error);
-  }
-  const [settings, rates] = await Promise.all([getSettings(), getRateTable()]);
+  };
+
+  const [recurringPosting, settings, rates] = await Promise.all([
+    runRecurringPosting(),
+    getSettings(),
+    getRateTable(),
+  ]);
   return {
     displayCurrency: toCurrency(settings.displayCurrency),
     language: isLocale(settings.language) ? settings.language : "en",
