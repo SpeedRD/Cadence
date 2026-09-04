@@ -218,7 +218,11 @@ export function PaydayCheckinDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex flex-col sm:max-w-2xl">
+      {/* overflow-hidden replaces DialogContent's own overflow-y-auto (cn()'s
+          tailwind-merge drops the base class rather than stacking a second
+          scroll region on it), leaving the step-content div below as the only
+          scroller so this dialog's header and footer stay put. */}
+      <DialogContent className="flex flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t.wizardTitle(plan.periodLabel)}</DialogTitle>
           <DialogDescription>
