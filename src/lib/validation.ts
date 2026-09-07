@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { MAX_INSTALLMENTS, equalInstallmentAmount } from "@/lib/afford";
 import { CURRENCIES } from "@/lib/currency";
 import { fromISODate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
@@ -222,8 +223,9 @@ export const recurringSchema = z
     }
     // The due date the user picked is also the item's anchor day: posting
     // advances nextDate but never rewrites anchorDay, so only an explicit edit
-    // here can re-anchor an item. This is the one place app writes set it, so
-    // no create or update path can leave it unset (see RecurringItem.anchorDay).
+    // here can re-anchor an item. Every app write sets it - this schema for
+    // the form, confirmAffordPurchase for an installment plan - so no create
+    // or update path can leave it unset (see RecurringItem.anchorDay).
     const anchorDay = value.nextDate.getUTCDate();
     if (value.kind === "CONTRIBUTION") {
       if (value.goalId === null) {
@@ -352,6 +354,43 @@ export const paydayConfirmSchema = z.object({
   acknowledgedZeroBuffer: z.boolean(),
 });
 
+const INSTALLMENT_COUNT_MESSAGE = `Use between 1 and ${MAX_INSTALLMENTS} installments`;
+
+/**
+ * The Afford calculator's payload. Sent as JSON, like the payday plan. Only
+ * the price and the number of installments travel: the server derives the
+ * one equal installment amount itself (equalInstallmentAmount), so the amount
+ * the checks run on and the amount the RecurringItem records are the same
+ * number by construction. `acknowledged` only matters to the confirm action,
+ * which refuses a non-viable plan without it.
+ */
+export const affordInputSchema = z
+  .object({
+    name: z.string().trim().min(1, "Name the purchase").max(80),
+    totalAmount: z
+      .number()
+      .finite()
+      .gt(0, "Enter a price greater than 0")
+      .max(AMOUNT_MAX, "That amount is too large")
+      .transform(round2),
+    installments: z
+      .number()
+      .int(INSTALLMENT_COUNT_MESSAGE)
+      .min(1, INSTALLMENT_COUNT_MESSAGE)
+      .max(MAX_INSTALLMENTS, INSTALLMENT_COUNT_MESSAGE),
+    currency,
+    frequency: z.enum(RECURRING_FREQUENCIES),
+    firstDate: isoDate,
+    accountId: z.string().trim().min(1, "Pick an account"),
+    acknowledged: z.boolean().default(false),
+  })
+  // A recurring item cannot post a zero, so a price that rounds to nothing
+  // per installment is refused here rather than recorded as a 0 subscription.
+  .refine((value) => equalInstallmentAmount(value.totalAmount, value.installments) > 0, {
+    message: "That price is too small to split into that many installments",
+    path: ["installments"],
+  });
+
 export const planningPreferencesSchema = z.object({
   bufferPercent: z.coerce.number().int().min(0).max(100),
   bufferFloorAmount: nonNegativeAmountOrEmpty.transform((value, ctx) => {
@@ -430,6 +469,11 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Pick a direction": "Elige una dirección",
   "Pick a goal": "Elige una meta",
   "Check the form and try again": "Revisa el formulario e intenta de nuevo",
+  "Name the purchase": "Ponle nombre a la compra",
+  "Enter a price greater than 0": "Ingresa un precio mayor que 0",
+  "Use between 1 and 120 installments": "Usa entre 1 y 120 cuotas",
+  "That price is too small to split into that many installments":
+    "Ese precio es demasiado pequeño para dividirlo en tantas cuotas",
 };
 
 export function firstError(error: z.ZodError, locale: Locale = "en"): string {

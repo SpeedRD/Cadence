@@ -50,6 +50,12 @@ export interface ScheduledItem {
   nextDate: Date;
   frequency: RecurringFrequency;
   anchorDay?: number | null;
+  /**
+   * RecurringItem.remainingOccurrences: how many more times the item posts,
+   * counted from nextDate, before it switches itself off. Null or absent
+   * means unbounded.
+   */
+  remainingOccurrences?: number | null;
 }
 
 /** Never walk more occurrences than this, however far behind an item has fallen. */
@@ -67,16 +73,25 @@ const MAX_OCCURRENCE_WALK = 400;
  * counts once for that backlog rather than once per missed occurrence, so one
  * unpostable item cannot swamp a period's committed total.
  *
+ * A finite item (remainingOccurrences set - an installment plan) has only that
+ * many occurrences left, counted from nextDate the way posting counts them
+ * down, so the walk stops there: a two-payment plan never owes a third date
+ * however long the window is, and a plan with nothing left owes nothing.
+ *
  * Returns an empty list when the window is already over (`from` after `to`).
  */
 export function owedOccurrences(item: ScheduledItem, from: Date, to: Date): Date[] {
   if (from.getTime() > to.getTime()) return [];
+  const remaining = item.remainingOccurrences ?? Number.POSITIVE_INFINITY;
+  if (remaining <= 0) return [];
 
   const dates: Date[] = [];
   if (item.nextDate.getTime() < from.getTime()) dates.push(item.nextDate);
 
+  // `i` counts occurrences from nextDate whether or not they land in the
+  // window, so the countdown is spent exactly as posting will spend it.
   let cursor = item.nextDate;
-  for (let i = 0; i < MAX_OCCURRENCE_WALK && cursor.getTime() <= to.getTime(); i += 1) {
+  for (let i = 0; i < MAX_OCCURRENCE_WALK && i < remaining && cursor.getTime() <= to.getTime(); i += 1) {
     if (cursor.getTime() >= from.getTime()) dates.push(cursor);
     cursor = advanceDate(cursor, item.frequency, item.anchorDay);
   }

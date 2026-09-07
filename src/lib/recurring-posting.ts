@@ -37,6 +37,12 @@
  *                      nextDate was moved back onto a posted day from failing
  *                      the same write on every future run, for ever.
  *
+ * A finite item (RecurringItem.remainingOccurrences set - an installment plan
+ * from the Afford calculator) counts down by one per occurrence it claims,
+ * posted or consumed, and the claim that reaches zero also sets active to
+ * false in the same statement. An item with a null countdown is never touched
+ * by any of that: its claim is the plain nextDate roll-forward it always was.
+ *
  * Exactly one code path posts: the daily cron route (/api/cron/recurring) and
  * the per-request catch-up in getAppContext() both call postDueRecurringItems.
  * Two overlapping runs can never double-post because each occurrence is
@@ -105,6 +111,8 @@ export interface RecurringPostingSummary {
   /** Items whose posting threw; the run carries on with the rest. */
   itemsFailed: number;
   failed: FailedRecurringItem[];
+  /** Finite items that claimed their last occurrence this run and deactivated themselves. */
+  itemsCompleted: number;
 }
 
 async function loadDueItems(today: Date) {
@@ -233,6 +241,12 @@ type OccurrenceResult = "posted" | "already_logged" | "already_posted";
  * duplicate money that is already recorded. Returns null when another run
  * already claimed it (its nextDate no longer equals `due`), in which case
  * nothing was written by this call.
+ *
+ * `claimedBefore` is how many occurrences of this item the calling run has
+ * already claimed: a finite item's countdown is expected to be the value it
+ * was loaded with less that number, and the claim checks for exactly that.
+ * `completed` is true when this claim consumed the item's last occurrence -
+ * the same statement also switched it off, so the caller must stop walking.
  */
 async function postOccurrence(
   item: DueItem,
@@ -240,22 +254,41 @@ async function postOccurrence(
   due: Date,
   alreadyLogged: boolean,
   rates: RateTable,
-): Promise<{ result: OccurrenceResult; goalContribution: boolean } | null> {
+  claimedBefore: number,
+): Promise<{ result: OccurrenceResult; goalContribution: boolean; completed: boolean } | null> {
   const next = advanceDate(due, item.frequency, item.anchorDay);
   const goalId = item.kind === "CONTRIBUTION" ? item.goalId : null;
   const externalId = recurringExternalId(item.id, due);
 
+  // A finite item counts this occurrence down - whether it is posted or
+  // consumed as already logged, it is one installment accounted for. The
+  // expected countdown joins the compare-and-swap so a value changed
+  // elsewhere while this run was in flight makes the claim fail (and the run
+  // leave the item alone) rather than get overwritten, and the claim that
+  // reaches zero deactivates the item in the very same statement. An
+  // unbounded item (null) gets the plain roll-forward it always had.
+  const expectedRemaining =
+    item.remainingOccurrences === null ? null : item.remainingOccurrences - claimedBefore;
+  const remainingAfter = expectedRemaining === null ? null : expectedRemaining - 1;
+  const completed = remainingAfter !== null && remainingAfter <= 0;
+
   const outcome = await prisma.$transaction(async (tx) => {
     const claimed = await tx.recurringItem.updateMany({
-      where: { id: item.id, active: true, nextDate: due },
-      data: { nextDate: next },
+      where:
+        expectedRemaining === null
+          ? { id: item.id, active: true, nextDate: due }
+          : { id: item.id, active: true, nextDate: due, remainingOccurrences: expectedRemaining },
+      data:
+        remainingAfter === null
+          ? { nextDate: next }
+          : { nextDate: next, remainingOccurrences: Math.max(0, remainingAfter), active: !completed },
     });
     if (claimed.count === 0) return null;
 
     // The charge reached the ledger from somewhere else. The occurrence is
     // still consumed - the item moves on - but posting it would double it.
     if (alreadyLogged) {
-      return { result: "already_logged" as const, goalContribution: false };
+      return { result: "already_logged" as const, goalContribution: false, completed };
     }
 
     // This occurrence's rows already exist (its nextDate was moved back onto a
@@ -267,7 +300,7 @@ async function postOccurrence(
       select: { id: true },
     });
     if (posted) {
-      return { result: "already_posted" as const, goalContribution: false };
+      return { result: "already_posted" as const, goalContribution: false, completed };
     }
 
     await tx.transaction.create({
@@ -284,7 +317,7 @@ async function postOccurrence(
       },
     });
 
-    if (!goalId) return { result: "posted" as const, goalContribution: false };
+    if (!goalId) return { result: "posted" as const, goalContribution: false, completed };
     // Contributions are stored in the goal's own currency, exactly as the
     // manual "Log contribution" flow does. Storing the item's currency instead
     // would leave recomputeGoalSaved re-converting this row at whatever rate
@@ -311,7 +344,7 @@ async function postOccurrence(
         recurringExternalId: externalId,
       },
     });
-    return { result: "posted" as const, goalContribution: true };
+    return { result: "posted" as const, goalContribution: true, completed };
   });
 
   // The cache rebuild reads through the shared client, so it runs after the
@@ -346,6 +379,7 @@ export async function postDueRecurringItems(
     itemsCapped: 0,
     itemsFailed: 0,
     failed: [],
+    itemsCompleted: 0,
   };
 
   // Only a contribution whose currency differs from its goal's needs a rate at
@@ -372,8 +406,22 @@ export async function postDueRecurringItems(
       continue;
     }
 
+    // Nothing left to post. The app never writes a zero countdown without
+    // deactivating in the same statement, but a row edited by hand could
+    // arrive here; retiring it is the only outcome that never posts past an
+    // installment plan's end.
+    if (item.remainingOccurrences !== null && item.remainingOccurrences <= 0) {
+      const retired = await prisma.recurringItem.updateMany({
+        where: { id: item.id, active: true, remainingOccurrences: { lte: 0 } },
+        data: { active: false },
+      });
+      if (retired.count > 0) summary.itemsCompleted += 1;
+      continue;
+    }
+
     let posted = 0;
     let claimed = 0;
+    let completed = false;
     let occurrence = item.nextDate;
     try {
       const charges = await loadLoggedCharges(item, today);
@@ -393,6 +441,7 @@ export async function postDueRecurringItems(
           occurrence,
           loggedChargeId !== null,
           rates,
+          claimed,
         );
         // Someone else (an overlapping run) owns this item now; leave the
         // rest of its backlog to them rather than racing for each occurrence.
@@ -408,6 +457,12 @@ export async function postDueRecurringItems(
         } else {
           summary.occurrencesAlreadyPosted += 1;
         }
+        // That was the item's last occurrence and it is now inactive; any
+        // later due date in the walk belongs to nobody.
+        if (outcome.completed) {
+          completed = true;
+          break;
+        }
         occurrence = advanceDate(occurrence, item.frequency, item.anchorDay);
       }
     } catch (error) {
@@ -421,7 +476,9 @@ export async function postDueRecurringItems(
     }
 
     if (posted > 0) summary.itemsPosted += 1;
+    if (completed) summary.itemsCompleted += 1;
     if (
+      !completed &&
       claimed === MAX_OCCURRENCES_PER_ITEM &&
       occurrence.getTime() <= today.getTime()
     ) {
@@ -460,6 +517,9 @@ export function describeRecurringPosting(summary: RecurringPostingSummary): stri
       .map((item) => `${item.name} (${SKIP_REASON_TEXT[item.reason]})`)
       .join(", ");
     parts.push(`${plural(summary.itemsSkipped, "item")} skipped: ${details}`);
+  }
+  if (summary.itemsCompleted > 0) {
+    parts.push(`${plural(summary.itemsCompleted, "item")} posted its last occurrence and stopped`);
   }
   if (summary.itemsCapped > 0) {
     parts.push(`${plural(summary.itemsCapped, "item")} still catching up (capped at ${MAX_OCCURRENCES_PER_ITEM} per run)`);

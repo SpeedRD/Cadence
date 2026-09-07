@@ -73,6 +73,7 @@ export const en = {
     accounts: "Accounts",
     budgets: "Budgets",
     recurring: "Recurring",
+    afford: "Afford",
     goals: "Goals",
     reports: "Reports",
     settings: "Settings",
@@ -499,6 +500,96 @@ export const en = {
       "This item changed somewhere else while the form was open. Reopen it and make the change again.",
     itemPaused: "Paused",
     itemResumed: "Resumed",
+    finished: "finished",
+    paymentsLeft: (n: number) => (n === 1 ? "1 payment left" : `${n} payments left`),
+  },
+  afford: {
+    title: "Afford",
+    description:
+      "Check whether a purchase paid in installments fits the pay periods it lands in. Nothing is recorded until you say you bought it.",
+    purchaseHeading: "The purchase",
+    purchaseName: "What are you buying?",
+    purchaseNamePlaceholder: "New laptop",
+    totalAmount: "Total price",
+    installments: "Installments",
+    installmentsHint: "How many payments the price is split into.",
+    frequency: "Paid every",
+    firstPayment: "First payment",
+    firstPaymentHint: "Later payments follow from this date at the chosen frequency.",
+    account: "Paid from",
+    accountHint: "Each installment is charged to this account.",
+    scheduleHeading: "Payment schedule",
+    scheduleDescription:
+      "Equal parts, rounded to the cent. Each one is checked against the pay period it lands in, and posts for exactly this amount.",
+    paymentLabel: (n: number) => `Payment ${n}`,
+    scheduleTotal: "Installments total",
+    scheduleRoundedUnder: (difference: string) =>
+      `Rounded to the cent: ${difference} less than the price entered.`,
+    scheduleRoundedOver: (difference: string) =>
+      `Rounded to the cent: ${difference} more than the price entered.`,
+    noScheduleYet: "Enter a price and a number of installments to see the schedule.",
+    checkAffordability: "Check affordability",
+    checking: "Checking...",
+    resultsStale: "The purchase changed since this verdict - check again before recording it.",
+    verdictViable: "Viable",
+    verdictNotViable: "Not viable",
+    viableSummary: (count: number) =>
+      count === 1
+        ? "The pay period this lands in keeps its protected buffer and stays out of deficit with this purchase in it."
+        : `All ${count} pay periods this lands in keep their protected buffer and stay out of deficit with this purchase in it.`,
+    notViableSummary: (count: number) =>
+      count === 1
+        ? "1 pay period would fall short with this purchase in it."
+        : `${count} pay periods would fall short with this purchase in it.`,
+    columnPayment: "Payment",
+    columnDate: "Date",
+    columnPeriod: "Pay period",
+    columnAmount: "Amount",
+    columnAccountCheck: (account: string) => `${account} above its buffer`,
+    columnFlexibleCheck: "Available for flexible categories",
+    columnBeforeAfter: "before / after",
+    columnVerdict: "Verdict",
+    passes: "Fits",
+    fails: "Short",
+    checkedTogether: (count: number) =>
+      `${count} payments land in this period and are checked together.`,
+    shortfallHeading: "Where it falls short",
+    accountShortfall: (period: string, account: string, amount: string) =>
+      `${period}: ${account} would end ${amount} below its protected buffer.`,
+    flexibleShortfall: (period: string, amount: string) =>
+      `${period}: the period would be ${amount} short for its flexible categories.`,
+    projectionHeading: "How these figures are projected",
+    projectionDescription: (periods: number, account: string) =>
+      `No payday check-in exists for these periods yet. ${account}'s income is projected from the average of your last ${periods} comparable pay periods (same half of the month). Its commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here. The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
+    projectionAccountColumns: (account: string) => `${account} (projected)`,
+    projectionPeriodColumns: "All accounts (projected)",
+    projectionIncome: "Income",
+    projectionCommitted: "Commitments",
+    projectionBuffer: "Buffer",
+    noHistoryForAccount: (account: string, periods: number) =>
+      `${account} received no income in the last ${periods} comparable periods, so its projected income is zero and only the buffer floor applies.`,
+    recordHeading: "Record it",
+    recordedNote: (amount: string, frequency: string, count: number, date: string) =>
+      `Records one subscription of ${amount} ${frequency}, ${count} times starting ${date}. It stops on its own after the last payment and shows up everywhere a subscription does - Recurring, the payday check-in, posting, reports.`,
+    acknowledgeLabel:
+      "I understand this purchase leaves at least one pay period below its protected buffer or in deficit, and I'm recording it anyway.",
+    bought: "I bought this",
+    addLater: "I'll add it myself later",
+    boughtToast: "Purchase recorded as a subscription",
+    recordedTitle: (name: string) => `${name} is now a recurring subscription`,
+    recordedDescription: "It posts on each payment date and switches itself off after the last one.",
+    viewRecurring: "See it on the Recurring page",
+    noAccountsTitle: "No active accounts",
+    noAccountsDescription:
+      "Add an account before checking a purchase - every installment is charged to one.",
+    accountNoLongerActive: "That account is no longer active",
+    acknowledgeFirst: "Acknowledge the shortfall before recording the purchase",
+    frequencyAdverb: {
+      WEEKLY: "every week",
+      BIWEEKLY: "every 2 weeks",
+      MONTHLY: "every month",
+      YEARLY: "every year",
+    } as Record<string, string>,
   },
   goals: {
     title: "Goals",

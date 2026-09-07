@@ -22,6 +22,7 @@ export function AccountSelect({
   defaultValue,
   placeholder,
   common,
+  onValueChange,
 }: {
   /** Lets a <Field htmlFor> label the trigger button. */
   id?: string;
@@ -30,9 +31,11 @@ export function AccountSelect({
   defaultValue?: string;
   placeholder?: string;
   common: Pick<Dictionary["common"], "pickAnAccount" | "pickACategory" | "noCategory">;
+  /** For a caller that keeps its own state (the Afford calculator); the form dialogs read the FormData instead. */
+  onValueChange?: (value: string) => void;
 }) {
   return (
-    <Select name={name} defaultValue={defaultValue}>
+    <Select name={name} defaultValue={defaultValue} onValueChange={onValueChange}>
       <SelectTrigger id={id} className="w-full">
         <SelectValue placeholder={placeholder ?? common.pickAnAccount} />
       </SelectTrigger>
@@ -122,13 +125,15 @@ export function CurrencySelect({
   id,
   name,
   defaultValue,
+  onValueChange,
 }: {
   id?: string;
   name: string;
   defaultValue?: string;
+  onValueChange?: (value: string) => void;
 }) {
   return (
-    <Select name={name} defaultValue={defaultValue ?? CURRENCIES[0]}>
+    <Select name={name} defaultValue={defaultValue ?? CURRENCIES[0]} onValueChange={onValueChange}>
       <SelectTrigger id={id} className="w-full">
         <SelectValue />
       </SelectTrigger>

@@ -75,7 +75,12 @@ export function RecurringList({
                 <span className="truncate text-sm font-medium">{row.name}</span>
                 {!row.active ? (
                   <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
-                    {t.paused}
+                    {row.remainingOccurrences === 0 ? t.finished : t.paused}
+                  </span>
+                ) : null}
+                {row.active && row.remainingOccurrences !== null ? (
+                  <span className="rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary">
+                    {t.paymentsLeft(row.remainingOccurrences)}
                   </span>
                 ) : null}
                 {row.active && row.needs ? (

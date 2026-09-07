@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Calculator,
   Coins,
   Flag,
   Gauge,
@@ -47,6 +48,7 @@ export function NavLinks({
     { href: "/accounts", label: t.accounts, icon: Wallet },
     { href: "/budgets", label: t.budgets, icon: SlidersHorizontal },
     { href: "/recurring", label: t.recurring, icon: Repeat },
+    { href: "/afford", label: t.afford, icon: Calculator },
     { href: "/goals", label: t.goals, icon: Flag },
     { href: "/reports", label: t.reports, icon: Coins },
     { href: "/settings", label: t.settings, icon: Settings },

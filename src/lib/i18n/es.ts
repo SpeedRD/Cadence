@@ -75,6 +75,7 @@ export const es = {
     accounts: "Cuentas",
     budgets: "Presupuestos",
     recurring: "Recurrentes",
+    afford: "Cuotas",
     goals: "Metas",
     reports: "Informes",
     settings: "Ajustes",
@@ -503,6 +504,96 @@ export const es = {
       "Este elemento cambió en otro lugar mientras el formulario estaba abierto. Ábrelo de nuevo y repite el cambio.",
     itemPaused: "Pausado",
     itemResumed: "Reanudado",
+    finished: "terminado",
+    paymentsLeft: (n: number) => (n === 1 ? "1 pago restante" : `${n} pagos restantes`),
+  },
+  afford: {
+    title: "¿Me alcanza?",
+    description:
+      "Comprueba si una compra pagada en cuotas cabe en los períodos de pago en los que cae. No se registra nada hasta que digas que la compraste.",
+    purchaseHeading: "La compra",
+    purchaseName: "¿Qué vas a comprar?",
+    purchaseNamePlaceholder: "Laptop nueva",
+    totalAmount: "Precio total",
+    installments: "Cuotas",
+    installmentsHint: "En cuántos pagos se divide el precio.",
+    frequency: "Se paga cada",
+    firstPayment: "Primer pago",
+    firstPaymentHint: "Los pagos siguientes salen de esta fecha con la frecuencia elegida.",
+    account: "Se paga desde",
+    accountHint: "Cada cuota se carga a esta cuenta.",
+    scheduleHeading: "Calendario de pagos",
+    scheduleDescription:
+      "Partes iguales, redondeadas al centavo. Cada una se comprueba contra el período de pago en el que cae y se contabiliza exactamente por este monto.",
+    paymentLabel: (n: number) => `Pago ${n}`,
+    scheduleTotal: "Total de las cuotas",
+    scheduleRoundedUnder: (difference: string) =>
+      `Redondeado al centavo: ${difference} menos que el precio ingresado.`,
+    scheduleRoundedOver: (difference: string) =>
+      `Redondeado al centavo: ${difference} más que el precio ingresado.`,
+    noScheduleYet: "Ingresa un precio y un número de cuotas para ver el calendario.",
+    checkAffordability: "Comprobar si alcanza",
+    checking: "Comprobando...",
+    resultsStale: "La compra cambió desde este veredicto: vuelve a comprobar antes de registrarla.",
+    verdictViable: "Viable",
+    verdictNotViable: "No viable",
+    viableSummary: (count: number) =>
+      count === 1
+        ? "El período de pago en el que cae conserva su colchón protegido y no entra en déficit con esta compra."
+        : `Los ${count} períodos de pago en los que cae conservan su colchón protegido y no entran en déficit con esta compra.`,
+    notViableSummary: (count: number) =>
+      count === 1
+        ? "1 período de pago se quedaría corto con esta compra."
+        : `${count} períodos de pago se quedarían cortos con esta compra.`,
+    columnPayment: "Pago",
+    columnDate: "Fecha",
+    columnPeriod: "Período de pago",
+    columnAmount: "Monto",
+    columnAccountCheck: (account: string) => `${account} por encima de su colchón`,
+    columnFlexibleCheck: "Disponible para categorías flexibles",
+    columnBeforeAfter: "antes / después",
+    columnVerdict: "Veredicto",
+    passes: "Alcanza",
+    fails: "Corto",
+    checkedTogether: (count: number) =>
+      `${count} pagos caen en este período y se comprueban juntos.`,
+    shortfallHeading: "Dónde se queda corto",
+    accountShortfall: (period: string, account: string, amount: string) =>
+      `${period}: ${account} terminaría ${amount} por debajo de su colchón protegido.`,
+    flexibleShortfall: (period: string, amount: string) =>
+      `${period}: al período le faltarían ${amount} para sus categorías flexibles.`,
+    projectionHeading: "Cómo se proyectan estas cifras",
+    projectionDescription: (periods: number, account: string) =>
+      `Todavía no existe un check-in de pago para estos períodos. El ingreso de ${account} se proyecta con el promedio de tus últimos ${periods} períodos comparables (la misma mitad del mes). Sus compromisos son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí. El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
+    projectionAccountColumns: (account: string) => `${account} (proyectado)`,
+    projectionPeriodColumns: "Todas las cuentas (proyectado)",
+    projectionIncome: "Ingreso",
+    projectionCommitted: "Compromisos",
+    projectionBuffer: "Colchón",
+    noHistoryForAccount: (account: string, periods: number) =>
+      `${account} no recibió ingresos en los últimos ${periods} períodos comparables, así que su ingreso proyectado es cero y solo aplica el mínimo del colchón.`,
+    recordHeading: "Registrarla",
+    recordedNote: (amount: string, frequency: string, count: number, date: string) =>
+      `Registra una suscripción de ${amount} ${frequency}, ${count} veces a partir del ${date}. Se apaga sola después del último pago y aparece en todo lo que muestra suscripciones: Recurrentes, el check-in de pago, la contabilización y los informes.`,
+    acknowledgeLabel:
+      "Entiendo que esta compra deja al menos un período de pago por debajo de su colchón protegido o en déficit, y la registro de todos modos.",
+    bought: "La compré",
+    addLater: "La agrego yo más tarde",
+    boughtToast: "Compra registrada como suscripción",
+    recordedTitle: (name: string) => `${name} ya es una suscripción recurrente`,
+    recordedDescription: "Se contabiliza en cada fecha de pago y se apaga sola después del último.",
+    viewRecurring: "Verla en la página Recurrentes",
+    noAccountsTitle: "No hay cuentas activas",
+    noAccountsDescription:
+      "Agrega una cuenta antes de comprobar una compra: cada cuota se carga a una.",
+    accountNoLongerActive: "Esa cuenta ya no está activa",
+    acknowledgeFirst: "Reconoce el faltante antes de registrar la compra",
+    frequencyAdverb: {
+      WEEKLY: "cada semana",
+      BIWEEKLY: "cada 2 semanas",
+      MONTHLY: "cada mes",
+      YEARLY: "cada año",
+    } as Record<string, string>,
   },
   goals: {
     title: "Metas",

@@ -158,7 +158,12 @@ export function planPeriodRef(context: AppContext): PeriodRef {
     : context.currentPeriod;
 }
 
-const HISTORY_PERIODS = 6;
+/**
+ * How many comparable (same-half) periods the planner averages over. Shared
+ * with the Afford calculator (src/lib/data/afford.ts), which projects a
+ * future period's income and commitments with this same walk.
+ */
+export const HISTORY_PERIODS = 6;
 
 /** Exported so Task 7's server action can recompute the exact same suggestions before persisting - never trusting a client-sent "recommended" figure. */
 export async function getCategorySuggestions(

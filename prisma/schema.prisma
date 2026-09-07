@@ -265,6 +265,14 @@ model RecurringItem {
   /// posting falls back to the occurrence's own day (the pre-anchor behaviour).
   anchorDay    Int?
   active       Boolean            @default(true)
+  /// How many more occurrences to post before the item switches itself off.
+  /// Null means unbounded - every ordinary subscription or contribution, and
+  /// every row that existed before this column. A number counts down by one
+  /// per occurrence postDueRecurringItems claims, and the write that reaches
+  /// 0 also sets `active` to false in the same statement, so the item drops
+  /// out of every "active items" read at once. Written by the Afford
+  /// calculator for an installment plan; the recurring form never touches it.
+  remainingOccurrences Int?
   categoryId   String?
   /// The account each posted occurrence is charged to. Required for posting.
   accountId    String?

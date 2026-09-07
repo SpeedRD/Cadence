@@ -19,6 +19,12 @@ export interface RecurringRow {
   /** The row's version when it was read, so the edit form can refuse a stale save. */
   updatedAt: Date;
   active: boolean;
+  /**
+   * Payments still to post for an installment plan (see the Afford
+   * calculator); null for an ordinary, open-ended item. 0 with active false
+   * is a plan that has finished, as opposed to one the user paused.
+   */
+  remainingOccurrences: number | null;
   note: string | null;
   categoryId: string | null;
   categoryName: string | null;
@@ -67,6 +73,7 @@ export async function listRecurringItems(context: AppContext) {
       nextDate: item.nextDate,
       updatedAt: item.updatedAt,
       active: item.active,
+      remainingOccurrences: item.remainingOccurrences,
       note: item.note,
       categoryId: item.categoryId,
       categoryName: item.category?.name ?? null,

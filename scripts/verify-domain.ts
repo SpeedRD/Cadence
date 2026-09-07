@@ -58,6 +58,7 @@ import {
 } from "../src/lib/import-grouping";
 import { num, round2 } from "../src/lib/money";
 import { gmailRedirectUri } from "../src/lib/oauth/google";
+import type { AffordInput } from "../src/lib/data/afford";
 import type { NextRequest } from "next/server";
 
 const prisma = new PrismaClient({
@@ -3004,6 +3005,376 @@ async function main() {
     await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Posting" } } });
     await prisma.goal.delete({ where: { id: postingGoal.id } });
     await prisma.account.deleteMany({ where: { id: { in: [postingAccount.id, archivedPostingAccount.id] } } });
+  }
+
+  console.log("\n== afford: installment plans ==");
+  {
+    const affordLib = await import("../src/lib/afford");
+    const affordData = await import("../src/lib/data/afford");
+    const { postDueRecurringItems: postForAfford } = await import("../src/lib/recurring-posting");
+    const { listRecurringItems } = await import("../src/lib/data/recurring");
+    const { getPeriodSummary: periodSummaryForAfford } = await import("../src/lib/data/period-summary");
+    const { getDashboardData } = await import("../src/lib/data/dashboard");
+
+    console.log("\n-- installment schedule (pure) --");
+    eq("the split is always equal: 100 over 3 is 33.33 each", affordLib.equalInstallmentAmount(100, 3), 33.33);
+    eq("the equal amount is rounded to the cent, up or down", `${affordLib.equalInstallmentAmount(1000, 7)}:${affordLib.equalInstallmentAmount(100, 6)}`, "142.86:16.67");
+    eq("a single installment is the whole price", affordLib.equalInstallmentAmount(250.5, 1), 250.5);
+    eq("zero installments or no price split into nothing", `${affordLib.equalInstallmentAmount(100, 0)}:${affordLib.equalInstallmentAmount(0, 3)}`, "0:0");
+    eq("a price that rounds to nothing per installment is 0, not a fraction of a cent", affordLib.equalInstallmentAmount(0.01, 3), 0);
+    const equalRows = affordLib.buildInstallments(affordLib.installmentDates(civilDate(2026, 10, 1), "MONTHLY", 3), affordLib.equalInstallmentAmount(100, 3));
+    eq("every schedule row carries the same amount - no remainder on the last", equalRows.map((i) => i.amount).join(","), "33.33,33.33,33.33");
+    eq("monthly dates anchor on the first payment's day through short months", affordLib.installmentDates(civilDate(2026, 1, 31), "MONTHLY", 3).map(toISODate).join(","), "2026-01-31,2026-02-28,2026-03-31");
+    eq("biweekly dates step 14 days", affordLib.installmentDates(civilDate(2026, 10, 1), "BIWEEKLY", 3).map(toISODate).join(","), "2026-10-01,2026-10-15,2026-10-29");
+    const biweeklyPlan = affordLib.buildInstallments(affordLib.installmentDates(civilDate(2026, 10, 1), "BIWEEKLY", 3), 100);
+    eq("installments are bucketed into their pay periods with periodForDate", biweeklyPlan.map((i) => i.periodKey).join(","), "2026-10-A,2026-10-A,2026-10-B");
+    const bucketTotals = affordLib.installmentTotalsByPeriod(biweeklyPlan);
+    eq("two installments in one period are summed before evaluation", `${bucketTotals.get("2026-10-A")}:${bucketTotals.get("2026-10-B")}`, "200:100");
+    {
+      const { affordInputSchema: schema } = await import("../src/lib/validation");
+      const base = { name: "Verify Afford Schema", totalAmount: 100, installments: 3, currency: "USD", frequency: "MONTHLY", firstDate: "2026-10-01", accountId: "acc_1", acknowledged: false };
+      eq("the payload carries only the price and the count - no per-installment amounts", schema.safeParse(base).success ? Object.keys(schema.safeParse(base).data ?? {}).sort().join(",") : "rejected", "accountId,acknowledged,currency,firstDate,frequency,installments,name,totalAmount");
+      const zeroPrice = schema.safeParse({ ...base, totalAmount: 0 });
+      eq("a zero price is refused", zeroPrice.success ? "accepted" : zeroPrice.error.issues[0]?.message, "Enter a price greater than 0");
+      const tooMany = schema.safeParse({ ...base, installments: 121 });
+      eq("more than 120 installments is refused", tooMany.success ? "accepted" : tooMany.error.issues[0]?.message, "Use between 1 and 120 installments");
+      const fractional = schema.safeParse({ ...base, installments: 2.5 });
+      eq("a fractional count is refused", fractional.success ? "accepted" : fractional.error.issues[0]?.message, "Use between 1 and 120 installments");
+      const tooSmall = schema.safeParse({ ...base, totalAmount: 0.01 });
+      eq("a price that would post as 0 per installment is refused", tooSmall.success ? "accepted" : tooSmall.error.issues[0]?.message, "That price is too small to split into that many installments");
+    }
+
+    console.log("\n-- occurrence walk respects a finite item's countdown (pure) --");
+    {
+      const { owedOccurrences: owed } = await import("../src/lib/recurring");
+      const weekly = { nextDate: civilDate(2026, 10, 1), frequency: "WEEKLY" as const, anchorDay: 1 };
+      const window = [civilDate(2026, 10, 1), civilDate(2026, 10, 15)] as const;
+      eq("an unbounded weekly item owes every date in the window", owed(weekly, ...window).map(toISODate).join(","), "2026-10-01,2026-10-08,2026-10-15");
+      eq("a null countdown is unbounded too", owed({ ...weekly, remainingOccurrences: null }, ...window).length, 3);
+      eq("a finite item owes only its remaining occurrences", owed({ ...weekly, remainingOccurrences: 2 }, ...window).map(toISODate).join(","), "2026-10-01,2026-10-08");
+      eq("the countdown counts from nextDate, so an overdue backlog spends it too", owed({ ...weekly, nextDate: civilDate(2026, 9, 24), remainingOccurrences: 3 }, ...window).map(toISODate).join(","), "2026-09-24,2026-10-01,2026-10-08");
+      eq("nothing left means nothing owed", owed({ ...weekly, remainingOccurrences: 0 }, ...window).length, 0);
+    }
+
+    console.log("\n-- comparable history walk --");
+    const affordToday = civilDate(2026, 9, 7);
+    eq("history skips comparable periods that have not ended yet", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A,2026-05-A,2026-04-A,2026-03-A");
+    eq("a far-off period resolves to the same completed history", affordData.comparableHistory({ year: 2027, month: 3, period: "A" }, affordToday)[0].key, "2026-08-A");
+    eq("B periods walk back through B periods only", affordData.comparableHistory({ year: 2026, month: 10, period: "B" }, affordToday).map((p) => p.key).join(","), "2026-08-B,2026-07-B,2026-06-B,2026-05-B,2026-04-B,2026-03-B");
+    eq("a period ending today has not ended", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, civilDate(2026, 9, 15))[0].key, "2026-08-A");
+    eq("a period that ended yesterday counts", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, civilDate(2026, 9, 16))[0].key, "2026-09-A");
+    eq("averages run from the oldest period with activity, like category suggestions", JSON.stringify(affordData.averageSinceFirstActivity([100, 100, 0, 0, 0, 0])), JSON.stringify({ amount: 100, periods: 2 }));
+    eq("zeros inside the active stretch still dilute", affordData.averageSinceFirstActivity([100, 0, 100, 0, 0, 0]).amount, 66.67);
+    eq("no activity at all projects zero over zero periods", JSON.stringify(affordData.averageSinceFirstActivity([0, 0, 0])), JSON.stringify({ amount: 0, periods: 0 }));
+
+    console.log("\n-- viability engine (pure) --");
+    const projectionFor = (
+      key: string,
+      account: { income: number; committed: number; buffer: number; currency?: string },
+      flexible: { income: number; committed: number; buffer: number },
+    ) => {
+      const info = periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" });
+      return [key, {
+        period: info,
+        account: { accountId: "acc", name: "Checking", currency: account.currency ?? "USD", income: account.income, committed: account.committed, buffer: account.buffer, basis: "average" as const },
+        flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer },
+        historyPeriods: 6,
+      }] as const;
+    };
+    const planOf = (dates: Date[], amount: number) => affordLib.buildInstallments(dates, amount);
+    const octFirst = civilDate(2026, 10, 1);
+    const viablePure = affordLib.evaluateAffordability({
+      installments: planOf([octFirst], 500),
+      currency: "USD",
+      projections: new Map([projectionFor("2026-10-A", { income: 1000, committed: 150, buffer: 100 }, { income: 1000, committed: 150, buffer: 100 })]),
+      rates,
+    });
+    const vp = viablePure.periods[0];
+    eq("account headroom before = income - commitments - buffer", vp.account.headroomBefore, 750);
+    eq("account headroom after subtracts the installment", vp.account.headroomAfter, 250);
+    eq("flexible available before is the check-in formula with the projected buffer", vp.flexible.availableBefore, 750);
+    eq("flexible available after subtracts the installment", vp.flexible.availableAfter, 250);
+    eq("both checks pass and the purchase is viable", `${vp.account.passes}:${vp.flexible.passes}:${viablePure.viable}`, "true:true:true");
+    const exactBuffer = affordLib.evaluateAffordability({
+      installments: planOf([octFirst], 750),
+      currency: "USD",
+      projections: new Map([projectionFor("2026-10-A", { income: 1000, committed: 150, buffer: 100 }, { income: 1000, committed: 150, buffer: 100 })]),
+      rates,
+    });
+    eq("landing exactly on the buffer still passes (at or above)", `${exactBuffer.periods[0].account.headroomAfter}:${exactBuffer.viable}`, "0:true");
+    const accountBreach = affordLib.evaluateAffordability({
+      installments: planOf([octFirst], 800),
+      currency: "USD",
+      projections: new Map([projectionFor("2026-10-A", { income: 1000, committed: 150, buffer: 100 }, { income: 5000, committed: 150, buffer: 100 })]),
+      rates,
+    });
+    eq("breaching the account buffer fails that check with the exact shortfall", `${accountBreach.periods[0].account.passes}:${accountBreach.periods[0].account.shortfall}`, "false:50");
+    eq("the flexible check can pass while the account check fails", accountBreach.periods[0].flexible.passes, true);
+    eq("one failed check makes the period and the purchase fail", `${accountBreach.periods[0].passes}:${accountBreach.viable}:${accountBreach.failing.length}`, "false:false:1");
+    const flexibleBreach = affordLib.evaluateAffordability({
+      installments: planOf([octFirst], 100),
+      currency: "USD",
+      projections: new Map([projectionFor("2026-10-A", { income: 5000, committed: 0, buffer: 500 }, { income: 1000, committed: 800, buffer: 500 })]),
+      rates,
+    });
+    eq("a period already in deficit fails the flexible check by the deficit plus the installment", `${flexibleBreach.periods[0].account.passes}:${flexibleBreach.periods[0].flexible.passes}:${flexibleBreach.periods[0].flexible.shortfall}`, "true:false:400");
+    const summed = affordLib.evaluateAffordability({
+      installments: planOf([octFirst, civilDate(2026, 10, 15)], 400),
+      currency: "USD",
+      projections: new Map([projectionFor("2026-10-A", { income: 1000, committed: 150, buffer: 100 }, { income: 1000, committed: 150, buffer: 100 })]),
+      rates,
+    });
+    eq("two installments in one period are judged on their sum, not one at a time", `${summed.periods.length}:${summed.periods[0].installmentTotal}:${summed.periods[0].account.headroomAfter}:${summed.viable}`, "1:800:-50:false");
+    eq("the period verdict lists both installments", summed.periods[0].installments.map((i) => i.index).join(","), "1,2");
+    const converted = affordLib.evaluateAffordability({
+      installments: planOf([octFirst], 6000),
+      currency: "DOP",
+      projections: new Map([projectionFor("2026-10-A", { income: 1000, committed: 150, buffer: 100 }, { income: 1000, committed: 150, buffer: 100 })]),
+      rates,
+    });
+    eq("an installment in another currency is converted into the account's before the check", `${converted.periods[0].account.installment}:${converted.periods[0].account.headroomAfter}`, "100:650");
+    const multi = affordLib.evaluateAffordability({
+      installments: planOf([octFirst, civilDate(2026, 11, 1)], 500),
+      currency: "USD",
+      projections: new Map([
+        projectionFor("2026-10-A", { income: 1000, committed: 150, buffer: 100 }, { income: 1000, committed: 150, buffer: 100 }),
+        projectionFor("2026-11-A", { income: 1000, committed: 650, buffer: 100 }, { income: 1000, committed: 150, buffer: 100 }),
+      ]),
+      rates,
+    });
+    eq("the purchase is viable only when every affected period passes", `${multi.periods.map((p) => p.passes).join(",")}:${multi.viable}:${multi.failing.map((p) => p.key).join(",")}`, "true,false:false:2026-11-A");
+
+    console.log("\n-- projected periods: income from history, commitments from schedules (database) --");
+    const affordAccount = await prisma.account.create({
+      data: { name: "Verify Afford Account", currency: "USD", type: "CHECKING" },
+    });
+    const affordSubsCategory = await prisma.category.findFirstOrThrow({ where: { isSubscriptionDefault: true } });
+    // Six comparable A periods and six B periods (Mar-Aug 2026): 10,000 in,
+    // plus recurring-source, subscription-category and ordinary spending -
+    // none of which may feed the projected commitments any more, which come
+    // from the recurring items' own schedules.
+    for (let month = 3; month <= 8; month += 1) {
+      for (const [day, half] of [[5, "A"], [20, "B"]] as const) {
+        await prisma.transaction.create({
+          data: { date: civilDate(2026, month, day), amount: 10000, currency: "USD", type: "INCOME", accountId: affordAccount.id, source: "MANUAL", note: "Verify Afford pay" },
+        });
+        await prisma.transaction.create({
+          data: { date: civilDate(2026, month, day + 3), amount: 100, currency: "USD", type: "EXPENSE", accountId: affordAccount.id, source: "RECURRING", externalId: `verify-afford:${month}-${half}`, note: "Verify Afford sub" },
+        });
+        await prisma.transaction.create({
+          data: { date: civilDate(2026, month, day + 4), amount: 50, currency: "USD", type: "EXPENSE", accountId: affordAccount.id, source: "MANUAL", categoryId: affordSubsCategory.id, note: "Verify Afford streaming" },
+        });
+        await prisma.transaction.create({
+          data: { date: civilDate(2026, month, day + 5), amount: 999, currency: "USD", type: "EXPENSE", accountId: affordAccount.id, source: "MANUAL", note: "Verify Afford groceries" },
+        });
+      }
+    }
+    // Floor 2000 DOP at the fixture rate is 33.33 USD, so 10% of 10,000 wins.
+    const affordContext = {
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today: affordToday,
+      currentPeriod: periodForDate(affordToday),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    };
+    const activeForAfford = await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true, name: true, currency: true } });
+    const chosenForAfford = activeForAfford.find((a) => a.id === affordAccount.id)!;
+    const octoberRefs = [{ year: 2026, month: 10, period: "A" as const }, { year: 2026, month: 10, period: "B" as const }];
+    const beforeSchedules = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+    eq("projected income is the comparable-period average of what the account received", beforeSchedules.get("2026-10-A")!.account.income, 10000);
+    eq("history no longer stands in for commitments: with no active item, nothing is committed", beforeSchedules.get("2026-10-A")!.account.committed, 0);
+    const periodCommittedBeforeSchedules = beforeSchedules.get("2026-10-A")!.flexible.committed;
+    // Real schedules: 150 monthly on the 5th from this account (A periods
+    // only), and 30 monthly from no account at all (period-wide only).
+    const rentItem = await prisma.recurringItem.create({
+      data: { name: "Verify Afford Rent", amount: 150, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 5), anchorDay: 5, accountId: affordAccount.id },
+    });
+    await prisma.recurringItem.create({
+      data: { name: "Verify Afford Unlinked", amount: 30, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 3), anchorDay: 3 },
+    });
+    const projections = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+    const octA = projections.get("2026-10-A")!;
+    eq("commitments are the active items' actual occurrences in the period, in the account's currency", octA.account.committed, 150);
+    eq("a monthly item due on the 5th commits nothing to the second half of the month", projections.get("2026-10-B")!.account.committed, 0);
+    eq("an item with no account counts period-wide but against no account's buffer", round2(octA.flexible.committed - periodCommittedBeforeSchedules), 180);
+    eq("the buffer is defaultProtectedBuffer over the projected income", octA.account.buffer, defaultProtectedBuffer(10000, 10, round2(2000 / 60)));
+    eq("basis is average when history exists", octA.account.basis, "average");
+    check("period-wide income adds the account's projection to every other active account's", octA.flexible.income >= 10000, octA.flexible.income);
+    check("period-wide buffer includes the account's", octA.flexible.buffer >= 1000, octA.flexible.buffer);
+    eq("B periods project from B history", projections.get("2026-10-B")!.account.income, 10000);
+    // A weekly item on the account is enumerated date by date, and its
+    // currency is converted into the account's: 600 DOP a week is 10 USD.
+    const weeklyItem = await prisma.recurringItem.create({
+      data: { name: "Verify Afford Weekly DOP", amount: 600, currency: "DOP", frequency: "WEEKLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 2), anchorDay: 2, accountId: affordAccount.id },
+    });
+    const withWeekly = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+    eq("a weekly item contributes each due date (Oct 2, 9 in the first half; 16, 23, 30 in the second), converted", `${withWeekly.get("2026-10-A")!.account.committed}:${withWeekly.get("2026-10-B")!.account.committed}`, "170:30");
+    await prisma.recurringItem.delete({ where: { id: weeklyItem.id } });
+    void rentItem;
+
+    const affordInput = (over: Partial<AffordInput> = {}): AffordInput => ({
+      name: "Verify Afford Laptop",
+      currency: "USD",
+      frequency: "MONTHLY",
+      firstDate: civilDate(2026, 10, 1),
+      accountId: affordAccount.id,
+      totalAmount: 1500,
+      installments: 3,
+      acknowledged: false,
+      ...over,
+    });
+    const viable = await affordData.evaluateAffordRequest(affordInput(), affordContext);
+    if (!viable.ok) throw new Error("viable evaluation refused");
+    eq("three monthly installments touch three periods", viable.verdict.periods.map((p) => p.key).join(","), "2026-10-A,2026-11-A,2026-12-A");
+    eq("account headroom before is income - commitments - buffer", viable.verdict.periods[0].account.headroomBefore, 8850);
+    eq("account headroom after subtracts the installment", viable.verdict.periods[0].account.headroomAfter, 8350);
+    eq("flexible available after is before less the installment", round2(viable.verdict.periods[0].flexible.availableBefore - viable.verdict.periods[0].flexible.availableAfter), 500);
+    eq("every period passes both checks", viable.verdict.periods.every((p) => p.account.passes && p.flexible.passes), true);
+    eq("the purchase is viable with no failing periods", `${viable.verdict.viable}:${viable.verdict.failing.length}`, "true:0");
+    eq("the recorded plan is 500 x 3 monthly from Oct 1", `${viable.recorded.amount}:${viable.recorded.count}:${viable.recorded.frequency}:${toISODate(viable.recorded.firstDate)}`, "500:3:MONTHLY:2026-10-01");
+    eq("the amount the checks subtracted is the amount that would be recorded", viable.verdict.installments.every((i) => i.amount === viable.recorded.amount), true);
+    eq("evaluating writes nothing (only the two schedule fixtures exist)", await prisma.recurringItem.count({ where: { name: { startsWith: "Verify Afford" } } }), 2);
+
+    // Borderline: 8,500 a month fits with 350 to spare while nothing else is
+    // recorded. The laptop confirmed below must change that.
+    const borderlineBefore = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Borderline", totalAmount: 25500 }), affordContext);
+    if (!borderlineBefore.ok) throw new Error("borderline evaluation refused");
+    eq("a borderline purchase is viable before anything else is recorded", `${borderlineBefore.verdict.viable}:${borderlineBefore.verdict.periods[0].account.headroomAfter}`, "true:350");
+
+    // Biweekly from Oct 1: Oct 1 and Oct 15 both land in Oct 1-15 (10,000
+    // together), Oct 29 in Oct 16-31 - so one period breaches and one does not.
+    const breach = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford TV", frequency: "BIWEEKLY", totalAmount: 15000 }), affordContext);
+    if (!breach.ok) throw new Error("breach evaluation refused");
+    eq("two installments in Oct 1-15 are evaluated together", `${breach.verdict.periods[0].key}:${breach.verdict.periods[0].installmentTotal}`, "2026-10-A:10000");
+    eq("Oct 1-15 breaches the account buffer by exactly the overrun", `${breach.verdict.periods[0].account.passes}:${breach.verdict.periods[0].account.shortfall}`, "false:1150");
+    eq("Oct 16-31 with a single installment still passes", `${breach.verdict.periods[1].key}:${breach.verdict.periods[1].passes}`, "2026-10-B:true");
+    eq("the purchase is not viable", breach.verdict.viable, false);
+    eq("exactly the breached period is reported", breach.verdict.failing.map((p) => p.key).join(","), "2026-10-A");
+
+    const emptyAccount = await prisma.account.create({ data: { name: "Verify Afford Empty", currency: "USD", type: "CHECKING" } });
+    const noHistory = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Nothing", accountId: emptyAccount.id, totalAmount: 100, installments: 1 }), affordContext);
+    if (!noHistory.ok) throw new Error("no-history evaluation refused");
+    eq("an account with no income history projects zero income on a 'none' basis", `${noHistory.verdict.periods[0].account.income}:${noHistory.verdict.periods[0].account.basis}`, "0:none");
+    eq("its buffer is the floor, so any installment fails by floor plus installment", `${noHistory.verdict.periods[0].account.buffer}:${noHistory.verdict.periods[0].account.shortfall}`, "33.33:133.33");
+    await prisma.account.update({ where: { id: emptyAccount.id }, data: { status: "ARCHIVED", archivedAt: new Date() } });
+    const archivedPick = await affordData.evaluateAffordRequest(affordInput({ accountId: emptyAccount.id }), affordContext);
+    eq("an archived account cannot be picked", archivedPick.ok ? "evaluated" : archivedPick.reason, "account_not_active");
+
+    console.log("\n-- I bought this --");
+    const refused = await affordData.confirmAffordPurchase(affordInput({ name: "Verify Afford TV", frequency: "BIWEEKLY", totalAmount: 15000 }), affordContext);
+    eq("a non-viable purchase is refused without the acknowledgement", refused.ok ? "created" : refused.reason, "not_acknowledged");
+    eq("a refused confirm writes nothing", await prisma.recurringItem.count({ where: { name: "Verify Afford TV" } }), 0);
+    const confirmed = await affordData.confirmAffordPurchase(affordInput(), affordContext);
+    check("a viable purchase is recorded with no checkbox", confirmed.ok);
+    const createdPlans = await prisma.recurringItem.findMany({ where: { name: "Verify Afford Laptop" } });
+    eq("exactly one RecurringItem is created", createdPlans.length, 1);
+    const plan = createdPlans[0];
+    eq("it is a SUBSCRIPTION with the chosen amount, currency, frequency, first date and account, counting 3", `${plan.kind}:${num(plan.amount)}:${plan.currency}:${plan.frequency}:${toISODate(plan.nextDate)}:${plan.anchorDay}:${plan.accountId === affordAccount.id}:${plan.active}:${plan.remainingOccurrences}`, "SUBSCRIPTION:500:USD:MONTHLY:2026-10-01:1:true:true:3");
+    eq("nothing else is set on it", `${plan.categoryId}:${plan.goalId}:${plan.note}`, "null:null:null");
+    eq("confirming adds exactly one item beside the two schedule fixtures", await prisma.recurringItem.count({ where: { name: { startsWith: "Verify Afford" } } }), 3);
+
+    console.log("\n-- a confirmed plan counts against the next calculation before it posts --");
+    const stacked = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Phone", firstDate: civilDate(2026, 10, 10), totalAmount: 900 }), affordContext);
+    if (!stacked.ok) throw new Error("stacked evaluation refused");
+    eq("a second purchase sees the first one's unposted installments as commitments", stacked.verdict.periods.map((p) => `${p.key}:${p.account.committed}`).join(","), "2026-10-A:650,2026-11-A:650,2026-12-A:650");
+    eq("its headroom drops by exactly the first plan's installment", stacked.verdict.periods[0].account.headroomBefore, 8350);
+    eq("the period-wide check sees the first plan too", round2(stacked.verdict.periods[0].flexible.committed - octA.flexible.committed), 500);
+    eq("none of the first plan's installments has posted yet", await prisma.transaction.count({ where: { source: "RECURRING", externalId: { startsWith: `${plan.id}:` } } }), 0);
+    const borderlineAfter = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Borderline", totalAmount: 25500 }), affordContext);
+    if (!borderlineAfter.ok) throw new Error("borderline re-evaluation refused");
+    eq("the borderline purchase flips to not viable alongside the recorded plan, short by its installment less the old spare", `${borderlineAfter.verdict.viable}:${borderlineAfter.verdict.failing.map((p) => p.key).join(",")}:${borderlineAfter.verdict.periods[0].account.shortfall}`, "false:2026-10-A,2026-11-A,2026-12-A:150");
+    const beyond = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Long", totalAmount: 600, installments: 6 }), affordContext);
+    if (!beyond.ok) throw new Error("long evaluation refused");
+    eq("a finite plan stops committing once its countdown runs out", beyond.verdict.periods.map((p) => `${p.key}:${p.account.committed}`).join(","), "2026-10-A:650,2026-11-A:650,2026-12-A:650,2027-01-A:150,2027-02-A:150,2027-03-A:150");
+
+    // A price that does not divide evenly: every row, every check and the
+    // recorded item all carry the one rounded amount - nothing is averaged
+    // and no row absorbs a remainder that could never post.
+    const oddPlan = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Odd", totalAmount: 100 }), affordContext);
+    if (!oddPlan.ok) throw new Error("odd evaluation refused");
+    eq("100 over 3 evaluates three rows of 33.33", oddPlan.verdict.installments.map((i) => i.amount).join(","), "33.33,33.33,33.33");
+    eq("each affected period subtracts exactly that row", oddPlan.verdict.periods.map((p) => p.installmentTotal).join(","), "33.33,33.33,33.33");
+    eq("the recorded amount is that same row, not a mean of anything", oddPlan.recorded.amount, 33.33);
+    const oddConfirm = await affordData.confirmAffordPurchase(affordInput({ name: "Verify Afford Odd", totalAmount: 100 }), affordContext);
+    check("the odd-priced plan is recorded", oddConfirm.ok);
+    const oddItem = await prisma.recurringItem.findFirstOrThrow({ where: { name: "Verify Afford Odd" } });
+    eq("the RecurringItem amount matches every schedule row exactly", `${num(oddItem.amount)}:${oddPlan.verdict.installments.every((i) => i.amount === num(oddItem.amount))}:${oddItem.remainingOccurrences}`, "33.33:true:3");
+
+    const acknowledgedConfirm = await affordData.confirmAffordPurchase(affordInput({ name: "Verify Afford TV", frequency: "BIWEEKLY", totalAmount: 15000, acknowledged: true }), affordContext);
+    check("an acknowledged non-viable purchase is recorded", acknowledgedConfirm.ok);
+    eq("the acknowledged plan counts its three installments", (await prisma.recurringItem.findFirstOrThrow({ where: { name: "Verify Afford TV" } })).remainingOccurrences, 3);
+    const afterTv = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford After TV", frequency: "BIWEEKLY", totalAmount: 300 }), affordContext);
+    if (!afterTv.ok) throw new Error("after-TV evaluation refused");
+    eq("a biweekly plan's two first-half installments and one second-half installment are enumerated exactly", `${afterTv.verdict.periods[0].account.committed}:${afterTv.verdict.periods[1].account.committed}`, `${round2(150 + 500 + 33.33 + 10000)}:${5000}`);
+
+    const listedPlans = await listRecurringItems(affordContext);
+    const laptopRow = listedPlans.subscriptions.find((row) => row.id === plan.id);
+    eq("the plan appears among subscriptions on the Recurring page with its countdown", `${laptopRow?.active}:${laptopRow?.remainingOccurrences}:${laptopRow?.needs}`, "true:3:null");
+    const octSummary = await periodSummaryForAfford(periodInfo({ year: 2026, month: 10, period: "A" }), affordContext);
+    eq("the plan is committed in the period its first installment lands in", octSummary.committedItems.find((i) => i.id === plan.id)?.nativeAmount, 500);
+
+    console.log("\n-- countdown and auto-deactivation --");
+    // Dated in the past so posting at Aug 20 - the same reference day the
+    // posting section uses, so nothing real is due - walks them down.
+    const finiteBase = { currency: "USD", frequency: "MONTHLY" as const, kind: "SUBSCRIPTION" as const, anchorDay: 1, accountId: affordAccount.id, nextDate: civilDate(2026, 6, 1) };
+    const finite = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Finite", amount: 40, remainingOccurrences: 3 } });
+    const longer = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Longer", amount: 41, remainingOccurrences: 5 } });
+    const unlimited = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Unlimited", amount: 42, remainingOccurrences: null } });
+    const prelogged = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Prelogged", amount: 77, nextDate: civilDate(2026, 7, 1), remainingOccurrences: 2 } });
+    await prisma.transaction.create({
+      data: { date: civilDate(2026, 7, 3), amount: 77, currency: "USD", type: "EXPENSE", accountId: affordAccount.id, source: "MANUAL", note: "Verify Afford Prelogged card" },
+    });
+    const postedByAfford = (itemId: string) => prisma.transaction.count({ where: { source: "RECURRING", externalId: { startsWith: `${itemId}:` } } });
+    const reloadItem = (id: string) => prisma.recurringItem.findUniqueOrThrow({ where: { id } });
+
+    const countdownRun = await postForAfford(civilDate(2026, 8, 20));
+    const finiteAfter = await reloadItem(finite.id);
+    eq("a 3-payment plan posts its three occurrences", await postedByAfford(finite.id), 3);
+    eq("the countdown reaches 0 and the item deactivates in the same write", `${finiteAfter.remainingOccurrences}:${finiteAfter.active}`, "0:false");
+    eq("its nextDate still advanced past the last occurrence", toISODate(finiteAfter.nextDate), "2026-09-01");
+    const longerAfter = await reloadItem(longer.id);
+    eq("a 5-payment plan posts three and keeps counting", `${await postedByAfford(longer.id)}:${longerAfter.remainingOccurrences}:${longerAfter.active}`, "3:2:true");
+    const unlimitedAfter = await reloadItem(unlimited.id);
+    eq("an unlimited item posts the same three and is untouched by the countdown", `${await postedByAfford(unlimited.id)}:${unlimitedAfter.remainingOccurrences}:${unlimitedAfter.active}:${toISODate(unlimitedAfter.nextDate)}`, "3:null:true:2026-09-01");
+    const preloggedAfter = await reloadItem(prelogged.id);
+    eq("an installment already logged elsewhere is consumed and still counts down", `${countdownRun.occurrencesAlreadyLogged >= 1}:${await postedByAfford(prelogged.id)}:${preloggedAfter.remainingOccurrences}:${preloggedAfter.active}`, "true:1:0:false");
+    eq("the run reports the plans that finished", countdownRun.itemsCompleted, 2);
+    const secondCountdownRun = await postForAfford(civilDate(2026, 8, 20));
+    eq("a finished plan is not posted again", `${await postedByAfford(finite.id)}:${secondCountdownRun.itemsCompleted}`, "3:0");
+    eq("a finished plan is not even due any more", (await reloadItem(finite.id)).active, false);
+
+    const listedAfter = await listRecurringItems(affordContext);
+    const finiteRow = listedAfter.subscriptions.find((row) => row.id === finite.id);
+    eq("the finished plan shows as inactive with a 0 countdown on the Recurring page", `${finiteRow?.active}:${finiteRow?.remainingOccurrences}`, "false:0");
+    const laterContext = { ...affordContext, today: civilDate(2026, 8, 31), currentPeriod: periodForDate(civilDate(2026, 8, 31)) };
+    const sepSummary = await periodSummaryForAfford(periodInfo({ year: 2026, month: 9, period: "A" }), laterContext);
+    eq("the finished plan is not committed in the next period", sepSummary.committedItems.some((i) => i.id === finite.id), false);
+    eq("the plan with payments left is still committed", sepSummary.committedItems.some((i) => i.id === longer.id), true);
+    eq("the unlimited item is still committed", sepSummary.committedItems.some((i) => i.id === unlimited.id), true);
+    const weeklyTwo = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Weekly Two", amount: 9, frequency: "WEEKLY", nextDate: civilDate(2026, 9, 1), remainingOccurrences: 2 } });
+    const sepSummaryWeekly = await periodSummaryForAfford(periodInfo({ year: 2026, month: 9, period: "A" }), laterContext);
+    eq("the period summary owes a finite item only its remaining occurrences, not every date in the window", sepSummaryWeekly.committedItems.find((i) => i.id === weeklyTwo.id)?.occurrenceCount, 2);
+    const dashboardAfter = await getDashboardData(laterContext);
+    eq("the finished plan is not upcoming", dashboardAfter.upcoming.some((i) => i.id === finite.id), false);
+    eq("the unlimited item is upcoming", dashboardAfter.upcoming.some((i) => i.id === unlimited.id), true);
+
+    const zeroLeft = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Zero", amount: 43, nextDate: civilDate(2026, 8, 1), remainingOccurrences: 0 } });
+    const zeroRun = await postForAfford(civilDate(2026, 8, 20));
+    eq("an active item with nothing left is retired without posting", `${await postedByAfford(zeroLeft.id)}:${(await reloadItem(zeroLeft.id)).active}:${zeroRun.itemsCompleted}`, "0:false:1");
+
+    // A plan cannot be resumed past its end: re-activating it (and even
+    // dragging its due date back) gets it retired again by the next run that
+    // finds it due, with nothing posted.
+    await prisma.recurringItem.update({ where: { id: finite.id }, data: { active: true, nextDate: civilDate(2026, 8, 1) } });
+    const resumedRun = await postForAfford(civilDate(2026, 8, 20));
+    eq("resuming a finished plan just retires it again without posting", `${await postedByAfford(finite.id)}:${(await reloadItem(finite.id)).active}:${resumedRun.itemsCompleted}`, "3:false:1");
+
+    await prisma.transaction.deleteMany({ where: { accountId: { in: [affordAccount.id, emptyAccount.id] } } });
+    await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
+    await prisma.account.deleteMany({ where: { id: { in: [affordAccount.id, emptyAccount.id] } } });
   }
 
   console.log("\n== manual goal contributions move real money ==");
