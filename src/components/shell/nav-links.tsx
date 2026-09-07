@@ -44,6 +44,8 @@ export function NavLinks({
   const NAV: NavItem[] = [
     { href: "/", label: t.dashboard, icon: Gauge, exact: true },
     { href: "/transactions", label: t.transactions, icon: Receipt },
+    // Kept as "Review", not renamed to "Inbox" to match the icon: "inbox"
+    // already means a connected mailbox on the Settings connections page.
     { href: "/review", label: t.review, icon: Inbox },
     { href: "/accounts", label: t.accounts, icon: Wallet },
     { href: "/budgets", label: t.budgets, icon: SlidersHorizontal },

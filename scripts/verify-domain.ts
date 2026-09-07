@@ -1563,6 +1563,104 @@ async function main() {
   await prisma.transaction.delete({ where: { id: dedupTransaction.id } });
   await prisma.recurringItem.delete({ where: { id: dedupSub.id } });
 
+  console.log("\n-- already-logged is counted per occurrence, not per item --");
+  {
+    const { loggedOccurrencesByItem } = await import("../src/lib/data/payday");
+    const { planAccountBuffers: planBuffers } = await import("../src/lib/payday");
+    // The plan period is Aug 16-31; a weekly item next due on the 20th owes the
+    // 20th and the 27th, so two occurrences of 9 each.
+    const weeklySub = await prisma.recurringItem.create({
+      data: { name: "Verify Payday Weekly", amount: 9, currency: "USD", frequency: "WEEKLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 20), anchorDay: 20, active: true, categoryId: subsCategoryForPayday.id, accountId: paydayChecking.id },
+    });
+    // Posting's own output for an occurrence already rolled past: a candidate
+    // for nothing, whatever its amount and note say.
+    const weeklyPosted = await prisma.transaction.create({
+      data: { date: civilDate(2026, 8, 17), amount: 9, currency: "USD", type: "EXPENSE", accountId: paydayChecking.id, categoryId: subsCategoryForPayday.id, note: "Verify Payday Weekly", source: "RECURRING", externalId: `${weeklySub.id}:2026-08-17` },
+    });
+    const weeklyNone = (await getPaydayCheckinDraft(paydayContext)).subscriptions.find((s) => s.recurringItemId === weeklySub.id);
+    eq("a weekly item owes both of its occurrences in the plan period", weeklyNone?.occurrenceCount, 2);
+    eq(
+      "a RECURRING row of the item's own is never taken as a logged charge",
+      `${weeklyNone?.loggedOccurrences}:${weeklyNone?.outstandingAmount}:${weeklyNone?.alreadyLogged}`,
+      "0:18:false",
+    );
+
+    const weeklyManualOne = await prisma.transaction.create({
+      data: { date: civilDate(2026, 8, 18), amount: 9, currency: "USD", type: "EXPENSE", accountId: paydayChecking.id, categoryId: subsCategoryForPayday.id, note: "Verify Payday Weekly", source: "MANUAL" },
+    });
+    const draftOneLogged = await getPaydayCheckinDraft(paydayContext);
+    const weeklyOne = draftOneLogged.subscriptions.find((s) => s.recurringItemId === weeklySub.id);
+    eq(
+      "one logged charge covers one occurrence: the other still counts, and the item is not flagged as already paid",
+      `${weeklyOne?.loggedOccurrences}:${weeklyOne?.outstandingAmount}:${weeklyOne?.outstandingNativeAmount}:${weeklyOne?.alreadyLogged}`,
+      "1:9:9:false",
+    );
+    eq(
+      "subscriptionsTotal reserves the still-unposted occurrence (9) on top of the monthly Netflix item (15)",
+      draftOneLogged.subscriptionsTotal,
+      24,
+    );
+    const bufferOneLogged = planBuffers(
+      [{ accountId: paydayChecking.id, name: paydayChecking.name, currency: "USD", income: 1000, bufferFloor: 100 }],
+      draftOneLogged.subscriptions.map((s) => ({
+        recurringItemId: s.recurringItemId,
+        accountId: s.accountId,
+        nativeAmount: s.outstandingNativeAmount,
+        currency: s.currency,
+        alreadyLogged: s.alreadyLogged,
+      })),
+      { bufferPercent: 10, displayCurrency: "USD", rates },
+    );
+    eq(
+      "the per-account buffer counts the one still-unposted occurrence against the account, not zero and not both",
+      bufferOneLogged.accounts.find((a) => a.accountId === paydayChecking.id)?.subscriptionsTotal,
+      24,
+    );
+
+    const weeklyManualTwo = await prisma.transaction.create({
+      data: { date: civilDate(2026, 8, 19), amount: 9, currency: "USD", type: "EXPENSE", accountId: paydayChecking.id, categoryId: subsCategoryForPayday.id, note: "Verify Payday Weekly", source: "MANUAL" },
+    });
+    const weeklyManualThree = await prisma.transaction.create({
+      data: { date: civilDate(2026, 8, 21), amount: 9, currency: "USD", type: "EXPENSE", accountId: paydayChecking.id, categoryId: subsCategoryForPayday.id, note: "Verify Payday Weekly", source: "MANUAL" },
+    });
+    const draftAllLogged = await getPaydayCheckinDraft(paydayContext);
+    const weeklyAll = draftAllLogged.subscriptions.find((s) => s.recurringItemId === weeklySub.id);
+    eq(
+      "with both occurrences logged the item is fully covered; a third charge cannot log more than is owed",
+      `${weeklyAll?.loggedOccurrences}:${weeklyAll?.outstandingAmount}:${weeklyAll?.alreadyLogged}`,
+      "2:0:true",
+    );
+    eq("a fully covered weekly item drops out of subscriptionsTotal entirely", draftAllLogged.subscriptionsTotal, 15);
+
+    eq(
+      "the shared helper caps logged occurrences at what the item still owes",
+      JSON.stringify([...loggedOccurrencesByItem(
+        [{ id: "w", occurrenceCount: 2 }, { id: "m", occurrenceCount: 1 }, { id: "none", occurrenceCount: 1 }],
+        new Map([["w", 5], ["m", 1]]),
+      ).entries()]),
+      JSON.stringify([["w", 2], ["m", 1], ["none", 0]]),
+    );
+
+    await prisma.transaction.deleteMany({
+      where: { id: { in: [weeklyPosted.id, weeklyManualOne.id, weeklyManualTwo.id, weeklyManualThree.id] } },
+    });
+    await prisma.recurringItem.delete({ where: { id: weeklySub.id } });
+
+    // A monthly item owes one occurrence, so one logged charge covers it
+    // completely - exactly the per-item verdict it had before.
+    const netflixManual = await prisma.transaction.create({
+      data: { date: civilDate(2026, 8, 21), amount: 15, currency: "USD", type: "EXPENSE", accountId: paydayChecking.id, categoryId: subsCategoryForPayday.id, note: "Verify Payday Netflix", source: "MANUAL" },
+    });
+    const draftMonthlyLogged = await getPaydayCheckinDraft(paydayContext);
+    const netflixLogged = draftMonthlyLogged.subscriptions.find((s) => s.recurringItemId === paydaySub.id);
+    eq(
+      "a monthly item with its one charge logged is fully covered, flagged as already paid, and reserves nothing",
+      `${netflixLogged?.occurrenceCount}:${netflixLogged?.loggedOccurrences}:${netflixLogged?.outstandingAmount}:${netflixLogged?.alreadyLogged}:${draftMonthlyLogged.subscriptionsTotal}`,
+      "1:1:0:true:0",
+    );
+    await prisma.transaction.delete({ where: { id: netflixManual.id } });
+  }
+
   console.log("\n-- budgets already set for the plan period seed the planned amounts --");
   // The "database invariants" section above already created this period's
   // Groceries budget; point it at a distinctive amount for this check and put

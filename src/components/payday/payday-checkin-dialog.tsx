@@ -132,7 +132,8 @@ export function PaydayCheckinDialog({
         plan.subscriptions.map((item) => ({
           recurringItemId: item.recurringItemId,
           accountId: item.accountId,
-          nativeAmount: item.nativeAmount,
+          // Only the occurrences not yet in the ledger, matching the server.
+          nativeAmount: item.outstandingNativeAmount,
           currency: item.currency,
           alreadyLogged: item.alreadyLogged,
         })),

@@ -106,6 +106,8 @@ interface MatchableTransaction {
 export interface RecurringMatchResult {
   matchedTransactionIds: Set<string>;
   actualNativeByItemId: Map<string, number>;
+  /** How many transactions each item matched - one per occurrence it can answer for. */
+  matchedCountByItemId: Map<string, number>;
 }
 
 function normalizeForMatch(value: string): string {
@@ -143,6 +145,7 @@ export function matchRecurringToTransactions(
 ): RecurringMatchResult {
   const matchedTransactionIds = new Set<string>();
   const actualNativeByItemId = new Map<string, number>();
+  const matchedCountByItemId = new Map<string, number>();
 
   const ordered = [...items].sort((a, b) => a.id.localeCompare(b.id));
   const shapeCounts = new Map<string, number>();
@@ -169,10 +172,11 @@ export function matchRecurringToTransactions(
 
       matchedTransactionIds.add(tx.id);
       actualNativeByItemId.set(item.id, (actualNativeByItemId.get(item.id) ?? 0) + tx.amount);
+      matchedCountByItemId.set(item.id, (matchedCountByItemId.get(item.id) ?? 0) + 1);
     }
   }
 
-  return { matchedTransactionIds, actualNativeByItemId };
+  return { matchedTransactionIds, actualNativeByItemId, matchedCountByItemId };
 }
 
 /**

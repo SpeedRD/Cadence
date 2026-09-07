@@ -1,13 +1,14 @@
 # Cadence
 
 Cadence is a single-user personal finance dashboard built around a twice-monthly pay
-cycle instead of the generic calendar month. Budgets, safe-to-spend, and goal
-roadmaps are all computed per pay period — **Period A: 1st–15th** and **Period B:
-16th–end of month** — so the numbers match how you actually get paid.
+cycle instead of the generic calendar month. Budgets, safe-to-spend, goal roadmaps,
+and the affordability check are all computed per pay period — **Period A: 1st–15th**
+and **Period B: 16th–end of month** — so the numbers match how you actually get paid.
 
-## Preview
+![Cadence dashboard: payday check-in prompt, the current pay period's safe-to-spend per day, spending against budget, and monthly spending pace](screenshots/dashboard.png)
 
-![Cadence dashboard showing the payday check-in banner, current pay period safe-to-spend, and goals summary](screenshots/Screenshot%202026-09-02%20at%2010.00.52%E2%80%AFAM.png)
+*Every screenshot in this README was captured against a throwaway database seeded
+with fictional data.*
 
 ## Why Cadence
 
@@ -15,124 +16,204 @@ Most budgeting apps assume one paycheck a month. Cadence assumes two, and builds
 everything else around that:
 
 - Twice-monthly budgeting, split cleanly at the 1st–15th and 16th–end boundaries
-- A guided payday check-in that plans each period's protected buffer and
-  category allocations from income, balances, and commitments
-- A safe-to-spend-per-day figure that accounts for budget, spending so far, and
-  upcoming committed outflows
-- Savings goals with a per-pay-period contribution roadmap, not just a single target
+  (a payday that lands on a weekend is treated as the Friday before)
+- A guided payday check-in that reconciles balances, records income, and plans each
+  period's protected buffer per account and its category allocations
+- A safe-to-spend-per-day figure computed from the period budget and what's already
+  been spent
+- Recurring subscriptions and contributions that post themselves on their due
+  dates, so the ledger stays current without retyping the same charges
+- An Afford calculator that checks whether an installment purchase fits every pay
+  period it lands in before you commit to it
+- Savings goals with a per-pay-period contribution roadmap, funded from real
+  accounts
 - Multi-currency support (DOP, USD, and EUR as first-class currencies) with cached
   USD-based exchange rates — changing your display currency only changes how
   figures are presented, never the currency a transaction was recorded in
 - Manual entry and CSV import as the baseline, with optional Gmail/Outlook
   review-based automation on top
-- English and Spanish interface localization
-- A single-user, privacy-conscious design — no multi-tenant accounts, no
-  auto-posting of anything without review
+- English and Spanish interface localization, dark and light themes
+- A single-user, privacy-conscious design: no multi-tenant accounts, and nothing
+  enters the ledger that you did not set up yourself. Review happens when you
+  create and confirm a plan — a recurring item, an Afford installment plan, a
+  payday check-in, an emailed receipt — not per transaction afterwards. Once a
+  plan is confirmed, its transactions post on schedule without further prompts.
 
 ## Features
 
-**Payday check-in** — A guided, step-by-step planner (income → account balances →
-committed outflows → flexible categories → confirm) that runs each payday. It
-computes a protected buffer (a configurable percentage of income or a fixed
-minimum, whichever is larger), then shows what's left for flexible categories
-after subscriptions, recurring contributions, goal contributions, and essential
-fixed categories are set aside.
+### Dashboard
 
-**Pay-period budgeting and safe-to-spend** — Set an overall budget per period, or
-let it fall back to the sum of category budgets. Safe-to-spend subtracts what's
-already spent and what's still committed (recurring items due before period end),
-then divides by days remaining.
+The period hero shows safe-to-spend per day, what's been spent against the period
+budget, what's still committed (recurring items due before the period ends), and
+income logged. Below it: the monthly spending pace against your own average, active
+goals, and everything due in the next seven days. If a recurring item cannot post
+(missing account or goal, archived account), the dashboard says so.
 
-**Transactions, transfers, and CSV import** — Manual entry, plus CSV import with
-date-format selection for bank exports that don't use ISO dates. Transfers are
-linked debit/credit rows that move balances between accounts without counting as
-income or expense.
+### Payday check-in
 
-**Accounts and opening balances** — Track balances across checking, savings, cash,
-and other account types, each with its own native currency. An opening balance can
-be set per account to seed its starting balance before tracked transactions begin.
+A five-step planner that runs each payday: **confirm account balances → record
+income → review commitments and goals → flexible categories → confirm.** Every
+"recommended" figure is recomputed server-side on confirm, so what you saw is what
+gets written.
 
-**Recurring subscriptions and investment contributions** — Track bills and
-recurring savings/investment contributions separately; both factor into
-safe-to-spend and the payday check-in for the period they fall in. Each item is
-tied to an account (and a contribution to a goal) and is posted automatically
-when it comes due: a subscription becomes an expense on that account, a
-contribution becomes the same expense plus a logged goal contribution. A daily
-Vercel Cron (`/api/cron/recurring`) does the posting, and opening the app runs
-the same catch-up, so a day the cron missed is never lost. An item missing its
-account or goal is flagged on the Recurring page and skipped rather than posted.
+![Payday check-in step 1: reconcile each account's reported balance against the ledger](screenshots/payday-step-balances.png)
 
-**Savings goals** — Target amount, optional target date, and a roadmap of what each
-pay period needs to carry to hit it.
+![Payday check-in step 2: record the income received into each account](screenshots/payday-step-income.png)
 
-**Multi-currency** — Every account and transaction is recorded in DOP, USD, or EUR.
-Changing the display currency in Settings only changes how figures are presented
-everywhere in the app (dashboard, budgets, goals, payday planning); it never
-converts or mutates the currency a transaction, account, or goal was recorded in.
-Conversions use cached, periodically refreshed USD-based exchange rates.
+![Payday check-in step 3: protected buffer per account, with the subscriptions each account has to cover and a picker to move one to another account](screenshots/payday-step-buffer.png)
 
-**Email review queue** — Connect Gmail and/or Outlook to have transactional emails
-parsed into a staged queue. Nothing becomes a real transaction until you approve it.
+The **protected buffer is per account**, not one global number. Each account that
+received income keeps its own buffer — a configurable percentage of that account's
+income or a fixed minimum, whichever is larger — and the step measures it against the
+subscriptions charged to that account. If one account would end below its buffer,
+the wizard says how far, suggests the account with the most room, and lets you move a
+subscription there without leaving the dialog (the change is saved to the recurring
+item itself). Recurring contributions, goal roadmap amounts, essential fixed
+categories, and last period's unspent carryover are then set aside, and what's left is
+available for flexible categories. A plan that ends in deficit, or with a zero
+buffer, can still be confirmed — but only after an explicit acknowledgement.
 
-**Reports** — Current-period spending by category, and a six-pay-period trend view.
+### Budgets and safe-to-spend
 
-**Localization** — English and Spanish interface translations, switchable from the
-top navigation bar.
+![Budgets page: overall period budget, committed and safe-to-spend figures, and a per-category table with progress meters](screenshots/budgets.png)
 
-**Security / PIN gate** — Single PIN-protected session; every route except login is
-protected server-side.
+Set an overall budget per period, or let it fall back to the sum of category
+budgets. The budget is net of commitments: safe-to-spend is the period budget minus
+flexible spending so far, divided by the days remaining. Charges posted by recurring
+items and spending in the subscription and savings categories don't eat into it —
+the payday check-in already set that money aside. "Plan this period" opens the
+check-in from here; "Copy last period" carries a previous budget forward.
 
-## Screenshots
+### Transactions
 
-<!-- Screenshots live in screenshots/ and should be refreshed after meaningful UI changes. -->
+![Transactions page with search, account, category, type, source, and date filters above the ledger](screenshots/transactions.png)
 
-### Dashboard, payday check-in, and budgeting
+Manual entry, transfers between your own accounts (linked debit/credit rows that
+never count as income or expense), external transfers (money leaving to or arriving
+from somewhere Cadence doesn't track), and CSV import with a date-format picker for
+bank exports that don't use ISO dates. Imports run through deterministic
+merchant-name categorization rules and a review step that can group repeated rows
+into a recurring item or record a pair as a transfer. Every row shows where it came
+from: manual, CSV, Gmail, Outlook, a payday check-in, an opening balance, or
+automatic recurring posting.
 
-![Cadence dashboard showing the payday check-in banner, current pay period safe-to-spend, monthly spending pace, and a goals summary](screenshots/Screenshot%202026-09-02%20at%2010.00.52%E2%80%AFAM.png)
+### Review queue
 
-![Budgets page with an overall budget field, committed/safe-to-spend totals, and a per-category budget table](screenshots/Screenshot%202026-09-02%20at%2010.01.29%E2%80%AFAM.png)
+![Review queue for email-derived transactions, empty, with the Manage connections action](screenshots/review.png)
 
-The overall budget drives safe-to-spend; category budgets are tracked independently
-and used as a fallback when no overall budget is set. The payday check-in banner
-launches the guided planning flow for the current period.
+Connect Gmail and/or Outlook and transactional emails are parsed into a staged queue.
+Pick an account, adjust the category or amount, then approve or reject each one.
+Nothing from email becomes a real transaction until you approve it — and if an
+approved receipt is the charge a recurring item was about to post, posting notices
+and skips the duplicate.
 
-### Transactions and review queue
+### Accounts
 
-![Transactions page with search, account/category/type/source filters, Import CSV, Transfer, and New actions](screenshots/Screenshot%202026-09-02%20at%2010.01.03%E2%80%AFAM.png)
+![Accounts page listing a checking and a savings account with balances and activity counts](screenshots/accounts.png)
 
-![Review queue with no pending items, and a Manage connections action for Gmail/Outlook](screenshots/Screenshot%202026-09-02%20at%2010.01.13%E2%80%AFAM.png)
+Checking, savings, cash, and other account types, each in its own native currency.
+Set an opening balance per account to seed its starting point before tracked
+transactions begin (exactly one per account, enforced by the database). Archive an
+account you no longer use; its history stays.
 
-Staged email items sit in the review queue until you approve, edit, or reject them.
+### Recurring
 
-### Accounts, recurring items, and goals
+![Recurring page: subscriptions and recurring contributions, one item tagged "4 payments left"](screenshots/recurring.png)
 
-![Accounts page listing checking and savings accounts with their native-currency and display-currency balances](screenshots/Screenshot%202026-09-02%20at%2010.01.21%E2%80%AFAM.png)
+Subscriptions (bills going out) and recurring contributions (money you put into a
+goal on a schedule). Both reduce safe-to-spend for the period they fall in, and both
+**post automatically** when they come due: a subscription becomes an expense on its
+account; a contribution becomes the same expense plus a logged contribution to its
+goal, converted once into the goal's currency. A daily Vercel Cron
+(`/api/cron/recurring`) does the posting, and opening the app runs the same catch-up,
+so a day the cron missed is never lost. Monthly and yearly items keep their anchor
+day (an item due on the 31st is charged on the 28th in February and back on the 31st
+in March). An item missing its account or goal, or pointing at an archived account,
+is flagged here and skipped rather than posted. A finite item — an installment plan
+recorded from Afford — shows how many payments are left and switches itself off after
+the last one.
 
-![Recurring page showing separate panels for subscriptions and recurring contributions](screenshots/Screenshot%202026-09-02%20at%2010.01.39%E2%80%AFAM.png)
+### Afford
 
-![Goals page showing a savings goal with its progress, target date, and per-pay-period contribution amount](screenshots/Screenshot%202026-09-02%20at%2010.01.47%E2%80%AFAM.png)
+![Afford calculator with a purchase filled in: name, total price, four monthly installments, first payment date, and the account each installment is charged to, plus the equal-installment schedule](screenshots/afford-calculator.png)
 
-### Reports and settings
+![Afford result: a "Viable" verdict, each installment checked against its pay period's account buffer and available-for-flexible figure, the projection table behind those figures, and the "I bought this" action](screenshots/afford-result.png)
 
-![Reports page showing spending by category for the current period and a six-pay-period trend chart](screenshots/Screenshot%202026-09-02%20at%2010.01.55%E2%80%AFAM.png)
+Type in a purchase, its price, how many installments, how often, the first payment
+date, and the account each installment is charged to. Cadence splits the price into
+equal parts, places each on the pay period it lands in, and runs two checks per
+period: the chosen account stays at or above its own protected buffer, and the
+period's available-for-flexible figure stays out of deficit. Installments landing in
+the same period are checked together. Because those periods haven't happened yet,
+income is projected from the average of your last six comparable periods (same half
+of the month) while commitments are exact — every active recurring item's occurrences
+in that period, including installment plans already recorded here. Nothing is written
+until you press **I bought this**, which records one self-limiting recurring
+subscription for the schedule shown; a shortfall verdict has to be acknowledged
+first.
 
-![Settings page showing display currency, cached exchange rates, payday planning preferences, essential fixed categories, and email connections](screenshots/Screenshot%202026-09-02%20at%2010.02.20%E2%80%AFAM.png)
+### Goals
+
+![Goals page: one goal reached and fully funded, one in progress with its per-pay-period roadmap amount](screenshots/goals.png)
+
+![Goal detail: progress, still to go, per-pay-period amount, and the contribution history](screenshots/goal-detail.png)
+
+![Log contribution dialog with amount, date, the account the money leaves, and a note](screenshots/goal-contribution.png)
+
+Target amount, optional target date, and a roadmap of what each pay period needs to
+carry — net of any recurring contribution already scheduled for that goal, so the
+check-in never reserves the same money twice. A contribution logged by hand moves
+real money: you pick the account it leaves, and Cadence writes the matching expense
+in that account's currency alongside the contribution (the pair is deleted together
+too). Auto-posted contributions from recurring items land here as well. A goal that
+reaches its target is marked as achieved.
+
+### Reports
+
+![Reports page: spending by category for the current period, the last six pay periods as bars, average monthly lifestyle spending by category, and the last four completed months](screenshots/reports.png)
+
+Current-period spending by category, a six-pay-period trend, and a calendar-month
+view: average monthly lifestyle spending by category, the last completed months, and
+the averages for committed spending, savings and investing, and total cash outflow.
+
+### Settings
+
+![Settings page: display currency, cached exchange rates, planning preferences (buffer percentage and floor), essential fixed categories, goal recalculation, categorization, email connections, and session](screenshots/settings.png)
+
+Display currency; the cached exchange-rate table; how the payday planner sizes the
+protected buffer (percentage of income and a fixed minimum) and whether carryover is
+included by default; which categories count as essential fixed spending; goal-total
+recalculation; categorizing older imports; Gmail/Outlook connections; and locking
+the app.
+
+### Multi-currency, localization, and the PIN gate
+
+Every account, transaction, recurring item, and goal is recorded in DOP, USD, or
+EUR. Changing the display currency only changes how figures are presented
+everywhere; it never converts or mutates what was recorded. Conversions use cached,
+periodically refreshed USD-based rates, and a stale rate table is flagged on every
+page. The interface is available in English and Spanish, switchable from the top
+bar, alongside a dark/light theme toggle. Access is a single PIN-protected session;
+every route except login is protected server-side.
+
+![Login screen with the PIN entry](screenshots/login.png)
 
 ## How it works
 
 1. Create the accounts you actually use (checking, savings, cash, etc.), with an
    opening balance if you're not starting from zero.
-2. Enter transactions manually, import a CSV, or connect Gmail/Outlook for
-   automated candidate detection.
-3. Review any email-derived items on `/review` — approve, edit, or reject each one.
-4. Set a budget (overall and/or per category) for the current pay period, or use
-   the payday check-in flow to plan the period from income, balances, and
-   commitments.
-5. Add recurring subscriptions and recurring investment/savings contributions.
-6. Create savings goals and follow their per-pay-period roadmap.
-
-Email-extracted items are never written as transactions automatically — every one
-passes through the review queue first.
+2. Enter transactions manually, import a CSV, or connect Gmail/Outlook and approve
+   the staged items on `/review`.
+3. Add recurring subscriptions and contributions, tied to the account each one is
+   charged to (and, for a contribution, the goal it feeds). From then on they post
+   themselves on their due dates.
+4. Create savings goals and follow their per-pay-period roadmap; log contributions
+   from a real account when you move money by hand.
+5. On payday, run the check-in: reconcile balances, record income, review the
+   per-account buffer and commitments, set flexible category budgets, confirm.
+6. Before an installment purchase, run it through Afford; if you buy it, record it
+   there and it becomes a recurring item with a countdown.
+7. Watch the dashboard's safe-to-spend per day through the period.
 
 ## Tech stack
 
@@ -155,7 +236,7 @@ session-pooler connection string).
 git clone <this-repository>
 cd FinanceApp
 npm install                 # runs `prisma generate` afterwards
-cp .env.example .env.local   # then fill in DATABASE_URL and SESSION_SECRET
+cp .env.example .env        # then fill in DATABASE_URL and SESSION_SECRET
 npm run db:migrate          # applies prisma/migrations to the database
 npm run db:seed             # inserts the default categories
 npm run dev
@@ -176,6 +257,7 @@ ready to use. Email automation (Gmail/Outlook) is optional — see
 | `npm run db:migrate` | `prisma migrate deploy` |
 | `npm run db:seed` | Seeds the default categories (idempotent) |
 | `npm run db:studio` | Prisma Studio |
+| `npx tsx scripts/verify-domain.ts` | Domain checks (pay periods, safe-to-spend, posting, payday, Afford, currency, CSV). Writes and then deletes rows, so run it with `DATABASE_URL` pointed at a scratch database |
 
 ## Environment variables
 
@@ -186,11 +268,11 @@ the authoritative source for "today" and pay-period boundaries.
 | Variable | Required for | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | Core app | Runtime PostgreSQL connection string |
-| `DIRECT_URL` | Core app (CLI) | Session-capable connection used by the Prisma CLI for migrations/seeding |
+| `DIRECT_URL` | Core app (CLI) | Session-capable connection used by the Prisma CLI for migrations/seeding. On Supabase this must be the session pooler; the transaction pooler hangs on migrations |
 | `SESSION_SECRET` | Core app | Signs the session cookie |
 | `APP_TIMEZONE` | Core app | IANA timezone for resolving pay periods; defaults to `America/Santo_Domingo` |
+| `CRON_SECRET` | Core app / Email automation | Bearer token required by both cron routes (`/api/cron/recurring` posts due recurring items; `/api/cron/ingest` syncs email) |
 | `OAUTH_ENCRYPTION_KEY` | Email automation | Encrypts stored OAuth tokens at rest |
-| `CRON_SECRET` | Core app / Email automation | Bearer token required by the cron routes (`/api/cron/recurring` posts due recurring items; `/api/cron/ingest` syncs email) |
 | `APP_URL` | Email automation (production) | Canonical production origin used to build the stable Gmail OAuth redirect URI |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Email automation | Gmail OAuth |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Email automation | Outlook OAuth |
@@ -203,41 +285,46 @@ registration steps) is in [PHASE2.md](./PHASE2.md).
 
 Production runs on Vercel with a Supabase PostgreSQL database. The app connects at
 runtime through the pooled (transaction-mode) connection string, while Prisma
-migrations use the documented direct/session connection. Environment-variable
-changes in Vercel only take effect on the next deploy — redeploy after updating
-them. See [DEPLOY.md](./DEPLOY.md) for the full Supabase migration walkthrough.
+migrations go through the session pooler — the transaction pooler hangs on DDL. The
+Vercel build does not run migrations, so apply a new migration to Supabase before
+deploying the code that needs it. Environment-variable changes in Vercel only take
+effect on the next deploy. `vercel.json` schedules two daily crons: email ingestion at
+04:00 UTC and recurring posting at 04:15 UTC. See [DEPLOY.md](./DEPLOY.md) for the
+full walkthrough.
 
 ## Current limitations
 
 - Email ingestion supports Gmail and Outlook only; PayPal ingestion is intentionally
-  not included.
-- Email-derived transactions are staged for review and never become real
-  transactions automatically.
+  not included. Email-derived transactions are staged for review and never become
+  real transactions without approval.
 - A mailbox's first sync may need several runs to catch up, since ingestion caps
   each run at a limited batch per mailbox.
 - No direct bank synchronization.
 - No native mobile app; the responsive web app works from mobile browsers.
-- The bundled Vercel Cron schedule runs the ingestion route once daily; the
-  in-app "Sync now" button can be used any time in between.
-- Recurring items post on their due date via the daily recurring cron, or on the
-  next app visit if the cron did not run; a long backlog (an item untouched for
-  months) catches up at most 24 occurrences per run.
+- Both crons run once a day; the in-app "Sync now" button and simply opening the app
+  cover the gaps for email and recurring posting respectively.
+- A long recurring backlog (an item untouched for months) catches up at most 24
+  occurrences per run; the rest post on the following runs.
+- Afford projects future income from history, so an account with no comparable-period
+  income is judged on its buffer floor alone.
 
 ## Project status
 
-Cadence is an actively used personal project and version-one foundation. Manual
-tracking, CSV import, budgets, goals, and reviewed Gmail/Outlook ingestion are all
-implemented. It is not a public or commercial service — see
-[PHASE2.md](./PHASE2.md) for what's built on top of the base app, and the note at
-the bottom of that file for what's intentionally not built yet.
+Cadence is an actively used personal project. Manual tracking, CSV import, budgets,
+the payday check-in, automatic recurring posting, Afford, goals, reports, and
+reviewed Gmail/Outlook ingestion are all implemented. It is not a public or
+commercial service — see [PHASE2.md](./PHASE2.md) for the email-ingestion layer and
+what it deliberately leaves out.
 
 ## Security notes
 
 - Access is gated behind a single PIN; every route except `/login` requires an
-  authenticated session.
-- Gmail and Outlook connections request read-only scopes.
-- Emails are parsed into a staged review queue — nothing is written as a real
-  transaction without explicit approval.
+  authenticated session, and the cron routes require a bearer secret.
+- Gmail and Outlook connections request read-only scopes; stored OAuth tokens are
+  encrypted at rest.
+- Emails are parsed into a staged review queue — nothing from email is written as a
+  real transaction without explicit approval. Recurring items and Afford plans post
+  automatically only after you have created and confirmed them.
 - Never commit `.env*` files; `.env.example` is the only one tracked in git.
 - Cadence is a personal tracking tool, not professional financial advice or a
   bank-grade financial institution.

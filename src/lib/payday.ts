@@ -133,10 +133,10 @@ export interface AccountBufferSubscription {
   recurringItemId: string;
   /** The recurring item's funding account - null while it has none. */
   accountId: string | null;
-  /** In `currency`, the recurring item's own currency. */
+  /** What the account still has to cover this period, in `currency` (the item's own): its occurrences not yet in the ledger. */
   nativeAmount: number;
   currency: string;
-  /** Already paid this period, so posting it again would double-count it. */
+  /** Every owed occurrence is already paid this period, so counting it again would double-count it. */
   alreadyLogged: boolean;
 }
 

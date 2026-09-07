@@ -14,6 +14,12 @@ Connection string):
   migrations/seeding, which need a session-capable connection the transaction
   pooler doesn't support for DDL.
 
+**Migrations must go through the session pooler, never the transaction
+pooler.** `prisma migrate deploy` takes a session-level advisory lock and runs
+DDL; against the transaction-mode pooler (port `6543`, `?pgbouncer=true`) it
+does not fail cleanly, it hangs. If a migration run sits there doing nothing,
+check that `DIRECT_URL` is the port `5432` string before anything else.
+
 ## 1. Create a local, private `.env.supabase`
 
 This file is for running migrations against Supabase from your machine. It's
@@ -85,7 +91,7 @@ In the Vercel project → Settings → Environment Variables (Production), set:
 - `DATABASE_URL` — the Supabase transaction pooler string (port `6543`, `?pgbouncer=true`)
 - `DIRECT_URL` — the Supabase session pooler string (port `5432`)
 - `APP_TIMEZONE` — `America/Santo_Domingo`
-- `SESSION_SECRET`, `OAUTH_ENCRYPTION_KEY`, `CRON_SECRET` — existing values, or generate new ones (see [PHASE2.md](./PHASE2.md))
+- `SESSION_SECRET`, `OAUTH_ENCRYPTION_KEY`, `CRON_SECRET` — existing values, or generate new ones (see [PHASE2.md](./PHASE2.md)). `CRON_SECRET` gates both cron routes in `vercel.json`: `/api/cron/ingest` (email sync, daily 04:00 UTC) and `/api/cron/recurring` (posts due recurring items, daily 04:15 UTC). Without it neither cron does anything.
 - `APP_URL` — the canonical production origin, e.g. `https://cadence.vercel.app` or your custom domain (no trailing slash). Required for Gmail OAuth to work in production — see [PHASE2.md](./PHASE2.md).
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`
@@ -109,3 +115,26 @@ or push a commit, or use **Deployments → Redeploy** in the dashboard.
 Open the production URL's `/login` page and confirm it loads (no more Prisma
 `P1001`), then sign in / set a PIN to confirm reads and writes both work
 against Supabase.
+
+## Applying a new migration later
+
+The Vercel build runs `prisma generate && next build` only — it never applies
+migrations. Every time `prisma/migrations/` gains a folder, apply it to
+Supabase yourself **before** the code that depends on it goes live, using the
+same session-pooler connection as step 3:
+
+```bash
+set -a; source .env.supabase; set +a
+npx prisma migrate status      # shows the pending migration(s)
+npm run db:migrate             # prisma migrate deploy via DIRECT_URL
+npx prisma migrate status      # should now report "Database schema is up to date"
+unset DATABASE_URL DIRECT_URL
+```
+
+Then deploy (push, or `vercel --prod`). If `db:migrate` hangs instead of
+finishing in a few seconds, `DIRECT_URL` is pointing at the transaction pooler
+- see the note at the top of this file.
+
+Order matters in the other direction too: deploying code that reads a column
+its migration has not created yet takes the whole app down with a Prisma
+error, so migrate first, deploy second.

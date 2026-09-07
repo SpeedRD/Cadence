@@ -24,7 +24,7 @@ import (Phase 1) are unchanged.
 | Variable | Purpose |
 | --- | --- |
 | `OAUTH_ENCRYPTION_KEY` | AES-256-GCM key that encrypts stored OAuth tokens at rest. Any string works (it's hashed to 32 bytes) - `openssl rand -hex 32` is the simplest. |
-| `CRON_SECRET` | Bearer token the `/api/cron/ingest` route requires. Vercel sets the `Authorization` header to this automatically for its own Cron invocations. |
+| `CRON_SECRET` | Bearer token both cron routes require - `/api/cron/ingest` (this phase) and `/api/cron/recurring` (automatic posting of due recurring items). Vercel sets the `Authorization` header to this automatically for its own Cron invocations. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | From Google Cloud Console (below). |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | From the Azure portal (below). |
 | `MICROSOFT_TENANT_ID` | Optional, defaults to `common` (personal + work/school accounts). Set to a specific tenant ID to restrict sign-in to one organization. |
@@ -97,11 +97,13 @@ Two ways, both running the same code (`src/lib/ingestion.ts`):
   curl -H "Authorization: Bearer $CRON_SECRET" https://your-app.vercel.app/api/cron/ingest
   ```
 
-`vercel.json` schedules this route every 30 minutes via Vercel Cron once
-deployed (requires `CRON_SECRET` set in the project's environment variables -
+`vercel.json` schedules this route once a day at 04:00 UTC via Vercel Cron
+(the recurring-posting route, `/api/cron/recurring`, runs right after it at
+04:15). Both require `CRON_SECRET` set in the project's environment variables -
 Vercel adds the matching `Authorization` header to its own invocations
-automatically). Adjust the cron expression there if you want a different
-cadence.
+automatically. Adjust the cron expressions there if you want a different
+cadence; **Sync now** on `/settings/connections` runs the same code on demand
+in between.
 
 ## How it works
 

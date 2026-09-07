@@ -77,6 +77,17 @@ export interface PaydayCommittedDraft {
   nextDate: Date;
   /** Its due date has passed and automatic posting has not cleared it. */
   overdue: boolean;
+  /**
+   * How many of those charges are already in the ledger from another route
+   * (an approved receipt, a CSV row, a manual entry) - one charge per
+   * occurrence, never more than occurrenceCount. See loggedOccurrencesByItem.
+   */
+  loggedOccurrences: number;
+  /** What the plan still has to set aside for this item: its unlogged occurrences, in the display currency. */
+  outstandingAmount: number;
+  /** The same in the item's own currency - what its account still has to cover. */
+  outstandingNativeAmount: number;
+  /** Every owed occurrence is already logged, so the plan reserves nothing for this item. */
   alreadyLogged: boolean;
   /** The account funding this item - reassignable from Step 3, which writes RecurringItem.accountId. */
   accountId: string | null;
@@ -279,7 +290,41 @@ function ledgerBefore(
   return round2(balance - num(snapshot.incomeEntered));
 }
 
-function toCommittedDraft(item: CommittedItem, alreadyLoggedIds: Set<string>): PaydayCommittedDraft {
+/**
+ * How many of each committed item's owed occurrences in the plan period are
+ * already in the ledger from another route, so the plan does not reserve money
+ * for a charge that has already gone out.
+ *
+ * The rule is the posting job's (the `consumed` set in
+ * src/lib/recurring-posting.ts): one logged charge answers for exactly one
+ * occurrence, never for a whole item. A weekly item with two charges still
+ * ahead and one payment in the ledger has one occurrence covered and one still
+ * owed. Every candidate here lies inside the one plan period - the same window
+ * that job judges each occurrence over - so consuming reduces to a count: the
+ * item's matched charges, capped at the occurrences it still owes. The owed
+ * count is getPeriodSummary's, from the same owedOccurrences() walk the
+ * committed figure and the Afford calculator use; nothing is re-enumerated.
+ *
+ * `matchedCountByItemId` must come from candidates that exclude RECURRING
+ * rows: those are the posting job's own output for occurrences it has already
+ * rolled past, not payments of the ones still ahead, and counting one would
+ * cancel a charge that is genuinely still due.
+ */
+export function loggedOccurrencesByItem(
+  items: readonly Pick<CommittedItem, "id" | "occurrenceCount">[],
+  matchedCountByItemId: ReadonlyMap<string, number>,
+): Map<string, number> {
+  const logged = new Map<string, number>();
+  for (const item of items) {
+    const matched = matchedCountByItemId.get(item.id) ?? 0;
+    logged.set(item.id, Math.max(0, Math.min(matched, item.occurrenceCount)));
+  }
+  return logged;
+}
+
+function toCommittedDraft(item: CommittedItem, loggedByItem: ReadonlyMap<string, number>): PaydayCommittedDraft {
+  const loggedOccurrences = loggedByItem.get(item.id) ?? 0;
+  const outstanding = Math.max(0, item.occurrenceCount - loggedOccurrences);
   return {
     recurringItemId: item.id,
     name: item.name,
@@ -290,7 +335,14 @@ function toCommittedDraft(item: CommittedItem, alreadyLoggedIds: Set<string>): P
     currency: item.currency,
     nextDate: item.nextDate,
     overdue: item.overdue,
-    alreadyLogged: alreadyLoggedIds.has(item.id),
+    loggedOccurrences,
+    // item.amount is the display total for every owed occurrence; scale it
+    // rather than re-converting so a fully outstanding item keeps the exact
+    // figure the committed list shows.
+    outstandingAmount:
+      item.occurrenceCount > 0 ? round2((item.amount * outstanding) / item.occurrenceCount) : 0,
+    outstandingNativeAmount: round2(item.perOccurrenceAmount * outstanding),
+    alreadyLogged: outstanding === 0,
     accountId: item.accountId,
   };
 }
@@ -311,7 +363,8 @@ function bufferInputs(
     subscriptions: subscriptions.map((item) => ({
       recurringItemId: item.recurringItemId,
       accountId: item.accountId,
-      nativeAmount: item.nativeAmount,
+      // Only the occurrences not yet in the ledger count against the account.
+      nativeAmount: item.outstandingNativeAmount,
       currency: item.currency,
       alreadyLogged: item.alreadyLogged,
     })),
@@ -374,8 +427,11 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
         nextDate: true,
       },
     }),
+    // Charges that could be an owed occurrence already paid through another
+    // route. RECURRING rows are excluded: they are posting's own output for
+    // occurrences already rolled past - see loggedOccurrencesByItem.
     prisma.transaction.findMany({
-      where: { type: "EXPENSE", date: { gte: plan.start, lte: plan.end } },
+      where: { type: "EXPENSE", source: { not: "RECURRING" }, date: { gte: plan.start, lte: plan.end } },
       select: { id: true, amount: true, currency: true, categoryId: true, note: true },
     }),
     prisma.budget.findMany({
@@ -391,8 +447,8 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
     categoryId: tx.categoryId,
     note: tx.note,
   }));
-  const { actualNativeByItemId } = matchRecurringToTransactions(forMatch, matchableExpenses);
-  const alreadyLoggedIds = new Set(actualNativeByItemId.keys());
+  const { matchedCountByItemId } = matchRecurringToTransactions(forMatch, matchableExpenses);
+  const loggedByItem = loggedOccurrencesByItem(planSummary.committedItems, matchedCountByItemId);
 
   // Category budgets already saved for the plan period - set by hand on the
   // Budgets page, copied forward, or written by an earlier confirmation and
@@ -457,16 +513,14 @@ export async function getPaydayCheckinDraft(context: AppContext): Promise<Payday
 
   const subscriptions = planSummary.committedItems
     .filter((i) => i.kind === "SUBSCRIPTION")
-    .map((item) => toCommittedDraft(item, alreadyLoggedIds));
+    .map((item) => toCommittedDraft(item, loggedByItem));
   const contributions = planSummary.committedItems
     .filter((i) => i.kind === "CONTRIBUTION")
-    .map((item) => toCommittedDraft(item, alreadyLoggedIds));
-  const subscriptionsTotal = round2(
-    subscriptions.filter((i) => !i.alreadyLogged).reduce((sum, i) => sum + i.amount, 0),
-  );
-  const contributionsTotal = round2(
-    contributions.filter((i) => !i.alreadyLogged).reduce((sum, i) => sum + i.amount, 0),
-  );
+    .map((item) => toCommittedDraft(item, loggedByItem));
+  // Per occurrence, not per item: an item with one charge already logged and
+  // another still ahead reserves the one still ahead.
+  const subscriptionsTotal = round2(subscriptions.reduce((sum, i) => sum + i.outstandingAmount, 0));
+  const contributionsTotal = round2(contributions.reduce((sum, i) => sum + i.outstandingAmount, 0));
 
   // A goal already fed by a recurring contribution this period does not also
   // need its full roadmap amount set aside: reserving both put the same goal in
@@ -702,8 +756,11 @@ export async function confirmPaydayCheckin(
         nextDate: true,
       },
     }),
+    // Charges that could be an owed occurrence already paid through another
+    // route. RECURRING rows are excluded: they are posting's own output for
+    // occurrences already rolled past - see loggedOccurrencesByItem.
     prisma.transaction.findMany({
-      where: { type: "EXPENSE", date: { gte: plan.start, lte: plan.end } },
+      where: { type: "EXPENSE", source: { not: "RECURRING" }, date: { gte: plan.start, lte: plan.end } },
       select: { id: true, amount: true, currency: true, categoryId: true, note: true },
     }),
     // Read before the write so income already recorded for an account archived
@@ -756,17 +813,17 @@ export async function confirmPaydayCheckin(
     categoryId: tx.categoryId,
     note: tx.note,
   }));
-  const { actualNativeByItemId } = matchRecurringToTransactions(forMatch, matchableExpenses);
-  const alreadyLoggedIds = new Set(actualNativeByItemId.keys());
+  const { matchedCountByItemId } = matchRecurringToTransactions(forMatch, matchableExpenses);
+  const loggedByItem = loggedOccurrencesByItem(planSummary.committedItems, matchedCountByItemId);
 
+  // The same per-occurrence accounting the draft showed, recomputed here from
+  // live data rather than trusted from the client.
   const subscriptionItems = planSummary.committedItems.filter((i) => i.kind === "SUBSCRIPTION");
   const contributionItems = planSummary.committedItems.filter((i) => i.kind === "CONTRIBUTION");
-  const subscriptionsTotal = round2(
-    subscriptionItems.filter((i) => !alreadyLoggedIds.has(i.id)).reduce((sum, i) => sum + i.amount, 0),
-  );
-  const contributionsTotal = round2(
-    contributionItems.filter((i) => !alreadyLoggedIds.has(i.id)).reduce((sum, i) => sum + i.amount, 0),
-  );
+  const subscriptionDrafts = subscriptionItems.map((item) => toCommittedDraft(item, loggedByItem));
+  const contributionDrafts = contributionItems.map((item) => toCommittedDraft(item, loggedByItem));
+  const subscriptionsTotal = round2(subscriptionDrafts.reduce((sum, i) => sum + i.outstandingAmount, 0));
+  const contributionsTotal = round2(contributionDrafts.reduce((sum, i) => sum + i.outstandingAmount, 0));
 
   const goalById = new Map(allGoals.map((g) => [g.id, g]));
   const goalInputs = input.goals.filter((g) => {
@@ -803,12 +860,12 @@ export async function confirmPaydayCheckin(
         ),
       };
     }),
-    subscriptionItems.map((item) => ({
-      recurringItemId: item.id,
+    subscriptionDrafts.map((item) => ({
+      recurringItemId: item.recurringItemId,
       accountId: item.accountId,
-      nativeAmount: item.nativeAmount,
+      nativeAmount: item.outstandingNativeAmount,
       currency: item.currency,
-      alreadyLogged: alreadyLoggedIds.has(item.id),
+      alreadyLogged: item.alreadyLogged,
     })),
     { bufferPercent: context.bufferPercent, displayCurrency: context.displayCurrency, rates: context.rates },
   );
