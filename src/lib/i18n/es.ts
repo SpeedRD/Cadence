@@ -715,6 +715,8 @@ export const es = {
     contributionLogged: "Aporte registrado",
     plannedThisPeriod: (amount: string) => `${amount} planificado este periodo`,
     plannedBehindRoadmap: (amount: string) => `${amount} por detrás de la hoja de ruta`,
+    roomShortfallThisPeriod: (amount: string) =>
+      `${amount} del monto de la hoja de ruta de este periodo no se pudo cubrir con lo que les sobraba a las cuentas tras sus suscripciones y colchón.`,
     contributionRemoved: "Aporte eliminado",
     contributionNoLongerExists: "Ese aporte ya no existe",
     editContributionAria: "Editar aporte",
@@ -997,9 +999,26 @@ export const es = {
     overdueBadge: "Vencido",
     chargesThisPeriod: (count: number, each: string) => `${count} cargos de ${each}`,
     goalsHeading: "Hoja de ruta de metas",
+    goalsDescription:
+      "Cada meta se financia desde las cuentas a las que les sobra dinero tras sus suscripciones y su colchón, en proporción al margen de cada una. Ajusta la parte de cualquier cuenta; el total de la meta es la suma.",
     noGoalsWithTarget: "No hay metas con fecha para reservar en este periodo.",
     roadmapAmount: "Monto de la hoja de ruta",
     plannedAmount: "Monto planificado",
+    goalPlannedTotal: "Total planificado",
+    goalFundingRecommended: "Recomendado",
+    goalFundingAccountLabel: (goalName: string, accountName: string) =>
+      `${goalName} desde ${accountName}`,
+    goalFundingRoom: (amount: string, sharePercent: number) =>
+      `${amount} de sobra tras sus suscripciones y colchón · ${sharePercent}% del margen`,
+    goalFundingRoomAfterEarlierGoals: (amount: string, sharePercent: number) =>
+      `${amount} aún de sobra tras las metas de arriba · ${sharePercent}% del margen`,
+    goalFundingNoRoomLeft: "No queda nada de sobra tras las metas de arriba",
+    goalFundingLeadAccount: (accountName: string) =>
+      `${accountName} tiene más margen este periodo tras sus suscripciones y colchón, así que toma la parte mayor.`,
+    goalFundingNoRoom:
+      "A ninguna cuenta le sobra dinero tras sus suscripciones y colchón este periodo, así que no se puede reservar nada para esta meta del excedente.",
+    goalFundingShortfall: (free: string, short: string) =>
+      `Solo sobran ${free} entre tus cuentas - ${short} del monto de la hoja de ruta de esta meta no se puede cubrir con el excedente este periodo.`,
     goalOnTrack: "Al día con la hoja de ruta",
     goalBehind: (amount: string) => `${amount} por detrás de la hoja de ruta`,
     goalAhead: (amount: string) => `${amount} por delante de la hoja de ruta`,

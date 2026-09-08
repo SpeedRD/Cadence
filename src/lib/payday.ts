@@ -8,7 +8,7 @@
 import { convert, type RateTable } from "@/lib/currency";
 import { round2 } from "@/lib/money";
 
-import type { PaydayCheckinDraft } from "@/lib/data/payday";
+import type { PaydayCheckinDraft, PaydayGoalFundingDraft } from "@/lib/data/payday";
 
 /** max(bufferPercent% of this check-in's income, the configured floor). Never zero unless the floor itself is zero. */
 export function defaultProtectedBuffer(
@@ -245,5 +245,215 @@ export function planAccountBuffers(
         0,
       ),
     ),
+  };
+}
+
+export interface GoalFundingGoal {
+  goalId: string;
+  /** What the goal needs set aside this period, in the display currency - its roadmap recommendedAmount. */
+  amount: number;
+}
+
+/** An account a goal can draw on. Structurally a subset of AccountBufferPlan, so the buffer view's rows can be passed straight in. */
+export interface GoalFundingAccount {
+  accountId: string;
+  name: string;
+  currency: string;
+  /** What the account has to spare after its subscriptions and its own buffer, in its own currency: AccountBufferPlan.headroom, less whatever earlier goals already claimed. */
+  headroom: number;
+}
+
+export interface GoalFundingDraw {
+  accountId: string;
+  name: string;
+  currency: string;
+  /** The room this goal could draw on here when it was reached, in the account's own currency. */
+  headroom: number;
+  /** This account's proportion of the room across every account with any, 0..1 - the reason for its share of the goal. */
+  share: number;
+  /** In the account's own currency. Never more than `headroom`. */
+  recommendedAmount: number;
+}
+
+export interface GoalFundingPlan {
+  goalId: string;
+  /** What the goal needed, in the display currency. */
+  amount: number;
+  /** One row per account with room to spare, in the order the accounts were given. */
+  draws: GoalFundingDraw[];
+  /** The draws summed into the display currency. */
+  recommendedTotal: number;
+  /** amount - recommendedTotal when the room across every account could not cover the goal; 0 otherwise. Display currency. */
+  shortfall: number;
+}
+
+/**
+ * Where to draw one goal's amount from: each account with positive headroom
+ * (what is left after its subscriptions and its own buffer - see
+ * planAccountBuffers) takes a share proportional to its headroom, never more
+ * than that headroom. When every account's room together is less than the goal
+ * needs, each account gives all it has and the rest is reported as `shortfall`
+ * rather than quietly planned from money that is not there.
+ *
+ * Shares are compared in the display currency and each draw is then expressed
+ * in its account's own currency, the same way the buffer view compares rooms
+ * across accounts. The cent left over by rounding the shares lands on the
+ * account with the most room, so same-currency draws sum exactly to `amount`.
+ */
+export function recommendGoalFunding(
+  goal: GoalFundingGoal,
+  accounts: GoalFundingAccount[],
+  options: { displayCurrency: string; rates: RateTable },
+): GoalFundingPlan {
+  const { displayCurrency, rates } = options;
+  const amount = Math.max(0, goal.amount);
+  const room = accounts
+    .filter((account) => account.headroom > 0)
+    .map((account) => ({
+      account,
+      displayHeadroom: convert(account.headroom, account.currency, displayCurrency, rates),
+    }));
+  const totalRoom = room.reduce((sum, entry) => sum + entry.displayHeadroom, 0);
+  const toDraw = (entry: (typeof room)[number], recommendedAmount: number): GoalFundingDraw => ({
+    accountId: entry.account.accountId,
+    name: entry.account.name,
+    currency: entry.account.currency,
+    headroom: entry.account.headroom,
+    share: totalRoom > 0 ? entry.displayHeadroom / totalRoom : 0,
+    recommendedAmount,
+  });
+
+  let draws: GoalFundingDraw[];
+  if (amount <= 0 || totalRoom <= 0) {
+    draws = room.map((entry) => toDraw(entry, 0));
+  } else if (amount >= totalRoom) {
+    draws = room.map((entry) => toDraw(entry, entry.account.headroom));
+  } else {
+    const residualIndex = room.reduce(
+      (best, entry, index) => (entry.displayHeadroom > room[best].displayHeadroom ? index : best),
+      0,
+    );
+    const displayDraws = room.map((entry) => round2((amount * entry.displayHeadroom) / totalRoom));
+    const others = displayDraws.reduce((sum, value, index) => (index === residualIndex ? sum : sum + value), 0);
+    displayDraws[residualIndex] = Math.min(round2(amount - others), room[residualIndex].displayHeadroom);
+    draws = room.map((entry, index) =>
+      toDraw(
+        entry,
+        Math.min(entry.account.headroom, round2(convert(displayDraws[index], displayCurrency, entry.account.currency, rates))),
+      ),
+    );
+  }
+
+  const recommendedTotal = round2(
+    draws.reduce((sum, draw) => sum + convert(draw.recommendedAmount, draw.currency, displayCurrency, rates), 0),
+  );
+  return {
+    goalId: goal.goalId,
+    amount,
+    draws,
+    recommendedTotal,
+    shortfall: Math.max(0, round2(amount - recommendedTotal)),
+  };
+}
+
+/**
+ * recommendGoalFunding() for every goal in a check-in, sharing one pool of
+ * headroom. Modeling choice: goals are funded in the order given - the order
+ * the draft lists them, which is the order Step 3 shows them (oldest goal
+ * first, see listGoals) - and each goal's recommended draw is taken out of
+ * the running pool before the next goal is placed. So the first goal gets
+ * first claim on every account's room and a later goal is recommended only
+ * what is still unclaimed; two goals are never both pointed at the same
+ * headroom. Whatever the user then edits a goal's rows to is not fed back
+ * into the pool: a recommendation is a function of the draft alone, so
+ * editing one goal never silently reshuffles another's.
+ *
+ * Every account with room before any goal is placed keeps a row on every
+ * goal, at 0 once earlier goals have used it up, so a later goal can still be
+ * funded from it by hand.
+ */
+export function planGoalFunding(
+  goals: GoalFundingGoal[],
+  accounts: GoalFundingAccount[],
+  options: { displayCurrency: string; rates: RateTable },
+): GoalFundingPlan[] {
+  const eligible = accounts.filter((account) => account.headroom > 0);
+  const remaining = new Map(eligible.map((account) => [account.accountId, account.headroom]));
+  return goals.map((goal) => {
+    const plan = recommendGoalFunding(
+      goal,
+      eligible.map((account) => ({ ...account, headroom: remaining.get(account.accountId) ?? 0 })),
+      options,
+    );
+    const drawByAccount = new Map(plan.draws.map((draw) => [draw.accountId, draw]));
+    for (const draw of plan.draws) {
+      remaining.set(draw.accountId, round2((remaining.get(draw.accountId) ?? 0) - draw.recommendedAmount));
+    }
+    return {
+      ...plan,
+      draws: eligible.map(
+        (account) =>
+          drawByAccount.get(account.accountId) ?? {
+            accountId: account.accountId,
+            name: account.name,
+            currency: account.currency,
+            headroom: 0,
+            share: 0,
+            recommendedAmount: 0,
+          },
+      ),
+    };
+  });
+}
+
+/** One account's row in a goal's Step 3 breakdown: the live recommendation next to what the plan will draw from it. */
+export interface GoalFundingRow extends GoalFundingDraw {
+  /** What the plan draws from this account, in its own currency: the user's held figure, else the recommendation. */
+  plannedAmount: number;
+  /** The figure is the user's own (see PaydayGoalFundingDraft.held) rather than the live recommendation. */
+  held: boolean;
+}
+
+export interface ResolvedGoalFunding {
+  goalId: string;
+  /** One row per account with room, in the plan's order. */
+  rows: GoalFundingRow[];
+  /** The rows' planned amounts summed into the display currency - the goal's total this period. */
+  total: number;
+  /** recommendGoalFunding()'s figures for the same goal, for the card's explanation. */
+  recommendedTotal: number;
+  shortfall: number;
+}
+
+/**
+ * The rows Step 3 shows for one goal: every account the recommendation gives a
+ * row (an account with room to spare), each at the user's held figure when
+ * there is one and at the live recommendation otherwise. A held figure for an
+ * account with no room now is neither shown nor counted, so what is on screen
+ * is exactly what confirming writes.
+ */
+export function resolveGoalFunding(
+  plan: GoalFundingPlan,
+  funding: PaydayGoalFundingDraft[],
+  options: { displayCurrency: string; rates: RateTable },
+): ResolvedGoalFunding {
+  const heldByAccount = new Map(
+    funding.filter((row) => row.held).map((row) => [row.accountId, row.plannedAmount]),
+  );
+  const rows = plan.draws.map((draw) => {
+    const held = heldByAccount.get(draw.accountId);
+    return { ...draw, plannedAmount: held ?? draw.recommendedAmount, held: held !== undefined };
+  });
+  return {
+    goalId: plan.goalId,
+    rows,
+    total: round2(
+      rows.reduce(
+        (sum, row) => sum + convert(row.plannedAmount, row.currency, options.displayCurrency, options.rates),
+        0,
+      ),
+    ),
+    recommendedTotal: plan.recommendedTotal,
+    shortfall: plan.shortfall,
   };
 }

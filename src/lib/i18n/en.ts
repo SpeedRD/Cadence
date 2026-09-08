@@ -711,6 +711,8 @@ export const en = {
     contributionLogged: "Contribution logged",
     plannedThisPeriod: (amount: string) => `${amount} planned this period`,
     plannedBehindRoadmap: (amount: string) => `${amount} behind the roadmap`,
+    roomShortfallThisPeriod: (amount: string) =>
+      `${amount} of this period's roadmap amount couldn't be covered by what the accounts had to spare after their subscriptions and buffer.`,
     contributionRemoved: "Contribution removed",
     contributionNoLongerExists: "That contribution no longer exists",
     editContributionAria: "Edit contribution",
@@ -990,9 +992,26 @@ export const en = {
     overdueBadge: "Overdue",
     chargesThisPeriod: (count: number, each: string) => `${count} charges of ${each}`,
     goalsHeading: "Goal roadmap",
+    goalsDescription:
+      "Each goal is funded from the accounts with money to spare after their subscriptions and buffer, in proportion to how much room each one has. Adjust any account's share; the goal's total is their sum.",
     noGoalsWithTarget: "No dated goals to reserve for this period.",
     roadmapAmount: "Roadmap amount",
     plannedAmount: "Planned amount",
+    goalPlannedTotal: "Planned total",
+    goalFundingRecommended: "Recommended",
+    goalFundingAccountLabel: (goalName: string, accountName: string) =>
+      `${goalName} from ${accountName}`,
+    goalFundingRoom: (amount: string, sharePercent: number) =>
+      `${amount} to spare after its subscriptions and buffer · ${sharePercent}% of the room`,
+    goalFundingRoomAfterEarlierGoals: (amount: string, sharePercent: number) =>
+      `${amount} still to spare after the goals above · ${sharePercent}% of the room`,
+    goalFundingNoRoomLeft: "Nothing left to spare after the goals above",
+    goalFundingLeadAccount: (accountName: string) =>
+      `${accountName} has more room this period after its subscriptions and buffer, so it takes the larger share.`,
+    goalFundingNoRoom:
+      "No account has money to spare after its subscriptions and buffer this period, so nothing can be set aside for this goal from surplus.",
+    goalFundingShortfall: (free: string, short: string) =>
+      `Only ${free} is to spare across your accounts - ${short} of this goal's roadmap amount can't be funded from surplus this period.`,
     goalOnTrack: "On track with the roadmap",
     goalBehind: (amount: string) => `${amount} behind the target roadmap`,
     goalAhead: (amount: string) => `${amount} ahead of the target roadmap`,

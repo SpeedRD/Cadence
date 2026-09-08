@@ -24,7 +24,7 @@ import {
 import { convert, formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getGoalDetail } from "@/lib/data/goals";
-import { planPeriodRef } from "@/lib/data/payday";
+import { getGoalRoadmapAmount, planPeriodRef } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
 import { num, round2 } from "@/lib/money";
@@ -49,19 +49,43 @@ export default async function GoalDetailPage({
   ]);
   if (!detail) notFound();
   const planRef = planPeriodRef(context);
-  const confirmedCheckin = await prisma.paydayCheckin.findFirst({
-    where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
-    include: { allocations: { where: { type: "GOAL", goalId: id } } },
-  });
-  const plannedAllocation = confirmedCheckin?.allocations[0] ?? null;
+  const [confirmedCheckin, roadmapAmount] = await Promise.all([
+    prisma.paydayCheckin.findFirst({
+      where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
+      include: { allocations: { where: { type: "GOAL", goalId: id } } },
+    }),
+    // The real pace for the plan period, computed live. The rows' own
+    // recommendedAmount is each account's share of that pace capped by the
+    // account's room, so summing them says what the accounts could fund - not
+    // what the target needs. "Behind the roadmap" is measured against the pace.
+    getGoalRoadmapAmount(id, planRef, context),
+  ]);
+  // One GOAL row per account the goal draws on, each in that account's
+  // currency - or, from a check-in confirmed before funding was per-account,
+  // a single accountless row in the check-in's currency. The goal's planned
+  // figure is the rows summed into the display currency; `recommendedAmount`
+  // summed the same way is what the accounts' room let the plan schedule.
+  const plannedAllocation =
+    confirmedCheckin && confirmedCheckin.allocations.length > 0
+      ? confirmedCheckin.allocations.reduce(
+          (sum, allocation) => ({
+            plannedAmount: round2(
+              sum.plannedAmount +
+                convert(num(allocation.plannedAmount), allocation.currency, context.displayCurrency, context.rates),
+            ),
+            recommendedAmount: round2(
+              sum.recommendedAmount +
+                convert(num(allocation.recommendedAmount), allocation.currency, context.displayCurrency, context.rates),
+            ),
+          }),
+          { plannedAmount: 0, recommendedAmount: 0 },
+        )
+      : null;
 
   const { summary, contributions, contributionTotal, displayContributionTotal } = detail;
   const today = toISODate(context.today);
   const drifted = Math.abs(contributionTotal - summary.savedAmount) > 0.005;
   const display = context.displayCurrency;
-  /** Allocations store the display currency in force when they were confirmed. */
-  const plannedInDisplay = (amount: unknown, currency: string) =>
-    round2(convert(num(amount as never), currency, display, context.rates));
   const t = getDictionary(context.language).goals;
   const common = getDictionary(context.language).common;
 
@@ -179,24 +203,19 @@ export default async function GoalDetailPage({
 
           {plannedAllocation ? (
             <p className="text-xs text-muted-foreground">
-              {t.plannedThisPeriod(
-                formatMoney(
-                  plannedInDisplay(plannedAllocation.plannedAmount, plannedAllocation.currency),
-                  display,
-                ),
-              )}
-              {num(plannedAllocation.recommendedAmount) - num(plannedAllocation.plannedAmount) > 0.005
+              {t.plannedThisPeriod(formatMoney(plannedAllocation.plannedAmount, display))}
+              {roadmapAmount !== null && roadmapAmount - plannedAllocation.plannedAmount > 0.005
                 ? ` · ${t.plannedBehindRoadmap(
-                    formatMoney(
-                      plannedInDisplay(
-                        num(plannedAllocation.recommendedAmount) -
-                          num(plannedAllocation.plannedAmount),
-                        plannedAllocation.currency,
-                      ),
-                      display,
-                    ),
+                    formatMoney(round2(roadmapAmount - plannedAllocation.plannedAmount), display),
                   )}`
                 : ""}
+            </p>
+          ) : null}
+          {plannedAllocation && roadmapAmount !== null && roadmapAmount - plannedAllocation.recommendedAmount > 0.005 ? (
+            <p className="text-xs text-[var(--warning)]">
+              {t.roomShortfallThisPeriod(
+                formatMoney(round2(roadmapAmount - plannedAllocation.recommendedAmount), display),
+              )}
             </p>
           ) : null}
         </CardContent>

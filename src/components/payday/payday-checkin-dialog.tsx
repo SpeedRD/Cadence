@@ -22,7 +22,12 @@ import { convert, type RateTable } from "@/lib/currency";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
-import { availableForFlexibleCategories, planAccountBuffers } from "@/lib/payday";
+import {
+  availableForFlexibleCategories,
+  planAccountBuffers,
+  planGoalFunding,
+  resolveGoalFunding,
+} from "@/lib/payday";
 import { cn } from "@/lib/utils";
 import { confirmPaydayCheckinAction } from "@/server/actions/payday";
 
@@ -142,8 +147,24 @@ export function PaydayCheckinDialog({
     [plan.accounts, plan.subscriptions, plan.bufferPercent, plan.displayCurrency, rates],
   );
   const plannedBuffer = bufferPlan.total;
-  // Goal planned amounts are already in plan.displayCurrency (PaydayGoalDraft).
-  const goalPlanTotal = round2(plan.goals.reduce((sum, g) => sum + g.plannedAmount, 0));
+  // Each goal's per-account draws come from the headroom the buffer view
+  // leaves each account, so they follow every income edit in step 2 and every
+  // subscription move in step 3 just as the buffers do. Only a row the user
+  // has edited (held) stays put. Server-side, confirmPaydayCheckin() runs the
+  // same planGoalFunding() over the same inputs for the recommended figures.
+  const goalFunding = useMemo(() => {
+    const options = { displayCurrency: plan.displayCurrency, rates };
+    const fundingPlans = planGoalFunding(
+      plan.goals.map((g) => ({ goalId: g.goalId, amount: g.recommendedAmount })),
+      bufferPlan.accounts,
+      options,
+    );
+    return new Map(
+      plan.goals.map((g, index) => [g.goalId, resolveGoalFunding(fundingPlans[index], g.funding, options)]),
+    );
+  }, [plan.goals, bufferPlan.accounts, plan.displayCurrency, rates]);
+  // A goal's total is the live sum of its rows, never entered on its own.
+  const goalPlanTotal = round2([...goalFunding.values()].reduce((sum, funding) => sum + funding.total, 0));
   const essentialFixedTotal = round2(plan.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const flexibleTotal = round2(plan.flexibleCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const available = availableForFlexibleCategories({
@@ -174,10 +195,21 @@ export function PaydayCheckinDialog({
       accounts: prev.accounts.map((a) => (a.accountId === accountId ? { ...a, ...patch } : a)),
     }));
   }
-  function updateGoal(goalId: string, plannedAmount: number) {
+  /** Holds one account's draw for a goal at the user's figure, in that account's own currency. */
+  function updateGoalFunding(goalId: string, accountId: string, plannedAmount: number) {
     setPlan((prev) => ({
       ...prev,
-      goals: prev.goals.map((g) => (g.goalId === goalId ? { ...g, plannedAmount } : g)),
+      goals: prev.goals.map((g) =>
+        g.goalId === goalId
+          ? {
+              ...g,
+              funding: [
+                ...g.funding.filter((row) => row.accountId !== accountId),
+                { accountId, plannedAmount, held: true },
+              ],
+            }
+          : g,
+      ),
     }));
   }
   function updateEssential(categoryId: string, plannedAmount: number) {
@@ -242,7 +274,14 @@ export function PaydayCheckinDialog({
       incomeEntered: a.incomeEntered,
       incomeNote: a.incomeNote || null,
     })),
-    goals: plan.goals.map((g) => ({ goalId: g.goalId, plannedAmount: g.plannedAmount })),
+    // What is on screen: every row of every goal, in each account's own currency.
+    goals: plan.goals.map((g) => ({
+      goalId: g.goalId,
+      funding: (goalFunding.get(g.goalId)?.rows ?? []).map((row) => ({
+        accountId: row.accountId,
+        plannedAmount: row.plannedAmount,
+      })),
+    })),
     essentialCategories: plan.essentialCategories.map((c) => ({
       categoryId: c.categoryId,
       plannedAmount: c.plannedAmount,
@@ -329,7 +368,8 @@ export function PaydayCheckinDialog({
                 goalPlanTotal={goalPlanTotal}
                 essentialFixedTotal={essentialFixedTotal}
                 available={available}
-                onGoalChange={updateGoal}
+                goalFunding={goalFunding}
+                onGoalFundingChange={updateGoalFunding}
                 onEssentialChange={updateEssential}
                 onCarryoverChange={(value) =>
                   setPlan((prev) => ({ ...prev, includedCarryover: value }))

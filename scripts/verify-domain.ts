@@ -43,6 +43,9 @@ import {
   availableForFlexibleCategories,
   defaultProtectedBuffer,
   planAccountBuffers,
+  planGoalFunding,
+  recommendGoalFunding,
+  resolveGoalFunding,
   scaleFlexibleSuggestions,
   summarizePaydayDraft,
 } from "../src/lib/payday";
@@ -1243,6 +1246,111 @@ async function main() {
     );
   }
 
+  {
+    // Goal funding draws on the same headroom the buffer view reports: what an
+    // account has left after its subscriptions and its own buffer. Popular has
+    // 27,000 DOP (450 USD) to spare, BSC 150 USD, and Cash is below its buffer.
+    const goalPool = [
+      { accountId: "popular", name: "Popular", currency: "DOP", headroom: 27000 },
+      { accountId: "bsc", name: "BSC", currency: "USD", headroom: 150 },
+      { accountId: "cash", name: "Cash", currency: "USD", headroom: -20 },
+    ];
+    const fundingOptions = { displayCurrency: "USD", rates };
+    const car = recommendGoalFunding({ goalId: "car", amount: 300 }, goalPool, fundingOptions);
+    eq("only accounts with room to spare get a funding row", car.draws.map((d) => d.accountId).join(","), "popular,bsc");
+    eq(
+      "each account's recommended draw is proportional to its headroom, in its own currency",
+      car.draws.map((d) => `${d.accountId}:${d.recommendedAmount}`).join(","),
+      "popular:13500,bsc:75",
+    );
+    eq("the shares explain the split: 75% of the room is in Popular", round2(car.draws[0].share * 100), 75);
+    eq("the draws sum to the goal's amount in the display currency", car.recommendedTotal, 300);
+    eq("no shortfall when the room covers the goal", car.shortfall, 0);
+
+    const house = recommendGoalFunding({ goalId: "house", amount: 1000 }, goalPool, fundingOptions);
+    eq(
+      "a goal bigger than all the room takes every account's full headroom and no more",
+      house.draws.map((d) => `${d.accountId}:${d.recommendedAmount}`).join(","),
+      "popular:27000,bsc:150",
+    );
+    eq("what the room could not cover is reported as a shortfall, not quietly dropped", house.shortfall, 400);
+    eq("the recommended total is what the room could cover", house.recommendedTotal, 600);
+
+    const thirds = recommendGoalFunding(
+      { goalId: "thirds", amount: 100 },
+      [
+        { accountId: "a", name: "A", currency: "USD", headroom: 100 },
+        { accountId: "b", name: "B", currency: "USD", headroom: 100 },
+        { accountId: "c", name: "C", currency: "USD", headroom: 100 },
+      ],
+      fundingOptions,
+    );
+    eq("rounding never loses a cent: the residual lands on one account", thirds.draws.map((d) => d.recommendedAmount).join(","), "33.34,33.33,33.33");
+    eq("and the rounded draws still sum to the goal exactly", thirds.recommendedTotal, 100);
+
+    const nothing = recommendGoalFunding({ goalId: "nothing", amount: 0 }, goalPool, fundingOptions);
+    eq("a goal needing nothing keeps its rows at zero", nothing.draws.map((d) => d.recommendedAmount).join(","), "0,0");
+    const dry = recommendGoalFunding({ goalId: "dry", amount: 100 }, [goalPool[2]], fundingOptions);
+    check("with no room anywhere there are no rows and the whole goal is the shortfall", dry.draws.length === 0 && dry.shortfall === 100 && dry.recommendedTotal === 0);
+
+    // Two goals in one check-in: the first claims its share of the pool, and
+    // the second is recommended only what the first left - never the same
+    // headroom twice. After the car takes 225 USD of Popular and 75 of BSC,
+    // 300 USD of room is left; a 400 USD trip takes all of it and is 100 short.
+    const both = planGoalFunding(
+      [
+        { goalId: "car", amount: 300 },
+        { goalId: "trip", amount: 400 },
+      ],
+      goalPool,
+      fundingOptions,
+    );
+    eq("the first goal in draft order is recommended exactly as if it were alone", JSON.stringify(both[0].draws), JSON.stringify(car.draws));
+    eq(
+      "the second goal draws only from the headroom the first left unclaimed",
+      both[1].draws.map((d) => `${d.accountId}:${d.recommendedAmount}`).join(","),
+      "popular:13500,bsc:75",
+    );
+    eq("the second goal's rows show the room that was still free for it", both[1].draws.map((d) => d.headroom).join(","), "13500,75");
+    eq("the second goal reports the shortfall the shared pool leaves it with", both[1].shortfall, 100);
+
+    const exhausted = planGoalFunding(
+      [
+        { goalId: "first", amount: 150 },
+        { goalId: "second", amount: 50 },
+      ],
+      [goalPool[1], goalPool[2]],
+      fundingOptions,
+    );
+    eq(
+      "an account an earlier goal used up keeps a zero row on later goals so it can still be funded by hand",
+      exhausted[1].draws.map((d) => `${d.accountId}:${d.recommendedAmount}:${d.headroom}`).join(","),
+      "bsc:0:0",
+    );
+    eq("a later goal with nothing left to draw on is entirely shortfall", exhausted[1].shortfall, 50);
+
+    // What Step 3 shows: the recommendation per account, except where the user
+    // has held a row at their own figure - and the goal's total is the rows'
+    // sum in the display currency, never a figure of its own.
+    const resolved = resolveGoalFunding(
+      car,
+      [
+        { accountId: "bsc", plannedAmount: 20, held: true },
+        { accountId: "popular", plannedAmount: 99, held: false },
+        { accountId: "cash", plannedAmount: 500, held: true },
+      ],
+      fundingOptions,
+    );
+    eq(
+      "a held row keeps the user's figure while an unheld one follows the live recommendation",
+      resolved.rows.map((r) => `${r.accountId}:${r.plannedAmount}:${r.held}`).join(","),
+      "popular:13500:false,bsc:20:true",
+    );
+    eq("a held figure for an account with no room now is neither shown nor counted", resolved.rows.length, 2);
+    eq("the goal's total is the rows summed into the display currency", resolved.total, 245);
+    eq("the recommendation's own figures ride along for the card's explanation", `${resolved.recommendedTotal}:${resolved.shortfall}`, "300:0");
+  }
+
   const suggestions = [
     { id: "groceries", suggested: 6000 },
     { id: "dining", suggested: 3000 },
@@ -1437,7 +1545,7 @@ async function main() {
   await prisma.account.delete({ where: { id: openingBalanceAccount.id } });
 
   console.log("\n== payday check-in (database) ==");
-  const { getPaydayCheckinDraft, confirmPaydayCheckin, getCategorySuggestions, checkinDateForNewCheckin, planPeriodRef } = await import(
+  const { getPaydayCheckinDraft, confirmPaydayCheckin, getCategorySuggestions, checkinDateForNewCheckin, planPeriodRef, goalRoadmapAmount, getGoalRoadmapAmount } = await import(
     "../src/lib/data/payday"
   );
   const { getSettings } = await import("../src/lib/auth");
@@ -1868,7 +1976,12 @@ async function main() {
       incomeEntered: a.accountId === paydayChecking.id ? 500 : 0,
       incomeNote: a.accountId === paydayChecking.id ? "Salary" : null,
     })),
-    goals: draftForConfirm.goals.map((g) => ({ goalId: g.goalId, plannedAmount: g.recommendedAmount })),
+    // The goal's roadmap amount, drawn from the checking account the income
+    // above lands in - what the wizard's per-account rows would send.
+    goals: draftForConfirm.goals.map((g) => ({
+      goalId: g.goalId,
+      funding: [{ accountId: paydayChecking.id, plannedAmount: g.recommendedAmount }],
+    })),
     essentialCategories: draftForConfirm.essentialCategories.map((c) => ({
       categoryId: c.categoryId,
       plannedAmount: c.suggestedAmount,
@@ -1925,13 +2038,43 @@ async function main() {
   });
   eq("confirming a plan never creates an actual expense transaction for a reserved subscription", subscriptionExpenseAfterConfirm, 0);
 
-  const goalAllocation = await prisma.paydayPlanAllocation.findFirst({
+  const goalAllocations = await prisma.paydayPlanAllocation.findMany({
     where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id },
   });
+  const datedGoalDraft = draftForConfirm.goals.find((g) => g.goalId === datedGoal.id)!;
+  eq("a goal's plan is one GOAL row per account it draws on, each stamped with its account", goalAllocations.map((a) => a.accountId).join(","), paydayChecking.id);
   check(
-    "the goal's roadmap recommendation is recorded in the allocation audit trail",
-    Boolean(goalAllocation) && num(goalAllocation!.recommendedAmount) > 0,
+    "the goal's roadmap recommendation is recorded in the allocation audit trail, in the account's own currency",
+    goalAllocations.length === 1 && num(goalAllocations[0].recommendedAmount) > 0 && goalAllocations[0].currency === "USD",
+    JSON.stringify(goalAllocations.map((a) => ({ recommended: num(a.recommendedAmount), currency: a.currency }))),
   );
+  eq("the draw the wizard sent for that account is stored as its planned amount", num(goalAllocations[0]?.plannedAmount), datedGoalDraft.recommendedAmount);
+
+  console.log("\n-- reopening a confirmed check-in carries its goal funding rows --");
+  const draftReopened = await getPaydayCheckinDraft(paydayContext);
+  const reopenedGoal = draftReopened.goals.find((g) => g.goalId === datedGoal.id)!;
+  eq(
+    "the confirmed per-account draw comes back held, so it does not follow the live recommendation",
+    JSON.stringify(reopenedGoal.funding),
+    JSON.stringify([{ accountId: paydayChecking.id, plannedAmount: datedGoalDraft.recommendedAmount, held: true }]),
+  );
+  eq("the goal's total is the sum of its funding rows in the display currency", reopenedGoal.plannedAmount, datedGoalDraft.recommendedAmount);
+
+  // A check-in confirmed before goal funding was per-account: one accountless
+  // GOAL row in the check-in's currency. Still a valid row, never an error -
+  // its total is spread over today's room and held.
+  await prisma.paydayPlanAllocation.deleteMany({ where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id } });
+  await prisma.paydayPlanAllocation.create({
+    data: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id, recommendedAmount: 250, plannedAmount: 40, currency: "USD", basis: "roadmap" },
+  });
+  const legacyGoal = (await getPaydayCheckinDraft(paydayContext)).goals.find((g) => g.goalId === datedGoal.id)!;
+  eq(
+    "an accountless GOAL row from before per-account funding is spread over the accounts with room today and held",
+    JSON.stringify(legacyGoal.funding),
+    JSON.stringify([{ accountId: paydayChecking.id, plannedAmount: 40, held: true }]),
+  );
+  eq("its confirmed total survives the upgrade", legacyGoal.plannedAmount, 40);
+  eq("the roadmap figure is still recomputed live, not read back from the old row", legacyGoal.recommendedAmount, datedGoalDraft.recommendedAmount);
 
   console.log("\n-- the protected buffer is one recommendation per account with income --");
   const checkingBufferFloorInUsd = round2(
@@ -2155,7 +2298,12 @@ async function main() {
   console.log("\n-- a lowered goal amount is preserved, never silently raised back --");
   const lowGoalPayload = {
     ...zeroedPayload,
-    goals: draftForConfirm.goals.map((g) => ({ goalId: g.goalId, plannedAmount: 5 })),
+    // Income back on checking, so the account has room and a recommendation to lower.
+    accounts: initialPayload.accounts,
+    goals: draftForConfirm.goals.map((g) => ({
+      goalId: g.goalId,
+      funding: [{ accountId: paydayChecking.id, plannedAmount: 5 }],
+    })),
     acknowledgedDeficit: true,
   };
   await confirmPaydayCheckin(lowGoalPayload, paydayContext);
@@ -2171,6 +2319,66 @@ async function main() {
     "the roadmap recommendation stays recorded alongside it, never overwritten to match",
     Boolean(lowGoalAllocation) && num(lowGoalAllocation!.recommendedAmount) > 5,
   );
+
+  console.log("\n-- a goal drawn from two accounts writes one row per account, each in its own currency --");
+  const splitPayload = {
+    ...lowGoalPayload,
+    accounts: initialPayload.accounts.map((a) => (a.accountId === paydayEuro.id ? { ...a, incomeEntered: 100 } : a)),
+    goals: draftForConfirm.goals.map((g) => ({
+      goalId: g.goalId,
+      funding: [
+        { accountId: paydayChecking.id, plannedAmount: 5 },
+        { accountId: paydayEuro.id, plannedAmount: 4 },
+      ],
+    })),
+  };
+  const splitResult = await confirmPaydayCheckin(splitPayload, paydayContext);
+  check("confirming a goal split across two accounts succeeds", splitResult.ok === true);
+  const splitRows = await prisma.paydayPlanAllocation.findMany({
+    where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id },
+    orderBy: { currency: "desc" },
+  });
+  eq(
+    "one GOAL row per (goal, account), each planned amount in that account's own currency",
+    splitRows.map((r) => `${r.accountId === paydayChecking.id ? "checking" : "euro"}:${num(r.plannedAmount)}:${r.currency}`).join(","),
+    "checking:5:USD,euro:4:EUR",
+  );
+  check(
+    "each row's recommendation is that account's share of the roadmap, never more than its room",
+    splitRows.every((r) => num(r.recommendedAmount) > 0) &&
+      round2(num(splitRows[0].recommendedAmount) + convert(num(splitRows[1].recommendedAmount), "EUR", "USD", rates)) <= datedGoalDraft.recommendedAmount + 0.01,
+    JSON.stringify(splitRows.map((r) => ({ currency: r.currency, recommended: num(r.recommendedAmount) }))),
+  );
+  const splitGoal = (await getPaydayCheckinDraft(paydayContext)).goals.find((g) => g.goalId === datedGoal.id)!;
+  eq(
+    "reopening shows both draws held, each converted into its account's currency",
+    JSON.stringify(splitGoal.funding),
+    JSON.stringify([
+      { accountId: paydayChecking.id, plannedAmount: 5, held: true },
+      { accountId: paydayEuro.id, plannedAmount: 4, held: true },
+    ]),
+  );
+  eq("and the goal's total sums both draws into the display currency", splitGoal.plannedAmount, round2(5 + convert(4, "EUR", "USD", rates)));
+
+  console.log("\n-- the goal page measures a plan against the real pace, not against what the accounts could fund --");
+  eq("goalRoadmapAmount is remaining over the periods left, net of contributions already due", goalRoadmapAmount({ displayRemaining: 1000, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16), 50), round2(1000 / periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 10, 15)) - 50));
+  eq("it never goes below zero when contributions already cover the pace", goalRoadmapAmount({ displayRemaining: 100, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16), 500), 0);
+  eq("the live roadmap figure for the plan period is the one the draft recommends", await getGoalRoadmapAmount(datedGoal.id, draftForConfirm.periodRef, paydayContext), datedGoalDraft.recommendedAmount);
+  eq("a goal with no target date has no roadmap figure", await getGoalRoadmapAmount(undatedGoal.id, draftForConfirm.periodRef, paydayContext), null);
+  // Income too small to fund the pace: the rows' recommendations are capped
+  // by the account's room, while the roadmap figure stays the real pace.
+  const cappedPayload = {
+    ...lowGoalPayload,
+    accounts: initialPayload.accounts.map((a) => (a.accountId === paydayChecking.id ? { ...a, incomeEntered: 150 } : a)),
+    goals: draftForConfirm.goals.map((g) => ({ goalId: g.goalId, funding: [{ accountId: paydayChecking.id, plannedAmount: 60 }] })),
+  };
+  await confirmPaydayCheckin(cappedPayload, paydayContext);
+  const cappedRows = await prisma.paydayPlanAllocation.findMany({ where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id } });
+  const cappedRecommended = round2(cappedRows.reduce((sum, r) => sum + num(r.recommendedAmount), 0));
+  const checkingRoom = round2(150 - 15 - defaultProtectedBuffer(150, paydaySettings.bufferPercent, checkingBufferFloorInUsd));
+  eq("the stored per-account recommendation is capped at the account's room", cappedRecommended, checkingRoom);
+  check("so the room shortfall the goal page shows is the pace less what the rows could fund, above zero", datedGoalDraft.recommendedAmount - cappedRecommended > 0.005, `${datedGoalDraft.recommendedAmount} vs ${cappedRecommended}`);
+  check("while 'behind the roadmap' is measured against the pace, not the capped sum", datedGoalDraft.recommendedAmount - 60 > cappedRecommended - 60);
 
   console.log("\n-- payday check-in cleanup --");
   await prisma.paydayPlanAllocation.deleteMany({ where: { paydayCheckinId: checkinRow!.id } });
@@ -2202,7 +2410,7 @@ async function main() {
         incomeEntered: a.accountId === paydayChecking.id ? 300 : 0,
         incomeNote: a.accountId === paydayChecking.id ? "Late salary" : null,
       })),
-      goals: lateDraft.goals.map((g) => ({ goalId: g.goalId, plannedAmount: 0 })),
+      goals: lateDraft.goals.map((g) => ({ goalId: g.goalId, funding: [] })),
       essentialCategories: lateDraft.essentialCategories.map((c) => ({ categoryId: c.categoryId, plannedAmount: 0 })),
       flexibleCategories: lateDraft.flexibleCategories.map((c) => ({ categoryId: c.categoryId, plannedAmount: 0 })),
       includedCarryover: 0,

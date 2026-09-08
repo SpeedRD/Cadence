@@ -18,9 +18,11 @@ import { num, round2 } from "@/lib/money";
 import {
   availableForFlexibleCategories,
   planAccountBuffers,
+  planGoalFunding,
   scaleFlexibleSuggestions,
   type AccountBufferAccount,
   type AccountBufferSubscription,
+  type GoalFundingPlan,
 } from "@/lib/payday";
 import {
   daysRemainingInPeriod,
@@ -96,16 +98,42 @@ export interface PaydayCommittedDraft {
 }
 
 /**
- * Like every other row in the draft, both amounts are in the draft's
- * `displayCurrency` - a goal roadmap figure is a planning value, not a native
- * one, and it is summed straight into the plan totals. The goal's own stored
- * currency and amounts are untouched; only the presentation is converted.
+ * One account a goal draws on this period, in that account's own currency.
+ * A `held` row is the user's own figure - edited in Step 3, or carried over
+ * from the confirmed check-in being re-opened - and stays put while the wizard
+ * recomputes; an unheld row is the assembly-time recommendation, which the
+ * wizard replaces with the live one as income and subscriptions change.
+ */
+export interface PaydayGoalFundingDraft {
+  accountId: string;
+  plannedAmount: number;
+  held: boolean;
+}
+
+/**
+ * `recommendedAmount` and `plannedAmount` are in the draft's `displayCurrency`
+ * like every other row in the draft - a goal roadmap figure is a planning
+ * value, not a native one, and it is summed straight into the plan totals.
+ * The goal's own stored currency and amounts are untouched; only the
+ * presentation is converted.
  */
 export interface PaydayGoalDraft {
   goalId: string;
   name: string;
+  /** The roadmap pace: what reaching the target on time asks for this period. */
   recommendedAmount: number;
+  /**
+   * The goal's total this period: `funding` summed into the display currency.
+   * Assembled here for summarizePaydayDraft's readers (the dashboard summary
+   * line, the period hero); the wizard derives it live from `funding` instead.
+   */
   plannedAmount: number;
+  /**
+   * Where the total comes from: one row per account with room to spare after
+   * its subscriptions and buffer (see planGoalFunding), each in that account's
+   * own currency. Empty when no account has any room this period.
+   */
+  funding: PaydayGoalFundingDraft[];
   targetDate: Date;
   periodsLeft: number;
 }
@@ -266,6 +294,56 @@ export async function getCategorySuggestions(
  * measure against. Clamped at 0: an overspent prior period carries nothing
  * forward rather than compounding a deficit into the new plan.
  */
+/**
+ * A goal's roadmap pace for the plan period, in the display currency: what
+ * reaching the target by its date asks for, spread over the pay periods left
+ * counted from the plan period's start, net of the recurring contributions
+ * already due to it this period. Independent of any account's room - it is
+ * the bar a goal is "on track" or "behind" against, never lowered by what the
+ * accounts can currently fund.
+ */
+export function goalRoadmapAmount(
+  goal: { displayRemaining: number; targetDate: Date },
+  planStart: Date,
+  dueContribution: number,
+): number {
+  const periodsLeft = Math.max(1, periodsRemaining(planStart, goal.targetDate));
+  return round2(Math.max(0, goal.displayRemaining / periodsLeft - dueContribution));
+}
+
+/** The recurring contributions due to each goal in the period, in the display currency. */
+function dueContributionsByGoal(committedItems: CommittedItem[]): Map<string, number> {
+  const byGoal = new Map<string, number>();
+  for (const item of committedItems) {
+    if (item.kind !== "CONTRIBUTION" || !item.goalId) continue;
+    byGoal.set(item.goalId, (byGoal.get(item.goalId) ?? 0) + item.amount);
+  }
+  return byGoal;
+}
+
+/**
+ * goalRoadmapAmount() for one goal from live data - the same figure the
+ * check-in draft and confirm compute for it - so the goal page measures a
+ * confirmed plan against the real pace rather than against whatever the
+ * accounts' room let the plan schedule. Null for a goal with no target date
+ * or none left to save.
+ */
+export async function getGoalRoadmapAmount(
+  goalId: string,
+  planRef: PeriodRef,
+  context: AppContext,
+): Promise<number | null> {
+  const plan = periodInfo(planRef);
+  const [goals, planSummary] = await Promise.all([listGoals(context), getPeriodSummary(plan, context)]);
+  const goal = goals.find((g) => g.id === goalId);
+  if (!goal || !goal.targetDate || goal.achievedAt || goal.remaining <= 0) return null;
+  return goalRoadmapAmount(
+    { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate },
+    plan.start,
+    dueContributionsByGoal(planSummary.committedItems).get(goal.id) ?? 0,
+  );
+}
+
 export async function getAvailableCarryover(
   planRef: PeriodRef,
   context: AppContext,
@@ -371,6 +449,75 @@ function bufferInputs(
       alreadyLogged: item.alreadyLogged,
     })),
   };
+}
+
+/** A confirmed check-in's GOAL allocation, as getPaydayCheckinDraft reads it back. */
+interface ConfirmedGoalAllocation {
+  accountId: string | null;
+  plannedAmount: unknown;
+  currency: string;
+}
+
+/**
+ * The funding rows a goal opens with. A fresh check-in follows the
+ * recommendation. Re-opening a confirmed one carries what was confirmed: each
+ * account's own row, converted into the account's currency in case it was
+ * written in another, and 0 for an account with room now that had no row then
+ * - so the total the user sees is the total they confirmed, all of it held.
+ * A check-in confirmed before goal funding was per-account has a single
+ * accountless row in the display currency of its day; its total is spread over
+ * today's rows in proportion to their room, uncapped so the total survives the
+ * upgrade, and held for the same reason.
+ *
+ * Only accounts with room now get a row (plan.draws) - an account the confirmed
+ * check-in drew on that has none today is not offered, exactly as it would not
+ * be on a fresh check-in.
+ */
+function seedGoalFunding(
+  plan: GoalFundingPlan,
+  confirmed: ConfirmedGoalAllocation[],
+  displayCurrency: string,
+  rates: AppContext["rates"],
+): PaydayGoalFundingDraft[] {
+  if (confirmed.length === 0) {
+    return plan.draws.map((draw) => ({
+      accountId: draw.accountId,
+      plannedAmount: draw.recommendedAmount,
+      held: false,
+    }));
+  }
+  const perAccount = confirmed.filter((row) => row.accountId !== null);
+  if (perAccount.length > 0) {
+    const confirmedByAccount = new Map(perAccount.map((row) => [row.accountId as string, row]));
+    return plan.draws.map((draw) => {
+      const row = confirmedByAccount.get(draw.accountId);
+      return {
+        accountId: draw.accountId,
+        plannedAmount: row ? round2(convert(num(row.plannedAmount as never), row.currency, draw.currency, rates)) : 0,
+        held: true,
+      };
+    });
+  }
+  if (plan.draws.length === 0) return [];
+  const total = round2(
+    confirmed.reduce(
+      (sum, row) => sum + convert(num(row.plannedAmount as never), row.currency, displayCurrency, rates),
+      0,
+    ),
+  );
+  // Shares are 0 for every row only when earlier goals used up all the room;
+  // then the legacy total is spread evenly rather than dropped.
+  const shareTotal = plan.draws.reduce((sum, draw) => sum + draw.share, 0);
+  const shares = plan.draws.map((draw) => (shareTotal > 0 ? draw.share / shareTotal : 1 / plan.draws.length));
+  const largest = shares.reduce((best, share, index) => (share > shares[best] ? index : best), 0);
+  const displayAmounts = shares.map((share) => round2(total * share));
+  const others = displayAmounts.reduce((sum, value, index) => (index === largest ? sum : sum + value), 0);
+  displayAmounts[largest] = round2(total - others);
+  return plan.draws.map((draw, index) => ({
+    accountId: draw.accountId,
+    plannedAmount: round2(convert(displayAmounts[index], displayCurrency, draw.currency, rates)),
+    held: true,
+  }));
 }
 
 /**
@@ -484,6 +631,16 @@ export async function getPaydayCheckinDraft(
       a,
     ]),
   );
+  // A goal's GOAL rows, all of them: one per account it drew on, or the single
+  // accountless row of a check-in confirmed before funding was per-account.
+  const existingGoalAllocations = new Map<string, ConfirmedGoalAllocation[]>();
+  for (const allocation of existing?.allocations ?? []) {
+    if (allocation.type !== "GOAL" || !allocation.goalId) continue;
+    existingGoalAllocations.set(allocation.goalId, [
+      ...(existingGoalAllocations.get(allocation.goalId) ?? []),
+      allocation,
+    ]);
+  }
 
   // Active accounts are always offered; an archived one appears only when this
   // check-in already recorded something for it, and then read-only.
@@ -537,39 +694,69 @@ export async function getPaydayCheckinDraft(
   // A goal already fed by a recurring contribution this period does not also
   // need its full roadmap amount set aside: reserving both put the same goal in
   // the plan twice and shrank what was left for the flexible categories.
-  const dueContributionByGoal = new Map<string, number>();
-  for (const item of planSummary.committedItems) {
-    if (item.kind !== "CONTRIBUTION" || !item.goalId) continue;
-    dueContributionByGoal.set(item.goalId, (dueContributionByGoal.get(item.goalId) ?? 0) + item.amount);
-  }
+  const dueContributionByGoal = dueContributionsByGoal(planSummary.committedItems);
 
-  const goals: PaydayGoalDraft[] = allGoals
+  // The buffer is a recommendation per income account, not a stored choice, so
+  // it is always recomputed from the income in this draft - never read back
+  // from the confirmed check-in's BUFFER allocations. Goal funding below draws
+  // on the headroom this leaves each account.
+  const bufferInput = bufferInputs(accountDrafts, subscriptions);
+  const bufferPlan = planAccountBuffers(bufferInput.accounts, bufferInput.subscriptions, {
+    bufferPercent: settings.bufferPercent,
+    displayCurrency: context.displayCurrency,
+    rates: context.rates,
+  });
+  const plannedBuffer = bufferPlan.total;
+
+  const roadmapGoals = allGoals
     .filter((g) => g.targetDate && !g.achievedAt && g.remaining > 0)
     .map((g) => {
-      const existingAlloc = existingAllocationByKey.get(`GOAL:${g.id}`);
       // listGoals()'s perPeriod/periodsLeft are anchored to context.today (right
       // for the goals page's "time until target" display), but the payday
       // planner reserves money for the PLAN period, which can be tomorrow's
       // period rather than today's (see planPeriodRef()) - so recompute here
       // anchored to plan.start instead of trusting the pre-computed fields.
       const periodsLeft = Math.max(1, periodsRemaining(plan.start, g.targetDate as Date));
-      const recommendedAmount = round2(
-        Math.max(0, g.displayRemaining / periodsLeft - (dueContributionByGoal.get(g.id) ?? 0)),
+      const recommendedAmount = goalRoadmapAmount(
+        { displayRemaining: g.displayRemaining, targetDate: g.targetDate as Date },
+        plan.start,
+        dueContributionByGoal.get(g.id) ?? 0,
       );
-      return {
-        goalId: g.id,
-        name: g.name,
-        recommendedAmount,
-        // Allocations carry the display currency of the check-in that wrote
-        // them, which is not necessarily today's - convert like the category
-        // and buffer allocations below rather than reading the raw number.
-        plannedAmount: existingAlloc
-          ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
-          : recommendedAmount,
-        targetDate: g.targetDate as Date,
-        periodsLeft,
-      };
+      return { goal: g, periodsLeft, recommendedAmount };
     });
+  // Which accounts each goal's roadmap amount is recommended to come from,
+  // goals in this order sharing one pool of headroom (see planGoalFunding).
+  const fundingPlanByGoal = new Map(
+    planGoalFunding(
+      roadmapGoals.map((entry) => ({ goalId: entry.goal.id, amount: entry.recommendedAmount })),
+      bufferPlan.accounts,
+      { displayCurrency: context.displayCurrency, rates: context.rates },
+    ).map((fundingPlan) => [fundingPlan.goalId, fundingPlan]),
+  );
+  const accountCurrencyById = new Map(accountDrafts.map((account) => [account.accountId, account.currency]));
+  const goals: PaydayGoalDraft[] = roadmapGoals.map(({ goal: g, periodsLeft, recommendedAmount }) => {
+    const funding = seedGoalFunding(
+      fundingPlanByGoal.get(g.id)!,
+      existingGoalAllocations.get(g.id) ?? [],
+      context.displayCurrency,
+      context.rates,
+    );
+    return {
+      goalId: g.id,
+      name: g.name,
+      recommendedAmount,
+      plannedAmount: round2(
+        funding.reduce(
+          (sum, row) =>
+            sum + convert(row.plannedAmount, accountCurrencyById.get(row.accountId)!, context.displayCurrency, context.rates),
+          0,
+        ),
+      ),
+      funding,
+      targetDate: g.targetDate as Date,
+      periodsLeft,
+    };
+  });
   const goalPlanTotal = round2(goals.reduce((sum, g) => sum + g.plannedAmount, 0));
 
   const suggestionsByCategory = await getCategorySuggestions(
@@ -594,16 +781,6 @@ export async function getPaydayCheckinDraft(
     };
   });
   const essentialFixedTotal = round2(essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
-
-  // The buffer is a recommendation per income account, not a stored choice, so
-  // it is always recomputed from the income in this draft - never read back
-  // from the confirmed check-in's BUFFER allocations.
-  const bufferInput = bufferInputs(accountDrafts, subscriptions);
-  const plannedBuffer = planAccountBuffers(bufferInput.accounts, bufferInput.subscriptions, {
-    bufferPercent: settings.bufferPercent,
-    displayCurrency: context.displayCurrency,
-    rates: context.rates,
-  }).total;
 
   const includedCarryover = existing
     ? round2(convert(num(existing.includedCarryover), existing.currency, context.displayCurrency, context.rates))
@@ -856,14 +1033,7 @@ export async function confirmPaydayCheckin(
     const goal = goalById.get(g.goalId);
     return Boolean(goal && goal.targetDate && !goal.achievedAt);
   });
-  const dueContributionByGoal = new Map<string, number>();
-  for (const item of planSummary.committedItems) {
-    if (item.kind !== "CONTRIBUTION" || !item.goalId) continue;
-    dueContributionByGoal.set(item.goalId, (dueContributionByGoal.get(item.goalId) ?? 0) + item.amount);
-  }
-
-  // Planned goal amounts arrive in the display currency (see PaydayGoalDraft).
-  const goalPlanTotal = round2(goalInputs.reduce((sum, g) => sum + g.plannedAmount, 0));
+  const dueContributionByGoal = dueContributionsByGoal(planSummary.committedItems);
 
   const essentialInputs = input.essentialCategories.filter((c) => essentialById.has(c.categoryId));
   const essentialFixedTotal = round2(essentialInputs.reduce((sum, c) => sum + c.plannedAmount, 0));
@@ -896,6 +1066,62 @@ export async function confirmPaydayCheckin(
     { bufferPercent: context.bufferPercent, displayCurrency: context.displayCurrency, rates: context.rates },
   );
   const protectedBuffer = bufferPlan.total;
+
+  // Each goal's roadmap amount, plan-anchored and netted against the recurring
+  // contributions already aimed at it exactly as getPaydayCheckinDraft does -
+  // never listGoals()'s today-anchored perPeriod - and then where that amount
+  // is recommended to come from: the same headroom Step 3 showed, shared
+  // between the goals in this order (see planGoalFunding).
+  const roadmapByGoal = new Map(
+    goalInputs.map((g) => {
+      const goal = goalById.get(g.goalId)!;
+      return [
+        g.goalId,
+        goalRoadmapAmount(
+          { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate as Date },
+          plan.start,
+          dueContributionByGoal.get(goal.id) ?? 0,
+        ),
+      ];
+    }),
+  );
+  const fundingPlanByGoal = new Map(
+    planGoalFunding(
+      goalInputs.map((g) => ({ goalId: g.goalId, amount: roadmapByGoal.get(g.goalId)! })),
+      bufferPlan.accounts,
+      { displayCurrency: context.displayCurrency, rates: context.rates },
+    ).map((fundingPlan) => [fundingPlan.goalId, fundingPlan]),
+  );
+  // One row per (goal, account) with either amount above zero, in the
+  // account's own currency: the user's figure for that account is trusted like
+  // every other planned value, and sits next to what the recommendation said.
+  // A row the user zeroed keeps the recommendation on record; a row for an
+  // account the recommendation skipped keeps the user's figure.
+  const goalRows = goalInputs.flatMap((g) => {
+    const recommendedByAccount = new Map(
+      fundingPlanByGoal.get(g.goalId)!.draws.map((draw) => [draw.accountId, draw.recommendedAmount]),
+    );
+    const plannedByAccount = new Map(
+      g.funding
+        .filter((row) => liveAccountById.has(row.accountId))
+        .map((row) => [row.accountId, row.plannedAmount]),
+    );
+    return [...new Set([...recommendedByAccount.keys(), ...plannedByAccount.keys()])]
+      .map((accountId) => ({
+        goalId: g.goalId,
+        accountId,
+        currency: liveAccountById.get(accountId)!.currency,
+        recommendedAmount: recommendedByAccount.get(accountId) ?? 0,
+        plannedAmount: plannedByAccount.get(accountId) ?? 0,
+      }))
+      .filter((row) => row.recommendedAmount > 0 || row.plannedAmount > 0);
+  });
+  const goalPlanTotal = round2(
+    goalRows.reduce(
+      (sum, row) => sum + convert(row.plannedAmount, row.currency, context.displayCurrency, context.rates),
+      0,
+    ),
+  );
 
   // The wizard only ever offers "all of it" or "none of it", so anything else -
   // most realistically a draft left open while the previous period kept moving -
@@ -1059,27 +1285,20 @@ export async function confirmPaydayCheckin(
         currency: item.currency,
         basis: "recurring_item",
       })),
-      ...goalInputs.map((g) => {
-        const goal = goalById.get(g.goalId)!;
-        // Same plan-anchored recompute as getPaydayCheckinDraft above - never
-        // trust listGoals()'s today-anchored perPeriod for the audit-trail
-        // recommendedAmount here.
-        const periodsLeft = Math.max(1, periodsRemaining(plan.start, goal.targetDate as Date));
-        // Netted against the recurring contributions already aimed at this
-        // goal, exactly as getPaydayCheckinDraft does.
-        const recommendedAmount = round2(
-          Math.max(0, goal.displayRemaining / periodsLeft - (dueContributionByGoal.get(goal.id) ?? 0)),
-        );
-        return {
-          paydayCheckinId: checkin.id,
-          type: "GOAL" as const,
-          goalId: goal.id,
-          recommendedAmount,
-          plannedAmount: g.plannedAmount,
-          currency: context.displayCurrency,
-          basis: "roadmap",
-        };
-      }),
+      // One GOAL row per (goal, account) the goal draws on, in that account's
+      // own currency, like the BUFFER rows below. Check-ins confirmed before
+      // this carry a single accountless GOAL row per goal in the check-in's
+      // currency; readers sum a goal's rows either way.
+      ...goalRows.map((row) => ({
+        paydayCheckinId: checkin.id,
+        type: "GOAL" as const,
+        goalId: row.goalId,
+        accountId: row.accountId,
+        recommendedAmount: row.recommendedAmount,
+        plannedAmount: row.plannedAmount,
+        currency: row.currency,
+        basis: "roadmap_headroom_share",
+      })),
       ...essentialInputs.map((c) => ({
         paydayCheckinId: checkin.id,
         type: "ESSENTIAL_CATEGORY" as const,

@@ -475,7 +475,17 @@ export const paydayConfirmSchema = z.object({
     .array(
       z.object({
         goalId: z.string().trim().min(1),
-        plannedAmount: planAmount,
+        // One row per account the goal draws from, each amount in that
+        // account's own currency - see PaydayGoalFundingDraft. The goal's
+        // total is their sum; it is never sent on its own.
+        funding: z
+          .array(
+            z.object({
+              accountId: z.string().trim().min(1),
+              plannedAmount: planAmount,
+            }),
+          )
+          .transform(dedupeBy((entry) => entry.accountId)),
       }),
     )
     .transform(dedupeBy((entry) => entry.goalId)),

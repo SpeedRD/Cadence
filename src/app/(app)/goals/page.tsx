@@ -38,19 +38,20 @@ export default async function GoalsPage() {
     where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
     include: { allocations: { where: { type: "GOAL" } } },
   });
-  const plannedByGoalId = new Map(
-    (confirmedCheckin?.allocations ?? []).map((allocation) => [allocation.goalId as string, allocation]),
-  );
-  /** Allocations store the display currency in force when they were confirmed. */
-  const toDisplay = (allocation: { plannedAmount: unknown; currency: string }) =>
-    round2(
-      convert(
-        num(allocation.plannedAmount as never),
-        allocation.currency,
-        context.displayCurrency,
-        context.rates,
+  // A goal's plan is one GOAL row per account it draws on, each in that
+  // account's currency (a check-in confirmed before that: a single accountless
+  // row in the check-in's currency). Either way the goal's figure is their sum.
+  const plannedByGoalId = new Map<string, number>();
+  for (const allocation of confirmedCheckin?.allocations ?? []) {
+    if (!allocation.goalId) continue;
+    plannedByGoalId.set(
+      allocation.goalId,
+      round2(
+        (plannedByGoalId.get(allocation.goalId) ?? 0) +
+          convert(num(allocation.plannedAmount), allocation.currency, context.displayCurrency, context.rates),
       ),
     );
+  }
 
   return (
     <div className="space-y-5">
@@ -190,10 +191,7 @@ export default async function GoalsPage() {
                 {plannedByGoalId.has(goal.id) ? (
                   <p className="text-xs text-muted-foreground">
                     {t.plannedThisPeriod(
-                      formatMoney(
-                        toDisplay(plannedByGoalId.get(goal.id)!),
-                        context.displayCurrency,
-                      ),
+                      formatMoney(plannedByGoalId.get(goal.id)!, context.displayCurrency),
                     )}
                   </p>
                 ) : null}

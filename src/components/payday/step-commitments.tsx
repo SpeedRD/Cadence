@@ -17,7 +17,7 @@ import { formatMoney } from "@/lib/currency";
 import { formatDayMonth } from "@/lib/date";
 import { round2 } from "@/lib/money";
 import type { Dictionary } from "@/lib/i18n";
-import type { AccountBufferBreakdown } from "@/lib/payday";
+import type { AccountBufferBreakdown, GoalFundingRow, ResolvedGoalFunding } from "@/lib/payday";
 import type {
   CarryoverBasis,
   PaydayAccountDraft,
@@ -116,6 +116,58 @@ function SubscriptionRow({
   );
 }
 
+/**
+ * One account inside a goal's funding block: what it has to spare and the
+ * draw planned from it, editable in the account's own currency with the
+ * recommendation kept in view - the same shape as a subscription row inside
+ * its account's buffer block above.
+ */
+function GoalFundingRowView({
+  goalName,
+  row,
+  headroomBeforeGoals,
+  onChange,
+  t,
+}: {
+  goalName: string;
+  row: GoalFundingRow;
+  /** The account's headroom before any goal drew on it (the buffer view's figure). */
+  headroomBeforeGoals: number;
+  onChange: (value: number) => void;
+  t: Dictionary["payday"];
+}) {
+  const sharePercent = Math.round(row.share * 100);
+  const reason =
+    row.headroom <= 0
+      ? t.goalFundingNoRoomLeft
+      : row.headroom < headroomBeforeGoals
+        ? t.goalFundingRoomAfterEarlierGoals(formatMoney(row.headroom, row.currency), sharePercent)
+        : t.goalFundingRoom(formatMoney(row.headroom, row.currency), sharePercent);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+      <span className="min-w-0 flex-1">
+        {row.name}
+        <span className="block text-xs text-muted-foreground">{reason}</span>
+      </span>
+      <Field
+        label={`${t.plannedAmount} (${row.currency})`}
+        hint={
+          <>
+            {t.goalFundingRecommended}:{" "}
+            <span className="figure">{formatMoney(row.recommendedAmount, row.currency)}</span>
+          </>
+        }
+      >
+        <AmountInput
+          value={row.plannedAmount}
+          onChange={onChange}
+          ariaLabel={t.goalFundingAccountLabel(goalName, row.name)}
+        />
+      </Field>
+    </div>
+  );
+}
+
 export function StepCommitments({
   accounts,
   subscriptions,
@@ -136,7 +188,8 @@ export function StepCommitments({
   goalPlanTotal,
   essentialFixedTotal,
   available,
-  onGoalChange,
+  goalFunding,
+  onGoalFundingChange,
   onEssentialChange,
   onCarryoverChange,
   pickAnAccountLabel,
@@ -162,13 +215,19 @@ export function StepCommitments({
   goalPlanTotal: number;
   essentialFixedTotal: number;
   available: number;
-  onGoalChange: (goalId: string, plannedAmount: number) => void;
+  /** Each goal's per-account rows, keyed by goal, derived live in the dialog from the buffer view's headroom. */
+  goalFunding: Map<string, ResolvedGoalFunding>;
+  /** One account's draw for one goal, in that account's own currency. */
+  onGoalFundingChange: (goalId: string, accountId: string, plannedAmount: number) => void;
   onEssentialChange: (categoryId: string, plannedAmount: number) => void;
   onCarryoverChange: (value: number) => void;
   pickAnAccountLabel: string;
   t: Dictionary["payday"];
 }) {
   const subscriptionById = new Map(subscriptions.map((item) => [item.recurringItemId, item]));
+  // An account's room before any goal drew on it, to tell "to spare after its
+  // subscriptions and buffer" from "still to spare after the goals above".
+  const headroomByAccount = new Map(bufferPlan.accounts.map((plan) => [plan.accountId, plan.headroom]));
   const unfundedSubscriptions = bufferPlan.unassignedRecurringItemIds
     .map((id) => subscriptionById.get(id))
     .filter((item) => item !== undefined);
@@ -311,30 +370,62 @@ export function StepCommitments({
       <Card size="sm">
         <CardHeader>
           <CardTitle>{t.goalsHeading}</CardTitle>
+          <CardDescription>{t.goalsDescription}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {goals.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t.noGoalsWithTarget}</p>
           ) : (
             goals.map((goal) => {
-              const variance = round2(goal.plannedAmount - goal.recommendedAmount);
+              const funding = goalFunding.get(goal.goalId);
+              const rows = funding?.rows ?? [];
+              const total = funding?.total ?? 0;
+              const variance = round2(total - goal.recommendedAmount);
+              // The account taking the larger share, when the goal is split at all.
+              const sharing = rows.filter((row) => row.share > 0).sort((a, b) => b.share - a.share);
+              const lead = sharing.length > 1 && sharing[0].share > sharing[1].share ? sharing[0] : null;
               return (
-                <div key={goal.goalId} className="space-y-1">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">{goal.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {t.roadmapAmount}: {formatMoney(goal.recommendedAmount, displayCurrency)}
-                      </p>
-                    </div>
-                    <Field label={`${t.plannedAmount} (${displayCurrency})`}>
-                      <AmountInput
-                        value={goal.plannedAmount}
-                        onChange={(value) => onGoalChange(goal.goalId, value)}
-                        ariaLabel={`${t.plannedAmount} - ${goal.name}`}
-                      />
-                    </Field>
+                <div key={goal.goalId} className="space-y-2 rounded-lg border border-border/70 p-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="text-sm font-medium">{goal.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t.goalPlannedTotal}:{" "}
+                      <span className="figure">{formatMoney(total, displayCurrency)}</span>
+                    </p>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t.roadmapAmount}:{" "}
+                    <span className="figure">{formatMoney(goal.recommendedAmount, displayCurrency)}</span>
+                  </p>
+                  {rows.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">{t.goalFundingNoRoom}</p>
+                  ) : (
+                    rows.map((row) => (
+                      <GoalFundingRowView
+                        key={row.accountId}
+                        goalName={goal.name}
+                        row={row}
+                        headroomBeforeGoals={headroomByAccount.get(row.accountId) ?? row.headroom}
+                        onChange={(value) => onGoalFundingChange(goal.goalId, row.accountId, value)}
+                        t={t}
+                      />
+                    ))
+                  )}
+                  {lead ? (
+                    <p className="text-xs text-muted-foreground">{t.goalFundingLeadAccount(lead.name)}</p>
+                  ) : null}
+                  {funding && funding.shortfall > 0 ? (
+                    <div className="reveal-block">
+                      <Alert variant="destructive">
+                        <AlertDescription>
+                          {t.goalFundingShortfall(
+                            formatMoney(funding.recommendedTotal, displayCurrency),
+                            formatMoney(funding.shortfall, displayCurrency),
+                          )}
+                        </AlertDescription>
+                      </Alert>
+                    </div>
+                  ) : null}
                   <p className={variance >= 0 ? "text-xs text-[var(--good)]" : "text-xs text-[var(--critical)]"}>
                     {variance === 0
                       ? t.goalOnTrack

@@ -63,7 +63,7 @@ keeps its original date when it is re-confirmed.
 
 ![Payday check-in step 2: record the income received into each account](screenshots/payday-step-income.png)
 
-![Payday check-in step 3: protected buffer per account, with the subscriptions each account has to cover and a picker to move one to another account](screenshots/payday-step-buffer.png)
+![Payday check-in step 3: protected buffer per account, with the subscriptions each account has to cover and a picker to move one to another account, then the goal roadmap funded from each account's room in proportion to how much it has to spare](screenshots/payday-step-buffer.png)
 
 The **protected buffer is per account**, not one global number. Each account that
 received income keeps its own buffer — a configurable percentage of that account's
@@ -71,10 +71,19 @@ income or a fixed minimum, whichever is larger — and the step measures it agai
 subscriptions charged to that account. If one account would end below its buffer,
 the wizard says how far, suggests the account with the most room, and lets you move a
 subscription there without leaving the dialog (the change is saved to the recurring
-item itself). Recurring contributions, goal roadmap amounts, essential fixed
-categories, and last period's unspent carryover are then set aside, and what's left is
-available for flexible categories. A plan that ends in deficit, or with a zero
-buffer, can still be confirmed — but only after an explicit acknowledgement.
+item itself). **Goal funding is per account too**: each dated goal's roadmap amount
+is recommended from the accounts that still have money to spare after their
+subscriptions and their own buffer, in proportion to how much room each one has,
+never more than an account has, and with a shortfall called out when the room across
+every account can't cover the goal. Goals are placed in the order they appear (oldest
+first), each taking its share out of the pool before the next is placed, so two goals
+are never pointed at the same money. Every account's share is editable in that
+account's currency; the goal's total is their sum, and confirming writes one
+allocation row per goal and account. Recurring contributions, goal funding,
+essential fixed categories, and last period's unspent carryover are then set aside,
+and what's left is available for flexible categories. A plan that ends in deficit,
+or with a zero buffer, can still be confirmed — but only after an explicit
+acknowledgement.
 
 ### Budgets and safe-to-spend
 
@@ -241,7 +250,8 @@ screen by whoever holds the server's `RECOVERY_SECRET`, when that variable is se
 4. Create savings goals and follow their per-pay-period roadmap; log contributions
    from a real account when you move money by hand.
 5. On payday, run the check-in: reconcile balances, record income, review the
-   per-account buffer and commitments, set flexible category budgets, confirm.
+   per-account buffer, commitments, and per-account goal funding, set flexible
+   category budgets, confirm.
 6. Before an installment purchase, run it through Afford; if you buy it, record it
    there and it becomes a recurring item with a countdown.
 7. Watch the dashboard's safe-to-spend per day through the period.
