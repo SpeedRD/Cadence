@@ -115,3 +115,14 @@ export function monthlyEquivalent(
       return amount;
   }
 }
+
+/**
+ * A finite item that has posted (or been marked as having paid) its last
+ * occurrence. Distinct from a paused item, which the user switched off with
+ * payments still owed: resuming a finished plan needs new Payments left first,
+ * or posting would retire it again on its next run (see the countdown branch
+ * in src/lib/recurring-posting.ts).
+ */
+export function isFinishedPlan(item: { active: boolean; remainingOccurrences: number | null }): boolean {
+  return !item.active && item.remainingOccurrences !== null && item.remainingOccurrences <= 0;
+}

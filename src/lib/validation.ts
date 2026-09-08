@@ -7,6 +7,7 @@ import type { Locale } from "@/lib/i18n";
 import { AMOUNT_MAX, parseAmountInput, round2, type ParsedAmount } from "@/lib/money";
 import {
   ACCOUNT_TYPES,
+  CATEGORY_KINDS,
   RECURRING_FREQUENCIES,
   RECURRING_KINDS,
 } from "@/lib/labels";
@@ -68,6 +69,25 @@ const positiveAmount = z
     return parsed.amount;
   });
 
+/** An optional amount: empty is null, anything typed must be greater than 0. */
+const positiveAmountOrEmpty = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value, ctx) => {
+    if (!value) return null;
+    const parsed = parseAmountInput(value);
+    if (!parsed.ok) {
+      ctx.addIssue({ code: "custom", message: amountIssue(parsed.reason) });
+      return z.NEVER;
+    }
+    if (parsed.amount <= 0) {
+      ctx.addIssue({ code: "custom", message: "Enter an amount greater than 0" });
+      return z.NEVER;
+    }
+    return parsed.amount;
+  });
+
 /** Zero allowed; an empty field is null so callers can treat it as "clear". */
 const nonNegativeAmountOrEmpty = z
   .string()
@@ -101,6 +121,63 @@ export const pinSchema = z
   .string()
   .trim()
   .regex(/^\d{4,6}$/, "Use 4 to 6 digits");
+
+const HEX_COLOR_MESSAGE = "Pick a color";
+
+/**
+ * The category form. Kind is validated here and gated on usage in the data
+ * layer (updateCategory refuses a kind change while transactions are filed
+ * under the category). Colors are the six-digit hex the color input emits.
+ */
+export const categorySchema = z.object({
+  id: z.string().trim().optional(),
+  name: z.string().trim().min(1, "Name the category").max(40, "Keep the name under 40 characters"),
+  kind: z.enum(CATEGORY_KINDS),
+  color: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^#[0-9a-f]{6}$/, HEX_COLOR_MESSAGE),
+});
+
+/** The reassignment step: the category being removed and where its rows go. */
+export const reassignCategorySchema = z.object({
+  id: z.string().trim().min(1),
+  moveToId: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value, ctx) => {
+      // Absent (nothing picked), "" and "none" all mean the same to the user.
+      if (!value || value === "none") {
+        ctx.addIssue({ code: "custom", message: "Pick a category to move them to" });
+        return z.NEVER;
+      }
+      return value;
+    }),
+});
+
+export const changePinSchema = z
+  .object({
+    currentPin: pinSchema,
+    pin: pinSchema,
+    confirm: z.string().trim(),
+  })
+  .refine((value) => value.pin === value.confirm, {
+    message: "Both entries must match",
+    path: ["confirm"],
+  });
+
+export const recoverPinSchema = z
+  .object({
+    secret: z.string().min(1, "Enter the recovery secret"),
+    pin: pinSchema,
+    confirm: z.string().trim(),
+  })
+  .refine((value) => value.pin === value.confirm, {
+    message: "Both entries must match",
+    path: ["confirm"],
+  });
 
 export const openingBalanceSchema = z.object({
   accountId: z.string().trim().min(1, "Pick an account"),
@@ -160,6 +237,12 @@ export const transferSchema = z
     fromAccountId: z.string().trim().min(1, "Pick a source account"),
     toAccountId: z.string().trim().min(1, "Pick a destination account"),
     note: optionalText,
+    /**
+     * Cross-currency only: what the receiving account was actually credited,
+     * in its own currency. Blank keeps both legs at the entered amount (see
+     * transferLegs in src/lib/transactions.ts).
+     */
+    receivedAmount: positiveAmountOrEmpty,
   })
   .refine((value) => value.fromAccountId !== value.toAccountId, {
     message: "Pick two different accounts",
@@ -183,6 +266,8 @@ export const budgetSchema = z.object({
  * the FormData entirely and is normalized to null regardless of what was
  * submitted (a stale pick from switching Kind back never survives).
  */
+const REMAINING_OCCURRENCES_MESSAGE = `Leave payments left blank, or use between 1 and ${MAX_INSTALLMENTS}`;
+
 export const recurringSchema = z
   .object({
     id: z.string().trim().optional(),
@@ -196,6 +281,17 @@ export const recurringSchema = z
         const parsed = new Date(value);
         return Number.isNaN(parsed.getTime()) ? null : parsed;
       }),
+    /**
+     * The item's nextDate as the edit form was rendered with it, so the
+     * transform below can tell an edit that re-picked the due date from one
+     * that left it alone. Absent on a new item; unparseable is treated as
+     * absent, which falls back to re-anchoring (the pre-existing behaviour).
+     */
+    originalNextDate: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (value ? fromISODate(value) : null)),
     name: z.string().trim().min(1, "Name the item").max(80),
     amount: positiveAmount,
     currency,
@@ -210,23 +306,53 @@ export const recurringSchema = z
       .optional()
       .transform((value) => (!value || value === "none" ? null : value)),
     note: optionalText,
+    /**
+     * RecurringItem.remainingOccurrences as typed into the form: blank is an
+     * open-ended item (null, what every item is unless told otherwise); a
+     * number is how many occurrences are still owed counting the one due at
+     * nextDate - the same meaning confirmAffordPurchase gives it, and the same
+     * cap, so an installment plan entered by hand before Afford existed can be
+     * retrofitted with its real countdown without recreating it.
+     */
+    remainingOccurrences: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value, ctx) => {
+        if (!value) return null;
+        const count = Number(value);
+        if (!Number.isInteger(count) || count < 1 || count > MAX_INSTALLMENTS) {
+          ctx.addIssue({ code: "custom", message: REMAINING_OCCURRENCES_MESSAGE });
+          return z.NEVER;
+        }
+        return count;
+      }),
     active: z
       .string()
       .trim()
       .optional()
       .transform((value) => value === "on" || value === "true"),
   })
-  .transform((value, ctx) => {
+  .transform(({ originalNextDate, ...value }, ctx) => {
     if (value.accountId === null) {
       ctx.addIssue({ code: "custom", message: "Pick an account", path: ["accountId"] });
       return z.NEVER;
     }
-    // The due date the user picked is also the item's anchor day: posting
-    // advances nextDate but never rewrites anchorDay, so only an explicit edit
-    // here can re-anchor an item. Every app write sets it - this schema for
-    // the form, confirmAffordPurchase for an installment plan - so no create
-    // or update path can leave it unset (see RecurringItem.anchorDay).
-    const anchorDay = value.nextDate.getUTCDate();
+    // The due date the user picks is also the item's anchor day: posting
+    // advances nextDate but never rewrites anchorDay, so only an explicit
+    // pick here can re-anchor an item. A new item always gets one (as does
+    // confirmAffordPurchase for an installment plan), and an edit gets one
+    // only when the date actually changed. An edit that leaves the date alone
+    // leaves the anchor alone too - the form prefills the *next* occurrence,
+    // which for an item due on the 31st is the 28th all through February, and
+    // re-anchoring on every save would quietly move the bill to the 28th for
+    // good the first time its amount was edited in a short month. Undefined
+    // is skipped by the update, so the stored value survives untouched.
+    const dateUnchanged =
+      Boolean(value.id) &&
+      originalNextDate !== null &&
+      originalNextDate.getTime() === value.nextDate.getTime();
+    const anchorDay = dateUnchanged ? undefined : value.nextDate.getUTCDate();
     if (value.kind === "CONTRIBUTION") {
       if (value.goalId === null) {
         ctx.addIssue({ code: "custom", message: "Pick a goal", path: ["goalId"] });
@@ -268,6 +394,12 @@ export const contributionSchema = z.object({
   amount: positiveAmount,
   date: isoDate,
   note: optionalText,
+});
+
+/** One auto-posted contribution's corrected amount, in the goal's currency. */
+export const recurringContributionEditSchema = z.object({
+  id: z.string().trim().min(1),
+  amount: positiveAmount,
 });
 
 export const settingsSchema = z.object({
@@ -468,10 +600,18 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Add at least one active account": "Agrega al menos una cuenta activa",
   "Pick a direction": "Elige una dirección",
   "Pick a goal": "Elige una meta",
+  "Name the category": "Ponle nombre a la categoría",
+  "Keep the name under 40 characters": "Mantén el nombre en menos de 40 caracteres",
+  "Pick a color": "Elige un color",
+  "Pick a category to move them to": "Elige la categoría a la que moverlos",
+  "Enter the recovery secret": "Ingresa el secreto de recuperación",
+  "Both entries must match": "Ambas entradas deben coincidir",
   "Check the form and try again": "Revisa el formulario e intenta de nuevo",
   "Name the purchase": "Ponle nombre a la compra",
   "Enter a price greater than 0": "Ingresa un precio mayor que 0",
   "Use between 1 and 120 installments": "Usa entre 1 y 120 cuotas",
+  "Leave payments left blank, or use between 1 and 120":
+    "Deja los pagos restantes en blanco, o usa entre 1 y 120",
   "That price is too small to split into that many installments":
     "Ese precio es demasiado pequeño para dividirlo en tantas cuotas",
 };

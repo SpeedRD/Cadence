@@ -78,6 +78,20 @@ export function paydayOfPeriod(ref: PeriodRef): number {
 }
 
 /**
+ * The calendar date the pay that funds `ref` lands on. Pay for the 16th-end
+ * period arrives on the 15th (period A's payday, same month); pay for the
+ * 1st-15th period arrives at the end of the previous month (the previous
+ * period's payday). Each pulled back off a weekend like paydayOfPeriod.
+ */
+export function paydayDateFor(ref: PeriodRef): Date {
+  if (ref.period === "B") {
+    return new Date(Date.UTC(ref.year, ref.month - 1, paydayOfPeriod({ ...ref, period: "A" })));
+  }
+  const previous = previousPeriod(ref);
+  return new Date(Date.UTC(previous.year, previous.month - 1, paydayOfPeriod(previous)));
+}
+
+/**
  * True from the day this period's pay lands until the period ends - the whole
  * stretch during which planning should already be looking at the *next* period.
  *

@@ -33,6 +33,8 @@ export interface RecurringFormValues {
   goalId?: string | null;
   note?: string | null;
   active?: boolean;
+  /** Payments still owed for a finite plan; null or undefined for an open-ended item. */
+  remainingOccurrences?: number | null;
 }
 
 export function RecurringDialog({
@@ -106,6 +108,12 @@ export function RecurringDialog({
       {values.updatedAt ? (
         <input type="hidden" name="updatedAt" value={values.updatedAt} />
       ) : null}
+      {editing ? (
+        // The due date as rendered, so the save can tell "re-picked the date"
+        // from "left it alone" and only re-anchor the item in the first case
+        // (see recurringSchema).
+        <input type="hidden" name="originalNextDate" value={values.nextDate} />
+      ) : null}
       <input
         type="hidden"
         name="active"
@@ -170,6 +178,27 @@ export function RecurringDialog({
             required
           />
         </Field>
+        <Field
+          label={t.paymentsLeftLabel}
+          htmlFor="recurring-remaining"
+          hint={t.paymentsLeftHint}
+        >
+          <Input
+            id="recurring-remaining"
+            name="remainingOccurrences"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={120}
+            step={1}
+            className="font-mono"
+            placeholder={t.paymentsLeftPlaceholder}
+            defaultValue={values.remainingOccurrences ?? ""}
+          />
+        </Field>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
         <Field label={common.category} htmlFor="recurring-category">
           <CategorySelect
             id="recurring-category"
@@ -179,9 +208,6 @@ export function RecurringDialog({
             common={common}
           />
         </Field>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
         <Field label={common.account} htmlFor="recurring-account" hint={t.accountHint}>
           <AccountSelect
             id="recurring-account"
@@ -191,22 +217,23 @@ export function RecurringDialog({
             common={common}
           />
         </Field>
-        {isContribution ? (
-          <Field
-            label={t.goal}
-            htmlFor="recurring-goal"
-            hint={goals.length === 0 ? t.noGoalsYet : t.goalHint}
-          >
-            <GoalSelect
-              id="recurring-goal"
-              name="goalId"
-              goals={goals}
-              defaultValue={goalDefault}
-              common={common}
-            />
-          </Field>
-        ) : null}
       </div>
+
+      {isContribution ? (
+        <Field
+          label={t.goal}
+          htmlFor="recurring-goal"
+          hint={goals.length === 0 ? t.noGoalsYet : t.goalHint}
+        >
+          <GoalSelect
+            id="recurring-goal"
+            name="goalId"
+            goals={goals}
+            defaultValue={goalDefault}
+            common={common}
+          />
+        </Field>
+      ) : null}
 
       <Field label={common.note} htmlFor="recurring-note">
         <Textarea

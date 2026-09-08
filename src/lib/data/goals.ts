@@ -214,6 +214,8 @@ export async function getGoalDetail(id: string, context: AppContext) {
     currency: contribution.currency,
     date: contribution.date,
     note: contribution.note,
+    /** Set when recurring posting wrote the row; such rows can be corrected in place. */
+    recurringExternalId: contribution.recurringExternalId,
   }));
 
   // The cached savedAmount should equal this; surfaced so drift is visible.

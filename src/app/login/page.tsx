@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { PinGate } from "@/components/auth/pin-gate";
 import { isAuthenticated, isPinConfigured, getSettings } from "@/lib/auth";
+import { isRecoveryConfigured } from "@/lib/recovery";
 import { isLocale } from "@/lib/i18n";
 
 export const dynamic = "force-dynamic";
@@ -15,5 +16,11 @@ export default async function LoginPage() {
     getSettings(),
   ]);
   const locale = isLocale(settings.language) ? settings.language : "en";
-  return <PinGate mode={configured ? "login" : "create"} locale={locale} />;
+  return (
+    <PinGate
+      mode={configured ? "login" : "create"}
+      recoveryConfigured={isRecoveryConfigured()}
+      locale={locale}
+    />
+  );
 }

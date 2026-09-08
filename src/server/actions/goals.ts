@@ -1,11 +1,15 @@
 "use server";
 
+import { redirect } from "next/navigation";
+
 import { getSettings, requireAuth } from "@/lib/auth";
 import {
+  deleteGoalDetachingLedger,
   logManualContribution,
   rebuildGoalSaved,
   recomputeGoalSaved,
   removeContribution,
+  updateRecurringContributionAmount,
 } from "@/lib/goals";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
@@ -15,6 +19,7 @@ import {
   firstError,
   formObject,
   goalSchema,
+  recurringContributionEditSchema,
 } from "@/lib/validation";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
@@ -54,9 +59,41 @@ export async function deleteGoalAction(
   const common = getDictionary(locale).common;
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return fail(common.nothingToDelete);
-  await prisma.goal.delete({ where: { id } });
+  // The contributions cascade; the expenses they wrote stay in the ledger as
+  // ordinary rows - see deleteGoalDetachingLedger.
+  if (!(await deleteGoalDetachingLedger(id))) return fail(t.goalNoLongerExists);
   revalidateApp();
+  // From the goal's own page the form asks to be sent to the list: that page
+  // has nothing left to render. Only the one fixed path is honoured.
+  if (String(formData.get("redirectTo") ?? "") === "/goals") redirect("/goals");
   return done(t.goalDeleted);
+}
+
+/**
+ * Corrects the amount of one contribution recurring posting wrote, and the
+ * ledger row beside it, without touching the recurring item's own amount.
+ */
+export async function updateRecurringContributionAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).goals;
+  const parsed = recurringContributionEditSchema.safeParse(formObject(formData));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
+
+  const result = await updateRecurringContributionAmount(parsed.data.id, parsed.data.amount);
+  if (!result.ok) {
+    return fail(
+      result.reason === "not_found" ? t.contributionNoLongerExists : t.contributionNotRecurring,
+    );
+  }
+  await recomputeGoalSaved(result.goalId);
+
+  revalidateApp();
+  return done(t.contributionUpdated);
 }
 
 /**
@@ -117,7 +154,7 @@ export async function deleteContributionAction(
   const id = String(formData.get("id") ?? "").trim();
   const contribution = await prisma.goalContribution.findUnique({
     where: { id },
-    select: { id: true, goalId: true, accountId: true },
+    select: { id: true, goalId: true, accountId: true, recurringExternalId: true },
   });
   if (!contribution) return fail(t.contributionNoLongerExists);
 

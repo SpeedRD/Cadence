@@ -74,7 +74,9 @@ export type RecurringSkipReason =
   | "missing_account"
   | "missing_goal"
   | "missing_account_and_goal"
-  | "account_archived";
+  | "account_archived"
+  /** A contribution whose goal is already fully funded: nothing more to put in. */
+  | "goal_achieved";
 
 export interface SkippedRecurringItem {
   id: string;
@@ -120,7 +122,7 @@ async function loadDueItems(today: Date) {
     where: { active: true, nextDate: { lte: today } },
     include: {
       account: { select: { status: true } },
-      goal: { select: { currency: true } },
+      goal: { select: { currency: true, achievedAt: true } },
     },
     orderBy: { nextDate: "asc" },
   });
@@ -135,6 +137,11 @@ function skipReasonFor(item: DueItem): RecurringSkipReason | null {
   if (missingAccount) return "missing_account";
   if (missingGoal) return "missing_goal";
   if (item.account?.status === "ARCHIVED") return "account_archived";
+  // A contribution to a goal that has reached its target is skipped, never
+  // advanced and never paused: the item stays exactly as it is, so raising
+  // the target later (which clears achievedAt, see rebuildGoalSaved) lets it
+  // pick up again from the same due date with no action from the user.
+  if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) return "goal_achieved";
   return null;
 }
 
@@ -494,6 +501,7 @@ const SKIP_REASON_TEXT: Record<RecurringSkipReason, string> = {
   missing_goal: "missing goal",
   missing_account_and_goal: "missing account and goal",
   account_archived: "account archived",
+  goal_achieved: "goal fully funded",
 };
 
 /** One log line for the cron output, e.g. "2 items posted ...; 1 item skipped: Netflix (missing account)". */

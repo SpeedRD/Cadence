@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { ContributionDialog } from "@/components/goals/contribution-dialog";
 import {
   ContributionDeleteButton,
+  ContributionEditButton,
   GoalActions,
 } from "@/components/goals/goal-actions";
 import { Meter } from "@/components/meter";
@@ -220,7 +221,7 @@ export default async function GoalDetailPage({
                   <TableHead className="w-[104px]">{common.date}</TableHead>
                   <TableHead>{common.note}</TableHead>
                   <TableHead className="text-right">{common.amount}</TableHead>
-                  <TableHead className="w-10" />
+                  <TableHead className="w-16" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -236,14 +237,24 @@ export default async function GoalDetailPage({
                       {formatMoney(contribution.amount, contribution.currency)}
                     </TableCell>
                     <TableCell>
-                      <ContributionDeleteButton
-                        locale={context.language}
-                        id={contribution.id}
-                        amount={formatMoney(
-                          contribution.amount,
-                          contribution.currency,
-                        )}
-                      />
+                      <div className="flex items-center justify-end gap-0.5">
+                        {contribution.recurringExternalId ? (
+                          <ContributionEditButton
+                            locale={context.language}
+                            id={contribution.id}
+                            amount={contribution.amount}
+                            currency={contribution.currency}
+                          />
+                        ) : null}
+                        <ContributionDeleteButton
+                          locale={context.language}
+                          id={contribution.id}
+                          amount={formatMoney(
+                            contribution.amount,
+                            contribution.currency,
+                          )}
+                        />
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

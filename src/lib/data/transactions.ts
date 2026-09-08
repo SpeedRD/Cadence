@@ -38,6 +38,9 @@ export interface TransactionRow {
   categoryColor: string | null;
   counterpartAccountName: string | null;
   counterpartAccountId: string | null;
+  /** The other leg's own figure - differs from this row's on a cross-currency transfer with a declared received amount. */
+  counterpartAmount: number | null;
+  counterpartCurrency: string | null;
 }
 
 function buildWhere(filters: TransactionFilters): Prisma.TransactionWhereInput {
@@ -91,6 +94,8 @@ export async function listTransactions(
           transferId: true,
           transferDirection: true,
           accountId: true,
+          amount: true,
+          currency: true,
           account: { select: { name: true } },
         },
       })
@@ -127,6 +132,8 @@ export async function listTransactions(
       categoryColor: transaction.category?.color ?? null,
       counterpartAccountName: counterpart?.account.name ?? null,
       counterpartAccountId: counterpart?.accountId ?? null,
+      counterpartAmount: counterpart ? num(counterpart.amount) : null,
+      counterpartCurrency: counterpart?.currency ?? null,
     };
   });
 

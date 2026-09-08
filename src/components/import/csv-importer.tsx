@@ -42,7 +42,11 @@ import {
   detectImportGroups,
   type RowCategoryDecision,
 } from "@/lib/import-grouping";
-import { importTransactionsAction } from "@/server/actions/import";
+import {
+  detectCsvDuplicatesAction,
+  importTransactionsAction,
+  type CsvDuplicateHit,
+} from "@/server/actions/import";
 import { cn } from "@/lib/utils";
 
 type SignMode = "signed" | "expenses" | "income";
@@ -100,6 +104,20 @@ export function CsvImporter({
   const [groupDecisions, setGroupDecisions] = useState<Record<string, string>>({});
   const [unknownRowDecisions, setUnknownRowDecisions] = useState<Record<number, string>>({});
   const [groupTypeDecisions, setGroupTypeDecisions] = useState<Record<string, string>>({});
+  // Rows already in the ledger as CSV imports (by validRows index), found by
+  // the server before anything is written, and the per-row choice for each:
+  // absent means skip, "import" means the user chose to import it anyway.
+  // Both are keyed by the inputs they answer for (see duplicateKey below), so
+  // a stale answer or a stale decision for a different set of rows is simply
+  // never read - no reset step, no window where old matches show for new rows.
+  const [duplicateResult, setDuplicateResult] = useState<{
+    key: string;
+    hits: Record<number, CsvDuplicateHit>;
+  } | null>(null);
+  const [duplicateChoices, setDuplicateChoices] = useState<{
+    key: string;
+    decisions: Record<number, "import" | "skip">;
+  } | null>(null);
 
   const [state, formAction, pending] = useActionState(
     importTransactionsAction,
@@ -119,6 +137,7 @@ export function CsvImporter({
   }, [state, router]);
 
   const headerCells = rows[0] ?? [];
+
   const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
   const dataRows = useMemo(
     () => (hasHeader ? rows.slice(1) : rows),
@@ -210,10 +229,58 @@ export function CsvImporter({
       groupTypeDecisions[group.id] === undefined,
   );
 
+  // Ask the server which rows are already imported whenever the rows, the
+  // account or the currency change. Debounced, and an answer for a request
+  // that is no longer the latest is dropped.
+  const duplicateKey = JSON.stringify({
+    accountId,
+    currency,
+    rows: validRows.map((row) => [toISODate(row.date as Date), row.amount, row.note || null]),
+  });
+  const hasRowsToCheck = Boolean(accountId) && validRows.length > 0;
+  const duplicateRequest = useRef(0);
+  useEffect(() => {
+    if (!hasRowsToCheck) return;
+    const request = ++duplicateRequest.current;
+    const timer = setTimeout(async () => {
+      const payload = JSON.parse(duplicateKey) as {
+        accountId: string;
+        currency: string;
+        rows: [string, number, string | null][];
+      };
+      const result = await detectCsvDuplicatesAction({
+        accountId: payload.accountId,
+        currency: payload.currency,
+        rows: payload.rows.map(([date, amount, note]) => ({ date, amount, note })),
+      });
+      if (request !== duplicateRequest.current) return;
+      if (!result.ok) {
+        toast.error(result.error);
+        setDuplicateResult({ key: duplicateKey, hits: {} });
+        return;
+      }
+      setDuplicateResult({
+        key: duplicateKey,
+        hits: Object.fromEntries(result.duplicates.map((hit) => [hit.index, hit])),
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [duplicateKey, hasRowsToCheck]);
+
+  const checkingDuplicates = hasRowsToCheck && duplicateResult?.key !== duplicateKey;
+  const duplicateHits = duplicateResult?.key === duplicateKey ? duplicateResult.hits : {};
+  const duplicateDecisions = duplicateChoices?.key === duplicateKey ? duplicateChoices.decisions : {};
+  const duplicateRowIndexes = Object.keys(duplicateHits).map(Number).sort((a, b) => a - b);
+  const isSkippedDuplicate = (index: number) =>
+    duplicateHits[index] !== undefined && duplicateDecisions[index] !== "import";
+  const importIndexes = validRows.map((_, index) => index).filter((index) => !isSkippedDuplicate(index));
+  const skippedDuplicateCount = validRows.length - importIndexes.length;
+
   const payload = JSON.stringify({
     accountId,
     currency,
-    rows: validRows.map((row, index) => {
+    rows: importIndexes.map((index) => {
+      const row = validRows[index];
       const type = rowTypeOverrides.get(index) ?? row.type;
       return {
         date: toISODate(row.date as Date),
@@ -225,6 +292,7 @@ export function CsvImporter({
           type === "EXTERNAL_TRANSFER"
             ? null
             : (rowCategoryOverrides.get(index) ?? (categoryId === "none" ? null : categoryId)),
+        importAnyway: duplicateHits[index] !== undefined,
       };
     }),
   });
@@ -500,19 +568,38 @@ export function CsvImporter({
                     return { ...previous, [groupId]: typeOverride };
                   })
                 }
+                duplicateRowIndexes={duplicateRowIndexes}
+                duplicateHits={duplicateHits}
+                duplicateDecisions={duplicateDecisions}
+                onDecideDuplicateAction={(rowIndexes, decision) =>
+                  setDuplicateChoices((previous) => {
+                    const next = { ...(previous?.key === duplicateKey ? previous.decisions : {}) };
+                    for (const index of rowIndexes) next[index] = decision;
+                    return { key: duplicateKey, decisions: next };
+                  })
+                }
               />
 
               <form action={formAction} className="flex items-center gap-3">
                 <input type="hidden" name="payload" value={payload} />
-                <SubmitButton pending={pending} disabled={unresolvedTransferGroups.length > 0}>
-                  {t.importCount(validRows.length)}
+                <SubmitButton
+                  pending={pending}
+                  disabled={unresolvedTransferGroups.length > 0 || checkingDuplicates || importIndexes.length === 0}
+                >
+                  {t.importCount(importIndexes.length)}
                 </SubmitButton>
                 {unresolvedTransferGroups.length > 0 ? (
                   <span className="text-sm text-muted-foreground">
                     {t.resolveTransfersHint(unresolvedTransferGroups.length)}
                   </span>
+                ) : checkingDuplicates ? (
+                  <span className="text-sm text-muted-foreground">{t.checkingDuplicates}</span>
                 ) : state?.error ? (
                   <span className="text-sm text-destructive">{state.error}</span>
+                ) : skippedDuplicateCount > 0 ? (
+                  <span className="text-sm text-muted-foreground">
+                    {t.duplicatesSkippedHint(skippedDuplicateCount)}
+                  </span>
                 ) : null}
               </form>
             </CardContent>

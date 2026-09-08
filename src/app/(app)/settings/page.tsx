@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { ActionButton } from "@/components/form/action-button";
 import { PageHeader } from "@/components/page-header";
+import { ChangePinForm } from "@/components/settings/change-pin-form";
 import { DisplayCurrencyForm } from "@/components/settings/display-currency-form";
 import { EssentialCategoryToggle } from "@/components/settings/essential-category-toggle";
 import { PlanningPreferencesForm } from "@/components/settings/planning-preferences-form";
@@ -99,6 +100,31 @@ export default async function SettingsPage() {
               carryoverIncludedByDefault={settings.carryoverIncludedByDefault}
               locale={context.language}
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t.categoriesTitle}</CardTitle>
+            <CardDescription>{t.categoriesDescription}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/settings/categories">
+                <Tags className="size-3.5" />
+                {t.manageCategories}
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t.pinTitle}</CardTitle>
+            <CardDescription>{t.pinDescription}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ChangePinForm locale={context.language} />
           </CardContent>
         </Card>
 

@@ -5,7 +5,8 @@ import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { firstError, formObject, recurringAccountSchema, recurringSchema } from "@/lib/validation";
 
-import { setRecurringItemAccount } from "@/lib/data/recurring";
+import { markRecurringItemPaidOff, setRecurringItemAccount } from "@/lib/data/recurring";
+import { isFinishedPlan } from "@/lib/recurring";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
@@ -99,6 +100,10 @@ export async function toggleRecurringAction(
   const id = String(formData.get("id") ?? "").trim();
   const item = await prisma.recurringItem.findUnique({ where: { id } });
   if (!item) return fail(t.itemNoLongerExists);
+  // Flipping a finished plan back on would only have posting retire it again
+  // on the next run, after a toast that said "Resumed". It needs new Payments
+  // left first, which the edit form sets.
+  if (isFinishedPlan(item)) return fail(t.finishedCannotResume);
 
   await prisma.recurringItem.update({
     where: { id },
@@ -106,6 +111,24 @@ export async function toggleRecurringAction(
   });
   revalidateApp();
   return done(item.active ? t.itemPaused : t.itemResumed);
+}
+
+/** The rest of an installment plan was paid in one go outside the app. */
+export async function markPaidOffAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).recurring;
+  const id = String(formData.get("id") ?? "").trim();
+  const result = await markRecurringItemPaidOff(id);
+  if (!result.ok) {
+    return fail(result.reason === "not_found" ? t.itemNoLongerExists : t.notAnInstallmentPlan);
+  }
+  revalidateApp();
+  return done(t.itemPaidOff);
 }
 
 /**

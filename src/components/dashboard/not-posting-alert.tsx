@@ -28,6 +28,7 @@ export function NotPostingAlert({
     missing_goal: t.notPostingReasonMissingGoal,
     missing_account_and_goal: t.notPostingReasonMissingAccountAndGoal,
     account_archived: t.notPostingReasonAccountArchived,
+    goal_achieved: t.notPostingReasonGoalAchieved,
   };
 
   const lines = [

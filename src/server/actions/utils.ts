@@ -12,10 +12,19 @@ export type ActionState = {
    * achieved goal - see rebuildGoalSaved() in src/lib/goals.ts.
    */
   achievedGoalId?: string;
+  /**
+   * Set by deleteCategoryAction when the category still has rows filed under
+   * it: what would be orphaned, so the client can open the reassignment step
+   * with the real counts instead of deleting anything.
+   */
+  categoryUsage?: { transactions: number; recurringItems: number; budgets: number };
 } | null;
 
-export function fail(error: string): ActionState {
-  return { ok: false, error, at: Date.now() };
+export function fail(
+  error: string,
+  extra?: { categoryUsage?: NonNullable<ActionState>["categoryUsage"] },
+): ActionState {
+  return { ok: false, error, at: Date.now(), ...extra };
 }
 
 export function done(

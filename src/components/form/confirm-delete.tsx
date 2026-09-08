@@ -28,6 +28,7 @@ export function ConfirmDelete({
   deletedMessage,
   open: controlledOpen,
   onOpenChange,
+  fields,
 }: {
   id: string;
   action: (state: ActionState, formData: FormData) => Promise<ActionState>;
@@ -39,6 +40,8 @@ export function ConfirmDelete({
   deletedMessage: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Extra hidden inputs posted with the id - e.g. where the action should send the user afterwards. */
+  fields?: Record<string, string>;
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
@@ -60,6 +63,9 @@ export function ConfirmDelete({
       <DialogContent className="sm:max-w-sm">
         <form action={formAction} className="grid gap-5">
           <input type="hidden" name="id" value={id} />
+          {Object.entries(fields ?? {}).map(([name, value]) => (
+            <input key={name} type="hidden" name={name} value={value} />
+          ))}
           <DialogHeader>
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>

@@ -91,6 +91,7 @@ In the Vercel project → Settings → Environment Variables (Production), set:
 - `DATABASE_URL` — the Supabase transaction pooler string (port `6543`, `?pgbouncer=true`)
 - `DIRECT_URL` — the Supabase session pooler string (port `5432`)
 - `APP_TIMEZONE` — `America/Santo_Domingo`
+- `RECOVERY_SECRET` — optional; enables "Forgot your PIN?" on the unlock screen (`openssl rand -hex 32`, kept in a password manager). Without it a forgotten PIN can only be reset by nulling `Settings.pinHash` in the database.
 - `SESSION_SECRET`, `OAUTH_ENCRYPTION_KEY`, `CRON_SECRET` — existing values, or generate new ones (see [PHASE2.md](./PHASE2.md)). `CRON_SECRET` gates both cron routes in `vercel.json`: `/api/cron/ingest` (email sync, daily 04:00 UTC) and `/api/cron/recurring` (posts due recurring items, daily 04:15 UTC). Without it neither cron does anything.
 - `APP_URL` — the canonical production origin, e.g. `https://cadence.vercel.app` or your custom domain (no trailing slash). Required for Gmail OAuth to work in production — see [PHASE2.md](./PHASE2.md).
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`

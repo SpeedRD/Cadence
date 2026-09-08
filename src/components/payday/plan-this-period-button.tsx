@@ -12,10 +12,13 @@ export function PlanThisPeriodButton({
   draft,
   rates,
   locale,
+  label,
 }: {
   draft: PaydayCheckinDraft;
   rates: RateTable;
   locale: Locale;
+  /** Defaults to "Plan this period"; the Budgets page passes the wording for a past or already confirmed period. */
+  label?: string;
 }) {
   const t = getDictionary(locale).payday;
   const [open, setOpen] = useState(false);
@@ -23,7 +26,7 @@ export function PlanThisPeriodButton({
   return (
     <>
       <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-        {t.planThisPeriod}
+        {label ?? t.planThisPeriod}
       </Button>
       <PaydayCheckinDialog draft={draft} rates={rates} locale={locale} open={open} onOpenChange={setOpen} />
     </>

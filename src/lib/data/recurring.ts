@@ -35,10 +35,11 @@ export interface RecurringRow {
   goalName: string | null;
   /**
    * What automatic posting is waiting on, if anything: the item has no usable
-   * (active) account, or is a contribution with no goal. Mirrors the skip
-   * rules in src/lib/recurring-posting.ts.
+   * (active) account, is a contribution with no goal, or is a contribution to
+   * a goal that is already fully funded. Mirrors the skip rules in
+   * src/lib/recurring-posting.ts.
    */
-  needs: "account" | "goal" | null;
+  needs: "account" | "goal" | "goal_achieved" | null;
 }
 
 export async function listRecurringItems(context: AppContext) {
@@ -46,7 +47,7 @@ export async function listRecurringItems(context: AppContext) {
     include: {
       category: { select: { name: true, color: true } },
       account: { select: { name: true, status: true } },
-      goal: { select: { name: true } },
+      goal: { select: { name: true, achievedAt: true } },
     },
     orderBy: [{ active: "desc" }, { nextDate: "asc" }],
   });
@@ -87,7 +88,9 @@ export async function listRecurringItems(context: AppContext) {
           ? "account"
           : item.kind === "CONTRIBUTION" && !item.goalId
             ? "goal"
-            : null,
+            : item.kind === "CONTRIBUTION" && item.goal?.achievedAt
+              ? "goal_achieved"
+              : null,
     };
   });
 
@@ -119,4 +122,32 @@ export async function listRecurringItems(context: AppContext) {
 export async function setRecurringItemAccount(id: string, accountId: string): Promise<boolean> {
   const updated = await prisma.recurringItem.updateMany({ where: { id }, data: { accountId } });
   return updated.count > 0;
+}
+
+export type PaidOffResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" }
+  /** Only an installment plan with payments still owed can be paid off early. */
+  | { ok: false; reason: "not_a_plan" };
+
+/**
+ * The remainder of an installment plan was settled outside the app in one
+ * lump sum: the countdown goes to 0 and the item switches off in the same
+ * write, leaving it in exactly the state posting its last occurrence would
+ * have - "finished", not "paused" - with its posting history intact.
+ */
+export async function markRecurringItemPaidOff(itemId: string): Promise<PaidOffResult> {
+  const item = await prisma.recurringItem.findUnique({
+    where: { id: itemId },
+    select: { remainingOccurrences: true },
+  });
+  if (!item) return { ok: false, reason: "not_found" };
+  if (item.remainingOccurrences === null || item.remainingOccurrences <= 0) {
+    return { ok: false, reason: "not_a_plan" };
+  }
+  const claimed = await prisma.recurringItem.updateMany({
+    where: { id: itemId, remainingOccurrences: item.remainingOccurrences },
+    data: { remainingOccurrences: 0, active: false },
+  });
+  return claimed.count === 0 ? { ok: false, reason: "not_a_plan" } : { ok: true };
 }

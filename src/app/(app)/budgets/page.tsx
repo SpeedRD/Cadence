@@ -67,8 +67,16 @@ export default async function BudgetsPage({
       where: { kind: "EXPENSE" },
       orderBy: { name: "asc" },
     }),
-    isPlanTarget ? getPaydayCheckinDraft(context) : Promise.resolve(null),
+    // The wizard for whichever period is being viewed - the one the dashboard
+    // prompt plans for, a past one never checked in, or one to revisit.
+    getPaydayCheckinDraft(context, { year: period.year, month: period.month, period: period.period }),
   ]);
+  const paydayLabels = getDictionary(context.language).payday;
+  const planButtonLabel = paydayDraft.isEditingConfirmed
+    ? paydayLabels.reviewConfirmedPlan
+    : isPlanTarget
+      ? paydayLabels.planThisPeriod
+      : paydayLabels.checkInForPeriod;
 
   // Every budget figure on this page - the inputs included - comes from the
   // period summary, which has already converted each stored budget into the
@@ -109,9 +117,12 @@ export default async function BudgetsPage({
         description={t.description}
         actions={
           <>
-            {paydayDraft ? (
-              <PlanThisPeriodButton draft={paydayDraft} rates={context.rates} locale={context.language} />
-            ) : null}
+            <PlanThisPeriodButton
+              draft={paydayDraft}
+              rates={context.rates}
+              locale={context.language}
+              label={planButtonLabel}
+            />
             <ActionButton
               action={copyPreviousBudgetsAction}
               fields={{

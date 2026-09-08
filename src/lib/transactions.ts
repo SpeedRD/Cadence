@@ -53,19 +53,43 @@ export function manualContributionIdFromTransaction(row: {
   return id.length > 0 ? id : null;
 }
 
+/**
+ * The key a RECURRING-sourced row shares with the GoalContribution posted
+ * beside it ("<itemId>:<YYYY-MM-DD>", see recurringExternalId in
+ * src/lib/recurring-posting.ts), or null for any other row. Only a lookup can
+ * tell whether a contribution actually exists for it - a subscription's row
+ * carries the same shape of key with nothing paired - so callers that cascade
+ * must check, and transactionEditBlock deliberately does not use this.
+ */
+export function recurringContributionKeyFromTransaction(row: {
+  source: string;
+  externalId: string | null;
+}): string | null {
+  if (row.source !== "RECURRING" || !row.externalId) return null;
+  return row.externalId;
+}
+
 export type TransactionEditBlock =
   | "transfer"
   | "opening_balance"
   | "goal_contribution"
+  | "payday_income"
   | null;
 
 /**
  * Rows the generic transaction form must not edit: a transfer leg (edit both
  * legs from the transfer form), an account's opening balance (edit it from
  * the Accounts page, where it stays an OPENING_BALANCE rather than being
- * re-saved as income or spending), and the expense a goal contribution wrote
+ * re-saved as income or spending), the expense a goal contribution wrote
  * (its amount and date belong to the GoalContribution on the goal's page;
- * re-saving it here would leave the goal's progress and the ledger disagreeing).
+ * re-saving it here would leave the goal's progress and the ledger
+ * disagreeing), and the paycheck a payday check-in recorded (the check-in's
+ * snapshot keeps the same figure as incomeEntered and points at this row by
+ * id: period income is read from the snapshot, the next check-in's expected
+ * balance subtracts it, and a re-confirm rewrites or recreates the row - so
+ * editing or deleting it here would desync all three; change the income by
+ * re-running that period's check-in instead). There is no paired row to
+ * cascade to, so a delete is refused outright rather than mirrored.
  */
 export function transactionEditBlock(row: {
   type: string;
@@ -76,5 +100,35 @@ export function transactionEditBlock(row: {
   if (row.transferId) return "transfer";
   if (row.type === "OPENING_BALANCE") return "opening_balance";
   if (manualContributionIdFromTransaction(row) !== null) return "goal_contribution";
+  if (row.source === "PAYDAY_CHECKIN") return "payday_income";
   return null;
+}
+
+export interface TransferLeg {
+  amount: number;
+  currency: string;
+}
+
+/**
+ * What each leg of a transfer records. Both legs carry the entered amount
+ * and currency - the receiving account's balance then converts it at the
+ * current rate - unless the accounts are in different currencies and the
+ * user gave the amount the bank actually credited: then the receiving leg
+ * carries that exact figure in the receiving account's own currency, the way
+ * a real cross-currency transfer lands. Same-currency transfers ignore the
+ * override entirely, so their two legs can never disagree.
+ */
+export function transferLegs(input: {
+  amount: number;
+  currency: string;
+  receivedAmount: number | null;
+  fromCurrency: string;
+  toCurrency: string;
+}): { out: TransferLeg; in: TransferLeg } {
+  const out = { amount: input.amount, currency: input.currency };
+  const crossCurrency = input.fromCurrency !== input.toCurrency;
+  if (crossCurrency && input.receivedAmount !== null) {
+    return { out, in: { amount: input.receivedAmount, currency: input.toCurrency } };
+  }
+  return { out, in: { ...out } };
 }

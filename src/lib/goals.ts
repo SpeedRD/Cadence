@@ -78,15 +78,19 @@ export async function logManualContribution(
 }
 
 /**
- * Removes a contribution and, when it moved real money, the Transaction it
- * wrote, together. A row with no accountId (logged before contributions had
- * one, or auto-posted) has nothing paired and is deleted on its own. deleteMany
- * rather than delete for the twin: the user may already have removed it from
- * the ledger, and that must not block removing the contribution.
+ * Removes a contribution and the Transaction that carries its money, together.
+ * A manual row is paired through its accountId and the goal-contribution
+ * externalId; a row recurring posting wrote is paired through
+ * recurringExternalId, the same key its RECURRING Transaction carries. A row
+ * with neither (logged before contributions had an account) is deleted on its
+ * own. deleteMany rather than delete for the twin: the user may already have
+ * removed it from the ledger, and that must not block removing the
+ * contribution.
  */
 export async function removeContribution(contribution: {
   id: string;
   accountId: string | null;
+  recurringExternalId?: string | null;
 }): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.goalContribution.delete({ where: { id: contribution.id } });
@@ -95,6 +99,98 @@ export async function removeContribution(contribution: {
         where: { source: "MANUAL", externalId: manualContributionExternalId(contribution.id) },
       });
     }
+    if (contribution.recurringExternalId) {
+      await tx.transaction.deleteMany({
+        where: { source: "RECURRING", externalId: contribution.recurringExternalId },
+      });
+    }
+  });
+}
+
+export type RecurringContributionUpdate =
+  | { ok: true; goalId: string; transactionAmount: number | null }
+  | { ok: false; reason: "not_found" }
+  /** Only rows recurring posting wrote are edited this way; manual ones are re-logged. */
+  | { ok: false; reason: "not_recurring" };
+
+/**
+ * Corrects one already-posted occurrence of a recurring contribution: the
+ * amount the goal counts (in the goal's currency, as stored) and the RECURRING
+ * expense that moved the money, in one write. The expense keeps its own
+ * currency - the item's - so when that differs from the goal's the new amount
+ * is converted at today's rate, the way a manual contribution's expense is.
+ * The RecurringItem itself is untouched: this is about what was charged on
+ * that date, not what the item charges next. The caller rebuilds the goal's
+ * cached total afterwards, as every contribution write does.
+ */
+export async function updateRecurringContributionAmount(
+  contributionId: string,
+  amount: number,
+  rates?: RateTable,
+): Promise<RecurringContributionUpdate> {
+  const contribution = await prisma.goalContribution.findUnique({
+    where: { id: contributionId },
+    select: { id: true, goalId: true, currency: true, recurringExternalId: true },
+  });
+  if (!contribution) return { ok: false, reason: "not_found" };
+  if (!contribution.recurringExternalId) return { ok: false, reason: "not_recurring" };
+
+  const twin = await prisma.transaction.findUnique({
+    where: {
+      source_externalId: { source: "RECURRING", externalId: contribution.recurringExternalId },
+    },
+    select: { id: true, currency: true },
+  });
+  const table =
+    rates ??
+    (!twin || twin.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
+  const transactionAmount = twin
+    ? round2(convert(amount, contribution.currency, twin.currency, table))
+    : null;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.goalContribution.update({
+      where: { id: contribution.id },
+      data: { amount },
+    });
+    if (twin && transactionAmount !== null) {
+      await tx.transaction.update({
+        where: { id: twin.id },
+        data: { amount: transactionAmount },
+      });
+    }
+  });
+  return { ok: true, goalId: contribution.goalId, transactionAmount };
+}
+
+/**
+ * Deletes a goal. Its contributions cascade at the database, but the MANUAL
+ * expenses those contributions wrote have no foreign key and stay in the
+ * ledger - the money did leave the account. Their goal-contribution
+ * externalId is cleared in the same transaction so they become ordinary,
+ * editable rows instead of pointing the transaction form at a goal that no
+ * longer exists. RECURRING rows keep their key: it pairs them with the
+ * recurring item's history, not with the goal.
+ */
+export async function deleteGoalDetachingLedger(goalId: string): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const goal = await tx.goal.findUnique({ where: { id: goalId }, select: { id: true } });
+    if (!goal) return false;
+    const manual = await tx.goalContribution.findMany({
+      where: { goalId, accountId: { not: null } },
+      select: { id: true },
+    });
+    if (manual.length > 0) {
+      await tx.transaction.updateMany({
+        where: {
+          source: "MANUAL",
+          externalId: { in: manual.map((row) => manualContributionExternalId(row.id)) },
+        },
+        data: { externalId: null },
+      });
+    }
+    await tx.goal.delete({ where: { id: goalId } });
+    return true;
   });
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Lock, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { ConfirmDelete } from "@/components/form/confirm-delete";
@@ -69,6 +69,32 @@ function AmountCell({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The transfer form is filled from the sending leg - whichever leg was
+ * clicked - and the receiving leg's figure is offered as the declared
+ * received amount only when it differs, i.e. when a cross-currency transfer
+ * was recorded with what the bank actually credited.
+ */
+function transferFormValues(row: TransactionRow) {
+  const isOut = row.transferDirection === "OUT";
+  const outAmount = isOut ? row.amount : (row.counterpartAmount ?? row.amount);
+  const outCurrency = isOut ? row.currency : (row.counterpartCurrency ?? row.currency);
+  const inAmount = isOut ? row.counterpartAmount : row.amount;
+  const inCurrency = isOut ? row.counterpartCurrency : row.currency;
+  const declaredReceived =
+    inAmount !== null && (inAmount !== outAmount || inCurrency !== outCurrency) ? inAmount : undefined;
+  return {
+    transferId: row.transferId ?? undefined,
+    date: toISODate(row.date),
+    amount: outAmount,
+    currency: outCurrency,
+    fromAccountId: isOut ? row.accountId : (row.counterpartAccountId ?? undefined),
+    toAccountId: isOut ? (row.counterpartAccountId ?? undefined) : row.accountId,
+    note: row.note,
+    receivedAmount: declaredReceived,
+  };
 }
 
 export function TransactionTable({
@@ -174,20 +200,33 @@ export function TransactionTable({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       {/* Opening balances are edited from the Accounts page so
-                          they can never be re-saved as income or spending. */}
-                      {transactionEditBlock(row) !== "opening_balance" ? (
-                        <DropdownMenuItem onSelect={() => setEditing(row)}>
-                          <Pencil className="size-3.5" />
-                          {common.edit}
+                          they can never be re-saved as income or spending. A
+                          paycheck a payday check-in recorded belongs to that
+                          check-in's snapshot, so it is neither edited nor
+                          deleted here (the actions refuse both) - re-run the
+                          check-in instead. */}
+                      {transactionEditBlock(row) === "payday_income" ? (
+                        <DropdownMenuItem disabled>
+                          <Lock className="size-3.5" />
+                          {t.paycheckLocked}
                         </DropdownMenuItem>
-                      ) : null}
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onSelect={() => setDeleting(row)}
-                      >
-                        <Trash2 className="size-3.5" />
-                        {common.delete}
-                      </DropdownMenuItem>
+                      ) : (
+                        <>
+                          {transactionEditBlock(row) !== "opening_balance" ? (
+                            <DropdownMenuItem onSelect={() => setEditing(row)}>
+                              <Pencil className="size-3.5" />
+                              {common.edit}
+                            </DropdownMenuItem>
+                          ) : null}
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onSelect={() => setDeleting(row)}
+                          >
+                            <Trash2 className="size-3.5" />
+                            {common.delete}
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
@@ -224,21 +263,7 @@ export function TransactionTable({
           locale={locale}
           open
           onOpenChange={(next) => !next && setEditing(null)}
-          values={{
-            transferId: editingTransfer.transferId ?? undefined,
-            date: toISODate(editingTransfer.date),
-            amount: editingTransfer.amount,
-            currency: editingTransfer.currency,
-            fromAccountId:
-              editingTransfer.transferDirection === "OUT"
-                ? editingTransfer.accountId
-                : (editingTransfer.counterpartAccountId ?? undefined),
-            toAccountId:
-              editingTransfer.transferDirection === "IN"
-                ? editingTransfer.accountId
-                : (editingTransfer.counterpartAccountId ?? undefined),
-            note: editingTransfer.note,
-          }}
+          values={transferFormValues(editingTransfer)}
         />
       ) : null}
 

@@ -4,7 +4,10 @@ import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { ConfirmDelete } from "@/components/form/confirm-delete";
+import { Field } from "@/components/form/field";
+import { FormDialog } from "@/components/form/form-dialog";
 import { GoalDialog } from "@/components/goals/goal-dialog";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,7 +16,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getDictionary, type Locale } from "@/lib/i18n";
-import { deleteGoalAction, deleteContributionAction } from "@/server/actions/goals";
+import {
+  deleteGoalAction,
+  deleteContributionAction,
+  updateRecurringContributionAction,
+} from "@/server/actions/goals";
+
+/** The only destination deleteGoalAction will redirect to; see that action. */
+export const GOALS_LIST_PATH = "/goals";
 
 export function GoalActions({
   goal,
@@ -85,6 +95,11 @@ export function GoalActions({
           confirmLabel={common.delete}
           keepLabel={common.keepIt}
           deletedMessage={t.goalDeleted}
+          // The detail page belongs to the goal just removed: the action sends
+          // the user to the list instead of leaving this page to 404 on its
+          // next render (a client-side push would run too late - the
+          // revalidated 404 replaces this dialog before its effect fires).
+          fields={redirectAfterDelete ? { redirectTo: GOALS_LIST_PATH } : undefined}
         />
       ) : null}
     </>
@@ -118,5 +133,53 @@ export function ContributionDeleteButton({
         </Button>
       }
     />
+  );
+}
+
+/**
+ * Corrects one contribution recurring posting wrote (its amount, in the
+ * goal's currency) together with the ledger row beside it. Manual
+ * contributions are not edited this way: they are removed and logged again.
+ */
+export function ContributionEditButton({
+  id,
+  amount,
+  currency,
+  locale,
+}: {
+  id: string;
+  amount: number;
+  currency: string;
+  locale: Locale;
+}) {
+  const t = getDictionary(locale).goals;
+  const common = getDictionary(locale).common;
+
+  return (
+    <FormDialog
+      title={t.editContributionTitle}
+      description={t.editContributionDescription}
+      action={updateRecurringContributionAction}
+      submitLabel={common.save}
+      cancelLabel={common.cancel}
+      savedMessage={t.contributionUpdated}
+      trigger={
+        <Button variant="ghost" size="icon-xs" aria-label={t.editContributionAria}>
+          <Pencil className="size-3.5" />
+        </Button>
+      }
+    >
+      <input type="hidden" name="id" value={id} />
+      <Field label={t.amountWithCurrency(currency)} htmlFor={`contribution-amount-${id}`}>
+        <Input
+          id={`contribution-amount-${id}`}
+          name="amount"
+          inputMode="decimal"
+          className="font-mono"
+          defaultValue={amount}
+          required
+        />
+      </Field>
+    </FormDialog>
   );
 }

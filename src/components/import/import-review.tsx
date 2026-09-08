@@ -30,6 +30,7 @@ import { formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { buildTransferPrefill, type DetectedGroup } from "@/lib/import-grouping";
+import type { CsvDuplicateHit } from "@/server/actions/import";
 
 export interface ReviewRow {
   date: Date;
@@ -60,6 +61,10 @@ export function ImportReview({
   onDecideUnknownAction,
   typeDecisions,
   onDecideTypeAction,
+  duplicateRowIndexes,
+  duplicateHits,
+  duplicateDecisions,
+  onDecideDuplicateAction,
 }: {
   groups: DetectedGroup[];
   unknownRowIndexes: number[];
@@ -79,16 +84,25 @@ export function ImportReview({
    *  transaction-type override, never a category assignment (see GroupCard). */
   typeDecisions: Record<string, string>;
   onDecideTypeAction: (groupId: string, typeOverride: string | undefined) => void;
+  /** Rows the server found already imported from a CSV into this account (see detectCsvDuplicatesAction). */
+  duplicateRowIndexes: number[];
+  duplicateHits: Record<number, CsvDuplicateHit>;
+  /** Per-row choice; a row with no entry is skipped. */
+  duplicateDecisions: Record<number, "import" | "skip">;
+  onDecideDuplicateAction: (rowIndexes: number[], decision: "import" | "skip") => void;
 }) {
   const dictionary = getDictionary(locale);
   const t = dictionary.transactions;
   const [unknownExpanded, setUnknownExpanded] = useState(false);
+  const [duplicatesExpanded, setDuplicatesExpanded] = useState(true);
 
   const categoryIdByName = new Map(
     categories.map((category) => [category.name.toLowerCase(), category.id]),
   );
 
-  if (groups.length === 0 && unknownRowIndexes.length === 0) return null;
+  if (groups.length === 0 && unknownRowIndexes.length === 0 && duplicateRowIndexes.length === 0) {
+    return null;
+  }
 
   return (
     <div className="space-y-3 rounded-md border border-border/70 p-4">
@@ -116,6 +130,45 @@ export function ImportReview({
           />
         ))}
       </div>
+
+      {duplicateRowIndexes.length > 0 ? (
+        <div className="rounded-md border border-border/50 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">{t.possibleDuplicatesTitle}</p>
+              <p className="text-xs text-muted-foreground">
+                {t.patternRowCount(duplicateRowIndexes.length)} · {t.possibleDuplicatesDescription}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => setDuplicatesExpanded((value) => !value)}
+            >
+              {t.reviewIndividually}
+              {duplicatesExpanded ? (
+                <ChevronUp className="size-3.5" />
+              ) : (
+                <ChevronDown className="size-3.5" />
+              )}
+            </Button>
+          </div>
+          {duplicatesExpanded ? (
+            <div className="mt-3">
+              <DuplicateRowsPanel
+                rowIndexes={duplicateRowIndexes}
+                rows={rows}
+                hits={duplicateHits}
+                currency={currency}
+                locale={locale}
+                decisions={duplicateDecisions}
+                onDecideAction={onDecideDuplicateAction}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {unknownRowIndexes.length > 0 ? (
         <div className="rounded-md border border-border/50 p-3">
@@ -547,6 +600,141 @@ function UnknownRowsPanel({
                       : decision === EXPLICIT_NO_CATEGORY
                         ? t.appliedUncategorized
                         : (categories.find((category) => category.id === decision)?.name ?? "-")}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The "possible duplicates" bucket: rows whose fingerprint (account, date,
+ * amount, currency, description) matches a CSV row already in the ledger.
+ * Same shape as the unknown-merchants panel - pick rows, apply one decision
+ * to them - but the decision is import-or-skip, and skip is the default: a
+ * re-imported statement should add nothing unless the user says so.
+ */
+function DuplicateRowsPanel({
+  rowIndexes,
+  rows,
+  hits,
+  currency,
+  locale,
+  decisions,
+  onDecideAction,
+}: {
+  rowIndexes: number[];
+  rows: ReviewRow[];
+  hits: Record<number, CsvDuplicateHit>;
+  currency: string;
+  locale: Locale;
+  decisions: Record<number, "import" | "skip">;
+  onDecideAction: (rowIndexes: number[], decision: "import" | "skip") => void;
+}) {
+  const dictionary = getDictionary(locale);
+  const t = dictionary.transactions;
+  const common = dictionary.common;
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  const allSelected = rowIndexes.length > 0 && rowIndexes.every((index) => selected.has(index));
+  const toggleRow = (index: number) => {
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rowIndexes));
+  const applyToSelected = (decision: "import" | "skip") => {
+    if (selected.size === 0) return;
+    onDecideAction(Array.from(selected), decision);
+    setSelected(new Set());
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          <Checkbox
+            id="import-review-duplicates-select-all"
+            checked={allSelected}
+            onCheckedChange={() => toggleAll()}
+            aria-label={t.selectAllAria}
+          />
+          <Label
+            htmlFor="import-review-duplicates-select-all"
+            className="text-xs font-normal text-muted-foreground"
+          >
+            {t.selectedCount(selected.size)}
+          </Label>
+        </div>
+        {selected.size > 0 ? (
+          <>
+            <Button type="button" variant="outline" size="xs" onClick={() => applyToSelected("import")}>
+              {t.importAnyway}
+            </Button>
+            <Button type="button" variant="ghost" size="xs" onClick={() => applyToSelected("skip")}>
+              {t.skipDuplicate}
+            </Button>
+          </>
+        ) : null}
+      </div>
+
+      <div className="overflow-x-auto rounded-md border border-border/50">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-8" />
+              <TableHead className="w-28">{common.date}</TableHead>
+              <TableHead>{common.note}</TableHead>
+              <TableHead className="w-32 text-right">{common.amount}</TableHead>
+              <TableHead className="w-44">{t.reviewGroup}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rowIndexes.map((index) => {
+              const row = rows[index];
+              const hit = hits[index];
+              const importing = decisions[index] === "import";
+              return (
+                <TableRow key={index}>
+                  <TableCell>
+                    <Checkbox
+                      checked={selected.has(index)}
+                      onCheckedChange={() => toggleRow(index)}
+                      aria-label={t.selectRowAria}
+                    />
+                  </TableCell>
+                  <TableCell className="figure figure-sm text-xs">{toISODate(row.date)}</TableCell>
+                  <TableCell className="max-w-[22rem] text-sm">
+                    <span className="block truncate">{row.note || "-"}</span>
+                    {hit ? (
+                      <span className="block text-xs text-muted-foreground">
+                        {t.matchesExisting(hit.existingDate)}
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <span className="figure text-sm">{formatMoney(row.amount, currency)}</span>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    <span className={importing ? "text-foreground" : "text-muted-foreground"}>
+                      {importing ? t.appliedImportAnyway : t.appliedSkipped}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      className="ml-1"
+                      onClick={() => onDecideAction([index], importing ? "skip" : "import")}
+                    >
+                      {importing ? t.skipDuplicate : t.importAnyway}
+                    </Button>
                   </TableCell>
                 </TableRow>
               );

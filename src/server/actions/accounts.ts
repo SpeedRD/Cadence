@@ -2,6 +2,7 @@
 
 import {
   archiveAccount,
+  correctStartingBalance,
   deleteAccountIfSafe,
   restoreAccount,
   setOpeningBalance,
@@ -89,6 +90,34 @@ export async function setOpeningBalanceAction(
 
   revalidateApp();
   return done(t.openingBalanceSaved);
+}
+
+/**
+ * The guided path for an account whose opening balance is locked by history:
+ * records the starting amount as an incoming external transfer (see
+ * correctStartingBalance). Same form shape as the opening balance.
+ */
+export async function correctStartingBalanceAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).accounts;
+  const parsed = openingBalanceSchema.safeParse(formObject(formData));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
+
+  const result = await correctStartingBalance(
+    parsed.data.accountId,
+    parsed.data.amount,
+    parsed.data.date,
+    t.startingBalanceNote,
+  );
+  if (!result.ok) return fail(t.accountNoLongerExists);
+
+  revalidateApp();
+  return done(t.startingBalanceCorrected);
 }
 
 export async function deleteAccountAction(

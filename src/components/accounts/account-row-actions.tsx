@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { AccountDialog } from "@/components/accounts/account-dialog";
 import { OpeningBalanceDialog } from "@/components/accounts/opening-balance-dialog";
+import { StartingBalanceCorrectionDialog } from "@/components/accounts/starting-balance-correction-dialog";
 import { ConfirmDelete } from "@/components/form/confirm-delete";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,6 +46,7 @@ export function AccountRowActions({
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [settingOpeningBalance, setSettingOpeningBalance] = useState(false);
+  const [correctingBalance, setCorrectingBalance] = useState(false);
   const isArchived = account.status === "ARCHIVED";
   const canSetOpeningBalance = account.otherTransactionCount === 0;
 
@@ -81,14 +83,20 @@ export function AccountRowActions({
                 <Pencil className="size-3.5" />
                 {common.edit}
               </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!canSetOpeningBalance}
-                title={canSetOpeningBalance ? undefined : t.openingBalanceUnavailable}
-                onSelect={() => canSetOpeningBalance && setSettingOpeningBalance(true)}
-              >
-                <Landmark className="size-3.5" />
-                {account.openingBalance ? t.editOpeningBalance : t.setOpeningBalance}
-              </DropdownMenuItem>
+              {canSetOpeningBalance ? (
+                <DropdownMenuItem onSelect={() => setSettingOpeningBalance(true)}>
+                  <Landmark className="size-3.5" />
+                  {account.openingBalance ? t.editOpeningBalance : t.setOpeningBalance}
+                </DropdownMenuItem>
+              ) : (
+                // Once the account has history the opening balance is fixed
+                // (setOpeningBalance refuses); the guided correction records
+                // the starting amount as an incoming external transfer instead.
+                <DropdownMenuItem onSelect={() => setCorrectingBalance(true)}>
+                  <Landmark className="size-3.5" />
+                  {t.correctStartingBalance}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onSelect={() => runLifecycleAction(archiveAccountAction, t.accountArchived)}
               >
@@ -127,6 +135,18 @@ export function AccountRowActions({
           accountName={account.name}
           amount={account.openingBalance?.amount}
           date={toISODate(account.openingBalance?.date ?? today)}
+        />
+      ) : null}
+
+      {correctingBalance ? (
+        <StartingBalanceCorrectionDialog
+          open
+          onOpenChange={(next) => !next && setCorrectingBalance(false)}
+          locale={locale}
+          accountId={account.id}
+          accountName={account.name}
+          currency={account.currency}
+          date={toISODate(today)}
         />
       ) : null}
 

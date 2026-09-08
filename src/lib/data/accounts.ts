@@ -173,6 +173,46 @@ export async function setOpeningBalance(
   }
 }
 
+export type CorrectStartingBalanceResult =
+  | { ok: true; transactionId: string }
+  | { ok: false; reason: "not_found" };
+
+/**
+ * The lossless way to fix a starting balance once an account has history and
+ * setOpeningBalance refuses: an incoming EXTERNAL_TRANSFER dated at the
+ * start. balanceSign() raises the balance with it exactly as it does for an
+ * OPENING_BALANCE row and isCashflow() excludes both, so it never counts as
+ * income, spending, or budget activity. It stays a real external transfer -
+ * the ledger shows it as one - written through a guided entry point instead
+ * of the generic transfer form.
+ */
+export async function correctStartingBalance(
+  accountId: string,
+  amount: number,
+  date: Date,
+  note: string,
+): Promise<CorrectStartingBalanceResult> {
+  const account = await prisma.account.findUnique({
+    where: { id: accountId },
+    select: { id: true, currency: true },
+  });
+  if (!account) return { ok: false, reason: "not_found" };
+  const created = await prisma.transaction.create({
+    data: {
+      accountId: account.id,
+      amount,
+      date,
+      currency: account.currency,
+      type: "EXTERNAL_TRANSFER",
+      transferDirection: "IN",
+      source: "MANUAL",
+      note,
+    },
+    select: { id: true },
+  });
+  return { ok: true, transactionId: created.id };
+}
+
 export async function archiveAccount(accountId: string): Promise<void> {
   await prisma.account.update({
     where: { id: accountId },

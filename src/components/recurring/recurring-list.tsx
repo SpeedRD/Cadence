@@ -1,6 +1,6 @@
 "use client";
 
-import { MoreHorizontal, Pause, Pencil, Play, Trash2 } from "lucide-react";
+import { CheckCircle2, MoreHorizontal, Pause, Pencil, Play, Trash2 } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
@@ -18,8 +18,10 @@ import { formatMoney } from "@/lib/currency";
 import { formatDate, formatRelativeDays, toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { labelFor } from "@/lib/labels";
+import { isFinishedPlan } from "@/lib/recurring";
 import {
   deleteRecurringAction,
+  markPaidOffAction,
   toggleRecurringAction,
 } from "@/server/actions/recurring";
 import { cn } from "@/lib/utils";
@@ -49,15 +51,20 @@ export function RecurringList({
   const t = getDictionary(locale).recurring;
   const common = getDictionary(locale).common;
 
-  const toggle = (row: RecurringRow) => {
+  const runRowAction = (
+    row: RecurringRow,
+    action: typeof toggleRecurringAction,
+  ) => {
     startTransition(async () => {
       const formData = new FormData();
       formData.set("id", row.id);
-      const result = await toggleRecurringAction(null, formData);
+      const result = await action(null, formData);
       if (result?.error) toast.error(result.error);
       else if (result?.message) toast.success(result.message);
     });
   };
+  const toggle = (row: RecurringRow) => runRowAction(row, toggleRecurringAction);
+  const markPaidOff = (row: RecurringRow) => runRowAction(row, markPaidOffAction);
 
   return (
     <>
@@ -75,7 +82,7 @@ export function RecurringList({
                 <span className="truncate text-sm font-medium">{row.name}</span>
                 {!row.active ? (
                   <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
-                    {row.remainingOccurrences === 0 ? t.finished : t.paused}
+                    {isFinishedPlan(row) ? t.finished : t.paused}
                   </span>
                 ) : null}
                 {row.active && row.remainingOccurrences !== null ? (
@@ -83,7 +90,14 @@ export function RecurringList({
                     {t.paymentsLeft(row.remainingOccurrences)}
                   </span>
                 ) : null}
-                {row.active && row.needs ? (
+                {row.active && row.needs === "goal_achieved" ? (
+                  <span
+                    className="rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary"
+                    title={t.goalReachedHint}
+                  >
+                    {t.goalReached}
+                  </span>
+                ) : row.active && row.needs ? (
                   <span
                     className="rounded-full bg-destructive/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-destructive"
                     title={t.needsHint}
@@ -128,19 +142,34 @@ export function RecurringList({
                   <Pencil className="size-3.5" />
                   {common.edit}
                 </DropdownMenuItem>
-                <DropdownMenuItem disabled={togglePending} onSelect={() => toggle(row)}>
-                  {row.active ? (
-                    <>
-                      <Pause className="size-3.5" />
-                      {t.pause}
-                    </>
-                  ) : (
-                    <>
-                      <Play className="size-3.5" />
-                      {t.resume}
-                    </>
-                  )}
-                </DropdownMenuItem>
+                {isFinishedPlan(row) ? (
+                  // A finished plan needs new Payments left (Edit) before it
+                  // can run again; toggleRecurringAction refuses otherwise.
+                  <DropdownMenuItem disabled>
+                    <CheckCircle2 className="size-3.5" />
+                    {t.finishedResumeHint}
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem disabled={togglePending} onSelect={() => toggle(row)}>
+                    {row.active ? (
+                      <>
+                        <Pause className="size-3.5" />
+                        {t.pause}
+                      </>
+                    ) : (
+                      <>
+                        <Play className="size-3.5" />
+                        {t.resume}
+                      </>
+                    )}
+                  </DropdownMenuItem>
+                )}
+                {row.active && row.remainingOccurrences !== null && row.remainingOccurrences > 0 ? (
+                  <DropdownMenuItem disabled={togglePending} onSelect={() => markPaidOff(row)}>
+                    <CheckCircle2 className="size-3.5" />
+                    {t.markPaidOff}
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuItem
                   variant="destructive"
                   onSelect={() => setDeleting(row)}
@@ -176,6 +205,7 @@ export function RecurringList({
             goalId: editing.goalId,
             note: editing.note,
             active: editing.active,
+            remainingOccurrences: editing.remainingOccurrences,
           }}
         />
       ) : null}

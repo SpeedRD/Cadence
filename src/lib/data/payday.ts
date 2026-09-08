@@ -26,7 +26,9 @@ import {
   daysRemainingInPeriod,
   isAfterPaydayInPeriod,
   nextPeriod,
+  paydayDateFor,
   periodInfo,
+  periodKey,
   periodsRemaining,
   previousComparablePeriod,
   previousPeriod,
@@ -371,8 +373,18 @@ function bufferInputs(
   };
 }
 
-export async function getPaydayCheckinDraft(context: AppContext): Promise<PaydayCheckinDraft> {
-  const planRef = planPeriodRef(context);
+/**
+ * The wizard's data for one pay period. Without a target this is the period
+ * a check-in opened right now plans for (planPeriodRef) - the dashboard's
+ * payday prompt. With one, any period: the Budgets page opens the same wizard
+ * for whichever period is being viewed, so a period that was never checked in
+ * can be done late and a past one can be revisited.
+ */
+export async function getPaydayCheckinDraft(
+  context: AppContext,
+  target?: PeriodRef,
+): Promise<PaydayCheckinDraft> {
+  const planRef = target ?? planPeriodRef(context);
   const plan = periodInfo(planRef);
 
   const [
@@ -709,6 +721,20 @@ export type ConfirmPaydayCheckinInput = z.infer<typeof paydayConfirmSchema>;
  * "use server" action wrapper in src/server/actions/payday.ts - see that
  * file for the auth/form-parsing/localized-message layer around this.
  */
+/**
+ * The date a check-in created now is stamped with. The period the dashboard
+ * prompt plans for gets today, the day the user is actually checking in. Any
+ * other period reached through the Budgets page is a late check-in: its
+ * paycheck should sit in the ledger on the day that pay landed, not on the
+ * day the user got round to it, so it gets the period's own payday when that
+ * is already past (a period checked in ahead of its payday still gets today).
+ */
+export function checkinDateForNewCheckin(planRef: PeriodRef, context: AppContext): Date {
+  if (periodKey(planRef) === periodKey(planPeriodRef(context))) return context.today;
+  const payday = paydayDateFor(planRef);
+  return payday.getTime() < context.today.getTime() ? payday : context.today;
+}
+
 export async function confirmPaydayCheckin(
   input: ConfirmPaydayCheckinInput,
   context: ConfirmPaydayCheckinContext,
@@ -902,8 +928,6 @@ export async function confirmPaydayCheckin(
     return { ok: false, reason: "zero_buffer_not_acknowledged", acknowledgements };
   }
 
-  const checkinDate = context.today;
-
   await prisma.$transaction(async (tx) => {
     // upsert on the (year, month, period) unique key rather than find-then-
     // create: two confirmations of the same period racing each other used to
@@ -911,11 +935,14 @@ export async function confirmPaydayCheckin(
     const existingCheckin = await tx.paydayCheckin.findFirst({
       where: { year: planRef.year, month: planRef.month, period: planRef.period },
     });
+    // The check-in's date is set once, when the row is first created, and a
+    // re-confirm keeps it: reopening the wizard days later to adjust one
+    // category must not re-date the check-in or the paycheck it recorded.
+    const checkinDate = existingCheckin?.checkinDate ?? checkinDateForNewCheckin(planRef, context);
     const checkin = existingCheckin
       ? await tx.paydayCheckin.update({
           where: { id: existingCheckin.id },
           data: {
-            checkinDate,
             currency: context.displayCurrency,
             totalIncome,
             includedCarryover,
@@ -966,9 +993,11 @@ export async function confirmPaydayCheckin(
       if (accountInput.incomeEntered > 0) {
         let updated = { count: 0 };
         if (incomeTransactionId) {
+          // Amount and note only: the paycheck keeps the date it was first
+          // recorded with (see checkinDate above).
           updated = await tx.transaction.updateMany({
             where: { id: incomeTransactionId },
-            data: { date: checkinDate, amount: accountInput.incomeEntered, note: accountInput.incomeNote },
+            data: { amount: accountInput.incomeEntered, note: accountInput.incomeNote },
           });
         }
         if (updated.count === 0) {

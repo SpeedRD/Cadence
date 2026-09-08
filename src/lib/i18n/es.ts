@@ -63,6 +63,10 @@ export const es = {
       MONTHLY: "Mensual",
       YEARLY: "Anual",
     } as Record<string, string>,
+    categoryKindLabels: {
+      EXPENSE: "Gasto",
+      INCOME: "Ingreso",
+    },
     recurringKindLabels: {
       SUBSCRIPTION: "Suscripción",
       CONTRIBUTION: "Aporte",
@@ -108,6 +112,15 @@ export const es = {
     pinAlreadySet: "Ya hay un PIN configurado para esta app",
     entriesMustMatch: "Ambas entradas deben coincidir",
     pinDoesNotMatch: "Ese PIN no coincide",
+    forgotPin: "¿Olvidaste tu PIN?",
+    recoverSubtitle:
+      "Ingresa el secreto de recuperación del entorno del servidor (RECOVERY_SECRET) y elige un PIN nuevo.",
+    recoverySecret: "Secreto de recuperación",
+    setNewPin: "Crear PIN nuevo",
+    backToUnlock: "Volver a desbloquear",
+    recoveryRejected: "Ese secreto de recuperación no coincide",
+    recoveryNotConfigured:
+      "La recuperación del PIN no está configurada en esta instalación: primero define RECOVERY_SECRET en el entorno del servidor",
   },
   errorPage: {
     genericTitle: "Algo salió mal",
@@ -131,6 +144,7 @@ export const es = {
     notPostingReasonMissingGoal: "sin meta asignada",
     notPostingReasonMissingAccountAndGoal: "sin cuenta ni meta asignadas",
     notPostingReasonAccountArchived: "su cuenta está archivada",
+    notPostingReasonGoalAchieved: "su meta ya está completa",
     notPostingReasonFailed: "la última ejecución falló",
     notPostingLink: "Arreglar en la página de recurrentes",
     goalsHeading: "Metas",
@@ -308,6 +322,11 @@ export const es = {
       "Este gasto es un aporte a una meta: cámbialo desde la página de la meta para que su progreso se mantenga al día",
     editOpeningBalanceFromAccounts:
       "Este es el saldo inicial de una cuenta: cámbialo desde la página de Cuentas para que se mantenga separado de ingresos y gastos",
+    editPaycheckFromCheckin:
+      "Este es un sueldo registrado por un check-in de día de pago: cámbialo repitiendo el check-in de ese período para que sus cifras se mantengan al día",
+    deletePaycheckFromCheckin:
+      "Este sueldo lo registró un check-in de día de pago: repite ese check-in con 0 de ingreso para quitarlo, así sus cifras se mantienen al día",
+    paycheckLocked: "Registrado por un check-in de día de pago",
     openingBalance: "Saldo inicial",
     externalTransferOut: "Transferencia externa saliente",
     externalTransferIn: "Transferencia externa entrante",
@@ -344,6 +363,23 @@ export const es = {
     appliedExternalTransfer: "Registrado como transferencia externa",
     resolveTransfersHint: (n: number) =>
       `Resuelve ${n} posible${n === 1 ? "" : "s"} transferencia${n === 1 ? "" : "s"} antes de importar`,
+    possibleDuplicatesTitle: "Posibles duplicados",
+    possibleDuplicatesDescription:
+      "Estas filas coinciden con transacciones ya importadas desde un CSV a esta cuenta: misma fecha, monto y descripción. Se omiten a menos que las importes de todos modos.",
+    checkingDuplicates: "Buscando filas ya importadas...",
+    matchesExisting: (date: string) => `Ya importada, con fecha ${date}`,
+    importAnyway: "Importar de todos modos",
+    skipDuplicate: "Omitir",
+    appliedImportAnyway: "Se importará",
+    appliedSkipped: "Omitida",
+    duplicatesSkippedHint: (n: number) =>
+      `${n} posible${n === 1 ? "" : "s"} duplicado${n === 1 ? "" : "s"} omitido${n === 1 ? "" : "s"}: revísalos arriba para importar alguno`,
+    duplicatesNeedReview: (n: number) =>
+      `${n} fila${n === 1 ? " coincide" : "s coinciden"} con transacciones ya importadas: revisa primero los posibles duplicados`,
+    importCollision: "Algunas de estas filas se importaron hace un momento: revisa el libro e intenta de nuevo",
+    receivedAmountLabel: (code: string) => `Monto realmente recibido (${code})`,
+    receivedAmountHint:
+      "Déjalo en blanco para registrar el mismo monto en ambos lados, convertido a la tasa de hoy. Escríbelo para registrar exactamente lo que acreditó el banco.",
   },
   accounts: {
     title: "Cuentas",
@@ -414,7 +450,17 @@ export const es = {
     openingBalanceAmountLabel: "Saldo inicial",
     openingBalanceDateLabel: "A partir de",
     openingBalanceSaved: "Saldo inicial guardado",
-    openingBalanceBlocked: "Esta cuenta ya tiene otras transacciones, así que su saldo inicial ya no se puede cambiar aquí.",
+    openingBalanceBlocked:
+      "Esta cuenta ya tiene otras transacciones, así que su saldo inicial está fijo. Usa \"Corregir saldo inicial\" desde el menú de la cuenta.",
+    correctStartingBalance: "Corregir saldo inicial",
+    correctStartingBalanceTitle: (name: string) => `Corregir el saldo inicial de ${name}`,
+    correctStartingBalanceDescription:
+      "Esta cuenta ya tiene transacciones, así que su saldo inicial no se puede editar. Ingresa lo que ya había en la cuenta antes de esas transacciones; se registra como una transferencia externa entrante, que sube el saldo igual que un saldo inicial sin contar como ingreso ni gasto.",
+    correctionAmountLabel: (code: string) => `Monto que ya había en la cuenta (${code})`,
+    correctionAmountHint: "Se suma al saldo que el libro ya muestra.",
+    correctionDateHint: "Normalmente el día anterior a la primera transacción registrada.",
+    startingBalanceCorrected: "Saldo inicial corregido",
+    startingBalanceNote: "Corrección de saldo inicial",
   },
   budgets: {
     title: "Presupuestos",
@@ -481,6 +527,10 @@ export const es = {
     nextDueHint: "Cada vencimiento hasta hoy se registra automáticamente.",
     goal: "Meta",
     accountHint: "Cada vencimiento se carga a esta cuenta.",
+    paymentsLeftLabel: "Pagos restantes",
+    paymentsLeftHint:
+      "En blanco significa sin fin. Un número es cuántos cobros faltan, contando el próximo; después se detiene solo.",
+    paymentsLeftPlaceholder: "Sin límite",
     goalHint: "Cada vencimiento también registra un aporte a esta meta.",
     noGoalsYet: "Aún no hay metas: crea una en la página de Metas primero.",
     needsAccount: "necesita una cuenta",
@@ -505,6 +555,13 @@ export const es = {
     itemPaused: "Pausado",
     itemResumed: "Reanudado",
     finished: "terminado",
+    goalReached: "meta alcanzada",
+    goalReachedHint: "Su meta ya está completa, así que no se registra. Se reanuda solo si se sube el objetivo de la meta; pausa el elemento para dejar de contarlo.",
+    finishedResumeHint: "Terminado: edita los pagos restantes para reiniciarlo",
+    markPaidOff: "Marcar como pagado",
+    itemPaidOff: "Marcado como pagado",
+    finishedCannotResume: "Este plan terminó. Edítalo y define los pagos restantes para iniciarlo de nuevo.",
+    notAnInstallmentPlan: "Solo un plan de cuotas con pagos restantes se puede marcar como pagado",
     paymentsLeft: (n: number) => (n === 1 ? "1 pago restante" : `${n} pagos restantes`),
   },
   afford: {
@@ -641,8 +698,10 @@ export const es = {
     targetDateHint: "Opcional. Sin ella, Cadence proyecta a partir de tu ritmo.",
     actionsFor: (name: string) => `Acciones de ${name}`,
     deleteGoalTitle: (name: string) => `¿Eliminar ${name}?`,
-    goalAndHistoryRemoved: "Se eliminan la meta y su historial de aportes.",
-    historyGoesWithIt: "Su historial de aportes se elimina también.",
+    goalAndHistoryRemoved:
+      "Se eliminan la meta y su historial de aportes. Los gastos que esos aportes registraron se quedan en el libro como transacciones normales que puedes editar o eliminar.",
+    historyGoesWithIt:
+      "Su historial de aportes se elimina también. Los gastos que esos aportes registraron se quedan en el libro como transacciones normales que puedes editar o eliminar.",
     removeContributionTitle: "¿Eliminar este aporte?",
     comesOffProgress: (amount: string) => `${amount} se resta del progreso de la meta.`,
     addTo: (name: string) => `Agregar a ${name}`,
@@ -658,6 +717,12 @@ export const es = {
     plannedBehindRoadmap: (amount: string) => `${amount} por detrás de la hoja de ruta`,
     contributionRemoved: "Aporte eliminado",
     contributionNoLongerExists: "Ese aporte ya no existe",
+    editContributionAria: "Editar aporte",
+    editContributionTitle: "Corregir este aporte",
+    editContributionDescription:
+      "Registrado automáticamente por un elemento recurrente. Cambiar el monto aquí también actualiza el gasto que escribió en el libro. El monto del elemento para fechas futuras no cambia.",
+    contributionUpdated: "Aporte actualizado",
+    contributionNotRecurring: "Aquí solo se corrigen aportes registrados por un elemento recurrente; uno manual se elimina y se registra de nuevo",
   },
   reports: {
     title: "Informes",
@@ -774,6 +839,66 @@ export const es = {
     categoryNoLongerExists: "Esa categoría ya no existe",
     categoryMarkedEssential: "Marcada como fija esencial",
     categoryUnmarkedEssential: "Ya no es fija esencial",
+    categoriesTitle: "Categorías",
+    categoriesDescription:
+      "Agrega, renombra o cambia el color de las categorías donde se archivan transacciones, elementos recurrentes y presupuestos, y elimina las que no uses.",
+    manageCategories: "Administrar categorías",
+    categoriesPageDescription:
+      "Cada transacción, elemento recurrente y presupuesto por categoría se archiva en una de estas. Eliminar una categoría en uso primero mueve sus filas a otra, así nada queda sin categoría por accidente.",
+    newCategory: "Nueva categoría",
+    editCategory: "Editar categoría",
+    addCategory: "Agregar categoría",
+    saveCategory: "Guardar cambios",
+    categoryNamePlaceholder: "Mascotas",
+    categoryKind: "Tipo",
+    categoryColor: "Color",
+    renameHint:
+      "Las reglas de importación CSV buscan las categorías por nombre, así que renombrar una cambia dónde caen esas importaciones.",
+    kindLockedHint: (n: number) =>
+      `El tipo no puede cambiar mientras ${n} transacci${n === 1 ? "ón está" : "ones están"} archivada${n === 1 ? "" : "s"} aquí.`,
+    usageTransactions: (n: number) => `${n} transacci${n === 1 ? "ón" : "ones"}`,
+    usageRecurringItems: (n: number) => `${n} elemento${n === 1 ? "" : "s"} recurrente${n === 1 ? "" : "s"}`,
+    usageBudgets: (n: number) => `${n} presupuesto${n === 1 ? "" : "s"} de período`,
+    inUse: "En uso",
+    notInUse: "Sin uso",
+    protectedBadge: "Protegida",
+    protectedSubscriptionHint: (name: string) =>
+      `${name} no se puede eliminar: lo disponible para gastar y el presupuesto del período tratan su gasto como dinero que el plan de pago ya apartó.`,
+    protectedSavingsHint: (name: string) =>
+      `${name} no se puede eliminar: el ritmo mensual archiva el ahorro aquí, y cada aporte a meta registrado a mano cae aquí.`,
+    categoryActionsFor: (name: string) => `Acciones de ${name}`,
+    deleteCategoryTitle: (name: string) => `¿Eliminar ${name}?`,
+    deleteCategoryUnused: "No hay nada archivado aquí, así que se elimina de inmediato.",
+    removeCategory: "Eliminar",
+    reassignTitle: (name: string) => `Mover lo archivado en ${name}`,
+    reassignDescription:
+      "Estas filas todavía apuntan a ella. Elige a dónde van; la categoría se elimina una vez movidas.",
+    willMove: "se mueven",
+    willBeCleared: "se borran",
+    budgetsClearedHint: "Los presupuestos son una decisión sobre esta categoría, así que se borran en vez de moverse.",
+    moveTo: "Mover a",
+    moveAndRemove: "Mover y eliminar",
+    categoryCreated: (name: string) => `${name} agregada`,
+    categoryUpdated: (name: string) => `${name} actualizada`,
+    categoryDeleted: (name: string) => `${name} eliminada`,
+    categoryReassigned: (name: string, rows: number) =>
+      `${rows} fila${rows === 1 ? "" : "s"} movida${rows === 1 ? "" : "s"} y ${name} eliminada`,
+    categoryNameTaken: "Ya existe una categoría con ese nombre",
+    categoryKindInUse: (n: number) =>
+      `El tipo no puede cambiar mientras ${n} transacci${n === 1 ? "ón está" : "ones están"} archivada${n === 1 ? "" : "s"} en esta categoría`,
+    categoryInUse: "Esa categoría todavía tiene filas archivadas: muévelas primero",
+    categoryTargetNoLongerExists: "La categoría de destino ya no existe",
+    categorySameTarget: "Elige una categoría distinta a la que moverlas",
+    categoryKindMismatch: "Elige una categoría del mismo tipo a la que moverlas",
+    pinTitle: "PIN",
+    pinDescription:
+      "Cambia el PIN que desbloquea Cadence. Si lo olvidas, la pantalla de desbloqueo ofrece recuperación cuando RECOVERY_SECRET está configurado en el entorno del servidor.",
+    currentPin: "PIN actual",
+    newPin: "PIN nuevo",
+    confirmNewPin: "Confirmar PIN nuevo",
+    changePin: "Cambiar PIN",
+    pinChanged: "PIN cambiado",
+    currentPinWrong: "Ese no es el PIN actual",
   },
   review: {
     title: "Cola de revisión",
@@ -816,6 +941,7 @@ export const es = {
       "Confirma saldos, registra el ingreso de este periodo y planifica hasta tu próximo pago.",
     startCheckin: "Iniciar chequeo de pago",
     planThisPeriod: "Planificar este periodo",
+    checkInForPeriod: "Hacer el check-in de este periodo",
     dismissForToday: "Ahora no",
     reviewConfirmedPlan: "Revisar el plan de este periodo",
     wizardTitle: (periodLabel: string) => `Chequeo de pago - ${periodLabel}`,

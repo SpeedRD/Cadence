@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
 import {
@@ -20,6 +22,8 @@ export interface TransferFormValues {
   fromAccountId?: string;
   toAccountId?: string;
   note?: string | null;
+  /** Cross-currency only: what the receiving account was actually credited, in its own currency. */
+  receivedAmount?: number;
 }
 
 /** Writes both legs of the transfer in one database transaction. */
@@ -43,6 +47,27 @@ export function TransferDialog({
   const common = dictionary.common;
   const editing = Boolean(values.transferId);
 
+  // Which accounts are picked decides whether the "actual amount received"
+  // field shows: only when the two are in different currencies. The selects
+  // are uncontrolled and remount to their defaults each time a controlled
+  // dialog re-opens, so this state resets in step (see RecurringDialog).
+  const initialFrom = values.fromAccountId ?? accounts[0]?.id;
+  const initialTo = values.toAccountId ?? accounts[1]?.id;
+  const [fromAccountId, setFromAccountId] = useState(initialFrom);
+  const [toAccountId, setToAccountId] = useState(initialTo);
+  const [wasOpen, setWasOpen] = useState(open ?? false);
+  if (open !== undefined && open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setFromAccountId(initialFrom);
+      setToAccountId(initialTo);
+    }
+  }
+  const currencyOf = (id: string | undefined) => accounts.find((account) => account.id === id)?.currency;
+  const fromCurrency = currencyOf(fromAccountId);
+  const toCurrency = currencyOf(toAccountId);
+  const crossCurrency = Boolean(fromCurrency && toCurrency && fromCurrency !== toCurrency);
+
   return (
     <FormDialog
       title={editing ? t.editTransfer : t.moveMoney}
@@ -65,8 +90,9 @@ export function TransferDialog({
             id="transfer-from"
             name="fromAccountId"
             accounts={accounts}
-            defaultValue={values.fromAccountId ?? accounts[0]?.id}
+            defaultValue={initialFrom}
             common={common}
+            onValueChange={setFromAccountId}
           />
         </Field>
         <Field label={t.to} htmlFor="transfer-to">
@@ -74,8 +100,9 @@ export function TransferDialog({
             id="transfer-to"
             name="toAccountId"
             accounts={accounts}
-            defaultValue={values.toAccountId ?? accounts[1]?.id}
+            defaultValue={initialTo}
             common={common}
+            onValueChange={setToAccountId}
           />
         </Field>
       </div>
@@ -96,6 +123,23 @@ export function TransferDialog({
           <CurrencySelect id="transfer-currency" name="currency" defaultValue={values.currency} />
         </Field>
       </div>
+
+      {crossCurrency ? (
+        <Field
+          label={t.receivedAmountLabel(toCurrency ?? "")}
+          htmlFor="transfer-received"
+          hint={t.receivedAmountHint}
+        >
+          <Input
+            id="transfer-received"
+            name="receivedAmount"
+            inputMode="decimal"
+            placeholder={common.optional}
+            className="font-mono"
+            defaultValue={values.receivedAmount ?? ""}
+          />
+        </Field>
+      ) : null}
 
       <Field label={common.date} htmlFor="transfer-date">
         <Input

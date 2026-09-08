@@ -54,7 +54,10 @@ goals, and everything due in the next seven days. If a recurring item cannot pos
 A five-step planner that runs each payday: **confirm account balances → record
 income → review commitments and goals → flexible categories → confirm.** Every
 "recommended" figure is recomputed server-side on confirm, so what you saw is what
-gets written.
+gets written. The same wizard opens from the Budgets page for whichever period is
+being viewed, so a period that was never checked in can be done late (its paycheck
+is dated on that period's payday) and a confirmed one can be revisited; a check-in
+keeps its original date when it is re-confirmed.
 
 ![Payday check-in step 1: reconcile each account's reported balance against the ledger](screenshots/payday-step-balances.png)
 
@@ -89,13 +92,18 @@ check-in from here; "Copy last period" carries a previous budget forward.
 ![Transactions page with search, account, category, type, source, and date filters above the ledger](screenshots/transactions.png)
 
 Manual entry, transfers between your own accounts (linked debit/credit rows that
-never count as income or expense), external transfers (money leaving to or arriving
-from somewhere Cadence doesn't track), and CSV import with a date-format picker for
-bank exports that don't use ISO dates. Imports run through deterministic
-merchant-name categorization rules and a review step that can group repeated rows
-into a recurring item or record a pair as a transfer. Every row shows where it came
-from: manual, CSV, Gmail, Outlook, a payday check-in, an opening balance, or
-automatic recurring posting.
+never count as income or expense; between accounts in different currencies you can
+declare the amount the bank actually credited, and the receiving leg records
+exactly that instead of a converted figure), external transfers (money leaving to
+or arriving from somewhere Cadence doesn't track), and CSV import with a
+date-format picker for bank exports that don't use ISO dates. Imports run through
+deterministic merchant-name categorization rules and a review step that can group
+repeated rows into a recurring item or record a pair as a transfer. Rows that match
+a CSV row already in the ledger (same account, date, amount, currency and
+description) are shown as possible duplicates and skipped unless you import them
+anyway, so re-importing an overlapping statement adds nothing twice. Every row
+shows where it came from: manual, CSV, Gmail, Outlook, a payday check-in, an
+opening balance, or automatic recurring posting.
 
 ### Review queue
 
@@ -113,8 +121,12 @@ and skips the duplicate.
 
 Checking, savings, cash, and other account types, each in its own native currency.
 Set an opening balance per account to seed its starting point before tracked
-transactions begin (exactly one per account, enforced by the database). Archive an
-account you no longer use; its history stays.
+transactions begin (exactly one per account, enforced by the database). Once an
+account has other transactions the opening balance is fixed; "Correct starting
+balance" in the account's menu records what was already there as an incoming
+external transfer dated at the start, which raises the balance the same way without
+counting as income or spending. Archive an account you no longer use; its history
+stays.
 
 ### Recurring
 
@@ -129,9 +141,13 @@ goal, converted once into the goal's currency. A daily Vercel Cron
 so a day the cron missed is never lost. Monthly and yearly items keep their anchor
 day (an item due on the 31st is charged on the 28th in February and back on the 31st
 in March). An item missing its account or goal, or pointing at an archived account,
-is flagged here and skipped rather than posted. A finite item — an installment plan
-recorded from Afford — shows how many payments are left and switches itself off after
-the last one.
+is flagged here and skipped rather than posted; so is a contribution to a goal that
+is already fully funded, which resumes on its own if the goal's target is raised. A
+finite item — an installment plan recorded from Afford, or any item given a "Payments
+left" count — shows how many payments are left and switches itself off after the last
+one, showing as finished rather than paused. "Mark as paid off" ends a plan early when
+the remainder was settled outside the app; a finished plan restarts only by editing
+its payments left.
 
 ### Afford
 
@@ -165,8 +181,11 @@ carry — net of any recurring contribution already scheduled for that goal, so 
 check-in never reserves the same money twice. A contribution logged by hand moves
 real money: you pick the account it leaves, and Cadence writes the matching expense
 in that account's currency alongside the contribution (the pair is deleted together
-too). Auto-posted contributions from recurring items land here as well. A goal that
-reaches its target is marked as achieved.
+too). Auto-posted contributions from recurring items land here as well; their amount
+can be corrected in place, which updates the ledger row they wrote, and removing one
+from either side removes both. A goal that reaches its target is marked as achieved.
+Deleting a goal removes its contribution history but leaves the expenses those
+contributions wrote in the ledger as ordinary, editable transactions.
 
 ### Reports
 
@@ -182,9 +201,19 @@ the averages for committed spending, savings and investing, and total cash outfl
 
 Display currency; the cached exchange-rate table; how the payday planner sizes the
 protected buffer (percentage of income and a fixed minimum) and whether carryover is
-included by default; which categories count as essential fixed spending; goal-total
-recalculation; categorizing older imports; Gmail/Outlook connections; and locking
-the app.
+included by default; category management; changing the PIN; which categories count
+as essential fixed spending; goal-total recalculation; categorizing older imports;
+Gmail/Outlook connections; and locking the app.
+
+Categories (Settings → Manage categories) can be added, renamed, and recolored at
+any time. A category's kind (expense or income) can only change while nothing is
+filed under it. Removing a category that transactions, recurring items, or budgets
+still use opens a reassignment step first: the rows move to a category you pick, the
+removed category's per-period budgets are cleared, and only then is it deleted, all
+in one database transaction. The two categories whole calculations hang off
+(Subscriptions, which safe-to-spend treats as already set aside, and
+Savings/Investment, where the monthly pace and manual goal contributions file
+saving) can be renamed but never removed.
 
 ### Multi-currency, localization, and the PIN gate
 
@@ -194,7 +223,9 @@ everywhere; it never converts or mutates what was recorded. Conversions use cach
 periodically refreshed USD-based rates, and a stale rate table is flagged on every
 page. The interface is available in English and Spanish, switchable from the top
 bar, alongside a dark/light theme toggle. Access is a single PIN-protected session;
-every route except login is protected server-side.
+every route except login is protected server-side. The PIN can be changed from
+Settings (current PIN required), and a forgotten one can be replaced from the unlock
+screen by whoever holds the server's `RECOVERY_SECRET`, when that variable is set.
 
 ![Login screen with the PIN entry](screenshots/login.png)
 
@@ -270,6 +301,7 @@ the authoritative source for "today" and pay-period boundaries.
 | `DATABASE_URL` | Core app | Runtime PostgreSQL connection string |
 | `DIRECT_URL` | Core app (CLI) | Session-capable connection used by the Prisma CLI for migrations/seeding. On Supabase this must be the session pooler; the transaction pooler hangs on migrations |
 | `SESSION_SECRET` | Core app | Signs the session cookie |
+| `RECOVERY_SECRET` | Core app (optional) | Enables "Forgot your PIN?" on the unlock screen; entering it sets a new PIN without the old one. Unset hides the recovery path |
 | `APP_TIMEZONE` | Core app | IANA timezone for resolving pay periods; defaults to `America/Santo_Domingo` |
 | `CRON_SECRET` | Core app / Email automation | Bearer token required by both cron routes (`/api/cron/recurring` posts due recurring items; `/api/cron/ingest` syncs email) |
 | `OAUTH_ENCRYPTION_KEY` | Email automation | Encrypts stored OAuth tokens at rest |

@@ -61,6 +61,10 @@ export const en = {
       MONTHLY: "Monthly",
       YEARLY: "Yearly",
     } as Record<string, string>,
+    categoryKindLabels: {
+      EXPENSE: "Expense",
+      INCOME: "Income",
+    },
     recurringKindLabels: {
       SUBSCRIPTION: "Subscription",
       CONTRIBUTION: "Contribution",
@@ -106,6 +110,15 @@ export const en = {
     pinAlreadySet: "A PIN is already set for this app",
     entriesMustMatch: "Both entries must match",
     pinDoesNotMatch: "That PIN doesn't match",
+    forgotPin: "Forgot your PIN?",
+    recoverSubtitle:
+      "Enter the recovery secret from the server's environment (RECOVERY_SECRET) and choose a new PIN.",
+    recoverySecret: "Recovery secret",
+    setNewPin: "Set new PIN",
+    backToUnlock: "Back to unlock",
+    recoveryRejected: "That recovery secret doesn't match",
+    recoveryNotConfigured:
+      "PIN recovery isn't set up on this install - set RECOVERY_SECRET in the server environment first",
   },
   errorPage: {
     genericTitle: "Something went wrong",
@@ -129,6 +142,7 @@ export const en = {
     notPostingReasonMissingGoal: "no goal set",
     notPostingReasonMissingAccountAndGoal: "no account or goal set",
     notPostingReasonAccountArchived: "its account is archived",
+    notPostingReasonGoalAchieved: "its goal is fully funded",
     notPostingReasonFailed: "last run failed",
     notPostingLink: "Fix on the recurring page",
     goalsHeading: "Goals",
@@ -305,6 +319,11 @@ export const en = {
       "This expense is a goal contribution - change it from the goal's page so the goal's progress stays in step",
     editOpeningBalanceFromAccounts:
       "This is an account's opening balance - change it from the Accounts page so it stays separate from income and spending",
+    editPaycheckFromCheckin:
+      "This is a paycheck a payday check-in recorded - change it by re-running that period's check-in so its figures stay in step",
+    deletePaycheckFromCheckin:
+      "This paycheck was recorded by a payday check-in - re-run that check-in with 0 income to remove it, so its figures stay in step",
+    paycheckLocked: "Recorded by a payday check-in",
     openingBalance: "Opening balance",
     externalTransferOut: "External transfer out",
     externalTransferIn: "External transfer in",
@@ -341,6 +360,23 @@ export const en = {
     appliedExternalTransfer: "Recorded as external transfer",
     resolveTransfersHint: (n: number) =>
       `Resolve ${n} possible transfer${n === 1 ? "" : "s"} before importing`,
+    possibleDuplicatesTitle: "Possible duplicates",
+    possibleDuplicatesDescription:
+      "These rows match transactions already imported from a CSV into this account - same date, amount and description. They are skipped unless you import them anyway.",
+    checkingDuplicates: "Checking for rows already imported...",
+    matchesExisting: (date: string) => `Already imported, dated ${date}`,
+    importAnyway: "Import anyway",
+    skipDuplicate: "Skip",
+    appliedImportAnyway: "Will import",
+    appliedSkipped: "Skipped",
+    duplicatesSkippedHint: (n: number) =>
+      `${n} possible duplicate${n === 1 ? "" : "s"} skipped - review them above to import any`,
+    duplicatesNeedReview: (n: number) =>
+      `${n} row${n === 1 ? " matches" : "s match"} transactions already imported - review the possible duplicates first`,
+    importCollision: "Some of these rows were imported a moment ago - check the ledger and try again",
+    receivedAmountLabel: (code: string) => `Actual amount received (${code})`,
+    receivedAmountHint:
+      "Leave blank to record the same amount on both sides, converted at today's rate. Fill it in to record exactly what the bank credited.",
   },
   accounts: {
     title: "Accounts",
@@ -411,7 +447,17 @@ export const en = {
     openingBalanceAmountLabel: "Starting balance",
     openingBalanceDateLabel: "As of",
     openingBalanceSaved: "Opening balance saved",
-    openingBalanceBlocked: "This account already has other transactions, so its opening balance can no longer be changed here.",
+    openingBalanceBlocked:
+      "This account already has other transactions, so its opening balance is fixed. Use \"Correct starting balance\" from the account's menu instead.",
+    correctStartingBalance: "Correct starting balance",
+    correctStartingBalanceTitle: (name: string) => `Correct the starting balance of ${name}`,
+    correctStartingBalanceDescription:
+      "This account already has transactions, so its opening balance can't be edited. Enter what was already in the account before those transactions; it's recorded as an incoming external transfer, which raises the balance the way an opening balance does without counting as income or spending.",
+    correctionAmountLabel: (code: string) => `Amount already in the account (${code})`,
+    correctionAmountHint: "Added on top of the balance the ledger already shows.",
+    correctionDateHint: "Usually the day before the first transaction you recorded.",
+    startingBalanceCorrected: "Starting balance corrected",
+    startingBalanceNote: "Starting balance correction",
   },
   budgets: {
     title: "Budgets",
@@ -477,6 +523,10 @@ export const en = {
     nextDueHint: "Every due date up to today is posted automatically.",
     goal: "Goal",
     accountHint: "Each due date is charged to this account.",
+    paymentsLeftLabel: "Payments left",
+    paymentsLeftHint:
+      "Blank means ongoing. A number is how many charges are still owed, counting the next one; it stops on its own after.",
+    paymentsLeftPlaceholder: "Unlimited",
     goalHint: "Each due date also logs a contribution to this goal.",
     noGoalsYet: "No goals yet - create one on the Goals page first.",
     needsAccount: "needs an account",
@@ -501,6 +551,13 @@ export const en = {
     itemPaused: "Paused",
     itemResumed: "Resumed",
     finished: "finished",
+    goalReached: "goal reached",
+    goalReachedHint: "Its goal is fully funded, so this isn't posting. It resumes on its own if the goal's target is raised; pause it to stop counting it.",
+    finishedResumeHint: "Finished - edit Payments left to restart",
+    markPaidOff: "Mark as paid off",
+    itemPaidOff: "Marked as paid off",
+    finishedCannotResume: "This plan has finished. Edit it and set Payments left to start it again.",
+    notAnInstallmentPlan: "Only an installment plan with payments left can be marked as paid off",
     paymentsLeft: (n: number) => (n === 1 ? "1 payment left" : `${n} payments left`),
   },
   afford: {
@@ -637,8 +694,10 @@ export const en = {
     targetDateHint: "Optional. Without one, Cadence projects from your pace.",
     actionsFor: (name: string) => `Actions for ${name}`,
     deleteGoalTitle: (name: string) => `Delete ${name}?`,
-    goalAndHistoryRemoved: "The goal and its contribution history are removed.",
-    historyGoesWithIt: "Its contribution history goes with it.",
+    goalAndHistoryRemoved:
+      "The goal and its contribution history are removed. The expenses those contributions wrote stay in the ledger as ordinary transactions you can edit or delete.",
+    historyGoesWithIt:
+      "Its contribution history goes with it. The expenses those contributions wrote stay in the ledger as ordinary transactions you can edit or delete.",
     removeContributionTitle: "Remove this contribution?",
     comesOffProgress: (amount: string) => `${amount} comes back off the goal's progress.`,
     addTo: (name: string) => `Add to ${name}`,
@@ -654,6 +713,12 @@ export const en = {
     plannedBehindRoadmap: (amount: string) => `${amount} behind the roadmap`,
     contributionRemoved: "Contribution removed",
     contributionNoLongerExists: "That contribution no longer exists",
+    editContributionAria: "Edit contribution",
+    editContributionTitle: "Correct this contribution",
+    editContributionDescription:
+      "Posted automatically by a recurring item. Changing the amount here also updates the expense it wrote in the ledger. The item's own amount for future dates is unchanged.",
+    contributionUpdated: "Contribution updated",
+    contributionNotRecurring: "Only a contribution posted by a recurring item is corrected here - remove a manual one and log it again",
   },
   reports: {
     title: "Reports",
@@ -767,6 +832,66 @@ export const en = {
     categoryNoLongerExists: "That category no longer exists",
     categoryMarkedEssential: "Marked as essential fixed",
     categoryUnmarkedEssential: "No longer essential fixed",
+    categoriesTitle: "Categories",
+    categoriesDescription:
+      "Add, rename, or recolor the categories transactions, recurring items, and budgets are filed under, and remove the ones you don't use.",
+    manageCategories: "Manage categories",
+    categoriesPageDescription:
+      "Every transaction, recurring item, and per-category budget is filed under one of these. Removing a category still in use moves its rows somewhere first, so nothing becomes uncategorized by accident.",
+    newCategory: "New category",
+    editCategory: "Edit category",
+    addCategory: "Add category",
+    saveCategory: "Save changes",
+    categoryNamePlaceholder: "Pets",
+    categoryKind: "Kind",
+    categoryColor: "Color",
+    renameHint:
+      "CSV import rules look categories up by name, so renaming one changes where those imports land.",
+    kindLockedHint: (n: number) =>
+      `Kind can't change while ${n} transaction${n === 1 ? " is" : "s are"} filed under it.`,
+    usageTransactions: (n: number) => `${n} transaction${n === 1 ? "" : "s"}`,
+    usageRecurringItems: (n: number) => `${n} recurring item${n === 1 ? "" : "s"}`,
+    usageBudgets: (n: number) => `${n} period budget${n === 1 ? "" : "s"}`,
+    inUse: "In use",
+    notInUse: "Not in use",
+    protectedBadge: "Protected",
+    protectedSubscriptionHint: (name: string) =>
+      `${name} can't be removed: safe to spend and the period budget treat spending in it as money the payday plan already set aside.`,
+    protectedSavingsHint: (name: string) =>
+      `${name} can't be removed: the monthly pace files saving under it, and every goal contribution logged by hand lands there.`,
+    categoryActionsFor: (name: string) => `Actions for ${name}`,
+    deleteCategoryTitle: (name: string) => `Remove ${name}?`,
+    deleteCategoryUnused: "Nothing is filed under it, so it goes straight away.",
+    removeCategory: "Remove",
+    reassignTitle: (name: string) => `Move what's filed under ${name}`,
+    reassignDescription:
+      "These rows still point at it. Pick where they go; the category is removed once they've moved.",
+    willMove: "moves",
+    willBeCleared: "cleared",
+    budgetsClearedHint: "Budgets are a decision about this category, so they're cleared rather than moved.",
+    moveTo: "Move to",
+    moveAndRemove: "Move and remove",
+    categoryCreated: (name: string) => `Added ${name}`,
+    categoryUpdated: (name: string) => `Updated ${name}`,
+    categoryDeleted: (name: string) => `Removed ${name}`,
+    categoryReassigned: (name: string, rows: number) =>
+      `Moved ${rows} row${rows === 1 ? "" : "s"} and removed ${name}`,
+    categoryNameTaken: "A category with that name already exists",
+    categoryKindInUse: (n: number) =>
+      `Kind can't change while ${n} transaction${n === 1 ? " is" : "s are"} filed under this category`,
+    categoryInUse: "That category still has rows filed under it - move them first",
+    categoryTargetNoLongerExists: "The category to move them to no longer exists",
+    categorySameTarget: "Pick a different category to move them to",
+    categoryKindMismatch: "Pick a category of the same kind to move them to",
+    pinTitle: "PIN",
+    pinDescription:
+      "Change the PIN that unlocks Cadence. If you forget it, the unlock screen offers recovery when RECOVERY_SECRET is set in the server environment.",
+    currentPin: "Current PIN",
+    newPin: "New PIN",
+    confirmNewPin: "Confirm new PIN",
+    changePin: "Change PIN",
+    pinChanged: "PIN changed",
+    currentPinWrong: "That isn't the current PIN",
   },
   review: {
     title: "Review queue",
@@ -809,6 +934,7 @@ export const en = {
       "Confirm balances, record this period's income, and plan until your next payday.",
     startCheckin: "Start payday check-in",
     planThisPeriod: "Plan this period",
+    checkInForPeriod: "Check in for this period",
     dismissForToday: "Not now",
     reviewConfirmedPlan: "Review this period's plan",
     wizardTitle: (periodLabel: string) => `Payday check-in - ${periodLabel}`,

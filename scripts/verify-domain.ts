@@ -30,11 +30,14 @@ import {
 import {
   daysRemainingInPeriod,
   isPaydayDate,
+  paydayDateFor,
   periodForDate,
   periodInfo,
+  periodKey,
   periodsRemaining,
   periodSeries,
   previousComparablePeriod,
+  previousPeriod,
 } from "../src/lib/period";
 import {
   availableForFlexibleCategories,
@@ -294,6 +297,8 @@ async function main() {
   eq("a goal contribution's expense can't be edited through the transaction form", transactionEditBlock({ ...plain, type: "EXPENSE", externalId: "goal-contribution:c1" }), "goal_contribution");
   eq("the prefix only counts under source MANUAL", transactionEditBlock({ ...plain, type: "EXPENSE", source: "CSV", externalId: "goal-contribution:c1" }), null);
   eq("a RECURRING externalId is not a goal contribution twin", transactionEditBlock({ ...plain, type: "EXPENSE", source: "RECURRING", externalId: "item:2026-08-01" }), null);
+  eq("the paycheck a payday check-in recorded can't be edited or deleted through the transaction form", transactionEditBlock({ ...plain, type: "INCOME", source: "PAYDAY_CHECKIN" }), "payday_income");
+  eq("an ordinary income row from any other source is still editable", transactionEditBlock({ ...plain, type: "INCOME", source: "CSV" }), null);
   eq("balanceSign(EXTERNAL_TRANSFER, OUT) is -1, same shape as an outgoing internal transfer leg", balanceSign("EXTERNAL_TRANSFER", "OUT"), -1);
   eq("balanceSign(EXTERNAL_TRANSFER, IN) is +1, same shape as an incoming internal transfer leg", balanceSign("EXTERNAL_TRANSFER", "IN"), 1);
   eq("isCashflow(EXTERNAL_TRANSFER) is false - it never counts as income or spending", isCashflow("EXTERNAL_TRANSFER"), false);
@@ -1251,7 +1256,7 @@ async function main() {
   eq("a deficit scales every suggestion to zero, never negative", deficit.every((s) => s.scaled === 0), true);
 
   console.log("\n== account archive lifecycle ==");
-  const { archiveAccount, restoreAccount, deleteAccountIfSafe, getAccountLedger, setOpeningBalance } =
+  const { archiveAccount, restoreAccount, deleteAccountIfSafe, getAccountLedger, setOpeningBalance, correctStartingBalance } =
     await import("../src/lib/data/accounts");
   const archiveTestAccount = await prisma.account.create({
     data: { name: "Verify Archive Me", currency: "USD", type: "CHECKING" },
@@ -1385,6 +1390,26 @@ async function main() {
     blockedOpeningBalance.ok === false && blockedOpeningBalance.reason === "has_history",
   );
 
+  // The guided correction for exactly that state: an incoming external
+  // transfer dated at the start, which raises the balance like an opening
+  // balance without ever counting as income or spending.
+  {
+    const balanceBeforeCorrection = (await getAccountBalances(context, { status: "ALL" })).find((a) => a.id === openingBalanceAccount.id)!.balance;
+    const corrected = await correctStartingBalance(openingBalanceAccount.id, 250, civilDate(2026, 1, 1), "Verify starting balance correction");
+    check("the starting balance correction is recorded", corrected.ok);
+    if (!corrected.ok) throw new Error("correctStartingBalance refused the fixture");
+    const correctionRow = await prisma.transaction.findUniqueOrThrow({ where: { id: corrected.transactionId } });
+    eq("it is a real incoming EXTERNAL_TRANSFER in the account's currency, not an opening balance", `${correctionRow.type}:${correctionRow.transferDirection}:${correctionRow.currency}:${correctionRow.source}:${num(correctionRow.amount)}:${toISODate(correctionRow.date)}`, "EXTERNAL_TRANSFER:IN:DOP:MANUAL:250:2026-01-01");
+    eq("it carries the note the action passes in", correctionRow.note, "Verify starting balance correction");
+    const balanceAfterCorrection = (await getAccountBalances(context, { status: "ALL" })).find((a) => a.id === openingBalanceAccount.id)!.balance;
+    eq("the account's balance rises by exactly the amount entered", round2(balanceAfterCorrection - balanceBeforeCorrection), 250);
+    eq("it never counts as income or spending", isCashflow(correctionRow.type), false);
+    eq("it raises the balance with the same sign as an opening balance", balanceSign(correctionRow.type, correctionRow.transferDirection), balanceSign("OPENING_BALANCE", null));
+    eq("the opening balance itself stays locked afterwards", (await setOpeningBalance(openingBalanceAccount.id, 1, context.today) as { ok: boolean; reason?: string }).reason, "has_history");
+    eq("a missing account is reported", (await correctStartingBalance("missing", 1, context.today, "x") as { ok: boolean; reason?: string }).reason, "not_found");
+    await prisma.transaction.delete({ where: { id: corrected.transactionId } });
+  }
+
   const obCheckin = await prisma.paydayCheckin.create({
     data: { year: 2099, month: 1, period: "A", checkinDate: context.today, currency: "DOP", status: "CONFIRMED" },
   });
@@ -1412,7 +1437,7 @@ async function main() {
   await prisma.account.delete({ where: { id: openingBalanceAccount.id } });
 
   console.log("\n== payday check-in (database) ==");
-  const { getPaydayCheckinDraft, confirmPaydayCheckin, getCategorySuggestions } = await import(
+  const { getPaydayCheckinDraft, confirmPaydayCheckin, getCategorySuggestions, checkinDateForNewCheckin, planPeriodRef } = await import(
     "../src/lib/data/payday"
   );
   const { getSettings } = await import("../src/lib/auth");
@@ -2150,6 +2175,66 @@ async function main() {
   console.log("\n-- payday check-in cleanup --");
   await prisma.paydayPlanAllocation.deleteMany({ where: { paydayCheckinId: checkinRow!.id } });
   await prisma.paydayAccountSnapshot.deleteMany({ where: { paydayCheckinId: checkinRow!.id } });
+  console.log("\n-- a late check-in for an earlier period, and dates that stay put --");
+  {
+    // July A 2026 is funded by June's second payday: June 30 2026 (a Tuesday).
+    const lateRef = { year: 2026, month: 7, period: "A" as const };
+    eq("nothing is checked in for the late period yet", await prisma.paydayCheckin.count({ where: lateRef }), 0);
+    eq("paydayDateFor: the 16th-end period is paid on the 15th, pulled back off a weekend", toISODate(paydayDateFor({ year: 2026, month: 8, period: "B" })), "2026-08-14");
+    eq("paydayDateFor: the 1st-15th period is paid at the end of the previous month", toISODate(paydayDateFor({ year: 2026, month: 9, period: "A" })), "2026-08-31");
+    eq("paydayDateFor: July A is paid on June 30", toISODate(paydayDateFor(lateRef)), "2026-06-30");
+    eq("a draft without a target still plans the payday period", periodKey((await getPaydayCheckinDraft(paydayContext)).periodRef), periodKey(planPeriodRef(paydayContext)));
+    const lateDraft = await getPaydayCheckinDraft(paydayContext, lateRef);
+    eq("a draft can target an explicit earlier period", periodKey(lateDraft.periodRef), periodKey(lateRef));
+    eq("the late draft is not editing a confirmed check-in", lateDraft.isEditingConfirmed, false);
+    eq("a new check-in for the payday period is dated today", toISODate(checkinDateForNewCheckin(planPeriodRef(paydayContext), paydayContext)), "2026-08-14");
+    eq("a new check-in for a period already paid is dated on that payday, not today", toISODate(checkinDateForNewCheckin(lateRef, paydayContext)), "2026-06-30");
+    eq("a new check-in for a period ahead of its payday is dated today", toISODate(checkinDateForNewCheckin({ year: 2026, month: 10, period: "A" }, paydayContext)), "2026-08-14");
+    eq("the previous period of July A is June B (the period whose payday funds it)", periodKey(previousPeriod(lateRef)), "2026-06-B");
+
+    const latePayload = {
+      year: lateRef.year,
+      month: lateRef.month,
+      period: lateRef.period,
+      accounts: lateDraft.accounts.map((a) => ({
+        accountId: a.accountId,
+        reportedBalance: a.expectedLedgerBalance,
+        incomeEntered: a.accountId === paydayChecking.id ? 300 : 0,
+        incomeNote: a.accountId === paydayChecking.id ? "Late salary" : null,
+      })),
+      goals: lateDraft.goals.map((g) => ({ goalId: g.goalId, plannedAmount: 0 })),
+      essentialCategories: lateDraft.essentialCategories.map((c) => ({ categoryId: c.categoryId, plannedAmount: 0 })),
+      flexibleCategories: lateDraft.flexibleCategories.map((c) => ({ categoryId: c.categoryId, plannedAmount: 0 })),
+      includedCarryover: 0,
+      acknowledgedDeficit: true,
+      acknowledgedZeroBuffer: true,
+    };
+    const lateResult = await confirmPaydayCheckin(latePayload, paydayContext);
+    check("a late check-in for an earlier period confirms", lateResult.ok === true);
+    const lateRow = await prisma.paydayCheckin.findFirstOrThrow({ where: lateRef, include: { snapshots: true } });
+    eq("the late check-in is dated on the period's payday", toISODate(lateRow.checkinDate), "2026-06-30");
+    const lateSnapshot = lateRow.snapshots.find((s) => s.accountId === paydayChecking.id);
+    const latePaycheck = await prisma.transaction.findUniqueOrThrow({ where: { id: lateSnapshot!.incomeTransactionId! } });
+    eq("its paycheck lands in the ledger on that payday too", `${toISODate(latePaycheck.date)}:${num(latePaycheck.amount)}:${latePaycheck.source}`, "2026-06-30:300:PAYDAY_CHECKIN");
+
+    // Re-confirm days later with a corrected amount: the dates must not move.
+    const laterContext = { ...paydayContext, today: civilDate(2026, 8, 20) };
+    const reconfirmLate = await confirmPaydayCheckin(
+      { ...latePayload, accounts: latePayload.accounts.map((a) => (a.accountId === paydayChecking.id ? { ...a, incomeEntered: 350 } : a)) },
+      laterContext,
+    );
+    check("re-confirming the late check-in on a later day succeeds", reconfirmLate.ok === true);
+    const lateRowAfter = await prisma.paydayCheckin.findUniqueOrThrow({ where: { id: lateRow.id } });
+    eq("re-confirming keeps the check-in's original date", toISODate(lateRowAfter.checkinDate), "2026-06-30");
+    const latePaycheckAfter = await prisma.transaction.findUniqueOrThrow({ where: { id: latePaycheck.id } });
+    eq("re-confirming updates the paycheck's amount but never its date", `${toISODate(latePaycheckAfter.date)}:${num(latePaycheckAfter.amount)}`, "2026-06-30:350");
+    eq("still exactly one paycheck row for it", await prisma.transaction.count({ where: { accountId: paydayChecking.id, source: "PAYDAY_CHECKIN", note: "Late salary" } }), 1);
+
+    await prisma.transaction.deleteMany({ where: { id: latePaycheck.id } });
+    await prisma.budget.deleteMany({ where: { year: lateRef.year, month: lateRef.month, period: lateRef.period } });
+    await prisma.paydayCheckin.delete({ where: { id: lateRow.id } });
+  }
+
   await prisma.paydayCheckin.deleteMany({ where: { id: checkinRow!.id } });
   await prisma.transaction.deleteMany({ where: { accountId: { in: [paydayChecking.id, paydayEuro.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [paydayChecking.id, paydayEuro.id] } } });
@@ -2938,6 +3023,67 @@ async function main() {
     eq("a contribution without an account is rejected", contributionNoAccount.success ? "accepted" : contributionNoAccount.error.issues[0]?.message, "Pick an account");
     const contribution = recurringSchema.safeParse({ ...baseForm, kind: "CONTRIBUTION", accountId: "acc_1", goalId: "goal_1" });
     eq("a contribution with both links saves with both", contribution.success ? `${contribution.data.accountId}:${contribution.data.goalId}` : "rejected", "acc_1:goal_1");
+    const noCountdownField = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1" });
+    eq("a form without the payments-left field at all saves as open-ended", noCountdownField.success ? String(noCountdownField.data.remainingOccurrences) : "rejected", "null");
+    const blankCountdown = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", remainingOccurrences: "  " });
+    eq("a blank payments-left field is open-ended (null), not 0", blankCountdown.success ? String(blankCountdown.data.remainingOccurrences) : "rejected", "null");
+    const countdown = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", remainingOccurrences: "4" });
+    eq("a whole number of payments left is kept", countdown.success ? countdown.data.remainingOccurrences : "rejected", 4);
+    for (const bad of ["0", "-1", "2.5", "121", "three"]) {
+      const rejected = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", remainingOccurrences: bad });
+      eq(`payments left of "${bad}" is rejected`, rejected.success ? "accepted" : rejected.error.issues[0]?.message, "Leave payments left blank, or use between 1 and 120");
+    }
+    const badCountdown = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", remainingOccurrences: "0" });
+    eq("the payments-left error is translated for the Spanish UI", badCountdown.success ? "accepted" : firstValidationError(badCountdown.error, "es"), "Deja los pagos restantes en blanco, o usa entre 1 y 120");
+
+    // Anchor day: set from the picked date on create and on a re-picked date,
+    // left alone (undefined, so the update skips it) when an edit keeps the
+    // date the form was rendered with - which in a short month is the
+    // clamped occurrence, not the real anchor.
+    const createdOn31 = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", nextDate: "2026-10-31" });
+    eq("a new item is anchored on the day picked", createdOn31.success ? createdOn31.data.anchorDay : "rejected", 31);
+    const untouchedDate = recurringSchema.safeParse({ ...baseForm, id: "item_1", accountId: "acc_1", nextDate: "2027-02-28", originalNextDate: "2027-02-28" });
+    eq("an edit that leaves the (clamped) due date alone leaves the anchor alone", untouchedDate.success ? String(untouchedDate.data.anchorDay) : "rejected", "undefined");
+    const repickedDate = recurringSchema.safeParse({ ...baseForm, id: "item_1", accountId: "acc_1", nextDate: "2027-03-15", originalNextDate: "2027-02-28" });
+    eq("an edit that re-picks the due date re-anchors to it", repickedDate.success ? repickedDate.data.anchorDay : "rejected", 15);
+    const noOriginal = recurringSchema.safeParse({ ...baseForm, id: "item_1", accountId: "acc_1", nextDate: "2027-02-28" });
+    eq("an edit that never says what the date was still anchors, as every save used to", noOriginal.success ? noOriginal.data.anchorDay : "rejected", 28);
+    const newWithOriginal = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", nextDate: "2027-02-28", originalNextDate: "2027-02-28" });
+    eq("a new item anchors even if an original date is sent (nothing to preserve)", newWithOriginal.success ? newWithOriginal.data.anchorDay : "rejected", 28);
+
+    const anchorAccount = await prisma.account.create({ data: { name: "Verify Anchor Account", currency: "USD", type: "CHECKING" } });
+    const anchored = await prisma.recurringItem.create({
+      data: { name: "Verify Anchor 31", amount: 12, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2027, 2, 28), anchorDay: 31, accountId: anchorAccount.id },
+    });
+    const editForm = (overrides: Record<string, string>) => ({
+      ...baseForm,
+      id: anchored.id,
+      updatedAt: anchored.updatedAt.toISOString(),
+      name: anchored.name,
+      accountId: anchorAccount.id,
+      nextDate: "2027-02-28",
+      originalNextDate: "2027-02-28",
+      ...overrides,
+    });
+    const amountEdit = recurringSchema.safeParse(editForm({ amount: "15" }));
+    if (!amountEdit.success) throw new Error(`anchor edit form rejected: ${amountEdit.error.issues[0]?.message}`);
+    {
+      const { id, updatedAt, ...values } = amountEdit.data;
+      eq("the amount-only edit claims the row through the guarded write", (await prisma.recurringItem.updateMany({ where: updatedAt ? { id, updatedAt } : { id }, data: values })).count, 1);
+    }
+    const afterAmountEdit = await prisma.recurringItem.findUniqueOrThrow({ where: { id: anchored.id } });
+    eq("editing the amount in February keeps the item anchored on the 31st", `${num(afterAmountEdit.amount)}:${afterAmountEdit.anchorDay}:${toISODate(afterAmountEdit.nextDate)}`, "15:31:2027-02-28");
+    eq("so the next occurrence after the clamped February date is still March 31", toISODate(advanceDate(afterAmountEdit.nextDate, "MONTHLY", afterAmountEdit.anchorDay)), "2027-03-31");
+    const dateEdit = recurringSchema.safeParse(editForm({ updatedAt: afterAmountEdit.updatedAt.toISOString(), nextDate: "2027-03-05" }));
+    if (!dateEdit.success) throw new Error(`anchor date edit form rejected: ${dateEdit.error.issues[0]?.message}`);
+    {
+      const { id, updatedAt, ...values } = dateEdit.data;
+      await prisma.recurringItem.updateMany({ where: updatedAt ? { id, updatedAt } : { id }, data: values });
+    }
+    const afterDateEdit = await prisma.recurringItem.findUniqueOrThrow({ where: { id: anchored.id } });
+    eq("re-picking the due date re-anchors the item to the new day", `${afterDateEdit.anchorDay}:${toISODate(afterDateEdit.nextDate)}`, "5:2027-03-05");
+    await prisma.recurringItem.delete({ where: { id: anchored.id } });
+    await prisma.account.delete({ where: { id: anchorAccount.id } });
   }
 
   console.log("\n== recurring posting ==");
@@ -3098,6 +3244,37 @@ async function main() {
     const fixedRun = await postDueRecurringItems(postingToday);
     eq("linking the account lets the item post from its original due date", (await postedFor(noAccountSub.id)).map((row) => toISODate(row.date)).join(","), "2026-08-05");
     eq("the fixed item is no longer skipped", fixedRun.skipped.some((item) => item.id === noAccountSub.id), false);
+
+    // A contribution to a goal that is already fully funded is skipped - not
+    // posted, not advanced, not paused - and picks itself up again once the
+    // target is raised above what has been saved.
+    {
+      const { describeRecurringPosting } = await import("../src/lib/recurring-posting");
+      const { recomputeGoalSaved: recomputeForPosting } = await import("../src/lib/goals");
+      const achievedGoal = await prisma.goal.create({ data: { name: "Verify Posting Achieved Goal", targetAmount: 50, currency: "USD" } });
+      await prisma.goalContribution.create({ data: { goalId: achievedGoal.id, amount: 60, currency: "USD", date: civilDate(2026, 7, 1), note: "Verify Posting Achieved Seed" } });
+      await recomputeForPosting(achievedGoal.id);
+      check("the seed contribution marks the goal achieved", (await prisma.goal.findUniqueOrThrow({ where: { id: achievedGoal.id } })).achievedAt !== null);
+      const achievedItem = await prisma.recurringItem.create({
+        data: { ...base, name: "Verify Posting Achieved Contribution", amount: 10, kind: "CONTRIBUTION", nextDate: civilDate(2026, 7, 15), accountId: postingAccount.id, goalId: achievedGoal.id },
+      });
+      const achievedRun = await postDueRecurringItems(postingToday);
+      eq("a contribution to a fully funded goal is skipped with its own reason", achievedRun.skipped.find((item) => item.id === achievedItem.id)?.reason, "goal_achieved");
+      eq("nothing is posted for it", (await postedFor(achievedItem.id)).length, 0);
+      eq("its nextDate does not advance", await nextDateOf(achievedItem.id), "2026-07-15");
+      eq("it is neither paused nor deactivated", (await prisma.recurringItem.findUniqueOrThrow({ where: { id: achievedItem.id } })).active, true);
+      eq("the goal's contributions are untouched", await prisma.goalContribution.count({ where: { goalId: achievedGoal.id } }), 1);
+      eq("the cron summary names the reason", describeRecurringPosting(achievedRun).includes("Verify Posting Achieved Contribution (goal fully funded)"), true);
+      await prisma.goal.update({ where: { id: achievedGoal.id }, data: { targetAmount: 1000 } });
+      await recomputeForPosting(achievedGoal.id);
+      eq("raising the target clears achievedAt", (await prisma.goal.findUniqueOrThrow({ where: { id: achievedGoal.id } })).achievedAt, null);
+      const resumedRun = await postDueRecurringItems(postingToday);
+      eq("the next run posts it normally again, catching up from its original due date", (await postedFor(achievedItem.id)).map((row) => toISODate(row.date)).join(","), "2026-07-15,2026-08-15");
+      eq("and no longer reports it skipped", resumedRun.skipped.some((item) => item.id === achievedItem.id), false);
+      eq("its nextDate has moved past today", await nextDateOf(achievedItem.id), "2026-09-15");
+      eq("both occurrences reached the goal", await prisma.goalContribution.count({ where: { goalId: achievedGoal.id } }), 3);
+      await prisma.goal.delete({ where: { id: achievedGoal.id } });
+    }
 
     await prisma.transaction.deleteMany({ where: { accountId: { in: [postingAccount.id, archivedPostingAccount.id] } } });
     await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Posting" } } });
@@ -3437,6 +3614,58 @@ async function main() {
     eq("a 5-payment plan posts three and keeps counting", `${await postedByAfford(longer.id)}:${longerAfter.remainingOccurrences}:${longerAfter.active}`, "3:2:true");
     const unlimitedAfter = await reloadItem(unlimited.id);
     eq("an unlimited item posts the same three and is untouched by the countdown", `${await postedByAfford(unlimited.id)}:${unlimitedAfter.remainingOccurrences}:${unlimitedAfter.active}:${toISODate(unlimitedAfter.nextDate)}`, "3:null:true:2026-09-01");
+
+    // Retrofitting: an installment plan entered as an ordinary subscription
+    // before Afford existed gets its countdown through the edit form, on the
+    // same row (same id, same posting history), through the same
+    // updatedAt-guarded write saveRecurringAction uses.
+    {
+      const { recurringSchema } = await import("../src/lib/validation");
+      type Editable = { id: string; updatedAt: Date; name: string; amount: unknown; nextDate: Date };
+      const saveEdit = async (item: Editable, remainingOccurrences: string) => {
+        const parsed = recurringSchema.safeParse({
+          id: item.id,
+          updatedAt: item.updatedAt.toISOString(),
+          name: item.name,
+          amount: String(num(item.amount as never)),
+          currency: "USD",
+          frequency: "MONTHLY",
+          kind: "SUBSCRIPTION",
+          nextDate: toISODate(item.nextDate),
+          categoryId: "none",
+          accountId: affordAccount.id,
+          note: "",
+          active: "true",
+          remainingOccurrences,
+        });
+        if (!parsed.success) throw new Error(`edit form rejected: ${parsed.error.issues[0]?.message}`);
+        const { id, updatedAt, ...values } = parsed.data;
+        return prisma.recurringItem.updateMany({ where: updatedAt ? { id, updatedAt } : { id }, data: values });
+      };
+      const retrofit = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Retrofit", amount: 44, remainingOccurrences: null } });
+      const untouched = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Untouched", amount: 45, remainingOccurrences: null } });
+      eq("the edit form's guarded write claims the unbounded item", (await saveEdit(retrofit, "2")).count, 1);
+      eq("the edit form's guarded write claims the item left blank", (await saveEdit(untouched, "")).count, 1);
+      eq("a stale updatedAt is refused after the countdown edit, like any other edit", (await saveEdit(retrofit, "5")).count, 0);
+      const retrofitAfter = await reloadItem(retrofit.id);
+      const untouchedAfter = await reloadItem(untouched.id);
+      eq("setting payments left on an existing unbounded item stores the countdown on the same row", `${retrofitAfter.remainingOccurrences}:${retrofitAfter.active}:${toISODate(retrofitAfter.nextDate)}`, "2:true:2026-06-01");
+      eq("saving a different item with the field blank leaves it open-ended and otherwise unchanged", `${untouchedAfter.remainingOccurrences}:${untouchedAfter.active}:${toISODate(untouchedAfter.nextDate)}:${num(untouchedAfter.amount)}:${untouchedAfter.anchorDay}`, "null:true:2026-06-01:45:1");
+      const retrofitRows = await listRecurringItems(affordContext);
+      const retrofitRow = retrofitRows.subscriptions.find((row) => row.id === retrofit.id);
+      const untouchedRow = retrofitRows.subscriptions.find((row) => row.id === untouched.id);
+      eq("the Recurring page shows the retrofitted countdown exactly like an Afford-created plan", `${retrofitRow?.active}:${retrofitRow?.remainingOccurrences}:${retrofitRow?.needs}`, "true:2:null");
+      eq("the blank-saved item shows no countdown on the Recurring page", `${untouchedRow?.active}:${untouchedRow?.remainingOccurrences}`, "true:null");
+      await postForAfford(civilDate(2026, 8, 20));
+      const retrofitPosted = await reloadItem(retrofit.id);
+      const untouchedPosted = await reloadItem(untouched.id);
+      eq("the retrofitted countdown is spent by posting and the item finishes on its own", `${await postedByAfford(retrofit.id)}:${retrofitPosted.remainingOccurrences}:${retrofitPosted.active}`, "2:0:false");
+      eq("the blank-saved item keeps posting past the same dates", `${await postedByAfford(untouched.id)}:${untouchedPosted.remainingOccurrences}:${untouchedPosted.active}`, "3:null:true");
+      await prisma.transaction.deleteMany({ where: { source: "RECURRING", externalId: { startsWith: retrofit.id } } });
+      await prisma.transaction.deleteMany({ where: { source: "RECURRING", externalId: { startsWith: untouched.id } } });
+      await prisma.recurringItem.deleteMany({ where: { id: { in: [retrofit.id, untouched.id] } } });
+    }
+
     const preloggedAfter = await reloadItem(prelogged.id);
     eq("an installment already logged elsewhere is consumed and still counts down", `${countdownRun.occurrencesAlreadyLogged >= 1}:${await postedByAfford(prelogged.id)}:${preloggedAfter.remainingOccurrences}:${preloggedAfter.active}`, "true:1:0:false");
     eq("the run reports the plans that finished", countdownRun.itemsCompleted, 2);
@@ -3469,6 +3698,28 @@ async function main() {
     await prisma.recurringItem.update({ where: { id: finite.id }, data: { active: true, nextDate: civilDate(2026, 8, 1) } });
     const resumedRun = await postForAfford(civilDate(2026, 8, 20));
     eq("resuming a finished plan just retires it again without posting", `${await postedByAfford(finite.id)}:${(await reloadItem(finite.id)).active}:${resumedRun.itemsCompleted}`, "3:false:1");
+
+    // Finished is a different state from paused, and the remainder of a plan
+    // can be settled outside the app in one go.
+    {
+      const { isFinishedPlan } = await import("../src/lib/recurring");
+      const { markRecurringItemPaidOff } = await import("../src/lib/data/recurring");
+      eq("a finished plan is finished, not paused", isFinishedPlan({ active: false, remainingOccurrences: 0 }), true);
+      eq("a paused plan with payments left is not finished", isFinishedPlan({ active: false, remainingOccurrences: 2 }), false);
+      eq("a paused open-ended item is not finished", isFinishedPlan({ active: false, remainingOccurrences: null }), false);
+      eq("an active plan is not finished even at 0 (posting retires it on its next run)", isFinishedPlan({ active: true, remainingOccurrences: 0 }), false);
+      eq("the plan that posted its last occurrence reads as finished", isFinishedPlan(await reloadItem(finite.id)), true);
+      const payoff = await prisma.recurringItem.create({ data: { ...finiteBase, name: "Verify Afford Payoff", amount: 20, nextDate: civilDate(2026, 8, 1), remainingOccurrences: 4 } });
+      eq("marking an active plan paid off succeeds", (await markRecurringItemPaidOff(payoff.id)).ok, true);
+      const paidOff = await reloadItem(payoff.id);
+      eq("it is now finished: 0 left and inactive, in one write, with its next date untouched", `${paidOff.remainingOccurrences}:${paidOff.active}:${isFinishedPlan(paidOff)}:${toISODate(paidOff.nextDate)}`, "0:false:true:2026-08-01");
+      eq("paying off an already finished plan is refused", (await markRecurringItemPaidOff(payoff.id) as { ok: boolean; reason?: string }).reason, "not_a_plan");
+      eq("paying off an open-ended item is refused", (await markRecurringItemPaidOff(unlimited.id) as { ok: boolean; reason?: string }).reason, "not_a_plan");
+      eq("paying off a missing item reports not_found", (await markRecurringItemPaidOff("missing") as { ok: boolean; reason?: string }).reason, "not_found");
+      await postForAfford(civilDate(2026, 8, 20));
+      const payoffAfterRun = await reloadItem(payoff.id);
+      eq("a paid-off plan is never posted, even though its due date has passed", `${await postedByAfford(payoff.id)}:${payoffAfterRun.remainingOccurrences}:${payoffAfterRun.active}`, "0:0:false");
+    }
 
     await prisma.transaction.deleteMany({ where: { accountId: { in: [affordAccount.id, emptyAccount.id] } } });
     await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
@@ -3581,9 +3832,289 @@ async function main() {
     await goalsLib.removeContribution({ id: orphaned.contributionId, accountId: contribAccount.id });
     eq("a contribution whose twin was already removed from the ledger still deletes", await prisma.goalContribution.count({ where: { id: orphaned.contributionId } }), 0);
 
+    // A contribution recurring posting wrote is paired with its RECURRING
+    // Transaction through recurringExternalId: its amount is corrected on both
+    // rows together, and deleting either side removes the other.
+    {
+      const { recurringContributionKeyFromTransaction } = await import("../src/lib/transactions");
+      const autoKey = "verify-item:2026-08-16";
+      const autoTx = await prisma.transaction.create({ data: { date: civilDate(2026, 8, 16), amount: 100, currency: "USD", type: "EXPENSE", accountId: contribAccount.id, source: "RECURRING", externalId: autoKey, note: "Verify Auto" } });
+      const autoContribution = await prisma.goalContribution.create({ data: { goalId: usdGoal.id, amount: 100, currency: "USD", date: civilDate(2026, 8, 16), note: "Verify Auto", recurringExternalId: autoKey } });
+      await goalsLib.recomputeGoalSaved(usdGoal.id);
+      const savedBeforeEdit = num((await prisma.goal.findUniqueOrThrow({ where: { id: usdGoal.id } })).savedAmount);
+      const edited = await goalsLib.updateRecurringContributionAmount(autoContribution.id, 80, rates);
+      eq("editing an auto-posted contribution succeeds and reports the ledger amount", edited.ok ? `${edited.goalId === usdGoal.id}:${edited.transactionAmount}` : edited.reason, "true:80");
+      await goalsLib.recomputeGoalSaved(usdGoal.id);
+      eq("the GoalContribution carries the new amount", num((await prisma.goalContribution.findUniqueOrThrow({ where: { id: autoContribution.id } })).amount), 80);
+      eq("the paired RECURRING Transaction carries the same new amount", num((await prisma.transaction.findUniqueOrThrow({ where: { id: autoTx.id } })).amount), 80);
+      eq("the goal's cached total moved by the difference", round2(savedBeforeEdit - num((await prisma.goal.findUniqueOrThrow({ where: { id: usdGoal.id } })).savedAmount)), 20);
+      const manualForEdit = await goalsLib.logManualContribution({ goalId: usdGoal.id, accountId: contribAccount.id, amount: 5, date: civilDate(2026, 8, 17), note: null }, rates);
+      const manualEdit = await goalsLib.updateRecurringContributionAmount(manualForEdit.contributionId, 1, rates);
+      eq("a manual contribution is refused by the recurring edit path", manualEdit.ok ? "edited" : manualEdit.reason, "not_recurring");
+      eq("a manual contribution's rows are untouched by the refusal", `${num((await prisma.goalContribution.findUniqueOrThrow({ where: { id: manualForEdit.contributionId } })).amount)}:${num((await prisma.transaction.findUniqueOrThrow({ where: { id: manualForEdit.transactionId } })).amount)}`, "5:5");
+      await goalsLib.removeContribution({ id: manualForEdit.contributionId, accountId: contribAccount.id });
+      eq("a missing contribution reports not_found", (await goalsLib.updateRecurringContributionAmount("missing", 1, rates) as { ok: boolean; reason?: string }).reason, "not_found");
+
+      // Cross-currency: the contribution is in the goal's currency (DOP), the
+      // ledger row in the item's (USD), converted at the fixed 60 DOP/USD rate.
+      const crossKey = "verify-item:2026-08-18";
+      const crossTx = await prisma.transaction.create({ data: { date: civilDate(2026, 8, 18), amount: 50, currency: "USD", type: "EXPENSE", accountId: contribAccount.id, source: "RECURRING", externalId: crossKey } });
+      const crossContribution = await prisma.goalContribution.create({ data: { goalId: contribGoal.id, amount: 3000, currency: "DOP", date: civilDate(2026, 8, 18), recurringExternalId: crossKey } });
+      const crossEdit = await goalsLib.updateRecurringContributionAmount(crossContribution.id, 600, rates);
+      eq("a cross-currency edit converts the ledger amount at the given rate", crossEdit.ok ? crossEdit.transactionAmount : crossEdit.reason, 10);
+      eq("the cross-currency twin is updated in its own currency", `${num((await prisma.transaction.findUniqueOrThrow({ where: { id: crossTx.id } })).amount)}:${(await prisma.transaction.findUniqueOrThrow({ where: { id: crossTx.id } })).currency}`, "10:USD");
+      eq("the contribution itself stays in the goal's currency", `${num((await prisma.goalContribution.findUniqueOrThrow({ where: { id: crossContribution.id } })).amount)}:DOP`, "600:DOP");
+
+      // Delete from the goal side: the RECURRING row goes too.
+      await goalsLib.removeContribution({ id: autoContribution.id, accountId: null, recurringExternalId: autoKey });
+      await goalsLib.recomputeGoalSaved(usdGoal.id);
+      eq("removing an auto-posted contribution from the goal deletes its RECURRING Transaction too", await prisma.transaction.count({ where: { id: autoTx.id } }), 0);
+      eq("and the contribution itself", await prisma.goalContribution.count({ where: { id: autoContribution.id } }), 0);
+
+      // Delete from the ledger side: the steps deleteTransactionAction runs.
+      eq("a RECURRING row's contribution key is its externalId", recurringContributionKeyFromTransaction(crossTx), crossKey);
+      eq("a MANUAL row has no recurring contribution key", recurringContributionKeyFromTransaction({ source: "MANUAL", externalId: "goal-contribution:x" }), null);
+      eq("a RECURRING row with no externalId has no key", recurringContributionKeyFromTransaction({ source: "RECURRING", externalId: null }), null);
+      const pairedFromLedger = await prisma.goalContribution.findFirst({ where: { recurringExternalId: crossKey }, select: { id: true, goalId: true, accountId: true, recurringExternalId: true } });
+      eq("the paired contribution is found by that key", pairedFromLedger?.id, crossContribution.id);
+      if (!pairedFromLedger) throw new Error("paired contribution missing");
+      await goalsLib.removeContribution(pairedFromLedger);
+      await goalsLib.recomputeGoalSaved(contribGoal.id);
+      eq("deleting the RECURRING row from the ledger removes the contribution with it", await prisma.goalContribution.count({ where: { id: crossContribution.id } }), 0);
+      eq("and the ledger row itself", await prisma.transaction.count({ where: { id: crossTx.id } }), 0);
+      eq("a subscription's RECURRING row pairs with no contribution, so it would be deleted alone", await prisma.goalContribution.count({ where: { recurringExternalId: "verify-sub:2026-08-19" } }), 0);
+    }
+
+    // Deleting a goal leaves the expenses its manual contributions wrote in
+    // the ledger as ordinary rows: their goal-contribution key is cleared in
+    // the same transaction, so the generic form stops pointing at a goal that
+    // no longer exists. A RECURRING expense keeps its key.
+    {
+      const doomedGoal = await prisma.goal.create({ data: { name: "Verify Contribution Doomed Goal", targetAmount: 100, currency: "USD" } });
+      const doomedManual = await goalsLib.logManualContribution({ goalId: doomedGoal.id, accountId: contribAccount.id, amount: 20, date: civilDate(2026, 8, 19), note: null }, rates);
+      const doomedAutoKey = "verify-doomed:2026-08-19";
+      const doomedAutoTx = await prisma.transaction.create({ data: { date: civilDate(2026, 8, 19), amount: 7, currency: "USD", type: "EXPENSE", accountId: contribAccount.id, source: "RECURRING", externalId: doomedAutoKey } });
+      await prisma.goalContribution.create({ data: { goalId: doomedGoal.id, amount: 7, currency: "USD", date: civilDate(2026, 8, 19), recurringExternalId: doomedAutoKey } });
+      const beforeDelete = await prisma.transaction.findUniqueOrThrow({ where: { id: doomedManual.transactionId } });
+      eq("before the goal is deleted its manual expense is blocked from the generic form", transactionEditBlock(beforeDelete), "goal_contribution");
+      eq("deleting the goal reports success", await goalsLib.deleteGoalDetachingLedger(doomedGoal.id), true);
+      eq("deleting a goal that is already gone reports false", await goalsLib.deleteGoalDetachingLedger(doomedGoal.id), false);
+      const afterDelete = await prisma.transaction.findUniqueOrThrow({ where: { id: doomedManual.transactionId } });
+      eq("the manual expense survives in the ledger with its goal key cleared", `${afterDelete.externalId}:${afterDelete.source}:${num(afterDelete.amount)}`, "null:MANUAL:20");
+      eq("so the generic transaction form no longer blocks it", transactionEditBlock(afterDelete), null);
+      eq("its contributions cascaded", await prisma.goalContribution.count({ where: { goalId: doomedGoal.id } }), 0);
+      eq("a RECURRING expense keeps its key (it pairs with the item's history, not the goal)", (await prisma.transaction.findUniqueOrThrow({ where: { id: doomedAutoTx.id } })).externalId, doomedAutoKey);
+      await prisma.transaction.deleteMany({ where: { id: { in: [doomedManual.transactionId, doomedAutoTx.id] } } });
+    }
+
     await prisma.transaction.deleteMany({ where: { accountId: contribAccount.id } });
     await prisma.goal.deleteMany({ where: { id: { in: [contribGoal.id, usdGoal.id] } } });
     await prisma.account.delete({ where: { id: contribAccount.id } });
+  }
+
+  console.log("\n== category management ==");
+  {
+    const categoriesLib = await import("../src/lib/data/categories");
+    const { protectedCategoryReason } = await import("../src/lib/categories");
+    const { categorySchema, reassignCategorySchema, changePinSchema, firstError: firstCategoryError } = await import("../src/lib/validation");
+
+    const noName = categorySchema.safeParse({ name: "  ", kind: "EXPENSE", color: "#123456" });
+    eq("categorySchema needs a name", noName.success ? "accepted" : noName.error.issues[0]?.message, "Name the category");
+    const badColor = categorySchema.safeParse({ name: "Pets", kind: "EXPENSE", color: "red" });
+    eq("categorySchema needs a six-digit hex color", badColor.success ? "accepted" : badColor.error.issues[0]?.message, "Pick a color");
+    eq("the color error is translated for the Spanish UI", badColor.success ? "accepted" : firstCategoryError(badColor.error, "es"), "Elige un color");
+    const upperColor = categorySchema.safeParse({ name: " Pets ", kind: "INCOME", color: "#ABCDEF" });
+    eq("categorySchema trims the name and lowercases the color", upperColor.success ? `${upperColor.data.name}:${upperColor.data.kind}:${upperColor.data.color}` : "rejected", "Pets:INCOME:#abcdef");
+    const noTarget = reassignCategorySchema.safeParse({ id: "cat_1" });
+    eq("reassignCategorySchema insists on a target (nothing picked)", noTarget.success ? "accepted" : noTarget.error.issues[0]?.message, "Pick a category to move them to");
+    const noneTarget = reassignCategorySchema.safeParse({ id: "cat_1", moveToId: "none" });
+    eq("reassignCategorySchema treats 'none' as nothing picked", noneTarget.success ? "accepted" : firstCategoryError(noneTarget.error, "es"), "Elige la categoría a la que moverlos");
+    const pinMismatch = changePinSchema.safeParse({ currentPin: "1234", pin: "5678", confirm: "5679" });
+    eq("changePinSchema needs the confirmation to match", pinMismatch.success ? "accepted" : pinMismatch.error.issues[0]?.message, "Both entries must match");
+    const pinBad = changePinSchema.safeParse({ currentPin: "1234", pin: "12", confirm: "12" });
+    eq("changePinSchema applies the PIN format", pinBad.success ? "accepted" : pinBad.error.issues[0]?.message, "Use 4 to 6 digits");
+
+    const created = await categoriesLib.createCategory({ name: "Verify Pets", kind: "EXPENSE", color: "#123456" });
+    check("a new category is created", created.ok);
+    if (!created.ok) throw new Error("createCategory refused the fixture");
+    const petsId = created.id;
+    const duplicate = await categoriesLib.createCategory({ name: "verify PETS", kind: "EXPENSE", color: "#123456" });
+    eq("a name that differs only by case is refused", duplicate.ok ? "created" : duplicate.reason, "name_taken");
+    const renamed = await categoriesLib.updateCategory({ id: petsId, name: "Verify Pets Renamed", kind: "EXPENSE", color: "#abcdef" });
+    eq("rename and recolor save", renamed.ok, true);
+    const rekindedWhileUnused = await categoriesLib.updateCategory({ id: petsId, name: "Verify Pets Renamed", kind: "INCOME", color: "#abcdef" });
+    eq("the kind can change while nothing is filed under it", rekindedWhileUnused.ok, true);
+    const backToExpense = await categoriesLib.updateCategory({ id: petsId, name: "Verify Pets Renamed", kind: "EXPENSE", color: "#abcdef" });
+    eq("and change back", backToExpense.ok, true);
+    const petsRow = await prisma.category.findUniqueOrThrow({ where: { id: petsId } });
+    eq("the stored row reflects the edits", `${petsRow.name}:${petsRow.kind}:${petsRow.color}`, "Verify Pets Renamed:EXPENSE:#abcdef");
+    const existingName = await prisma.category.findFirstOrThrow({ where: { isSubscriptionDefault: true } });
+    const collide = await categoriesLib.updateCategory({ id: petsId, name: existingName.name.toUpperCase(), kind: "EXPENSE", color: "#abcdef" });
+    eq("renaming onto another category's name (any case) is refused", collide.ok ? "saved" : collide.reason, "name_taken");
+
+    const target = await categoriesLib.createCategory({ name: "Verify Target", kind: "EXPENSE", color: "#654321" });
+    if (!target.ok) throw new Error("createCategory refused the target fixture");
+    const catAccount = await prisma.account.create({ data: { name: "Verify Category Account", currency: "USD", type: "CHECKING" } });
+    await prisma.transaction.createMany({
+      data: [
+        { date: civilDate(2026, 10, 2), amount: 10, currency: "USD", type: "EXPENSE", accountId: catAccount.id, categoryId: petsId, source: "MANUAL" },
+        { date: civilDate(2026, 10, 3), amount: 11, currency: "USD", type: "EXPENSE", accountId: catAccount.id, categoryId: petsId, source: "MANUAL" },
+      ],
+    });
+    const catItem = await prisma.recurringItem.create({
+      data: { name: "Verify Category Item", amount: 5, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 11, 1), anchorDay: 1, categoryId: petsId, accountId: catAccount.id },
+    });
+    const catBudget = await prisma.budget.create({ data: { year: 2026, month: 10, period: "A", categoryId: petsId, amount: 100, currency: "USD" } });
+
+    const rekindInUse = await categoriesLib.updateCategory({ id: petsId, name: "Verify Pets Renamed", kind: "INCOME", color: "#abcdef" });
+    eq("the kind is locked once transactions are filed under it, reporting how many", rekindInUse.ok ? "saved" : `${rekindInUse.reason}:${rekindInUse.reason === "kind_in_use" ? rekindInUse.transactions : ""}`, "kind_in_use:2");
+    const renameInUse = await categoriesLib.updateCategory({ id: petsId, name: "Verify Pets", kind: "EXPENSE", color: "#abcdef" });
+    eq("a rename with the same kind still saves while in use", renameInUse.ok, true);
+
+    const usage = await categoriesLib.getCategoryUsage(petsId);
+    eq("usage counts transactions, recurring items and budgets by type", `${usage.transactions}:${usage.recurringItems}:${usage.budgets}`, "2:1:1");
+    const listed = (await categoriesLib.listCategoriesWithUsage()).find((row) => row.id === petsId);
+    eq("the settings list carries the same counts", listed ? `${listed.usage.transactions}:${listed.usage.recurringItems}:${listed.usage.budgets}:${listed.protectedBy}` : "missing", "2:1:1:null");
+    const inUse = await categoriesLib.deleteCategoryIfUnused(petsId);
+    eq("deleting a category in use is refused with the counts, and nothing is deleted", inUse.ok ? "deleted" : `${inUse.reason}:${inUse.reason === "in_use" ? `${inUse.usage.transactions}:${inUse.usage.recurringItems}:${inUse.usage.budgets}` : ""}`, "in_use:2:1:1");
+    eq("the category is still there", await prisma.category.count({ where: { id: petsId } }), 1);
+
+    const subscriptions = await prisma.category.findFirstOrThrow({ where: { isSubscriptionDefault: true } });
+    const savings = await prisma.category.findFirstOrThrow({ where: { isSavingsDefault: true } });
+    const protectedSubs = await categoriesLib.deleteCategoryIfUnused(subscriptions.id);
+    eq("the subscriptions default can't be deleted, naming safe-to-spend's dependency", protectedSubs.ok ? "deleted" : `${protectedSubs.reason}:${protectedSubs.reason === "protected" ? protectedSubs.protectedBy : ""}`, "protected:subscription");
+    const protectedSavings = await categoriesLib.deleteCategoryIfUnused(savings.id);
+    eq("the savings default can't be deleted either", protectedSavings.ok ? "deleted" : `${protectedSavings.reason}:${protectedSavings.reason === "protected" ? protectedSavings.protectedBy : ""}`, "protected:savings");
+    const protectedReassign = await categoriesLib.reassignAndDeleteCategory(subscriptions.id, target.id);
+    eq("nor removed through the reassignment step", protectedReassign.ok ? "deleted" : protectedReassign.reason, "protected");
+    eq("protectedCategoryReason is what the list shows as the badge", `${protectedCategoryReason(subscriptions)}:${protectedCategoryReason(savings)}:${protectedCategoryReason(petsRow)}`, "subscription:savings:null");
+
+    const incomeCategory = await prisma.category.findFirstOrThrow({ where: { kind: "INCOME" } });
+    eq("moving rows to a category of another kind is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, incomeCategory.id)).ok ? "moved" : (await categoriesLib.reassignAndDeleteCategory(petsId, incomeCategory.id) as { reason: string }).reason, "kind_mismatch");
+    eq("moving rows onto the category being removed is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, petsId) as { ok: boolean; reason?: string }).reason, "same_category");
+    eq("moving rows to a category that no longer exists is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, "missing_category") as { ok: boolean; reason?: string }).reason, "target_not_found");
+    eq("none of the refusals touched anything", `${await prisma.transaction.count({ where: { categoryId: petsId } })}:${await prisma.recurringItem.count({ where: { categoryId: petsId } })}:${await prisma.budget.count({ where: { id: catBudget.id } })}`, "2:1:1");
+
+    const moved = await categoriesLib.reassignAndDeleteCategory(petsId, target.id);
+    eq("the reassignment step moves the rows, clears the budgets and removes the category, reporting the counts", moved.ok ? `${moved.moved.transactions}:${moved.moved.recurringItems}:${moved.moved.budgets}` : moved.reason, "2:1:1");
+    eq("every transaction now sits under the target", await prisma.transaction.count({ where: { accountId: catAccount.id, categoryId: target.id } }), 2);
+    eq("the recurring item now sits under the target", (await prisma.recurringItem.findUniqueOrThrow({ where: { id: catItem.id } })).categoryId, target.id);
+    eq("the removed category's budget is gone rather than moved", await prisma.budget.count({ where: { id: catBudget.id } }), 0);
+    eq("and the category itself is gone", await prisma.category.count({ where: { id: petsId } }), 0);
+    eq("the target keeps its own name and kind", (await prisma.category.findUniqueOrThrow({ where: { id: target.id } })).name, "Verify Target");
+
+    const targetInUse = await categoriesLib.deleteCategoryIfUnused(target.id);
+    eq("the target is now in use and refuses a plain delete", targetInUse.ok ? "deleted" : targetInUse.reason, "in_use");
+    await prisma.transaction.deleteMany({ where: { accountId: catAccount.id } });
+    await prisma.recurringItem.delete({ where: { id: catItem.id } });
+    const targetUnused = await categoriesLib.deleteCategoryIfUnused(target.id);
+    eq("a category nothing is filed under deletes outright", targetUnused.ok, true);
+    eq("deleting a category that is already gone reports not_found", (await categoriesLib.deleteCategoryIfUnused(target.id) as { ok: boolean; reason?: string }).reason, "not_found");
+    await prisma.account.delete({ where: { id: catAccount.id } });
+  }
+
+  console.log("\n== csv re-import duplicates ==");
+  {
+    const { csvFingerprint, csvExternalId, fingerprintFromCsvExternalId, normalizeCsvNote } = await import("../src/lib/csv-fingerprint");
+    const { findCsvDuplicates } = await import("../src/lib/data/import-duplicates");
+    const base = { accountId: "acc_1", date: "2026-09-02", amount: 12.5, currency: "USD", note: "Coffee  Shop" };
+    eq("a fingerprint is deterministic", csvFingerprint(base), csvFingerprint({ ...base }));
+    eq("description whitespace and case do not change it", csvFingerprint(base), csvFingerprint({ ...base, note: " coffee shop " }));
+    eq("normalizeCsvNote collapses whitespace and lowercases", normalizeCsvNote("  Coffee   SHOP "), "coffee shop");
+    check("a different amount changes it", csvFingerprint(base) !== csvFingerprint({ ...base, amount: 12.51 }));
+    check("a different date changes it", csvFingerprint(base) !== csvFingerprint({ ...base, date: "2026-09-03" }));
+    check("a different account changes it", csvFingerprint(base) !== csvFingerprint({ ...base, accountId: "acc_2" }));
+    check("a different currency changes it", csvFingerprint(base) !== csvFingerprint({ ...base, currency: "DOP" }));
+    eq("the first row with a fingerprint stores it bare", csvExternalId("abc", 1), "abc");
+    eq("a repeat stores an ordinal", csvExternalId("abc", 2), "abc#2");
+    eq("the fingerprint is read back from either form", `${fingerprintFromCsvExternalId("abc")}:${fingerprintFromCsvExternalId("abc#3")}:${fingerprintFromCsvExternalId(null)}`, "abc:abc:null");
+
+    const csvAccount = await prisma.account.create({ data: { name: "Verify CSV Account", currency: "USD", type: "CHECKING" } });
+    const legacyFp = csvFingerprint({ accountId: csvAccount.id, date: "2026-09-02", amount: 12.5, currency: "USD", note: "Coffee shop" });
+    const storedFp = csvFingerprint({ accountId: csvAccount.id, date: "2026-09-03", amount: 40, currency: "USD", note: "Groceries" });
+    await prisma.transaction.createMany({
+      data: [
+        // An import from before fingerprints existed: no externalId.
+        { date: civilDate(2026, 9, 2), amount: 12.5, currency: "USD", type: "EXPENSE", accountId: csvAccount.id, source: "CSV", note: "Coffee shop" },
+        // An import that stored its fingerprint.
+        { date: civilDate(2026, 9, 3), amount: 40, currency: "USD", type: "EXPENSE", accountId: csvAccount.id, source: "CSV", note: "Groceries", externalId: csvExternalId(storedFp, 1) },
+        // A manual row with the same fields is not a CSV duplicate.
+        { date: civilDate(2026, 9, 4), amount: 9, currency: "USD", type: "EXPENSE", accountId: csvAccount.id, source: "MANUAL", note: "Lunch" },
+      ],
+    });
+    const candidates = [
+      { date: "2026-09-02", amount: 12.5, note: "coffee shop" },
+      { date: "2026-09-03", amount: 40, note: "Groceries" },
+      { date: "2026-09-04", amount: 9, note: "Lunch" },
+      { date: "2026-09-05", amount: 7, note: "Bus" },
+      { date: "2026-09-05", amount: 7, note: "Bus" },
+    ];
+    const report = await findCsvDuplicates({ accountId: csvAccount.id, currency: "USD", rows: candidates });
+    eq("a row matching a pre-fingerprint CSV import is detected", report.matches.get(0)?.map((m) => `${toISODate(m.date)}:${m.amount}`).join(","), "2026-09-02:12.5");
+    eq("a row matching a fingerprinted CSV import is detected", report.matches.get(1)?.length, 1);
+    eq("a row matching only a MANUAL transaction is not", report.matches.has(2), false);
+    eq("new rows are not", `${report.matches.has(3)}:${report.matches.has(4)}`, "false:false");
+    eq("existing counts are per fingerprint", `${report.existingCountByFingerprint.get(legacyFp)}:${report.existingCountByFingerprint.get(storedFp)}:${report.existingCountByFingerprint.get(report.fingerprints[3]) ?? 0}`, "1:1:0");
+    eq("the fingerprint list lines up with the rows", `${report.fingerprints.length}:${report.fingerprints[0] === legacyFp}:${report.fingerprints[1] === storedFp}:${report.fingerprints[3] === report.fingerprints[4]}`, "5:true:true:true");
+    const otherCurrency = await findCsvDuplicates({ accountId: csvAccount.id, currency: "DOP", rows: candidates.slice(0, 2) });
+    eq("the same rows in another currency match nothing", otherCurrency.matches.size, 0);
+
+    // The import's ordinal allocation: existing rows first, then the batch.
+    const ordinalByFingerprint = new Map(report.existingCountByFingerprint);
+    const externalIds = candidates.map((_, index) => {
+      const fp = report.fingerprints[index];
+      const ordinal = (ordinalByFingerprint.get(fp) ?? 0) + 1;
+      ordinalByFingerprint.set(fp, ordinal);
+      return csvExternalId(fp, ordinal);
+    });
+    eq("rows imported anyway continue after the stored ones", `${externalIds[0]}:${externalIds[1]}`, `${legacyFp}#2:${storedFp}#2`);
+    eq("two identical new lines in one batch get distinct ids", `${externalIds[3] === report.fingerprints[3]}:${externalIds[4]}`, `true:${report.fingerprints[3]}#2`);
+    const written = await prisma.transaction.createMany({
+      data: candidates.map((row, index) => ({ date: civilDate(2026, 9, Number(row.date.slice(8))), amount: row.amount, currency: "USD", type: "EXPENSE" as const, accountId: csvAccount.id, source: "CSV" as const, note: row.note, externalId: externalIds[index] })),
+    });
+    eq("every row lands under the (source, externalId) unique index", written.count, 5);
+    const again = await findCsvDuplicates({ accountId: csvAccount.id, currency: "USD", rows: candidates });
+    eq("a third import now sees every row as already imported, with the counts grown", `${again.matches.size}:${again.existingCountByFingerprint.get(legacyFp)}:${again.existingCountByFingerprint.get(report.fingerprints[3])}`, "5:2:2");
+    await prisma.transaction.deleteMany({ where: { accountId: csvAccount.id } });
+    await prisma.account.delete({ where: { id: csvAccount.id } });
+  }
+
+  console.log("\n== cross-currency transfer legs ==");
+  {
+    const { transferLegs } = await import("../src/lib/transactions");
+    const { transferSchema } = await import("../src/lib/validation");
+    const same = transferLegs({ amount: 100, currency: "USD", receivedAmount: 90, fromCurrency: "USD", toCurrency: "USD" });
+    eq("a same-currency transfer ignores a received amount: both legs carry the entered figure", `${same.out.amount}:${same.out.currency}:${same.in.amount}:${same.in.currency}`, "100:USD:100:USD");
+    const crossBlank = transferLegs({ amount: 50000, currency: "DOP", receivedAmount: null, fromCurrency: "DOP", toCurrency: "USD" });
+    eq("a cross-currency transfer with no received amount keeps today's behaviour", `${crossBlank.out.amount}:${crossBlank.out.currency}:${crossBlank.in.amount}:${crossBlank.in.currency}`, "50000:DOP:50000:DOP");
+    const crossDeclared = transferLegs({ amount: 50000, currency: "DOP", receivedAmount: 830.5, fromCurrency: "DOP", toCurrency: "USD" });
+    eq("a declared received amount lands on the receiving leg in that account's currency", `${crossDeclared.out.amount}:${crossDeclared.out.currency}:${crossDeclared.in.amount}:${crossDeclared.in.currency}`, "50000:DOP:830.5:USD");
+    const form = { date: "2026-09-08", amount: "50000", currency: "DOP", fromAccountId: "a", toAccountId: "b", note: "" };
+    const blank = transferSchema.safeParse({ ...form, receivedAmount: "" });
+    eq("transferSchema: a blank received amount is null", blank.success ? String(blank.data.receivedAmount) : "rejected", "null");
+    const absent = transferSchema.safeParse(form);
+    eq("transferSchema: an absent received amount (same-currency form) is null", absent.success ? String(absent.data.receivedAmount) : "rejected", "null");
+    const declared = transferSchema.safeParse({ ...form, receivedAmount: "830.50" });
+    eq("transferSchema: a typed received amount is parsed", declared.success ? declared.data.receivedAmount : "rejected", 830.5);
+    const zero = transferSchema.safeParse({ ...form, receivedAmount: "0" });
+    eq("transferSchema: zero is refused", zero.success ? "accepted" : zero.error.issues[0]?.message, "Enter an amount greater than 0");
+  }
+
+  console.log("\n== pin recovery secret ==");
+  {
+    const recovery = await import("../src/lib/recovery");
+    const previous = process.env.RECOVERY_SECRET;
+    delete process.env.RECOVERY_SECRET;
+    eq("recovery is off while RECOVERY_SECRET is unset", recovery.isRecoveryConfigured(), false);
+    eq("an unset secret matches nothing, not even an empty candidate", `${recovery.verifyRecoverySecret("")}:${recovery.verifyRecoverySecret("anything")}`, "false:false");
+    process.env.RECOVERY_SECRET = "";
+    eq("an empty RECOVERY_SECRET counts as unset", `${recovery.isRecoveryConfigured()}:${recovery.verifyRecoverySecret("")}`, "false:false");
+    process.env.RECOVERY_SECRET = "verify-recovery-secret";
+    eq("recovery is on once the secret is set", recovery.isRecoveryConfigured(), true);
+    eq("the exact secret verifies", recovery.verifyRecoverySecret("verify-recovery-secret"), true);
+    eq("a near miss, a different length and an empty candidate are all refused", `${recovery.verifyRecoverySecret("Verify-recovery-secret")}:${recovery.verifyRecoverySecret("verify-recovery-secret-longer")}:${recovery.verifyRecoverySecret("")}`, "false:false:false");
+    if (previous === undefined) delete process.env.RECOVERY_SECRET;
+    else process.env.RECOVERY_SECRET = previous;
   }
 
   console.log("\n== cleanup ==");
@@ -3592,6 +4123,7 @@ async function main() {
   await prisma.budget.deleteMany({ where: { year: 2026, month: { in: [8, 9] } } });
   await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify" } } });
   await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify" } } });
+  await prisma.category.deleteMany({ where: { name: { startsWith: "Verify" } } });
   console.log("  ok   test rows removed");
 
   console.log(failures === 0 ? "\nAll checks passed.\n" : `\n${failures} CHECK(S) FAILED\n`);
