@@ -1071,7 +1071,12 @@ export async function confirmPaydayCheckin(
   // contributions already aimed at it exactly as getPaydayCheckinDraft does -
   // never listGoals()'s today-anchored perPeriod - and then where that amount
   // is recommended to come from: the same headroom Step 3 showed, shared
-  // between the goals in this order (see planGoalFunding).
+  // between the goals in this order (see planGoalFunding). Each goal's
+  // submitted rows go in as held, exactly what the wizard fed the live pool:
+  // a later goal's recommendation is then the one Step 3 showed after the
+  // goals above it were edited, not a context-free figure. An unedited row's
+  // submitted amount is that recommendation itself, so passing every row as
+  // held draws the same pool the client did.
   const roadmapByGoal = new Map(
     goalInputs.map((g) => {
       const goal = goalById.get(g.goalId)!;
@@ -1087,7 +1092,13 @@ export async function confirmPaydayCheckin(
   );
   const fundingPlanByGoal = new Map(
     planGoalFunding(
-      goalInputs.map((g) => ({ goalId: g.goalId, amount: roadmapByGoal.get(g.goalId)! })),
+      goalInputs.map((g) => ({
+        goalId: g.goalId,
+        amount: roadmapByGoal.get(g.goalId)!,
+        funding: g.funding
+          .filter((row) => liveAccountById.has(row.accountId))
+          .map((row) => ({ accountId: row.accountId, plannedAmount: row.plannedAmount, held: true })),
+      })),
       bufferPlan.accounts,
       { displayCurrency: context.displayCurrency, rates: context.rates },
     ).map((fundingPlan) => [fundingPlan.goalId, fundingPlan]),

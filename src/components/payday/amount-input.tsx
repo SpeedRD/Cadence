@@ -13,13 +13,15 @@ import { cn } from "@/lib/utils";
  * through the DOM before the user finishes typing it.
  *
  * Resyncs `text` from an external `value` change (e.g. the dialog reopening
- * with a fresh draft), but never from a change this input itself just caused
- * (tracked via lastEmitted, kept as state rather than a ref so the
- * render-time resync check below can read it without tripping
- * react-hooks/refs) - otherwise an intermediate unparseable value like a
- * lone "-" or "." would report 0 upward and immediately get overwritten back
- * to "0", making it impossible to type a negative number over a non-zero
- * seed.
+ * with a fresh draft, or a goal row following the live recommendation), but
+ * never from a change this input itself just caused (tracked via
+ * lastEmitted, kept as state rather than a ref so the render-time resync
+ * check below can read it without tripping react-hooks/refs) - otherwise an
+ * intermediate unparseable value like a lone "-" or "." would report 0
+ * upward and immediately get overwritten back to "0", making it impossible
+ * to type a negative number over a non-zero seed. An accepted external value
+ * becomes the new lastEmitted, so a later external change back to an earlier
+ * figure is still recognised as external.
  *
  * Either "." or "," is accepted as the decimal point (an iPhone set to a
  * Spanish region only offers "," on its decimal keypad) and at most two
@@ -52,6 +54,11 @@ export function PaydayAmountInput({
     setPrevValue(value);
     if (value !== lastEmitted) {
       setText(String(value));
+      // The external value is now the baseline: a later external change back
+      // to the figure this input started at (or last typed) must resync too,
+      // e.g. a goal row that follows the live recommendation returning to it
+      // after an edit on another goal is undone.
+      setLastEmitted(value);
     }
   }
 

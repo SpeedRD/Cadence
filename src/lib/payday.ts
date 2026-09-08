@@ -252,6 +252,13 @@ export interface GoalFundingGoal {
   goalId: string;
   /** What the goal needs set aside this period, in the display currency - its roadmap recommendedAmount. */
   amount: number;
+  /**
+   * The goal's Step 3 rows as the user has them (PaydayGoalFundingDraft), when
+   * planning live: a held row counts against the pool at the user's figure
+   * instead of the recommendation. Omitted server-side, where the
+   * recommendations are a function of the draft alone.
+   */
+  funding?: PaydayGoalFundingDraft[];
 }
 
 /** An account a goal can draw on. Structurally a subset of AccountBufferPlan, so the buffer view's rows can be passed straight in. */
@@ -360,13 +367,15 @@ export function recommendGoalFunding(
  * recommendGoalFunding() for every goal in a check-in, sharing one pool of
  * headroom. Modeling choice: goals are funded in the order given - the order
  * the draft lists them, which is the order Step 3 shows them (oldest goal
- * first, see listGoals) - and each goal's recommended draw is taken out of
- * the running pool before the next goal is placed. So the first goal gets
- * first claim on every account's room and a later goal is recommended only
- * what is still unclaimed; two goals are never both pointed at the same
- * headroom. Whatever the user then edits a goal's rows to is not fed back
- * into the pool: a recommendation is a function of the draft alone, so
- * editing one goal never silently reshuffles another's.
+ * first, see listGoals) - and each goal's draw is taken out of the running
+ * pool before the next goal is placed. So the first goal gets first claim on
+ * every account's room and a later goal is recommended only what is still
+ * unclaimed; two goals are never both pointed at the same headroom. What
+ * comes out of the pool for a goal is what it will actually draw: the user's
+ * held figure for a row they have edited (see GoalFundingGoal.funding), the
+ * recommendation otherwise - so zeroing one goal's row frees that room for
+ * the goals after it and raising it takes room from them, live. A goal's own
+ * recommendation never depends on its own edits, only on the goals above it.
  *
  * Every account with room before any goal is placed keeps a row on every
  * goal, at 0 once earlier goals have used it up, so a later goal can still be
@@ -386,8 +395,12 @@ export function planGoalFunding(
       options,
     );
     const drawByAccount = new Map(plan.draws.map((draw) => [draw.accountId, draw]));
+    const heldByAccount = new Map(
+      (goal.funding ?? []).filter((row) => row.held).map((row) => [row.accountId, row.plannedAmount]),
+    );
     for (const draw of plan.draws) {
-      remaining.set(draw.accountId, round2((remaining.get(draw.accountId) ?? 0) - draw.recommendedAmount));
+      const drawn = heldByAccount.get(draw.accountId) ?? draw.recommendedAmount;
+      remaining.set(draw.accountId, Math.max(0, round2((remaining.get(draw.accountId) ?? 0) - drawn)));
     }
     return {
       ...plan,

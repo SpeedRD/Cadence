@@ -1314,6 +1314,59 @@ async function main() {
     eq("the second goal's rows show the room that was still free for it", both[1].draws.map((d) => d.headroom).join(","), "13500,75");
     eq("the second goal reports the shortfall the shared pool leaves it with", both[1].shortfall, 100);
 
+    // What the user actually types for an earlier goal feeds the pool, live:
+    // a held row counts at the user's figure and an unheld one at its own
+    // recommendation. Zeroing the car's Popular row frees all 27,000 DOP for
+    // the trip (525 USD of room now covers its 400), while holding it at every
+    // peso leaves the trip only BSC's 75 USD.
+    const freed = planGoalFunding(
+      [
+        {
+          goalId: "car",
+          amount: 300,
+          funding: [
+            { accountId: "popular", plannedAmount: 0, held: true },
+            { accountId: "bsc", plannedAmount: 999, held: false },
+            { accountId: "cash", plannedAmount: 500, held: true },
+          ],
+        },
+        { goalId: "trip", amount: 400 },
+      ],
+      goalPool,
+      fundingOptions,
+    );
+    eq("a goal's own recommendation ignores its edits: only the pool for later goals moves", JSON.stringify(freed[0].draws), JSON.stringify(car.draws));
+    eq(
+      "zeroing an earlier goal's row frees that room for the goals after it",
+      freed[1].draws.map((d) => `${d.accountId}:${d.recommendedAmount}:${d.headroom}`).join(","),
+      "popular:20571.6:27000,bsc:57.14:75",
+    );
+    eq("the later goal's rows show the room the edit left it", freed[1].draws.map((d) => d.headroom).join(","), "27000,75");
+    eq("with the room freed the later goal is no longer short", `${freed[1].recommendedTotal}:${freed[1].shortfall}`, "400:0");
+    const claimed = planGoalFunding(
+      [
+        { goalId: "car", amount: 300, funding: [{ accountId: "popular", plannedAmount: 27000, held: true }] },
+        { goalId: "trip", amount: 400 },
+      ],
+      goalPool,
+      fundingOptions,
+    );
+    eq(
+      "raising an earlier goal's row above its recommendation takes that room from the goals after it",
+      claimed[1].draws.map((d) => `${d.accountId}:${d.recommendedAmount}:${d.headroom}`).join(","),
+      "popular:0:0,bsc:75:75",
+    );
+    eq("and the later goal's shortfall grows by what was taken", claimed[1].shortfall, 325);
+    const restored = planGoalFunding(
+      [
+        { goalId: "car", amount: 300, funding: [{ accountId: "popular", plannedAmount: 13500, held: true }] },
+        { goalId: "trip", amount: 400 },
+      ],
+      goalPool,
+      fundingOptions,
+    );
+    eq("holding a row at its own recommendation leaves later goals exactly as before", JSON.stringify(restored[1]), JSON.stringify(both[1]));
+
     const exhausted = planGoalFunding(
       [
         { goalId: "first", amount: 150 },
@@ -2379,6 +2432,52 @@ async function main() {
   eq("the stored per-account recommendation is capped at the account's room", cappedRecommended, checkingRoom);
   check("so the room shortfall the goal page shows is the pace less what the rows could fund, above zero", datedGoalDraft.recommendedAmount - cappedRecommended > 0.005, `${datedGoalDraft.recommendedAmount} vs ${cappedRecommended}`);
   check("while 'behind the roadmap' is measured against the pace, not the capped sum", datedGoalDraft.recommendedAmount - 60 > cappedRecommended - 60);
+
+  console.log("\n-- the stored recommendation is the one Step 3 showed: later goals see what earlier goals actually drew --");
+  {
+    // A second dated goal, listed after the first, sharing checking's 101.67
+    // USD of room. Untouched, the first goal takes all of it and the second is
+    // recommended nothing; with the first goal's row zeroed on screen, Step 3
+    // recommends the whole room to the second goal - and that is what confirm
+    // must record next to the user's figure, not the context-free zero.
+    const secondGoal = await prisma.goal.create({
+      data: { name: "Verify Payday Second Goal", targetAmount: 1000, currency: "USD", targetDate: civilDate(2026, 10, 15) },
+    });
+    const secondRows = async () =>
+      prisma.paydayPlanAllocation.findMany({ where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: secondGoal.id } });
+    const untouchedPayload = {
+      ...cappedPayload,
+      goals: [
+        { goalId: datedGoal.id, funding: [{ accountId: paydayChecking.id, plannedAmount: checkingRoom }] },
+        { goalId: secondGoal.id, funding: [{ accountId: paydayChecking.id, plannedAmount: 1 }] },
+      ],
+    };
+    await confirmPaydayCheckin(untouchedPayload, paydayContext);
+    const firstUntouched = await prisma.paydayPlanAllocation.findFirst({ where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id } });
+    eq("with no goal edited, the first goal's stored recommendation is its plain default: all the room", num(firstUntouched!.recommendedAmount), checkingRoom);
+    eq(
+      "and the second goal's is the default too: nothing left after the first",
+      (await secondRows()).map((r) => `${num(r.recommendedAmount)}:${num(r.plannedAmount)}`).join(","),
+      "0:1",
+    );
+    const freedPayload = {
+      ...cappedPayload,
+      goals: [
+        { goalId: datedGoal.id, funding: [{ accountId: paydayChecking.id, plannedAmount: 0 }] },
+        { goalId: secondGoal.id, funding: [{ accountId: paydayChecking.id, plannedAmount: checkingRoom }] },
+      ],
+    };
+    await confirmPaydayCheckin(freedPayload, paydayContext);
+    const firstFreed = await prisma.paydayPlanAllocation.findFirst({ where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id } });
+    eq("a zeroed first goal keeps its own recommendation on record", `${num(firstFreed!.recommendedAmount)}:${num(firstFreed!.plannedAmount)}`, `${checkingRoom}:0`);
+    eq(
+      "and the second goal's stored recommendation is the freed-room figure Step 3 showed, not the context-free zero",
+      (await secondRows()).map((r) => `${num(r.recommendedAmount)}:${num(r.plannedAmount)}`).join(","),
+      `${checkingRoom}:${checkingRoom}`,
+    );
+    await prisma.paydayPlanAllocation.deleteMany({ where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: secondGoal.id } });
+    await prisma.goal.delete({ where: { id: secondGoal.id } });
+  }
 
   console.log("\n-- payday check-in cleanup --");
   await prisma.paydayPlanAllocation.deleteMany({ where: { paydayCheckinId: checkinRow!.id } });

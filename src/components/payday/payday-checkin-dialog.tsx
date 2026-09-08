@@ -150,12 +150,14 @@ export function PaydayCheckinDialog({
   // Each goal's per-account draws come from the headroom the buffer view
   // leaves each account, so they follow every income edit in step 2 and every
   // subscription move in step 3 just as the buffers do. Only a row the user
-  // has edited (held) stays put. Server-side, confirmPaydayCheckin() runs the
-  // same planGoalFunding() over the same inputs for the recommended figures.
+  // has edited (held) stays put - and what it is held at is what the goals
+  // below it see taken from the pool, so editing one goal's row recomputes
+  // every goal after it. Server-side, confirmPaydayCheckin() runs the same
+  // planGoalFunding() over the draft alone for the recommended figures.
   const goalFunding = useMemo(() => {
     const options = { displayCurrency: plan.displayCurrency, rates };
     const fundingPlans = planGoalFunding(
-      plan.goals.map((g) => ({ goalId: g.goalId, amount: g.recommendedAmount })),
+      plan.goals.map((g) => ({ goalId: g.goalId, amount: g.recommendedAmount, funding: g.funding })),
       bufferPlan.accounts,
       options,
     );
