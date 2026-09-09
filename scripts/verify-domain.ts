@@ -34,6 +34,7 @@ import {
   periodForDate,
   periodInfo,
   periodKey,
+  periodRange,
   periodsRemaining,
   periodSeries,
   previousComparablePeriod,
@@ -3596,6 +3597,7 @@ async function main() {
     const { postDueRecurringItems: postForAfford } = await import("../src/lib/recurring-posting");
     const { listRecurringItems } = await import("../src/lib/data/recurring");
     const { getPeriodSummary: periodSummaryForAfford } = await import("../src/lib/data/period-summary");
+    const { confirmPaydayCheckin: confirmCheckinForAfford } = await import("../src/lib/data/payday");
     const { getDashboardData } = await import("../src/lib/data/dashboard");
 
     console.log("\n-- installment schedule (pure) --");
@@ -3898,6 +3900,98 @@ async function main() {
     const octSummary = await periodSummaryForAfford(periodInfo({ year: 2026, month: 10, period: "A" }), affordContext);
     eq("the plan is committed in the period its first installment lands in", octSummary.committedItems.find((i) => i.id === plan.id)?.nativeAmount, 500);
 
+    console.log("\n-- what the rest of the app already knows: achieved goals and confirmed goal plans --");
+    {
+      // Two contributions on the account, one to a goal that has already
+      // reached its target. Posting skips that one (goal_achieved, see
+      // skipReasonFor in recurring-posting.ts), so Afford must not count it
+      // either; the other counts like any subscription.
+      const achievedGoal = await prisma.goal.create({
+        data: { name: "Verify Afford Goal Achieved", targetAmount: 100, currency: "USD", savedAmount: 100, achievedAt: civilDate(2026, 8, 1) },
+      });
+      const openGoal = await prisma.goal.create({
+        data: { name: "Verify Afford Goal Open", targetAmount: 5000, currency: "USD", targetDate: civilDate(2027, 6, 30) },
+      });
+      const baseline = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+      const achievedItem = await prisma.recurringItem.create({
+        data: { name: "Verify Afford Achieved Contribution", amount: 70, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 10, 8), anchorDay: 8, accountId: affordAccount.id, goalId: achievedGoal.id },
+      });
+      await prisma.recurringItem.create({
+        data: { name: "Verify Afford Open Contribution", amount: 80, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 10, 9), anchorDay: 9, accountId: affordAccount.id, goalId: openGoal.id },
+      });
+      const withGoals = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+      const octAccountDelta = round2(withGoals.get("2026-10-A")!.account.committed - baseline.get("2026-10-A")!.account.committed);
+      const octFlexibleDelta = round2(withGoals.get("2026-10-A")!.flexible.committed - baseline.get("2026-10-A")!.flexible.committed);
+      eq("a contribution to an achieved goal is not a commitment; one to an open goal is", `${octAccountDelta}:${octFlexibleDelta}`, "80:80");
+      eq("neither contribution touches the half of the month it is not due in", round2(withGoals.get("2026-10-B")!.account.committed - baseline.get("2026-10-B")!.account.committed), 0);
+      await prisma.goal.update({ where: { id: achievedGoal.id }, data: { achievedAt: null } });
+      const reopened = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+      eq("clearing achievedAt (raising the target) brings the contribution back, as posting would pick it up again", round2(reopened.get("2026-10-A")!.account.committed - baseline.get("2026-10-A")!.account.committed), 150);
+      await prisma.recurringItem.delete({ where: { id: achievedItem.id } });
+
+      // A confirmed check-in for the current period plans 400 toward the open
+      // goal from this account. Nothing has moved yet - the user logs the
+      // contribution later - but the money is spoken for, so a purchase
+      // landing in that period must see it as committed.
+      const currentRef = affordContext.currentPeriod;
+      eq("the current period is Sep 1-15 (today is Sep 7)", currentRef.key, "2026-09-A");
+      const septemberInput = affordInput({ name: "Verify Afford September", firstDate: civilDate(2026, 9, 10), totalAmount: 100, installments: 1 });
+      const beforeCheckin = await affordData.evaluateAffordRequest(septemberInput, affordContext);
+      if (!beforeCheckin.ok) throw new Error("september evaluation refused");
+      eq("the purchase lands in the current period only", beforeCheckin.verdict.periods.map((p) => p.key).join(","), "2026-09-A");
+      const goalPlanResult = await confirmCheckinForAfford(
+        {
+          year: currentRef.year,
+          month: currentRef.month,
+          period: currentRef.period,
+          accounts: activeForAfford.map((a) => ({ accountId: a.id, reportedBalance: 0, incomeEntered: 0, incomeNote: null })),
+          goals: [{ goalId: openGoal.id, funding: [{ accountId: affordAccount.id, plannedAmount: 400 }] }],
+          essentialCategories: [],
+          flexibleCategories: [],
+          includedCarryover: 0,
+          acknowledgedDeficit: true,
+          acknowledgedZeroBuffer: true,
+        },
+        affordContext,
+      );
+      check("a check-in with a planned goal draw confirms for the current period", goalPlanResult.ok === true);
+      const goalPlanCheckin = await prisma.paydayCheckin.findFirstOrThrow({
+        where: { year: currentRef.year, month: currentRef.month, period: currentRef.period },
+        include: { allocations: { where: { type: "GOAL" } } },
+      });
+      eq("it stored one GOAL row of 400 USD from the account", goalPlanCheckin.allocations.map((a) => `${num(a.plannedAmount)}:${a.currency}:${a.accountId === affordAccount.id}`).join(","), "400:USD:true");
+      eq("no contribution has been logged for it", await prisma.goalContribution.count({ where: { goalId: openGoal.id } }), 0);
+      const afterCheckin = await affordData.evaluateAffordRequest(septemberInput, affordContext);
+      if (!afterCheckin.ok) throw new Error("september re-evaluation refused");
+      const sepBefore = beforeCheckin.verdict.periods[0];
+      const sepAfter = afterCheckin.verdict.periods[0];
+      eq("the planned goal draw is committed against the account's buffer", round2(sepAfter.account.committed - sepBefore.account.committed), 400);
+      eq("and against the period's flexible money", round2(sepAfter.flexible.committed - sepBefore.flexible.committed), 400);
+      eq("account headroom and available-for-flexible both drop by the draw", `${round2(sepBefore.account.headroomBefore - sepAfter.account.headroomBefore)}:${round2(sepBefore.flexible.availableBefore - sepAfter.flexible.availableBefore)}`, "400:400");
+      eq("income is still projected from history, not read from the check-in", sepAfter.account.income, sepBefore.account.income);
+      const octoberAfterCheckin = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+      eq("a period with no check-in is untouched", `${round2(octoberAfterCheckin.get("2026-10-A")!.account.committed - reopened.get("2026-10-A")!.account.committed + 70)}:${round2(octoberAfterCheckin.get("2026-10-A")!.flexible.committed - reopened.get("2026-10-A")!.flexible.committed + 70)}`, "0:0");
+      // A GOAL row from before per-account funding existed has no account: it
+      // counts period-wide, against no account's buffer, like an unlinked item.
+      const accountlessRow = await prisma.paydayPlanAllocation.create({
+        data: { paydayCheckinId: goalPlanCheckin.id, type: "GOAL", goalId: openGoal.id, recommendedAmount: 25, plannedAmount: 25, currency: "USD", basis: "roadmap" },
+      });
+      const withAccountless = await affordData.evaluateAffordRequest(septemberInput, affordContext);
+      if (!withAccountless.ok) throw new Error("accountless evaluation refused");
+      eq("an accountless GOAL row counts period-wide only", `${round2(withAccountless.verdict.periods[0].account.committed - sepBefore.account.committed)}:${round2(withAccountless.verdict.periods[0].flexible.committed - sepBefore.flexible.committed)}`, "400:425");
+      await prisma.paydayPlanAllocation.delete({ where: { id: accountlessRow.id } });
+      await prisma.paydayCheckin.update({ where: { id: goalPlanCheckin.id }, data: { status: "DRAFT" } });
+      const draftOnly = await affordData.evaluateAffordRequest(septemberInput, affordContext);
+      if (!draftOnly.ok) throw new Error("draft evaluation refused");
+      eq("a draft check-in commits nothing", `${round2(draftOnly.verdict.periods[0].account.committed - sepBefore.account.committed)}:${round2(draftOnly.verdict.periods[0].flexible.committed - sepBefore.flexible.committed)}`, "0:0");
+
+      await prisma.transaction.deleteMany({ where: { source: "PAYDAY_CHECKIN", accountId: { in: activeForAfford.map((a) => a.id) }, date: periodRange(periodInfo(currentRef)) } });
+      await prisma.budget.deleteMany({ where: { year: currentRef.year, month: currentRef.month, period: currentRef.period } });
+      await prisma.paydayCheckin.delete({ where: { id: goalPlanCheckin.id } });
+      await prisma.recurringItem.deleteMany({ where: { kind: "CONTRIBUTION", name: { startsWith: "Verify Afford" } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
+    }
+
     console.log("\n-- countdown and auto-deactivation --");
     // Dated in the past so posting at Aug 20 - the same reference day the
     // posting section uses, so nothing real is due - walks them down.
@@ -4030,6 +4124,7 @@ async function main() {
 
     await prisma.transaction.deleteMany({ where: { accountId: { in: [affordAccount.id, emptyAccount.id] } } });
     await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
+    await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
     await prisma.account.deleteMany({ where: { id: { in: [affordAccount.id, emptyAccount.id] } } });
   }
 

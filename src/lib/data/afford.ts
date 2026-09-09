@@ -18,9 +18,13 @@
  *               owedOccurrences() - the walk getPeriodSummary's committed
  *               figure uses, over the same set of items (every active one,
  *               either kind) - and summed. A finite item stops at its
- *               countdown. This is what lets a purchase recorded here a minute
- *               ago count against the next one before a single installment of
- *               it has posted.
+ *               countdown, and a contribution to a goal that has already
+ *               reached its target is left out, exactly as posting skips it.
+ *               This is what lets a purchase recorded here a minute ago count
+ *               against the next one before a single installment of it has
+ *               posted. A period that already has a confirmed check-in adds
+ *               the goal funding that check-in planned: money the user has
+ *               committed to move toward a goal but may not have logged yet.
  *   buffer      defaultProtectedBuffer() over the projected income, per
  *               account, as the check-in's per-account buffer card does
  *
@@ -151,7 +155,7 @@ async function loadPeriodIncome(
   return income;
 }
 
-/** What the active recurring items owe in one evaluated period: per funding account in that account's currency, and in total in the display currency. */
+/** What one evaluated period already owes: per funding account in that account's currency, and in total in the display currency. */
 interface ScheduledCommitments {
   byAccount: Map<string, number>;
   total: number;
@@ -165,7 +169,19 @@ interface ScheduledCommitments {
  * item at its countdown. One walk per item from today to the furthest period,
  * with each due date filed under the period it lands in; an overdue date is
  * owed now, so it lands in the current period, exactly as getPeriodSummary
- * treats it. An item with no account (or one on an archived account) counts
+ * treats it. A contribution whose goal has been achieved is left out
+ * entirely: postDueRecurringItems skips it (skipReasonFor's "goal_achieved"
+ * in src/lib/recurring-posting.ts, the same condition as here), so it never
+ * posts and never advances until the goal's target is raised again.
+ *
+ * A period that already has a CONFIRMED check-in also owes the goal funding
+ * that check-in planned - its GOAL allocation rows, one per goal and account
+ * in that account's currency. Confirming commits the money; logging the
+ * contribution comes later, and Afford does not read the ledger to see
+ * whether it has, so a planned draw counts either way. A period with no
+ * confirmed check-in has nothing of the kind to add.
+ *
+ * An item or GOAL row with no account (or one on an archived account) counts
  * period-wide but against no account's buffer.
  */
 async function loadScheduledCommitments(
@@ -180,34 +196,64 @@ async function loadScheduledCommitments(
   const horizonEnd = periods.reduce((latest, period) => maxDate(latest, period.end), periods[0].end);
   const currencyByAccount = new Map(accounts.map((account) => [account.id, account.currency]));
 
-  const items = await prisma.recurringItem.findMany({
-    where: { active: true, nextDate: { lte: horizonEnd } },
-    select: {
-      amount: true,
-      currency: true,
-      frequency: true,
-      nextDate: true,
-      anchorDay: true,
-      remainingOccurrences: true,
-      accountId: true,
-    },
-  });
+  const add = (bucket: ScheduledCommitments, amount: number, currency: string, accountId: string | null) => {
+    bucket.total += convert(amount, currency, context.displayCurrency, context.rates);
+    const accountCurrency = accountId ? currencyByAccount.get(accountId) : undefined;
+    if (accountId && accountCurrency) {
+      bucket.byAccount.set(
+        accountId,
+        (bucket.byAccount.get(accountId) ?? 0) + convert(amount, currency, accountCurrency, context.rates),
+      );
+    }
+  };
+
+  const [items, checkins] = await Promise.all([
+    prisma.recurringItem.findMany({
+      where: { active: true, nextDate: { lte: horizonEnd } },
+      select: {
+        amount: true,
+        currency: true,
+        frequency: true,
+        nextDate: true,
+        anchorDay: true,
+        remainingOccurrences: true,
+        accountId: true,
+        kind: true,
+        goal: { select: { achievedAt: true } },
+      },
+    }),
+    prisma.paydayCheckin.findMany({
+      where: {
+        status: "CONFIRMED",
+        OR: periods.map((period) => ({ year: period.year, month: period.month, period: period.period })),
+      },
+      select: {
+        year: true,
+        month: true,
+        period: true,
+        allocations: {
+          where: { type: "GOAL" },
+          select: { plannedAmount: true, currency: true, accountId: true },
+        },
+      },
+    }),
+  ]);
   for (const item of items) {
+    if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) continue;
     const amount = num(item.amount);
-    const accountCurrency = item.accountId ? currencyByAccount.get(item.accountId) : undefined;
     for (const due of owedOccurrences(item, context.today, horizonEnd)) {
       const key =
         due.getTime() < context.today.getTime() ? context.currentPeriod.key : periodForDate(due).key;
       const bucket = result.get(key);
       if (!bucket) continue;
-      bucket.total += convert(amount, item.currency, context.displayCurrency, context.rates);
-      if (item.accountId && accountCurrency) {
-        bucket.byAccount.set(
-          item.accountId,
-          (bucket.byAccount.get(item.accountId) ?? 0) +
-            convert(amount, item.currency, accountCurrency, context.rates),
-        );
-      }
+      add(bucket, amount, item.currency, item.accountId);
+    }
+  }
+  for (const checkin of checkins) {
+    const bucket = result.get(periodInfo(checkin).key);
+    if (!bucket) continue;
+    for (const allocation of checkin.allocations) {
+      add(bucket, num(allocation.plannedAmount), allocation.currency, allocation.accountId);
     }
   }
   return result;
