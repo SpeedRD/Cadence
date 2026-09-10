@@ -715,8 +715,11 @@ export const es = {
     contributionLogged: "Aporte registrado",
     plannedThisPeriod: (amount: string) => `${amount} planificado este periodo`,
     plannedBehindRoadmap: (amount: string) => `${amount} por detrás de la hoja de ruta`,
+    plannedBehindRemaining: (amount: string) => `${amount} del saldo restante sin planificar este periodo`,
     roomShortfallThisPeriod: (amount: string) =>
       `${amount} del monto de la hoja de ruta de este periodo no se pudo cubrir con lo que les sobraba a las cuentas tras sus suscripciones y colchón.`,
+    roomShortfallRemainingThisPeriod: (amount: string) =>
+      `${amount} del saldo restante no se pudo cubrir con lo que les sobraba a las cuentas tras sus suscripciones y colchón.`,
     contributionRemoved: "Aporte eliminado",
     contributionNoLongerExists: "Ese aporte ya no existe",
     editContributionAria: "Editar aporte",
@@ -1001,8 +1004,11 @@ export const es = {
     goalsHeading: "Hoja de ruta de metas",
     goalsDescription:
       "Cada meta se financia desde las cuentas a las que les sobra dinero tras sus suscripciones y su colchón, en proporción al margen de cada una. Ajusta la parte de cualquier cuenta; el total de la meta es la suma.",
-    noGoalsWithTarget: "No hay metas con fecha para reservar en este periodo.",
+    noGoalsToReserve: "No hay metas que reservar en este periodo.",
     roadmapAmount: "Monto de la hoja de ruta",
+    remainingBalanceNoDate: "Saldo restante (sin fecha objetivo)",
+    remainingBalanceNoDateHint:
+      "recomendado completo hasta donde alcance el margen de las cuentas - no hay fecha contra la cual marcar el ritmo",
     plannedAmount: "Monto planificado",
     goalPlannedTotal: "Total planificado",
     goalFundingRecommended: "Recomendado",
@@ -1022,6 +1028,9 @@ export const es = {
     goalOnTrack: "Al día con la hoja de ruta",
     goalBehind: (amount: string) => `${amount} por detrás de la hoja de ruta`,
     goalAhead: (amount: string) => `${amount} por delante de la hoja de ruta`,
+    goalRemainingFunded: "Cubre todo el saldo restante",
+    goalRemainingLeft: (amount: string) => `${amount} del saldo restante queda para un periodo posterior`,
+    goalRemainingOver: (amount: string) => `${amount} más que el saldo restante`,
     bufferZeroWarning: "Este plan no deja colchón protegido para gastos imprevistos.",
     essentialCategoriesHeading: "Gastos fijos esenciales",
     noEssentialCategoriesConfigured:

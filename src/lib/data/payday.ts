@@ -134,8 +134,10 @@ export interface PaydayGoalDraft {
    * own currency. Empty when no account has any room this period.
    */
   funding: PaydayGoalFundingDraft[];
-  targetDate: Date;
-  periodsLeft: number;
+  /** Null for a goal with no target date: it is funded as fast as room allows rather than paced. */
+  targetDate: Date | null;
+  /** Pay periods from the plan period to the target date; null when there is no date to count to. */
+  periodsLeft: number | null;
 }
 
 export type SuggestionBasis = "last_budget" | "average" | "none";
@@ -301,13 +303,18 @@ export async function getCategorySuggestions(
  * already due to it this period. Independent of any account's room - it is
  * the bar a goal is "on track" or "behind" against, never lowered by what the
  * accounts can currently fund.
+ *
+ * A goal with no target date has no pace to spread over - paying back
+ * borrowed money, say, is simply done as fast as possible - so its figure is
+ * the whole remaining balance, net of the same due contributions. What the
+ * accounts can actually put toward it this period is planGoalFunding's cap.
  */
 export function goalRoadmapAmount(
-  goal: { displayRemaining: number; targetDate: Date },
+  goal: { displayRemaining: number; targetDate: Date | null },
   planStart: Date,
   dueContribution: number,
 ): number {
-  const periodsLeft = Math.max(1, periodsRemaining(planStart, goal.targetDate));
+  const periodsLeft = goal.targetDate ? Math.max(1, periodsRemaining(planStart, goal.targetDate)) : 1;
   return round2(Math.max(0, goal.displayRemaining / periodsLeft - dueContribution));
 }
 
@@ -325,8 +332,9 @@ function dueContributionsByGoal(committedItems: CommittedItem[]): Map<string, nu
  * goalRoadmapAmount() for one goal from live data - the same figure the
  * check-in draft and confirm compute for it - so the goal page measures a
  * confirmed plan against the real pace rather than against whatever the
- * accounts' room let the plan schedule. Null for a goal with no target date
- * or none left to save.
+ * accounts' room let the plan schedule. Null for a goal that is achieved or
+ * has none left to save; a goal with no target date gets its whole remaining
+ * balance, as goalRoadmapAmount describes.
  */
 export async function getGoalRoadmapAmount(
   goalId: string,
@@ -336,7 +344,7 @@ export async function getGoalRoadmapAmount(
   const plan = periodInfo(planRef);
   const [goals, planSummary] = await Promise.all([listGoals(context), getPeriodSummary(plan, context)]);
   const goal = goals.find((g) => g.id === goalId);
-  if (!goal || !goal.targetDate || goal.achievedAt || goal.remaining <= 0) return null;
+  if (!goal || goal.achievedAt || goal.remaining <= 0) return null;
   return goalRoadmapAmount(
     { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate },
     plan.start,
@@ -708,17 +716,20 @@ export async function getPaydayCheckinDraft(
   });
   const plannedBuffer = bufferPlan.total;
 
+  // Every goal still being saved for, dated or not: an undated goal has no
+  // pace, so its recommendation is the whole remaining balance and the
+  // funding split below caps it by whatever room the goals before it leave.
   const roadmapGoals = allGoals
-    .filter((g) => g.targetDate && !g.achievedAt && g.remaining > 0)
+    .filter((g) => !g.achievedAt && g.remaining > 0)
     .map((g) => {
       // listGoals()'s perPeriod/periodsLeft are anchored to context.today (right
       // for the goals page's "time until target" display), but the payday
       // planner reserves money for the PLAN period, which can be tomorrow's
       // period rather than today's (see planPeriodRef()) - so recompute here
       // anchored to plan.start instead of trusting the pre-computed fields.
-      const periodsLeft = Math.max(1, periodsRemaining(plan.start, g.targetDate as Date));
+      const periodsLeft = g.targetDate ? Math.max(1, periodsRemaining(plan.start, g.targetDate)) : null;
       const recommendedAmount = goalRoadmapAmount(
-        { displayRemaining: g.displayRemaining, targetDate: g.targetDate as Date },
+        { displayRemaining: g.displayRemaining, targetDate: g.targetDate },
         plan.start,
         dueContributionByGoal.get(g.id) ?? 0,
       );
@@ -753,7 +764,7 @@ export async function getPaydayCheckinDraft(
         ),
       ),
       funding,
-      targetDate: g.targetDate as Date,
+      targetDate: g.targetDate,
       periodsLeft,
     };
   });
@@ -1029,9 +1040,11 @@ export async function confirmPaydayCheckin(
   const contributionsTotal = round2(contributionDrafts.reduce((sum, i) => sum + i.outstandingAmount, 0));
 
   const goalById = new Map(allGoals.map((g) => [g.id, g]));
+  // Dated or not, as the draft lists them; an achieved goal's funding is
+  // dropped, as is funding for a goal that no longer exists.
   const goalInputs = input.goals.filter((g) => {
     const goal = goalById.get(g.goalId);
-    return Boolean(goal && goal.targetDate && !goal.achievedAt);
+    return Boolean(goal && !goal.achievedAt);
   });
   const dueContributionByGoal = dueContributionsByGoal(planSummary.committedItems);
 
@@ -1083,7 +1096,7 @@ export async function confirmPaydayCheckin(
       return [
         g.goalId,
         goalRoadmapAmount(
-          { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate as Date },
+          { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate },
           plan.start,
           dueContributionByGoal.get(goal.id) ?? 0,
         ),

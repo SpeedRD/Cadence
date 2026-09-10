@@ -374,7 +374,7 @@ export function StepCommitments({
         </CardHeader>
         <CardContent className="space-y-3">
           {goals.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t.noGoalsWithTarget}</p>
+            <p className="text-xs text-muted-foreground">{t.noGoalsToReserve}</p>
           ) : (
             goals.map((goal) => {
               const funding = goalFunding.get(goal.goalId);
@@ -393,10 +393,22 @@ export function StepCommitments({
                       <span className="figure">{formatMoney(total, displayCurrency)}</span>
                     </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    {t.roadmapAmount}:{" "}
-                    <span className="figure">{formatMoney(goal.recommendedAmount, displayCurrency)}</span>
-                  </p>
+                  {/* A dated goal shows its pace; an undated one has none, so
+                      its figure is the whole remaining balance, recommended in
+                      full as far as the accounts' room allows. */}
+                  {goal.targetDate ? (
+                    <p className="text-xs text-muted-foreground">
+                      {t.roadmapAmount}:{" "}
+                      <span className="figure">{formatMoney(goal.recommendedAmount, displayCurrency)}</span>
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {t.remainingBalanceNoDate}:{" "}
+                      <span className="figure">{formatMoney(goal.recommendedAmount, displayCurrency)}</span>
+                      {" · "}
+                      {t.remainingBalanceNoDateHint}
+                    </p>
+                  )}
                   {rows.length === 0 ? (
                     <p className="text-xs text-muted-foreground">{t.goalFundingNoRoom}</p>
                   ) : (
@@ -427,11 +439,17 @@ export function StepCommitments({
                     </div>
                   ) : null}
                   <p className={variance >= 0 ? "text-xs text-[var(--good)]" : "text-xs text-[var(--critical)]"}>
-                    {variance === 0
-                      ? t.goalOnTrack
-                      : variance > 0
-                        ? t.goalAhead(formatMoney(variance, displayCurrency))
-                        : t.goalBehind(formatMoney(Math.abs(variance), displayCurrency))}
+                    {goal.targetDate
+                      ? variance === 0
+                        ? t.goalOnTrack
+                        : variance > 0
+                          ? t.goalAhead(formatMoney(variance, displayCurrency))
+                          : t.goalBehind(formatMoney(Math.abs(variance), displayCurrency))
+                      : variance === 0
+                        ? t.goalRemainingFunded
+                        : variance > 0
+                          ? t.goalRemainingOver(formatMoney(variance, displayCurrency))
+                          : t.goalRemainingLeft(formatMoney(Math.abs(variance), displayCurrency))}
                   </p>
                 </div>
               );

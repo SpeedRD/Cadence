@@ -54,10 +54,11 @@ export default async function GoalDetailPage({
       where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
       include: { allocations: { where: { type: "GOAL", goalId: id } } },
     }),
-    // The real pace for the plan period, computed live. The rows' own
-    // recommendedAmount is each account's share of that pace capped by the
+    // The real pace for the plan period, computed live - or, for a goal with
+    // no target date, its whole remaining balance. The rows' own
+    // recommendedAmount is each account's share of that figure capped by the
     // account's room, so summing them says what the accounts could fund - not
-    // what the target needs. "Behind the roadmap" is measured against the pace.
+    // what the goal needs. "Behind" is measured against the figure itself.
     getGoalRoadmapAmount(id, planRef, context),
   ]);
   // One GOAL row per account the goal draws on, each in that account's
@@ -205,7 +206,7 @@ export default async function GoalDetailPage({
             <p className="text-xs text-muted-foreground">
               {t.plannedThisPeriod(formatMoney(plannedAllocation.plannedAmount, display))}
               {roadmapAmount !== null && roadmapAmount - plannedAllocation.plannedAmount > 0.005
-                ? ` · ${t.plannedBehindRoadmap(
+                ? ` · ${(summary.targetDate ? t.plannedBehindRoadmap : t.plannedBehindRemaining)(
                     formatMoney(round2(roadmapAmount - plannedAllocation.plannedAmount), display),
                   )}`
                 : ""}
@@ -213,7 +214,7 @@ export default async function GoalDetailPage({
           ) : null}
           {plannedAllocation && roadmapAmount !== null && roadmapAmount - plannedAllocation.recommendedAmount > 0.005 ? (
             <p className="text-xs text-[var(--warning)]">
-              {t.roomShortfallThisPeriod(
+              {(summary.targetDate ? t.roomShortfallThisPeriod : t.roomShortfallRemainingThisPeriod)(
                 formatMoney(round2(roadmapAmount - plannedAllocation.recommendedAmount), display),
               )}
             </p>

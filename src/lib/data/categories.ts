@@ -260,6 +260,14 @@ export async function reassignAndDeleteCategory(
       where: { categoryId },
       data: { categoryId: moveToId },
     });
+    // A staged (email-parsed) candidate only suggests a category, so its
+    // suggestion follows the move too rather than being nulled by the FK:
+    // the reviewer then sees the target pre-picked, as they would have seen
+    // the removed category. No kind check - it is a hint, not a filed row.
+    await tx.stagedTransaction.updateMany({
+      where: { suggestedCategoryId: categoryId },
+      data: { suggestedCategoryId: moveToId },
+    });
     const budgets = await tx.budget.deleteMany({ where: { categoryId } });
     await tx.category.delete({ where: { id: categoryId } });
     return {

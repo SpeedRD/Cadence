@@ -711,8 +711,11 @@ export const en = {
     contributionLogged: "Contribution logged",
     plannedThisPeriod: (amount: string) => `${amount} planned this period`,
     plannedBehindRoadmap: (amount: string) => `${amount} behind the roadmap`,
+    plannedBehindRemaining: (amount: string) => `${amount} of the remaining balance not planned this period`,
     roomShortfallThisPeriod: (amount: string) =>
       `${amount} of this period's roadmap amount couldn't be covered by what the accounts had to spare after their subscriptions and buffer.`,
+    roomShortfallRemainingThisPeriod: (amount: string) =>
+      `${amount} of the remaining balance couldn't be covered by what the accounts had to spare after their subscriptions and buffer.`,
     contributionRemoved: "Contribution removed",
     contributionNoLongerExists: "That contribution no longer exists",
     editContributionAria: "Edit contribution",
@@ -994,8 +997,11 @@ export const en = {
     goalsHeading: "Goal roadmap",
     goalsDescription:
       "Each goal is funded from the accounts with money to spare after their subscriptions and buffer, in proportion to how much room each one has. Adjust any account's share; the goal's total is their sum.",
-    noGoalsWithTarget: "No dated goals to reserve for this period.",
+    noGoalsToReserve: "No goals to reserve for this period.",
     roadmapAmount: "Roadmap amount",
+    remainingBalanceNoDate: "Remaining balance (no target date)",
+    remainingBalanceNoDateHint:
+      "recommended in full as far as the accounts' room allows - there is no date to pace it against",
     plannedAmount: "Planned amount",
     goalPlannedTotal: "Planned total",
     goalFundingRecommended: "Recommended",
@@ -1015,6 +1021,9 @@ export const en = {
     goalOnTrack: "On track with the roadmap",
     goalBehind: (amount: string) => `${amount} behind the target roadmap`,
     goalAhead: (amount: string) => `${amount} ahead of the target roadmap`,
+    goalRemainingFunded: "Covers the whole remaining balance",
+    goalRemainingLeft: (amount: string) => `${amount} of the remaining balance left for a later period`,
+    goalRemainingOver: (amount: string) => `${amount} more than the remaining balance`,
     bufferZeroWarning: "This plan leaves no protected buffer for unexpected spending.",
     essentialCategoriesHeading: "Essential fixed spending",
     noEssentialCategoriesConfigured:

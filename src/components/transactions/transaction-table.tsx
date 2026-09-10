@@ -204,11 +204,22 @@ export function TransactionTable({
                           paycheck a payday check-in recorded belongs to that
                           check-in's snapshot, so it is neither edited nor
                           deleted here (the actions refuse both) - re-run the
-                          check-in instead. */}
+                          check-in instead. The expense a goal contribution
+                          wrote - logged by hand (transactionEditBlock knows
+                          it) or posted by a recurring item (only the
+                          loader's lookup knows, see hasLinkedGoalContribution)
+                          - is changed from the goal's page, so both halves
+                          of the pair stay in step. */}
                       {transactionEditBlock(row) === "payday_income" ? (
                         <DropdownMenuItem disabled>
                           <Lock className="size-3.5" />
                           {t.paycheckLocked}
+                        </DropdownMenuItem>
+                      ) : transactionEditBlock(row) === "goal_contribution" ||
+                        row.hasLinkedGoalContribution ? (
+                        <DropdownMenuItem disabled>
+                          <Lock className="size-3.5" />
+                          {t.editContributionFromGoal}
                         </DropdownMenuItem>
                       ) : (
                         <>

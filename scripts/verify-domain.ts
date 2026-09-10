@@ -1648,9 +1648,6 @@ async function main() {
   const datedGoal = await prisma.goal.create({
     data: { name: "Verify Payday Dated Goal", targetAmount: 1000, currency: "USD", targetDate: civilDate(2026, 10, 15) },
   });
-  const undatedGoal = await prisma.goal.create({
-    data: { name: "Verify Payday Undated Goal", targetAmount: 1000, currency: "USD" },
-  });
 
   console.log("\n-- draft assembly --");
   const draft = await getPaydayCheckinDraft(paydayContext);
@@ -1678,10 +1675,7 @@ async function main() {
     draft.contributions.some((c) => c.recurringItemId === paydayContribution.id) &&
       !draft.subscriptions.some((s) => s.recurringItemId === paydayContribution.id),
   );
-  check(
-    "only the dated goal is reserved - the undated goal is not automatically included",
-    draft.goals.some((g) => g.goalId === datedGoal.id) && !draft.goals.some((g) => g.goalId === undatedGoal.id),
-  );
+  check("the dated goal is reserved in the draft", draft.goals.some((g) => g.goalId === datedGoal.id));
   check(
     "a category marked essential fixed appears in essentialCategories, not flexibleCategories",
     draft.essentialCategories.some((c) => c.categoryId === billsCategory.id) &&
@@ -2418,7 +2412,6 @@ async function main() {
   eq("goalRoadmapAmount is remaining over the periods left, net of contributions already due", goalRoadmapAmount({ displayRemaining: 1000, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16), 50), round2(1000 / periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 10, 15)) - 50));
   eq("it never goes below zero when contributions already cover the pace", goalRoadmapAmount({ displayRemaining: 100, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16), 500), 0);
   eq("the live roadmap figure for the plan period is the one the draft recommends", await getGoalRoadmapAmount(datedGoal.id, draftForConfirm.periodRef, paydayContext), datedGoalDraft.recommendedAmount);
-  eq("a goal with no target date has no roadmap figure", await getGoalRoadmapAmount(undatedGoal.id, draftForConfirm.periodRef, paydayContext), null);
   // Income too small to fund the pace: the rows' recommendations are capped
   // by the account's room, while the roadmap figure stays the real pace.
   const cappedPayload = {
@@ -2541,6 +2534,72 @@ async function main() {
     await prisma.transaction.deleteMany({ where: { id: latePaycheck.id } });
     await prisma.budget.deleteMany({ where: { year: lateRef.year, month: lateRef.month, period: lateRef.period } });
     await prisma.paydayCheckin.delete({ where: { id: lateRow.id } });
+  }
+
+  console.log("\n-- a goal with no target date is funded as fast as the accounts' room allows --");
+  {
+    // There is no date to pace a debt-repayment goal against, so its
+    // recommendation is the whole remaining balance, and planGoalFunding caps
+    // it by the room the dated goals above it leave - the same machinery.
+    const { logManualContribution: logForUndated, rebuildGoalSaved: rebuildForUndated } = await import("../src/lib/goals");
+    eq("goalRoadmapAmount with no target date is the whole remaining balance, net of contributions already due", goalRoadmapAmount({ displayRemaining: 1000, targetDate: null }, civilDate(2026, 8, 16), 50), 950);
+    eq("and never below zero", goalRoadmapAmount({ displayRemaining: 100, targetDate: null }, civilDate(2026, 8, 16), 500), 0);
+    eq("a dated goal's pace is untouched", goalRoadmapAmount({ displayRemaining: 1000, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16), 50), round2(1000 / periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 10, 15)) - 50));
+
+    const beforeUndated = await getPaydayCheckinDraft(paydayContext);
+    const datedBefore = beforeUndated.goals.find((g) => g.goalId === datedGoal.id);
+    const undatedGoal = await prisma.goal.create({ data: { name: "Verify Payday Undated Goal", targetAmount: 1000, currency: "USD" } });
+    const withUndated = await getPaydayCheckinDraft(paydayContext);
+    const undatedCard = withUndated.goals.find((g) => g.goalId === undatedGoal.id);
+    const datedAfter = withUndated.goals.find((g) => g.goalId === datedGoal.id);
+    check("the undated goal now has a card in the draft", Boolean(undatedCard));
+    eq("its recommendation is the full remaining balance, with no date and no period count", `${undatedCard?.recommendedAmount}:${undatedCard?.targetDate}:${undatedCard?.periodsLeft}`, "1000:null:null");
+    eq("the live roadmap figure agrees", await getGoalRoadmapAmount(undatedGoal.id, withUndated.periodRef, paydayContext), 1000);
+    eq("the dated goal, funded first, is exactly as it was before the undated goal existed", JSON.stringify(datedAfter), JSON.stringify(datedBefore));
+    eq("it still carries its date and period count", `${datedAfter?.targetDate?.getTime() === civilDate(2026, 10, 15).getTime()}:${datedAfter?.periodsLeft}`, `true:${datedBefore?.periodsLeft}`);
+    eq("the undated goal is listed after the dated one, so it draws on what that one leaves", withUndated.goals.map((g) => g.goalId).indexOf(undatedGoal.id) > withUndated.goals.map((g) => g.goalId).indexOf(datedGoal.id), true);
+
+    // Confirm with enough income for both goals to draw on checking.
+    const undatedPayload = {
+      year: withUndated.periodRef.year,
+      month: withUndated.periodRef.month,
+      period: withUndated.periodRef.period,
+      accounts: withUndated.accounts.map((a) => ({
+        accountId: a.accountId,
+        reportedBalance: a.expectedLedgerBalance,
+        incomeEntered: a.accountId === paydayChecking.id ? 5000 : 0,
+        incomeNote: null,
+      })),
+      goals: withUndated.goals.map((g) => ({
+        goalId: g.goalId,
+        funding: [{ accountId: paydayChecking.id, plannedAmount: g.goalId === undatedGoal.id ? 700 : g.recommendedAmount }],
+      })),
+      essentialCategories: [],
+      flexibleCategories: [],
+      includedCarryover: 0,
+      acknowledgedDeficit: true,
+      acknowledgedZeroBuffer: true,
+    };
+    const undatedConfirm = await confirmPaydayCheckin(undatedPayload, paydayContext);
+    check("a plan funding the undated goal confirms", undatedConfirm.ok === true);
+    const undatedRows = await prisma.paydayPlanAllocation.findMany({ where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: undatedGoal.id } });
+    eq("the confirm stores the undated goal's GOAL row with the planned draw, recommended against the whole remaining balance", undatedRows.map((r) => `${r.accountId === paydayChecking.id}:${num(r.plannedAmount)}:${num(r.recommendedAmount) > 0 && num(r.recommendedAmount) <= 1000}`).join(","), "true:700:true");
+    eq("the dated goal's GOAL row is stored beside it", await prisma.paydayPlanAllocation.count({ where: { paydayCheckinId: checkinRow!.id, type: "GOAL", goalId: datedGoal.id } }), 1);
+    const reopened = (await getPaydayCheckinDraft(paydayContext)).goals.find((g) => g.goalId === undatedGoal.id);
+    eq("reopening the plan holds the undated goal's draw", JSON.stringify(reopened?.funding), JSON.stringify([{ accountId: paydayChecking.id, plannedAmount: 700, held: true }]));
+
+    // Half of it paid back: the recommendation follows the reduced balance.
+    const partial = await logForUndated({ goalId: undatedGoal.id, accountId: paydayChecking.id, amount: 400, date: civilDate(2026, 8, 15), note: null }, rates);
+    await rebuildForUndated(undatedGoal.id);
+    const afterPartial = (await getPaydayCheckinDraft(paydayContext)).goals.find((g) => g.goalId === undatedGoal.id);
+    eq("after a partial contribution the recommendation is the reduced remaining balance", afterPartial?.recommendedAmount, 600);
+    eq("and the live roadmap figure with it", await getGoalRoadmapAmount(undatedGoal.id, withUndated.periodRef, paydayContext), 600);
+    eq("the dated goal's recommendation did not move", (await getPaydayCheckinDraft(paydayContext)).goals.find((g) => g.goalId === datedGoal.id)?.recommendedAmount, datedBefore?.recommendedAmount);
+    await prisma.goal.update({ where: { id: undatedGoal.id }, data: { savedAmount: 1000, achievedAt: civilDate(2026, 8, 15) } });
+    eq("an achieved undated goal drops out of the draft like any achieved goal", (await getPaydayCheckinDraft(paydayContext)).goals.some((g) => g.goalId === undatedGoal.id), false);
+    eq("and has no roadmap figure", await getGoalRoadmapAmount(undatedGoal.id, withUndated.periodRef, paydayContext), null);
+    await prisma.transaction.deleteMany({ where: { id: partial.transactionId } });
+    await prisma.goal.delete({ where: { id: undatedGoal.id } });
   }
 
   await prisma.paydayCheckin.deleteMany({ where: { id: checkinRow!.id } });
@@ -3647,6 +3706,14 @@ async function main() {
     eq("B periods walk back through B periods only", affordData.comparableHistory({ year: 2026, month: 10, period: "B" }, affordToday).map((p) => p.key).join(","), "2026-08-B,2026-07-B,2026-06-B,2026-05-B,2026-04-B,2026-03-B");
     eq("a period ending today has not ended", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, civilDate(2026, 9, 15))[0].key, "2026-08-A");
     eq("a period that ended yesterday counts", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, civilDate(2026, 9, 16))[0].key, "2026-09-A");
+    // A period whose check-in is already confirmed is complete for this
+    // purpose even before its calendar end: its income is known.
+    const confirmedSepA = new Set(["2026-09-A"]);
+    eq("a comparable period with a confirmed check-in counts before its dates have passed", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, confirmedSepA).map((p) => p.key).join(","), "2026-09-A,2026-08-A,2026-07-A,2026-06-A,2026-05-A,2026-04-A");
+    eq("a far-off period walks past the unconfirmed future down to the confirmed one", affordData.comparableHistory({ year: 2027, month: 3, period: "A" }, affordToday, confirmedSepA)[0].key, "2026-09-A");
+    eq("a confirmed period of the other half changes nothing for this half", affordData.comparableHistory({ year: 2026, month: 10, period: "B" }, affordToday, confirmedSepA)[0].key, "2026-08-B");
+    eq("a confirmed period later than the target is not history for it", affordData.comparableHistory({ year: 2026, month: 9, period: "A" }, affordToday, confirmedSepA)[0].key, "2026-08-A");
+    eq("an unconfirmed future period is still excluded", affordData.comparableHistory({ year: 2026, month: 11, period: "A" }, affordToday, new Set(["2026-09-B"]))[0].key, "2026-08-A");
     eq("averages run from the oldest period with activity, like category suggestions", JSON.stringify(affordData.averageSinceFirstActivity([100, 100, 0, 0, 0, 0])), JSON.stringify({ amount: 100, periods: 2 }));
     eq("zeros inside the active stretch still dilute", affordData.averageSinceFirstActivity([100, 0, 100, 0, 0, 0]).amount, 66.67);
     eq("no activity at all projects zero over zero periods", JSON.stringify(affordData.averageSinceFirstActivity([0, 0, 0])), JSON.stringify({ amount: 0, periods: 0 }));
@@ -3992,6 +4059,55 @@ async function main() {
       await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
     }
 
+    console.log("\n-- a confirmed check-in is history the moment it is confirmed --");
+    {
+      // The investigation scenario: on Sep 7 the user confirms Sep 1-15 with
+      // real income on a fresh account, then evaluates a purchase landing in
+      // Oct 1-15. Sep 1-15 has not ended, but its income is confirmed, so the
+      // projection must read it - over one period, not diluted by older ones.
+      const freshAccount = await prisma.account.create({ data: { name: "Verify Afford Fresh", currency: "USD", type: "CHECKING" } });
+      const accountsWithFresh = [...activeForAfford, freshAccount];
+      const currentRef = affordContext.currentPeriod;
+      const beforeConfirm = await affordData.projectPeriods(octoberRefs, freshAccount, accountsWithFresh, affordContext);
+      eq("with no check-in and no history the fresh account projects nothing", `${beforeConfirm.get("2026-10-A")!.account.income}:${beforeConfirm.get("2026-10-A")!.account.basis}`, "0:none");
+      const freshConfirm = await confirmCheckinForAfford(
+        {
+          year: currentRef.year,
+          month: currentRef.month,
+          period: currentRef.period,
+          accounts: accountsWithFresh.map((a) => ({ accountId: a.id, reportedBalance: 0, incomeEntered: a.id === freshAccount.id ? 30000 : 0, incomeNote: null })),
+          goals: [],
+          essentialCategories: [],
+          flexibleCategories: [],
+          includedCarryover: 0,
+          acknowledgedDeficit: true,
+          acknowledgedZeroBuffer: true,
+        },
+        affordContext,
+      );
+      check("the current period's check-in confirms with income on the fresh account", freshConfirm.ok === true);
+      const freshCheckin = await prisma.paydayCheckin.findFirstOrThrow({ where: { year: currentRef.year, month: currentRef.month, period: currentRef.period } });
+      eq("today is still inside the period just confirmed", `${currentRef.key}:${affordContext.today.getTime() <= currentRef.end.getTime()}`, "2026-09-A:true");
+      const afterConfirm = await affordData.projectPeriods(octoberRefs, freshAccount, accountsWithFresh, affordContext);
+      eq("Oct 1-15 now projects the confirmed Sep 1-15 income, averaged over that one period", `${afterConfirm.get("2026-10-A")!.account.income}:${afterConfirm.get("2026-10-A")!.account.basis}`, "30000:average");
+      // The confirmed check-in recorded nothing for the older account, and that
+      // zero is real: it heads the window and dilutes the average like any
+      // other period the account lived through (five of 10,000 plus it).
+      eq("the account with older history averages the confirmed period in with it, zero and all", (await affordData.projectPeriods(octoberRefs, chosenForAfford, accountsWithFresh, affordContext)).get("2026-10-A")!.account.income, round2((10000 * 5) / 6));
+      eq("Oct 16-31, whose history has no confirmed check-in, still has not enough history", `${afterConfirm.get("2026-10-B")!.account.income}:${afterConfirm.get("2026-10-B")!.account.basis}`, "0:none");
+      const freshPurchase = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Fresh Purchase", accountId: freshAccount.id, firstDate: civilDate(2026, 10, 5), totalAmount: 100, installments: 1 }), affordContext);
+      if (!freshPurchase.ok) throw new Error("fresh purchase evaluation refused");
+      eq("the purchase evaluation reads the same projection", `${freshPurchase.verdict.periods[0].key}:${freshPurchase.verdict.periods[0].account.income}:${freshPurchase.verdict.periods[0].account.basis}`, "2026-10-A:30000:average");
+      await prisma.paydayCheckin.update({ where: { id: freshCheckin.id }, data: { status: "DRAFT" } });
+      const draftAgain = await affordData.projectPeriods(octoberRefs, freshAccount, accountsWithFresh, affordContext);
+      eq("a draft check-in does not make the period history", `${draftAgain.get("2026-10-A")!.account.income}:${draftAgain.get("2026-10-A")!.account.basis}`, "0:none");
+      await prisma.transaction.deleteMany({ where: { accountId: freshAccount.id } });
+      await prisma.transaction.deleteMany({ where: { source: "PAYDAY_CHECKIN", accountId: { in: activeForAfford.map((a) => a.id) }, date: periodRange(periodInfo(currentRef)) } });
+      await prisma.budget.deleteMany({ where: { year: currentRef.year, month: currentRef.month, period: currentRef.period } });
+      await prisma.paydayCheckin.delete({ where: { id: freshCheckin.id } });
+      await prisma.account.delete({ where: { id: freshAccount.id } });
+    }
+
     console.log("\n-- countdown and auto-deactivation --");
     // Dated in the past so posting at Aug 20 - the same reference day the
     // posting section uses, so nothing real is due - walks them down.
@@ -4309,6 +4425,43 @@ async function main() {
       await prisma.transaction.deleteMany({ where: { id: { in: [doomedManual.transactionId, doomedAutoTx.id] } } });
     }
 
+    // The Transactions table needs to know up front which RECURRING rows carry
+    // a contribution: transactionEditBlock cannot tell (a subscription's row
+    // has the same shape of key), so listTransactions looks the pairing up
+    // once per page and each row carries the answer.
+    {
+      const { listTransactions: listForTable } = await import("../src/lib/data/transactions");
+      const { postDueRecurringItems: postForTable } = await import("../src/lib/recurring-posting");
+      const tableGoal = await prisma.goal.create({ data: { name: "Verify Contribution Table Goal", targetAmount: 1000, currency: "USD" } });
+      const tableContribution = await prisma.recurringItem.create({
+        data: { name: "Verify Contribution Table Item", amount: 25, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 8, 21), anchorDay: 21, accountId: contribAccount.id, goalId: tableGoal.id },
+      });
+      const tableSubscription = await prisma.recurringItem.create({
+        data: { name: "Verify Contribution Table Sub", amount: 9, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 8, 21), anchorDay: 21, accountId: contribAccount.id },
+      });
+      await postForTable(civilDate(2026, 8, 21));
+      const rowsFor = async (itemId: string) =>
+        (await listForTable({ accountId: contribAccount.id }, contribContext)).rows.filter((row) => row.source === "RECURRING" && row.externalId?.startsWith(`${itemId}:`));
+      const [contributionRow] = await rowsFor(tableContribution.id);
+      const [subscriptionRow] = await rowsFor(tableSubscription.id);
+      check("both items posted one row each", Boolean(contributionRow && subscriptionRow));
+      eq("posting wrote the contribution beside the row", await prisma.goalContribution.count({ where: { recurringExternalId: contributionRow.externalId ?? "" } }), 1);
+      eq("the pure classifier still cannot tell the two rows apart", `${transactionEditBlock(contributionRow)}:${transactionEditBlock(subscriptionRow)}`, "null:null");
+      eq("the table row for an auto-posted contribution is flagged as carrying one", contributionRow.hasLinkedGoalContribution, true);
+      eq("a subscription's row is not, so it stays editable", subscriptionRow.hasLinkedGoalContribution, false);
+      const manualForTable = await goalsLib.logManualContribution({ goalId: tableGoal.id, accountId: contribAccount.id, amount: 3, date: civilDate(2026, 8, 21), note: null }, rates);
+      const manualRow = (await listForTable({ accountId: contribAccount.id }, contribContext)).rows.find((row) => row.id === manualForTable.transactionId);
+      eq("a manual contribution's row is recognised by the classifier alone, not by the flag", `${manualRow && transactionEditBlock(manualRow)}:${manualRow?.hasLinkedGoalContribution}`, "goal_contribution:false");
+      // Deleting the goal cascades its contributions: the RECURRING row keeps
+      // its key, but nothing pairs with it any more, so it unlocks.
+      eq("deleting the goal reports success", await goalsLib.deleteGoalDetachingLedger(tableGoal.id), true);
+      const [detachedRow] = await rowsFor(tableContribution.id);
+      eq("after the goal is deleted the same row is no longer flagged", `${detachedRow.externalId === contributionRow.externalId}:${detachedRow.hasLinkedGoalContribution}`, "true:false");
+      await prisma.transaction.deleteMany({ where: { accountId: contribAccount.id, source: "RECURRING" } });
+      await prisma.transaction.deleteMany({ where: { id: manualForTable.transactionId } });
+      await prisma.recurringItem.deleteMany({ where: { id: { in: [tableContribution.id, tableSubscription.id] } } });
+    }
+
     await prisma.transaction.deleteMany({ where: { accountId: contribAccount.id } });
     await prisma.goal.deleteMany({ where: { id: { in: [contribGoal.id, usdGoal.id] } } });
     await prisma.account.delete({ where: { id: contribAccount.id } });
@@ -4367,6 +4520,15 @@ async function main() {
       data: { name: "Verify Category Item", amount: 5, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 11, 1), anchorDay: 1, categoryId: petsId, accountId: catAccount.id },
     });
     const catBudget = await prisma.budget.create({ data: { year: 2026, month: 10, period: "A", categoryId: petsId, amount: 100, currency: "USD" } });
+    // Pending email-parsed candidates only suggest a category; they follow the
+    // reassignment like real rows do, but never block a plain delete.
+    const stagedPets = await prisma.stagedTransaction.create({
+      data: { date: civilDate(2026, 10, 4), amount: 12, currency: "USD", rawDescription: "Verify Staged Pets", source: "GMAIL", externalId: "verify-staged-pets", suggestedCategoryId: petsId },
+    });
+    const stagedTarget = await prisma.stagedTransaction.create({
+      data: { date: civilDate(2026, 10, 5), amount: 13, currency: "USD", rawDescription: "Verify Staged Target", source: "GMAIL", externalId: "verify-staged-target", suggestedCategoryId: target.id },
+    });
+    const stagedSuggestion = async (id: string) => (await prisma.stagedTransaction.findUniqueOrThrow({ where: { id } })).suggestedCategoryId;
 
     const rekindInUse = await categoriesLib.updateCategory({ id: petsId, name: "Verify Pets Renamed", kind: "INCOME", color: "#abcdef" });
     eq("the kind is locked once transactions are filed under it, reporting how many", rekindInUse.ok ? "saved" : `${rekindInUse.reason}:${rekindInUse.reason === "kind_in_use" ? rekindInUse.transactions : ""}`, "kind_in_use:2");
@@ -4404,13 +4566,21 @@ async function main() {
     eq("the removed category's budget is gone rather than moved", await prisma.budget.count({ where: { id: catBudget.id } }), 0);
     eq("and the category itself is gone", await prisma.category.count({ where: { id: petsId } }), 0);
     eq("the target keeps its own name and kind", (await prisma.category.findUniqueOrThrow({ where: { id: target.id } })).name, "Verify Target");
+    eq("a pending staged suggestion of the removed category now suggests the target, not nothing", await stagedSuggestion(stagedPets.id), target.id);
+    eq("a staged suggestion of some other category is untouched", await stagedSuggestion(stagedTarget.id), target.id);
 
     const targetInUse = await categoriesLib.deleteCategoryIfUnused(target.id);
     eq("the target is now in use and refuses a plain delete", targetInUse.ok ? "deleted" : targetInUse.reason, "in_use");
     await prisma.transaction.deleteMany({ where: { accountId: catAccount.id } });
     await prisma.recurringItem.delete({ where: { id: catItem.id } });
+    const unusedCategory = await categoriesLib.createCategory({ name: "Verify Unused", kind: "EXPENSE", color: "#0f0f0f" });
+    if (!unusedCategory.ok) throw new Error("createCategory refused the unused fixture");
+    eq("a plain delete of an unused category succeeds", (await categoriesLib.deleteCategoryIfUnused(unusedCategory.id)).ok, true);
+    eq("and leaves unrelated staged suggestions alone", `${await stagedSuggestion(stagedPets.id) === target.id}:${await stagedSuggestion(stagedTarget.id) === target.id}`, "true:true");
     const targetUnused = await categoriesLib.deleteCategoryIfUnused(target.id);
     eq("a category nothing is filed under deletes outright", targetUnused.ok, true);
+    eq("staged rows never block a plain delete; their suggestion is simply cleared", `${await stagedSuggestion(stagedPets.id)}:${await stagedSuggestion(stagedTarget.id)}`, "null:null");
+    await prisma.stagedTransaction.deleteMany({ where: { id: { in: [stagedPets.id, stagedTarget.id] } } });
     eq("deleting a category that is already gone reports not_found", (await categoriesLib.deleteCategoryIfUnused(target.id) as { ok: boolean; reason?: string }).reason, "not_found");
     await prisma.account.delete({ where: { id: catAccount.id } });
   }

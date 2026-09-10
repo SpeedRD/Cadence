@@ -1,6 +1,7 @@
 import { convert } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { recurringContributionKeyFromTransaction } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
 import type { Prisma } from "@/generated/prisma/client";
@@ -28,6 +29,14 @@ export interface TransactionRow {
   source: string;
   /** Read by transactionEditBlock to recognise the expense a goal contribution wrote. */
   externalId: string | null;
+  /**
+   * True for a RECURRING row that a GoalContribution was posted beside (see
+   * recurringExternalId on GoalContribution). transactionEditBlock cannot
+   * tell such a row from a subscription's - both carry "<itemId>:<date>" -
+   * so listTransactions looks the pairing up once per page and the table
+   * locks the row up front, as the actions would refuse it after the fact.
+   */
+  hasLinkedGoalContribution: boolean;
   note: string | null;
   transferId: string | null;
   transferDirection: string | null;
@@ -101,7 +110,22 @@ export async function listTransactions(
       })
     : [];
 
+  const contributionKeys = transactions
+    .map((transaction) => recurringContributionKeyFromTransaction(transaction))
+    .filter((key): key is string => key !== null);
+  const pairedKeys = new Set(
+    contributionKeys.length
+      ? (
+          await prisma.goalContribution.findMany({
+            where: { recurringExternalId: { in: contributionKeys } },
+            select: { recurringExternalId: true },
+          })
+        ).map((contribution) => contribution.recurringExternalId)
+      : [],
+  );
+
   const rows: TransactionRow[] = transactions.map((transaction) => {
+    const contributionKey = recurringContributionKeyFromTransaction(transaction);
     const counterpart = counterparts.find(
       (row) =>
         row.transferId === transaction.transferId && row.id !== transaction.id,
@@ -122,6 +146,7 @@ export async function listTransactions(
       type: transaction.type,
       source: transaction.source,
       externalId: transaction.externalId,
+      hasLinkedGoalContribution: contributionKey !== null && pairedKeys.has(contributionKey),
       note: transaction.note,
       transferId: transaction.transferId,
       transferDirection: transaction.transferDirection,

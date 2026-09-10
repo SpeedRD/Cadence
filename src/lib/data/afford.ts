@@ -75,15 +75,25 @@ interface ActiveAccount {
  * The comparable periods a projection for `ref` averages over: HISTORY_PERIODS
  * same-half periods, newest first, stepping one full cycle back each time the
  * way getCategorySuggestions does. The walk starts from the most recent
- * comparable period that has already ended. The check-in only ever plans one
- * period ahead, so its first comparable period is always complete; an
+ * comparable period that is complete: one whose dates have all passed, or one
+ * whose check-in is already confirmed (`confirmed` holds those periods' keys)
+ * - its income is then known in full, even on the payday it was entered. An
  * installment can land a year out, and the same-half periods between now and
- * then have no history to give and would only dilute the average with zeros.
+ * then that are neither over nor confirmed have no history to give and would
+ * only dilute the average with zeros, so they are walked past.
  */
-export function comparableHistory(ref: PeriodRef, today: Date): PeriodInfo[] {
+export function comparableHistory(
+  ref: PeriodRef,
+  today: Date,
+  confirmed: ReadonlySet<string> = new Set(),
+): PeriodInfo[] {
   let cursor = periodInfo(previousComparablePeriod(ref));
   // Bounded for an absurdly distant first payment (~40 years).
-  for (let i = 0; i < 1000 && cursor.end.getTime() >= today.getTime(); i += 1) {
+  for (
+    let i = 0;
+    i < 1000 && cursor.end.getTime() >= today.getTime() && !confirmed.has(cursor.key);
+    i += 1
+  ) {
     cursor = periodInfo(previousComparablePeriod(cursor));
   }
   const periods: PeriodInfo[] = [];
@@ -109,6 +119,26 @@ export function averageSinceFirstActivity(values: number[]): { amount: number; p
   const periods = oldest + 1;
   const total = values.reduce((sum, value) => sum + value, 0);
   return { amount: round2(total / periods), periods };
+}
+
+/**
+ * The keys of the confirmed check-ins whose periods have not ended yet - the
+ * only ones comparableHistory's has-ended rule would otherwise skip. Every
+ * period still running or ahead lies in today's month or later, so that is
+ * all the query reads; a confirmed period already behind us passes the date
+ * rule on its own.
+ */
+async function loadConfirmedOpenPeriodKeys(today: Date): Promise<Set<string>> {
+  const year = today.getUTCFullYear();
+  const month = today.getUTCMonth() + 1;
+  const checkins = await prisma.paydayCheckin.findMany({
+    where: {
+      status: "CONFIRMED",
+      OR: [{ year: { gt: year } }, { year, month: { gte: month } }],
+    },
+    select: { year: true, month: true, period: true },
+  });
+  return new Set(checkins.map((checkin) => periodInfo(checkin).key));
 }
 
 /** One historical period's income per account, in the account's own currency. */
@@ -265,7 +295,9 @@ async function loadScheduledCommitments(
  * Income is averaged from history; periods that resolve to the same history
  * window (every future A period does, as does every future B period) share
  * one set of queries, and each account's average runs from its own first
- * activity. Commitments are enumerated from the recurring items' schedules in
+ * activity. A period confirmed today counts as history from this moment (see
+ * comparableHistory), so a purchase evaluated right after a check-in reads
+ * the income that check-in just recorded. Commitments are enumerated from the recurring items' schedules in
  * one pass over the whole horizon.
  */
 export async function projectPeriods(
@@ -274,10 +306,11 @@ export async function projectPeriods(
   accounts: ActiveAccount[],
   context: AffordContext,
 ): Promise<Map<string, PeriodProjection>> {
+  const confirmedOpen = await loadConfirmedOpenPeriodKeys(context.today);
   const histories = new Map<string, PeriodInfo[]>();
   const historyKeyFor = new Map<string, string>();
   for (const ref of refs) {
-    const history = comparableHistory(ref, context.today);
+    const history = comparableHistory(ref, context.today, confirmedOpen);
     const key = history[0].key;
     historyKeyFor.set(periodInfo(ref).key, key);
     if (!histories.has(key)) histories.set(key, history);
