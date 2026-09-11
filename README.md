@@ -93,8 +93,14 @@ Set an overall budget per period, or let it fall back to the sum of category
 budgets. The budget is net of commitments: safe-to-spend is the period budget minus
 flexible spending so far, divided by the days remaining. Charges posted by recurring
 items and spending in the subscription and savings categories don't eat into it —
-the payday check-in already set that money aside. "Plan this period" opens the
-check-in from here; "Copy last period" carries a previous budget forward.
+the payday check-in already set that money aside. The period switcher steps
+through any past or future period; its plan button reads "Plan this period" for
+the one due next, "Review this period's plan" once it's confirmed, and "Check in
+for this period" for any other period that was never checked in, so a period
+missed months ago can still be planned retroactively. "Copy last period" carries
+a previous budget forward.
+
+![Budgets page on a past period that was never checked in, showing its "Check in for this period" button](screenshots/budgets-plan-period.png)
 
 ### Transactions
 
@@ -169,6 +175,8 @@ and suggests two smaller subscriptions on different accounts, since a subscripti
 always charged to a single account. It never blocks saving, and a contribution is never
 checked here — its funding is planned per account in the payday check-in's Step 3.
 
+![Large-subscription room check in the Recurring form: each account's headroom before and after the charge, with the one that keeps its buffer recommended](screenshots/recurring-large-subscription.png)
+
 ### Afford
 
 ![Afford calculator with a purchase filled in: name, total price, four monthly installments, first payment date, and the account each installment is charged to, plus the equal-installment schedule](screenshots/afford-calculator.png)
@@ -225,6 +233,10 @@ included by default; category management; changing the PIN; which categories cou
 as essential fixed spending; goal-total recalculation; categorizing older imports;
 Gmail/Outlook connections; and locking the app.
 
+![PIN change form in Settings: current PIN, new PIN, and confirmation](screenshots/settings-pin-change.png)
+
+![Category manager: every category with its kind and how many transactions, recurring items, and budgets are filed under it](screenshots/settings-categories.png)
+
 Categories (Settings → Manage categories) can be added, renamed, and recolored at
 any time. A category's kind (expense or income) can only change while nothing is
 filed under it. Removing a category that transactions, recurring items, or budgets
@@ -234,6 +246,8 @@ in one database transaction. The two categories whole calculations hang off
 (Subscriptions, which safe-to-spend treats as already set aside, and
 Savings/Investment, where the monthly pace and manual goal contributions file
 saving) can be renamed but never removed.
+
+![Category reassignment dialog mid-flow: a category's transactions and recurring item about to move to another category, its period budget about to be cleared](screenshots/settings-categories-reassign.png)
 
 ### Multi-currency, localization, and the PIN gate
 
