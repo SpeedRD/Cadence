@@ -4238,6 +4238,103 @@ async function main() {
       eq("a paid-off plan is never posted, even though its due date has passed", `${await postedByAfford(payoff.id)}:${payoffAfterRun.remainingOccurrences}:${payoffAfterRun.active}`, "0:0:false");
     }
 
+    console.log("\n-- large-subscription room check (Recurring form) --");
+    {
+      const roomLib = await import("../src/lib/subscription-room");
+      const roomData = await import("../src/lib/data/subscription-room");
+      eq("the threshold is DOP 10,000", `${roomLib.LARGE_SUBSCRIPTION_THRESHOLD.amount}:${roomLib.LARGE_SUBSCRIPTION_THRESHOLD.currency}`, "10000:DOP");
+      eq("DOP 9,999 is not large; DOP 10,000 is", `${roomLib.isLargeSubscription(9999, "DOP", rates)}:${roomLib.isLargeSubscription(10000, "DOP", rates)}`, "false:true");
+      eq("another currency is converted first: USD 166 is under, USD 166.67 is over", `${roomLib.isLargeSubscription(166, "USD", rates)}:${roomLib.isLargeSubscription(166.67, "USD", rates)}`, "false:true");
+      eq("EUR converts through USD", roomLib.isLargeSubscription(100, "EUR", rates), true);
+
+      // Two fresh accounts with clean history for Oct 1-15: Big receives 3,000
+      // USD a period, Small 90,000 DOP (1,500 USD). Neither has any recurring
+      // item, so their Oct 1-15 headroom is income less the 10% buffer:
+      // 2,700 USD and 81,000 DOP. The older Afford account is deep in
+      // commitments for Oct 1-15 (the biweekly TV plan alone owes 10,000), so
+      // it can never be the recommendation here.
+      const bigAccount = await prisma.account.create({ data: { name: "Verify Afford Room Big", currency: "USD", type: "CHECKING" } });
+      const smallAccount = await prisma.account.create({ data: { name: "Verify Afford Room Small", currency: "DOP", type: "CHECKING" } });
+      for (let month = 3; month <= 8; month += 1) {
+        await prisma.transaction.create({ data: { date: civilDate(2026, month, 5), amount: 3000, currency: "USD", type: "INCOME", accountId: bigAccount.id, source: "MANUAL", note: "Verify Afford Room pay" } });
+        await prisma.transaction.create({ data: { date: civilDate(2026, month, 5), amount: 90000, currency: "DOP", type: "INCOME", accountId: smallAccount.id, source: "MANUAL", note: "Verify Afford Room pay" } });
+      }
+      const roomInput = (over: Partial<Parameters<typeof roomData.checkSubscriptionRoom>[0]> = {}) => ({
+        amount: 1400,
+        currency: "USD",
+        frequency: "MONTHLY" as const,
+        nextDate: civilDate(2026, 10, 5),
+        ...over,
+      });
+      const rowOf = (room: Awaited<ReturnType<typeof roomData.checkSubscriptionRoom>>, id: string) =>
+        room.large ? room.accounts.find((a) => a.accountId === id) : undefined;
+
+      const under = await roomData.checkSubscriptionRoom(roomInput({ amount: 166 }), affordContext);
+      eq("a subscription under the threshold is not checked at all", under.large, false);
+
+      const split = await roomData.checkSubscriptionRoom(roomInput(), affordContext);
+      if (!split.large) throw new Error("large subscription was not checked");
+      eq("the period is the one Next due lands in", split.period.key, "2026-10-A");
+      eq("a monthly item lands once in it, for the entered amount", `${split.occurrences}:${split.charge}:${split.currency}`, "1:1400:USD");
+      eq("every active account is listed, most room first", `${split.accounts.length >= 3}:${split.accounts.every((a, i) => i === 0 || split.accounts[i - 1].headroomAfterDisplay >= a.headroomAfterDisplay)}`, "true:true");
+      const bigRow = rowOf(split, bigAccount.id)!;
+      const smallRow = rowOf(split, smallAccount.id)!;
+      eq("Big: Afford's own projection - 3,000 income, nothing committed, 300 buffer, 2,700 room", `${bigRow.income}:${bigRow.committed}:${bigRow.buffer}:${bigRow.headroomBefore}:${bigRow.basis}`, "3000:0:300:2700:average");
+      eq("Big keeps 1,300 above its buffer after the charge", `${bigRow.installment}:${bigRow.headroomAfter}:${bigRow.passes}:${bigRow.shortfall}`, "1400:1300:true:0");
+      eq("Small is judged in its own currency: 84,000 DOP charge against 81,000 DOP of room", `${smallRow.headroomBefore}:${smallRow.installment}:${smallRow.headroomAfter}:${smallRow.passes}:${smallRow.shortfall}`, "81000:84000:-3000:false:3000");
+      eq("ranking converts to the display currency (-50 USD for Small)", `${bigRow.headroomAfterDisplay}:${smallRow.headroomAfterDisplay}`, "1300:-50");
+      eq("Big is recommended: the account with the most room among those that keep their buffer", split.recommendedAccountId === bigAccount.id, true);
+      eq("the older account, already over-committed for Oct 1-15, is listed but short", rowOf(split, affordAccount.id)?.passes, false);
+      eq("history depth is Afford's", split.historyPeriods, (await import("../src/lib/data/payday")).HISTORY_PERIODS);
+
+      const bothFit = await roomData.checkSubscriptionRoom(roomInput({ amount: 200 }), affordContext);
+      if (!bothFit.large) throw new Error("200 USD subscription was not checked");
+      eq("at 200 USD both fresh accounts fit and Big, with more room, is still the pick", `${rowOf(bothFit, bigAccount.id)?.passes}:${rowOf(bothFit, smallAccount.id)?.passes}:${bothFit.recommendedAccountId === bigAccount.id}`, "true:true:true");
+      const smallWins = await roomData.checkSubscriptionRoom(roomInput({ amount: 60000, currency: "DOP" }), affordContext);
+      if (!smallWins.large) throw new Error("DOP subscription was not checked");
+      eq("a DOP 60,000 charge: Big keeps 1,700 USD, Small keeps 21,000 DOP (350 USD) - Big still has the most room", `${rowOf(smallWins, bigAccount.id)?.headroomAfter}:${rowOf(smallWins, smallAccount.id)?.headroomAfter}:${smallWins.recommendedAccountId === bigAccount.id}`, "1700:21000:true");
+
+      const none = await roomData.checkSubscriptionRoom(roomInput({ amount: 5000 }), affordContext);
+      if (!none.large) throw new Error("5,000 USD subscription was not checked");
+      eq("when no account keeps its buffer there is no recommendation", `${none.recommendedAccountId}:${none.accounts.some((a) => a.passes)}`, "null:false");
+      eq("each account reports its own shortfall", `${rowOf(none, bigAccount.id)?.shortfall}:${rowOf(none, smallAccount.id)?.shortfall}`, "2300:219000");
+
+      const weekly = await roomData.checkSubscriptionRoom(roomInput({ amount: 200, frequency: "WEEKLY" }), affordContext);
+      if (!weekly.large) throw new Error("weekly subscription was not checked");
+      eq("a weekly item due Oct 5 lands twice in Oct 1-15 (5th and 12th) and both charges are checked together", `${weekly.occurrences}:${weekly.charge}:${rowOf(weekly, bigAccount.id)?.installment}:${rowOf(weekly, bigAccount.id)?.headroomAfter}`, "2:400:400:2300");
+      const overdue = await roomData.checkSubscriptionRoom(roomInput({ nextDate: civilDate(2026, 9, 1) }), affordContext);
+      if (!overdue.large) throw new Error("overdue subscription was not checked");
+      eq("a Next due already in the past is owed now, so the current period is checked", overdue.period.key, affordContext.currentPeriod.key);
+
+      // Editing: the item's own schedule is already among the period's
+      // commitments, so judging its edited amount must take it back out.
+      const existing = await prisma.recurringItem.create({
+        data: { name: "Verify Afford Room Existing", amount: 1400, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 5), anchorDay: 5, accountId: bigAccount.id },
+      });
+      const asNew = await roomData.checkSubscriptionRoom(roomInput(), affordContext);
+      eq("a second 1,400 item on top of the existing one would leave Big 100 short", `${rowOf(asNew, bigAccount.id)?.headroomAfter}:${rowOf(asNew, bigAccount.id)?.passes}`, "-100:false");
+      const asEdit = await roomData.checkSubscriptionRoom(roomInput({ excludeItemId: existing.id }), affordContext);
+      eq("editing that item judges it as if it were not there yet: 1,300 of room again", `${rowOf(asEdit, bigAccount.id)?.committed}:${rowOf(asEdit, bigAccount.id)?.headroomAfter}:${asEdit.large && asEdit.recommendedAccountId === bigAccount.id}`, "0:1300:true");
+      const asEditRaised = await roomData.checkSubscriptionRoom(roomInput({ amount: 2800, excludeItemId: existing.id }), affordContext);
+      eq("raising it to 2,800 while editing is short by 100, not by 1,500", rowOf(asEditRaised, bigAccount.id)?.shortfall, 100);
+      eq("the other accounts are untouched by the exclusion", rowOf(asEdit, smallAccount.id)?.headroomAfter, -3000);
+      await prisma.recurringItem.update({ where: { id: existing.id }, data: { active: false } });
+      const pausedEdit = await roomData.checkSubscriptionRoom(roomInput({ excludeItemId: existing.id }), affordContext);
+      eq("a paused item was never committed, so nothing is taken out for it", `${rowOf(pausedEdit, bigAccount.id)?.committed}:${rowOf(pausedEdit, bigAccount.id)?.headroomAfter}`, "0:1300");
+      eq("an unknown item id is simply not excluded", rowOf(await roomData.checkSubscriptionRoom(roomInput({ excludeItemId: "missing" }), affordContext), bigAccount.id)?.headroomAfter, 1300);
+
+      const { subscriptionRoomSchema: roomSchema } = await import("../src/lib/validation");
+      const roomForm = { kind: "SUBSCRIPTION", amount: "12,000", currency: "DOP", frequency: "MONTHLY", nextDate: "2026-10-05" };
+      const parsedRoom = roomSchema.safeParse(roomForm);
+      eq("the form payload parses with the save's own amount and date rules", parsedRoom.success ? `${parsedRoom.data.amount}:${toISODate(parsedRoom.data.nextDate)}:${parsedRoom.data.excludeItemId}` : "refused", "12000:2026-10-05:undefined");
+      eq("an amount that is not a number is refused rather than projected", `${roomSchema.safeParse({ ...roomForm, amount: "12k" }).success}:${roomSchema.safeParse({ ...roomForm, amount: "" }).success}`, "false:false");
+      eq("a contribution parses (the action then declines to check it)", roomSchema.safeParse({ ...roomForm, kind: "CONTRIBUTION" }).success, true);
+
+      await prisma.recurringItem.delete({ where: { id: existing.id } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: [bigAccount.id, smallAccount.id] } } });
+      await prisma.account.deleteMany({ where: { id: { in: [bigAccount.id, smallAccount.id] } } });
+    }
+
     await prisma.transaction.deleteMany({ where: { accountId: { in: [affordAccount.id, emptyAccount.id] } } });
     await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
     await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });

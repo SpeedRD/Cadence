@@ -506,6 +506,20 @@ const INSTALLMENT_COUNT_MESSAGE = `Use between 1 and ${MAX_INSTALLMENTS} install
  * number by construction. `acknowledged` only matters to the confirm action,
  * which refuses a non-viable plan without it.
  */
+/**
+ * What the Recurring form sends for the large-subscription room check - the
+ * same field parsers as recurringSchema (positiveAmount, isoDate), so an
+ * amount the save would refuse is refused here too rather than projected.
+ */
+export const subscriptionRoomSchema = z.object({
+  kind: z.enum(RECURRING_KINDS),
+  amount: positiveAmount,
+  currency,
+  frequency: z.enum(RECURRING_FREQUENCIES),
+  nextDate: isoDate,
+  excludeItemId: z.string().trim().optional(),
+});
+
 export const affordInputSchema = z
   .object({
     name: z.string().trim().min(1, "Name the purchase").max(80),

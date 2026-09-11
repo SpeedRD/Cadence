@@ -158,6 +158,17 @@ one, showing as finished rather than paused. "Mark as paid off" ends a plan earl
 the remainder was settled outside the app; a finished plan restarts only by editing
 its payments left.
 
+A **large subscription** — DOP 10,000 or more a charge, converted if entered in another
+currency — gets an advisory room check right in the form, recomputed as the amount,
+currency, frequency or due date changes. It reuses Afford's projection for the one pay
+period the "Next due" date lands in: each active account's income averaged from its
+comparable periods, its other recurring items due then, and its protected buffer, then
+this charge on top. The panel lists every account's headroom before and after, marks
+which keep their buffer, and names the one with the most room; if none does it says so
+and suggests two smaller subscriptions on different accounts, since a subscription is
+always charged to a single account. It never blocks saving, and a contribution is never
+checked here — its funding is planned per account in the payday check-in's Step 3.
+
 ### Afford
 
 ![Afford calculator with a purchase filled in: name, total price, four monthly installments, first payment date, and the account each installment is charged to, plus the equal-installment schedule](screenshots/afford-calculator.png)

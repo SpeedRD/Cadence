@@ -3,9 +3,18 @@
 import { getSettings, requireAuth } from "@/lib/auth";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
-import { firstError, formObject, recurringAccountSchema, recurringSchema } from "@/lib/validation";
+import { num } from "@/lib/money";
+import {
+  firstError,
+  formObject,
+  recurringAccountSchema,
+  recurringSchema,
+  subscriptionRoomSchema,
+} from "@/lib/validation";
 
+import { getAppContext } from "@/lib/data/context";
 import { markRecurringItemPaidOff, setRecurringItemAccount } from "@/lib/data/recurring";
+import { checkSubscriptionRoom, type SubscriptionRoom } from "@/lib/data/subscription-room";
 import { isFinishedPlan } from "@/lib/recurring";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
@@ -158,4 +167,30 @@ export async function reassignRecurringAccountAction(
 
   revalidateApp();
   return done(t.itemUpdated);
+}
+
+export type SubscriptionRoomResult = { ok: true; room: SubscriptionRoom } | { ok: false };
+
+/**
+ * The Recurring form's advisory room check for a large subscription: a pure
+ * read over Afford's projection (see src/lib/data/subscription-room.ts). It
+ * never blocks the save, so an input the schema refuses - a half-typed
+ * amount, an incomplete date - simply yields no panel rather than an error;
+ * saveRecurringAction reports those when the user submits. A contribution is
+ * never checked here: its funding is planned per account in the payday
+ * check-in's Step 3.
+ */
+export async function checkSubscriptionRoomAction(payload: unknown): Promise<SubscriptionRoomResult> {
+  await requireAuth();
+  const parsed = subscriptionRoomSchema.safeParse(payload);
+  if (!parsed.success || parsed.data.kind !== "SUBSCRIPTION") return { ok: false };
+
+  const [context, settings] = await Promise.all([getAppContext(), getSettings()]);
+  const room = await checkSubscriptionRoom(parsed.data, {
+    ...context,
+    bufferPercent: settings.bufferPercent,
+    bufferFloorAmount: num(settings.bufferFloorAmount),
+    bufferFloorCurrency: settings.bufferFloorCurrency,
+  });
+  return { ok: true, room };
 }

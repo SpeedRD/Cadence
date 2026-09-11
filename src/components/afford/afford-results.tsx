@@ -24,8 +24,8 @@ import { cn } from "@/lib/utils";
 import type { AffordVerdict, PeriodVerdict } from "@/lib/afford";
 import type { AffordRecordedPlan } from "@/lib/data/afford";
 
-/** "before / after" pair: the before muted, the after coloured by whether it stayed on the right side of zero. */
-function BeforeAfter({
+/** "before / after" pair: the before muted, the after coloured by whether it stayed on the right side of zero. Shared with the Recurring form's subscription room panel. */
+export function BeforeAfter({
   before,
   after,
   currency,

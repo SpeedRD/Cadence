@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
@@ -12,11 +12,28 @@ import {
   GoalSelect,
   type Option,
 } from "@/components/form/selects";
+import { SubscriptionRoomPanel } from "@/components/recurring/subscription-room-panel";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { CURRENCIES, formatMoney } from "@/lib/currency";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { RECURRING_FREQUENCIES, RECURRING_KINDS } from "@/lib/labels";
-import { saveRecurringAction } from "@/server/actions/recurring";
+import { LARGE_SUBSCRIPTION_THRESHOLD } from "@/lib/subscription-room";
+import { checkSubscriptionRoomAction, saveRecurringAction } from "@/server/actions/recurring";
+
+import type { SubscriptionRoom } from "@/lib/data/subscription-room";
+
+/** How long the amount field rests before the room check runs, so typing "12000" projects once, not five times. */
+const ROOM_CHECK_DEBOUNCE_MS = 400;
+
+/** The fields the room check depends on, mirrored from the (uncontrolled) inputs as they change. */
+interface RoomInputs {
+  amount: string;
+  currency: string;
+  frequency: string;
+  nextDate: string;
+  accountId: string;
+}
 
 export interface RecurringFormValues {
   id?: string;
@@ -72,10 +89,6 @@ export function RecurringDialog({
   const open = controlledOpen ?? uncontrolledOpen;
   const setOpen = onOpenChange ?? setUncontrolledOpen;
   const [wasOpen, setWasOpen] = useState(open);
-  if (open !== wasOpen) {
-    setWasOpen(open);
-    if (open) setKind(values.kind ?? "SUBSCRIPTION");
-  }
 
   // An existing item whose link is missing (or points at an account that is no
   // longer active) must show up as unset, never quietly fall back to the first
@@ -91,6 +104,71 @@ export function RecurringDialog({
   const goalDefault = goals.some((goal) => goal.id === values.goalId)
     ? (values.goalId ?? undefined)
     : undefined;
+
+  // The large-subscription room check (see src/lib/data/subscription-room.ts).
+  // The inputs stay uncontrolled - the save reads the FormData as before - and
+  // are only mirrored here so the check can re-run as they change. Like `kind`,
+  // the mirror resets whenever the dialog re-opens, since the inputs remount
+  // to their defaults then.
+  const initialRoomInputs = (): RoomInputs => ({
+    amount: values.amount === undefined ? "" : String(values.amount),
+    currency: values.currency ?? CURRENCIES[0],
+    frequency: values.frequency ?? "MONTHLY",
+    nextDate: values.nextDate,
+    accountId: accountDefault ?? "",
+  });
+  const [roomInputs, setRoomInputs] = useState<RoomInputs>(initialRoomInputs);
+  const [room, setRoom] = useState<SubscriptionRoom | null>(null);
+  const [roomPending, setRoomPending] = useState(false);
+  const roomRequest = useRef(0);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setKind(values.kind ?? "SUBSCRIPTION");
+      setRoomInputs(initialRoomInputs());
+      setRoom(null);
+    }
+  }
+  const updateRoomInputs = (patch: Partial<RoomInputs>) =>
+    setRoomInputs((current) => ({ ...current, ...patch }));
+
+  // Only a subscription with an amount is checked; a contribution never is
+  // (its funding is planned per account in the payday check-in's Step 3).
+  // The last result stays on screen while a new one is in flight, so the
+  // panel does not flicker between keystrokes; the account pick only changes
+  // which row is marked, so it does not re-run the projection.
+  const shouldCheckRoom = open && kind === "SUBSCRIPTION" && roomInputs.amount.trim() !== "";
+  const { amount, currency, frequency, nextDate } = roomInputs;
+  const itemId = values.id;
+  useEffect(() => {
+    if (!shouldCheckRoom) return;
+    const request = (roomRequest.current += 1);
+    const timer = setTimeout(async () => {
+      setRoomPending(true);
+      let next: SubscriptionRoom | null = null;
+      try {
+        const result = await checkSubscriptionRoomAction({
+          kind: "SUBSCRIPTION",
+          amount,
+          currency,
+          frequency,
+          nextDate,
+          excludeItemId: itemId,
+        });
+        if (result.ok) next = result.room;
+      } catch {
+        // Advisory only: a failed check shows nothing rather than an error.
+      }
+      if (request !== roomRequest.current) return;
+      setRoom(next);
+      setRoomPending(false);
+    }, ROOM_CHECK_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      // A response to inputs that have since changed is dropped, not shown.
+      roomRequest.current += 1;
+    };
+  }, [shouldCheckRoom, amount, currency, frequency, nextDate, itemId]);
 
   return (
     <FormDialog
@@ -147,6 +225,7 @@ export function RecurringDialog({
             options={RECURRING_FREQUENCIES}
             labels={common.frequencyLabels}
             defaultValue={values.frequency ?? "MONTHLY"}
+            onValueChange={(frequency) => updateRoomInputs({ frequency })}
           />
         </Field>
       </div>
@@ -160,11 +239,17 @@ export function RecurringDialog({
             className="font-mono"
             placeholder="0.00"
             defaultValue={values.amount ?? ""}
+            onChange={(event) => updateRoomInputs({ amount: event.target.value })}
             required
           />
         </Field>
         <Field label={common.currency} htmlFor="recurring-currency">
-          <CurrencySelect id="recurring-currency" name="currency" defaultValue={values.currency} />
+          <CurrencySelect
+            id="recurring-currency"
+            name="currency"
+            defaultValue={values.currency}
+            onValueChange={(currency) => updateRoomInputs({ currency })}
+          />
         </Field>
       </div>
 
@@ -175,6 +260,7 @@ export function RecurringDialog({
             type="date"
             name="nextDate"
             defaultValue={values.nextDate}
+            onChange={(event) => updateRoomInputs({ nextDate: event.target.value })}
             required
           />
         </Field>
@@ -215,9 +301,25 @@ export function RecurringDialog({
             accounts={accounts}
             defaultValue={accountDefault}
             common={common}
+            onValueChange={(accountId) => updateRoomInputs({ accountId })}
           />
         </Field>
       </div>
+
+      {shouldCheckRoom && room?.large ? (
+        <SubscriptionRoomPanel
+          room={room}
+          selectedAccountId={roomInputs.accountId}
+          threshold={formatMoney(LARGE_SUBSCRIPTION_THRESHOLD.amount, LARGE_SUBSCRIPTION_THRESHOLD.currency, {
+            maximumFractionDigits: 0,
+          })}
+          locale={locale}
+        />
+      ) : roomPending && shouldCheckRoom ? (
+        <p className="text-xs text-muted-foreground" role="status">
+          {t.roomChecking}
+        </p>
+      ) : null}
 
       {isContribution ? (
         <Field

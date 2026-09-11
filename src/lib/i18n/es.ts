@@ -563,6 +563,31 @@ export const es = {
     finishedCannotResume: "Este plan terminó. Edítalo y define los pagos restantes para iniciarlo de nuevo.",
     notAnInstallmentPlan: "Solo un plan de cuotas con pagos restantes se puede marcar como pagado",
     paymentsLeft: (n: number) => (n === 1 ? "1 pago restante" : `${n} pagos restantes`),
+    roomHeading: "¿Qué cuenta puede con esto?",
+    roomDescription: (threshold: string, period: string, periods: number) =>
+      `Una suscripción de ${threshold} o más se comprueba como ¿Me alcanza? comprueba una compra: el ingreso de cada cuenta para ${period} se proyecta con tus últimos ${periods} períodos de pago comparables, se restan sus otros elementos recurrentes que vencen entonces y se reserva su colchón protegido. Que haya margen significa que el margen habitual de la cuenta cubre el cobro, no una garantía para todos los períodos. Esto nunca impide guardar.`,
+    roomChecking: "Comprobando qué cuenta tiene margen...",
+    roomChargesTogether: (count: number, charge: string) =>
+      `${count} cobros caen en este período y se comprueban juntos (${charge}).`,
+    roomColumnAccount: "Cuenta",
+    roomColumnHeadroom: "Sobre su colchón",
+    roomBeforeAfter: "antes / después",
+    roomFits: "Margen",
+    roomShort: "Corto",
+    roomSelected: "elegida",
+    roomNoHistory: (account: string) =>
+      `${account} no recibió ingresos en los períodos comparables, así que solo aplica su colchón mínimo.`,
+    roomRecommendMost: (account: string, headroom: string, count: number) =>
+      `${count} cuentas conservan su colchón con este cobro. ${account} es la que más margen conserva (${headroom}): la mejor cuenta para pagarlo.`,
+    roomRecommendOnly: (account: string, headroom: string) =>
+      `${account} es la única cuenta que conserva su colchón con este cobro (le quedan ${headroom}).`,
+    roomSelectedFits: (account: string) => `${account}, la cuenta elegida arriba, tiene margen para esto.`,
+    roomSelectedShort: (account: string, shortfall: string) =>
+      `${account}, la cuenta elegida arriba, quedaría ${shortfall} por debajo de su colchón; considera la cuenta indicada aquí.`,
+    roomNone: (period: string) =>
+      `Ninguna cuenta puede sostener esto por sí sola: todas terminarían ${period} por debajo de su colchón protegido.`,
+    roomNoneSuggestion:
+      "Aun así puedes guardarlo tal cual. Para repartir el costo, crea dos suscripciones más pequeñas, una por cuenta: una suscripción siempre se cobra a una sola cuenta.",
   },
   afford: {
     title: "¿Me alcanza?",

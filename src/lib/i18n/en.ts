@@ -559,6 +559,31 @@ export const en = {
     finishedCannotResume: "This plan has finished. Edit it and set Payments left to start it again.",
     notAnInstallmentPlan: "Only an installment plan with payments left can be marked as paid off",
     paymentsLeft: (n: number) => (n === 1 ? "1 payment left" : `${n} payments left`),
+    roomHeading: "Which account can carry this?",
+    roomDescription: (threshold: string, period: string, periods: number) =>
+      `A subscription of ${threshold} or more is checked the way Afford checks a purchase: each account's income for ${period} is projected from your last ${periods} comparable pay periods, its other recurring items due then are subtracted, and its protected buffer is kept back. Room means the account's typical margin covers the charge - not a guarantee for every period. Saving is never blocked by this.`,
+    roomChecking: "Checking which account has room...",
+    roomChargesTogether: (count: number, charge: string) =>
+      `${count} charges land in this period and are checked together (${charge}).`,
+    roomColumnAccount: "Account",
+    roomColumnHeadroom: "Above its buffer",
+    roomBeforeAfter: "before / after",
+    roomFits: "Room",
+    roomShort: "Short",
+    roomSelected: "selected",
+    roomNoHistory: (account: string) =>
+      `${account} received no income in the comparable periods, so only its buffer floor applies.`,
+    roomRecommendMost: (account: string, headroom: string, count: number) =>
+      `${count} accounts keep their buffer with this charge. ${account} has the most room left (${headroom}) - the best account to fund it from.`,
+    roomRecommendOnly: (account: string, headroom: string) =>
+      `${account} is the only account that keeps its buffer with this charge (${headroom} left).`,
+    roomSelectedFits: (account: string) => `${account}, the account chosen above, has room for it.`,
+    roomSelectedShort: (account: string, shortfall: string) =>
+      `${account}, the account chosen above, would end ${shortfall} below its buffer - consider the account named here instead.`,
+    roomNone: (period: string) =>
+      `No account can sustain this on its own: each would end ${period} below its protected buffer.`,
+    roomNoneSuggestion:
+      "You can still save it as is. To spread the cost, create two smaller subscriptions instead, one per account - a subscription is always charged to a single account.",
   },
   afford: {
     title: "Afford",
