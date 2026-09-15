@@ -17,12 +17,15 @@ export function PlanningPreferencesForm({
   bufferFloorAmount,
   bufferFloorCurrency,
   carryoverIncludedByDefault,
+  incomeHistoryStartDate,
   locale,
 }: {
   bufferPercent: number;
   bufferFloorAmount: number;
   bufferFloorCurrency: string;
   carryoverIncludedByDefault: boolean;
+  /** Settings.incomeHistoryStartDate as an ISO date, or null when unset. */
+  incomeHistoryStartDate: string | null;
   locale: Locale;
 }) {
   const t = getDictionary(locale).settingsPage;
@@ -78,6 +81,20 @@ export function PlanningPreferencesForm({
         {t.carryoverDefaultLabel}
       </label>
       <p className="text-xs text-muted-foreground">{t.carryoverDefaultHint}</p>
+
+      <Field
+        label={t.incomeHistoryStartLabel}
+        htmlFor="income-history-start"
+        hint={t.incomeHistoryStartHint}
+      >
+        <Input
+          id="income-history-start"
+          name="incomeHistoryStartDate"
+          type="date"
+          className="sm:max-w-[50%]"
+          defaultValue={incomeHistoryStartDate ?? ""}
+        />
+      </Field>
 
       {state?.error ? (
         <p className="text-sm text-destructive" role="alert">

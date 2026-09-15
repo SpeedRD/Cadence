@@ -849,6 +849,7 @@ async function main() {
   await prisma.goal.deleteMany({ where: { name: "Verify Goal" } });
   const {
     MIN_HISTORICAL_MONTHS,
+    MAX_HISTORICAL_MONTHS,
     classifyCompletedMonth,
     compareToAverage,
     computeCompletedMonthWindows,
@@ -1046,6 +1047,27 @@ async function main() {
 
   eq("no recorded activity at all returns no completed months", computeCompletedMonthWindows({ year: 2026, month: 8 }, null, 6).length, 0);
 
+  console.log("\n-- completed month windows: a second, independent boundary (count income history from) --");
+  // Mirrors firstActivityMonth's own mechanism - not a parallel one: the
+  // break condition is against whichever of the two boundaries is later
+  // (more restrictive), same comparison, same loop.
+  eq(
+    "omitting the boundary (3 args) is byte-for-byte the same as before - the regression this exists to prevent",
+    computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2026, month: 1 }, 6).map((w) => w.key).join(","),
+    computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2026, month: 1 }, 6, null).map((w) => w.key).join(","),
+  );
+  const boundaryLater = computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2026, month: 1 }, 6, { year: 2026, month: 4 });
+  eq("a boundary later than first activity wins: it, not first activity, is where the walk stops", boundaryLater[0].key, "2026-04");
+  eq("months on/after the boundary are all still included, up to maxCount", boundaryLater.map((w) => w.key).join(","), "2026-04,2026-05,2026-06,2026-07");
+  const boundaryEarlier = computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2026, month: 5 }, 6, { year: 2026, month: 1 });
+  eq("a boundary earlier than first activity loses: first activity still wins, exactly as with no boundary at all", boundaryEarlier.map((w) => w.key).join(","), threeMonths.map((w) => w.key).join(","));
+  const boundaryTied = computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2026, month: 5 }, 6, { year: 2026, month: 5 });
+  eq("a boundary equal to first activity changes nothing", boundaryTied.map((w) => w.key).join(","), threeMonths.map((w) => w.key).join(","));
+  const boundaryLeavesTooFew = computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2026, month: 1 }, 6, { year: 2026, month: 7 });
+  eq("a boundary set this recently leaves one month, correctly below the minimum - not an error, not forced to average over too few", `${boundaryLeavesTooFew.length}:${boundaryLeavesTooFew.length < MIN_HISTORICAL_MONTHS}`, "1:true");
+  const boundaryPastEverything = computeCompletedMonthWindows({ year: 2026, month: 8 }, { year: 2026, month: 1 }, 6, { year: 2026, month: 9 });
+  eq("a boundary past even the current month leaves nothing", boundaryPastEverything.length, 0);
+
   console.log("\n-- getCompletedMonthWindows / getHistoricalMonthlyAverage wiring (against real data) --");
   const wiringContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 8, 20), currentPeriod: periodForDate(civilDate(2026, 8, 20)) };
   const actualFirstActivity = await prisma.transaction.aggregate({ _min: { date: true } });
@@ -1062,6 +1084,28 @@ async function main() {
   const wiredAverage = await getHistoricalMonthlyAverage(wiringContext);
   eq("sufficient reflects whether the wired months meet the minimum", wiredAverage.sufficient, expectedWindows.length >= MIN_HISTORICAL_MONTHS);
   eq("monthsUsed matches the wired window count", wiredAverage.monthsUsed, expectedWindows.length);
+
+  // context.incomeHistoryStartDate (Settings' "count income history from")
+  // wired through to the same pure boundary, converted to a month the same
+  // way monthForDate already converts every other date here.
+  const boundedContext = { ...wiringContext, incomeHistoryStartDate: civilDate(2026, 7, 1) };
+  const expectedBoundedWindows = computeCompletedMonthWindows(
+    monthForDate(wiringContext.today),
+    actualFirstActivity._min.date ? monthForDate(actualFirstActivity._min.date) : null,
+    MAX_HISTORICAL_MONTHS,
+    monthForDate(civilDate(2026, 7, 1)),
+  );
+  const boundedWindows = await getCompletedMonthWindows(boundedContext);
+  eq(
+    "getCompletedMonthWindows reads context.incomeHistoryStartDate and applies the same second boundary, whatever the real first-activity date turns out to be",
+    boundedWindows.map((w) => w.key).join(","),
+    expectedBoundedWindows.map((w) => w.key).join(","),
+  );
+  const nullDateContext = { ...wiringContext, incomeHistoryStartDate: null };
+  const nullDateWindows = await getCompletedMonthWindows(nullDateContext);
+  eq("an explicit null on the context is the same as leaving it unset", nullDateWindows.map((w) => w.key).join(","), wiredWindows.map((w) => w.key).join(","));
+  const boundedAverage = await getHistoricalMonthlyAverage(boundedContext);
+  eq("the average's own monthsUsed and sufficiency follow the bounded window count, unmodified by getHistoricalMonthlyAverage itself", `${boundedAverage.monthsUsed}:${boundedAverage.sufficient}`, `${expectedBoundedWindows.length}:${expectedBoundedWindows.length >= MIN_HISTORICAL_MONTHS}`);
 
   console.log("\n== payday planner (pure) ==");
   // Sep 2026: the 15th is a Tuesday and the 30th a Wednesday, so neither
@@ -2044,6 +2088,38 @@ async function main() {
       "same-half matching: a Period A plan does not pick up the Period B comparable-period budget",
       JSON.stringify(periodASuggestions.get(diningCat.id)),
       JSON.stringify({ amount: 0, basis: "none" }),
+    );
+
+    // Settings.incomeHistoryStartDate bounds this walk exactly as it bounds
+    // Afford's: a comparable period that ended before it is not walked, and
+    // the average runs over the periods left from the oldest with spending.
+    const suggestFrom = (incomeHistoryStartDate: Date | null) =>
+      getCategorySuggestions(draft.periodRef, recCategories, { ...paydayContext, incomeHistoryStartDate });
+    eq(
+      "a null start date changes nothing",
+      JSON.stringify((await suggestFrom(null)).get(transportCat.id)),
+      JSON.stringify({ amount: 60, basis: "average" }),
+    );
+    eq(
+      "from June 1 the May 16-31 period is not walked: Transport averages its one remaining period with spending (80 / 1)",
+      JSON.stringify((await suggestFrom(civilDate(2026, 6, 1))).get(transportCat.id)),
+      JSON.stringify({ amount: 80, basis: "average" }),
+    );
+    eq(
+      "a period ending on the start date still counts: from May 31 the walk is Jul, Jun and May and the average is unchanged",
+      JSON.stringify((await suggestFrom(civilDate(2026, 5, 31))).get(transportCat.id)),
+      JSON.stringify({ amount: 60, basis: "average" }),
+    );
+    const fromAugust = await suggestFrom(civilDate(2026, 8, 1));
+    eq(
+      "a start date past every comparable period leaves no history to average",
+      JSON.stringify(fromAugust.get(transportCat.id)),
+      JSON.stringify({ amount: 0, basis: "none" }),
+    );
+    eq(
+      "the comparable period's own budget is the user's figure, not history, so the boundary leaves it alone",
+      JSON.stringify(fromAugust.get(diningCat.id)),
+      JSON.stringify({ amount: 150, basis: "last_budget" }),
     );
 
     console.log("\n-- scaling flexible recommendations against available money --");
@@ -3807,6 +3883,27 @@ async function main() {
     eq("a confirmed period of the other half changes nothing for this half", affordData.comparableHistory({ year: 2026, month: 10, period: "B" }, affordToday, confirmedSepA)[0].key, "2026-08-B");
     eq("a confirmed period later than the target is not history for it", affordData.comparableHistory({ year: 2026, month: 9, period: "A" }, affordToday, confirmedSepA)[0].key, "2026-08-A");
     eq("an unconfirmed future period is still excluded", affordData.comparableHistory({ year: 2026, month: 11, period: "A" }, affordToday, new Set(["2026-09-B"]))[0].key, "2026-08-A");
+    // Settings.incomeHistoryStartDate ("count income history from") is a
+    // second boundary of the same kind as an account's first activity: a
+    // comparable period that ended before it is not walked at all, and what
+    // remains averages over its own count.
+    eq("with no start date the walk is unchanged", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), null).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A,2026-05-A,2026-04-A,2026-03-A");
+    eq("a start date drops every comparable period that ended before it", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 6, 1)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A");
+    eq("a period ending on the start date itself still counts", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 5, 15)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A,2026-05-A");
+    eq("a period the start date falls inside counts in full", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 5, 10)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A,2026-05-A");
+    eq("a start date past every comparable period leaves nothing to average", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 9, 1)).length, 0);
+    eq("the boundary is by period end, so B periods are bounded the same way (May 16-31 ends before June 1)", affordData.comparableHistory({ year: 2026, month: 10, period: "B" }, affordToday, new Set(), civilDate(2026, 6, 1)).map((p) => p.key).join(","), "2026-08-B,2026-07-B,2026-06-B");
+    eq("the confirmed-period rule and the boundary compose", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, confirmedSepA, civilDate(2026, 7, 1)).map((p) => p.key).join(","), "2026-09-A,2026-08-A,2026-07-A");
+    {
+      const { planningPreferencesSchema: prefs } = await import("../src/lib/validation");
+      const prefsForm = { bufferPercent: "10", bufferFloorAmount: "2000", bufferFloorCurrency: "DOP", carryoverIncludedByDefault: "true" };
+      const blankStart = prefs.safeParse({ ...prefsForm, incomeHistoryStartDate: "" });
+      eq("the Settings form's blank start date saves as null (no boundary)", blankStart.success ? String(blankStart.data.incomeHistoryStartDate) : "refused", "null");
+      const datedStart = prefs.safeParse({ ...prefsForm, incomeHistoryStartDate: "2026-06-01" });
+      eq("a typed start date saves as that civil date", datedStart.success && datedStart.data.incomeHistoryStartDate instanceof Date ? toISODate(datedStart.data.incomeHistoryStartDate) : "refused", "2026-06-01");
+      const junkStart = prefs.safeParse({ ...prefsForm, incomeHistoryStartDate: "June" });
+      eq("an unparseable start date is refused", junkStart.success ? "accepted" : junkStart.error.issues[0]?.message, "Enter a valid date");
+    }
     eq("averages run from the oldest period with activity, like category suggestions", JSON.stringify(affordData.averageSinceFirstActivity([100, 100, 0, 0, 0, 0])), JSON.stringify({ amount: 100, periods: 2 }));
     eq("zeros inside the active stretch still dilute", affordData.averageSinceFirstActivity([100, 0, 100, 0, 0, 0]).amount, 66.67);
     eq("no activity at all projects zero over zero periods", JSON.stringify(affordData.averageSinceFirstActivity([0, 0, 0])), JSON.stringify({ amount: 0, periods: 0 }));
@@ -3888,6 +3985,30 @@ async function main() {
     });
     eq("the purchase is viable only when every affected period passes", `${multi.periods.map((p) => p.passes).join(",")}:${multi.viable}:${multi.failing.map((p) => p.key).join(",")}`, "true,false:false:2026-11-A");
 
+    console.log("\n-- still viable? the tracker badge and the remaining schedule (pure) --");
+    {
+      const tracking = await import("../src/lib/afford-tracking");
+      eq("every period passing is on track", tracking.summarizeAffordViability(viablePure).status, "on_track");
+      const accountShort = tracking.summarizeAffordViability(accountBreach);
+      eq("an account breach names the period and the account's shortfall in the account's currency", accountShort.status === "short" ? `${accountShort.periodKey}:${accountShort.shortfall}:${accountShort.currency}:${accountShort.check}` : accountShort.status, "2026-10-A:50:USD:account");
+      const flexibleShort = tracking.summarizeAffordViability(flexibleBreach);
+      eq("a flexible-only breach reports the period-wide shortfall in the display currency", flexibleShort.status === "short" ? `${flexibleShort.periodKey}:${flexibleShort.shortfall}:${flexibleShort.currency}:${flexibleShort.check}` : flexibleShort.status, "2026-10-A:400:USD:flexible");
+      const laterShort = tracking.summarizeAffordViability(multi);
+      eq("the first failing period is the one named, even when earlier periods pass", laterShort.status === "short" ? `${laterShort.periodKey}:${laterShort.periodLabel}:${laterShort.shortfall}` : laterShort.status, `2026-11-A:${periodInfo({ year: 2026, month: 11, period: "A" }).label}:250`);
+      const walked = tracking.remainingInstallments({ nextDate: civilDate(2026, 1, 31), frequency: "MONTHLY", anchorDay: 31, remainingOccurrences: 3 }, 10, civilDate(2026, 1, 1), "2026-01-A");
+      eq("the remaining schedule walks from nextDate on the stored anchor day (Jan 31 -> Feb 28 -> Mar 31), every row at the item's amount", walked.map((i) => `${i.index}:${toISODate(i.date)}:${i.amount}:${i.periodKey}`).join(","), "1:2026-01-31:10:2026-01-B,2:2026-02-28:10:2026-02-B,3:2026-03-31:10:2026-03-B");
+      const overdueWalk = tracking.remainingInstallments({ nextDate: civilDate(2026, 8, 20), frequency: "MONTHLY", anchorDay: 20, remainingOccurrences: 2 }, 10, affordToday, periodForDate(affordToday).key);
+      eq("an overdue occurrence is owed now and lands in the current period - Afford's own commitment rule", overdueWalk.map((i) => i.periodKey).join(","), "2026-09-A,2026-09-B");
+      eq("a plan with nothing left owes no dates", tracking.remainingInstallments({ nextDate: civilDate(2026, 10, 1), frequency: "MONTHLY", anchorDay: 1, remainingOccurrences: 0 }, 10, affordToday, "2026-09-A").length, 0);
+      eq("a missing anchor (a row written outside the app) falls back to the date's own day, as posting does", tracking.remainingInstallments({ nextDate: civilDate(2026, 10, 5), frequency: "MONTHLY", anchorDay: null, remainingOccurrences: 2 }, 10, affordToday, "2026-09-A").map((i) => toISODate(i.date)).join(","), "2026-10-05,2026-11-05");
+      const tracked = [
+        { itemId: "a", name: "A", verdict: viablePure },
+        { itemId: "b", name: "B", verdict: accountBreach },
+        { itemId: "c", name: "C", verdict: multi },
+      ];
+      eq("the not-viable list keeps only the plans with a failing period, in order", tracking.notViableAffordItems(tracked).map((t) => t.itemId).join(","), "b,c");
+    }
+
     console.log("\n-- projected periods: income from history, commitments from schedules (database) --");
     const affordAccount = await prisma.account.create({
       data: { name: "Verify Afford Account", currency: "USD", type: "CHECKING" },
@@ -3949,6 +4070,54 @@ async function main() {
     check("period-wide income adds the account's projection to every other active account's", octA.flexible.income >= 10000, octA.flexible.income);
     check("period-wide buffer includes the account's", octA.flexible.buffer >= 1000, octA.flexible.buffer);
     eq("B periods project from B history", projections.get("2026-10-B")!.account.income, 10000);
+
+    console.log("\n-- count income history from: a global boundary on the comparable-period walk --");
+    {
+      // A second account whose income changed: 5,000 in Mar-May, nothing in
+      // June, 8,000 from July (a new job whose first pay came late). The
+      // steady account beside it keeps its 10,000 every period.
+      const raiseAccount = await prisma.account.create({ data: { name: "Verify Afford Raise", currency: "USD", type: "CHECKING" } });
+      for (const [month, amount] of [[3, 5000], [4, 5000], [5, 5000], [7, 8000], [8, 8000]] as const) {
+        await prisma.transaction.create({
+          data: { date: civilDate(2026, month, 5), amount, currency: "USD", type: "INCOME", accountId: raiseAccount.id, source: "MANUAL", note: "Verify Afford Raise pay" },
+        });
+      }
+      const accountsWithRaise = [...activeForAfford, { id: raiseAccount.id, name: raiseAccount.name, currency: raiseAccount.currency }];
+      const raiseChosen = accountsWithRaise[accountsWithRaise.length - 1];
+      const octRef = [{ year: 2026, month: 10, period: "A" as const }];
+      const projectRaise = async (incomeHistoryStartDate: Date | null | undefined, chosen = raiseChosen) =>
+        (await affordData.projectPeriods(octRef, chosen, accountsWithRaise, incomeHistoryStartDate === undefined ? affordContext : { ...affordContext, incomeHistoryStartDate })).get("2026-10-A")!;
+
+      const unbounded = await projectRaise(undefined);
+      eq("with no boundary all six comparable periods count and the empty June dilutes: 31,000 / 6", unbounded.account.income, round2(31000 / 6));
+      eq("historyPeriods reports the true count actually walked, unaffected by no boundary: 6", unbounded.historyPeriods, 6);
+      const nullBounded = await projectRaise(null);
+      eq("a null start date is no boundary at all - same account and period-wide figures", `${nullBounded.account.income}:${nullBounded.flexible.income}`, `${unbounded.account.income}:${unbounded.flexible.income}`);
+      const fromJune = await projectRaise(civilDate(2026, 6, 1));
+      eq("from June 1 only Jun, Jul and Aug count; the empty June sits before the first activity that remains, so the average is over the two paid periods", `${fromJune.account.income}:${fromJune.account.basis}`, "8000:average");
+      eq("historyPeriods reports 3, not the HISTORY_PERIODS constant, once the boundary trims Mar/Apr/May out - what the Afford results copy reads", fromJune.historyPeriods, 3);
+      const fromMay = await projectRaise(civilDate(2026, 5, 1));
+      eq("from May 1 the empty June is inside the active stretch and dilutes, as averageSinceFirstActivity always did: 21,000 / 4", fromMay.account.income, 5250);
+      eq("historyPeriods is 4 with the May 1 boundary (Mar and Apr dropped, May kept in full)", fromMay.historyPeriods, 4);
+      const fromSeptember = await projectRaise(civilDate(2026, 9, 1));
+      eq("a start date past every comparable period leaves no history: zero income on a 'none' basis, the floor as the buffer", `${fromSeptember.account.income}:${fromSeptember.account.basis}:${fromSeptember.account.buffer}`, `0:none:${round2(2000 / 60)}`);
+      eq("historyPeriods is 0 when the boundary drops every comparable period, not the constant", fromSeptember.historyPeriods, 0);
+
+      const steadyFromJune = await projectRaise(civilDate(2026, 6, 1), chosenForAfford);
+      eq("the boundary is global: the steady account, asked with the same start date, still projects 10,000 over the three periods left", `${steadyFromJune.account.income}:${steadyFromJune.account.basis}`, "10000:average");
+      const boundedContext = { ...affordContext, incomeHistoryStartDate: civilDate(2026, 6, 1) };
+      const perAccount = await Promise.all(
+        accountsWithRaise.map(async (account) => {
+          const projection = (await affordData.projectPeriods(octRef, account, accountsWithRaise, boundedContext)).get("2026-10-A")!;
+          return convert(projection.account.income, account.currency, "USD", rates);
+        }),
+      );
+      eq("the period-wide income is every account's own bounded average summed - one boundary for all of them", steadyFromJune.flexible.income, round2(perAccount.reduce((sum, value) => sum + value, 0)));
+      eq("the period-wide figure does not depend on which account is asked", round2(steadyFromJune.flexible.income - fromJune.flexible.income), 0);
+
+      await prisma.transaction.deleteMany({ where: { accountId: raiseAccount.id } });
+      await prisma.account.delete({ where: { id: raiseAccount.id } });
+    }
     // A weekly item on the account is enumerated date by date, and its
     // currency is converted into the account's: 600 DOP a week is 10 USD.
     const weeklyItem = await prisma.recurringItem.create({
@@ -4016,9 +4185,22 @@ async function main() {
     const createdPlans = await prisma.recurringItem.findMany({ where: { name: "Verify Afford Laptop" } });
     eq("exactly one RecurringItem is created", createdPlans.length, 1);
     const plan = createdPlans[0];
-    eq("it is a SUBSCRIPTION with the chosen amount, currency, frequency, first date and account, counting 3", `${plan.kind}:${num(plan.amount)}:${plan.currency}:${plan.frequency}:${toISODate(plan.nextDate)}:${plan.anchorDay}:${plan.accountId === affordAccount.id}:${plan.active}:${plan.remainingOccurrences}`, "SUBSCRIPTION:500:USD:MONTHLY:2026-10-01:1:true:true:3");
+    eq("it is a SUBSCRIPTION with the chosen amount, currency, frequency, first date and account, counting 3, marked as from Afford", `${plan.kind}:${num(plan.amount)}:${plan.currency}:${plan.frequency}:${toISODate(plan.nextDate)}:${plan.anchorDay}:${plan.accountId === affordAccount.id}:${plan.active}:${plan.remainingOccurrences}:${plan.fromAfford}`, "SUBSCRIPTION:500:USD:MONTHLY:2026-10-01:1:true:true:3:true");
     eq("nothing else is set on it", `${plan.categoryId}:${plan.goalId}:${plan.note}`, "null:null:null");
     eq("confirming adds exactly one item beside the two schedule fixtures", await prisma.recurringItem.count({ where: { name: { startsWith: "Verify Afford" } } }), 3);
+    eq("the two schedule fixtures, written by hand, are not from Afford", await prisma.recurringItem.count({ where: { name: { startsWith: "Verify Afford" }, fromAfford: false } }), 2);
+
+    console.log("\n-- still viable? re-checking the plan right after confirming --");
+    // The plan is now among the active items, so its own installments would
+    // be counted as commitments and then subtracted again. The re-check takes
+    // them back out, so it asks exactly the question Afford answered a moment
+    // ago - and, with nothing else recorded since, gets the same answer.
+    const laptopRecheck = await affordData.recheckAffordItem(plan.id, affordContext);
+    if (!laptopRecheck.ok) throw new Error(`laptop re-check refused: ${laptopRecheck.reason}`);
+    eq("re-checking reproduces the verdict that was confirmed: same periods, same headroom", `${laptopRecheck.verdict.viable}:${laptopRecheck.verdict.periods.map((p) => `${p.key}=${p.account.headroomAfter}`).join(",")}`, `${viable.verdict.viable}:${viable.verdict.periods.map((p) => `${p.key}=${p.account.headroomAfter}`).join(",")}`);
+    eq("its installments are the item's own remaining schedule, at the recorded amount", laptopRecheck.verdict.installments.map((i) => `${toISODate(i.date)}:${i.amount}`).join(","), "2026-10-01:500,2026-11-01:500,2026-12-01:500");
+    eq("the item's own occurrences are not counted twice: committed is what it was before the plan existed", `${laptopRecheck.verdict.periods[0].account.committed}:${round2(laptopRecheck.verdict.periods[0].flexible.committed - octA.flexible.committed)}`, "150:0");
+    eq("the verdict is Afford's own shape, so the results table can render it", `${laptopRecheck.verdict.currency}:${laptopRecheck.verdict.periods[0].account.name}:${laptopRecheck.verdict.failing.length}`, "USD:Verify Afford Account:0");
 
     console.log("\n-- a confirmed plan counts against the next calculation before it posts --");
     const stacked = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Phone", firstDate: civilDate(2026, 10, 10), totalAmount: 900 }), affordContext);
@@ -4054,9 +4236,58 @@ async function main() {
     if (!afterTv.ok) throw new Error("after-TV evaluation refused");
     eq("a biweekly plan's two first-half installments and one second-half installment are enumerated exactly", `${afterTv.verdict.periods[0].account.committed}:${afterTv.verdict.periods[1].account.committed}`, `${round2(150 + 500 + 33.33 + 10000)}:${5000}`);
 
+    console.log("\n-- still viable? a later commitment shrinks the room a confirmed plan was counting on --");
+    {
+      const tracking = await import("../src/lib/afford-tracking");
+      const tvItem = await prisma.recurringItem.findFirstOrThrow({ where: { name: "Verify Afford TV" } });
+      eq("every plan Afford confirmed is marked as from Afford", `${oddItem.fromAfford}:${tvItem.fromAfford}`, "true:true");
+      // The acknowledged TV plan owes 10,000 in Oct 1-15 on the same account.
+      // The laptop's first installment shares that period, so the room it
+      // was confirmed against is gone: 10,000 in, 150 + 33.33 + 10,000 owed
+      // by the others, 1,000 kept back - 1,183.33 below the buffer before
+      // its own 500 lands.
+      const laptopAfterTv = await affordData.recheckAffordItem(plan.id, affordContext);
+      if (!laptopAfterTv.ok) throw new Error(`laptop re-check refused: ${laptopAfterTv.reason}`);
+      eq("the laptop is no longer viable: Oct 1-15 fails, the later periods still pass", `${laptopAfterTv.verdict.viable}:${laptopAfterTv.verdict.failing.map((p) => p.key).join(",")}:${laptopAfterTv.verdict.periods.map((p) => p.passes).join(",")}`, "false:2026-10-A:false,true,true");
+      eq("the shortfall is exactly the room the TV plan took", `${laptopAfterTv.verdict.periods[0].account.committed}:${laptopAfterTv.verdict.periods[0].account.shortfall}`, "10183.33:1683.33");
+      const laptopBadge = tracking.summarizeAffordViability(laptopAfterTv.verdict);
+      eq("the badge names Oct 1-15 and the account shortfall", laptopBadge.status === "short" ? `${laptopBadge.periodKey}:${laptopBadge.shortfall}:${laptopBadge.currency}` : laptopBadge.status, "2026-10-A:1683.33:USD");
+
+      const tracked = await affordData.recheckAffordItems(affordContext);
+      eq("every active Afford plan with payments left is tracked - the hand-written schedule fixtures are not", tracked.map((t) => t.name).sort().join(","), "Verify Afford Laptop,Verify Afford Odd,Verify Afford TV");
+      eq("all three share Oct 1-15, so all three are short there - the count the nav badge shows", tracking.notViableAffordItems(tracked).length, 3);
+      eq("the period is over-committed as a whole, so each plan lands in the same place whichever is asked", tracked.map((t) => t.verdict.periods[0].account.headroomAfter).join(","), "-1683.33,-1683.33,-1683.33");
+
+      // Resolving it: pausing the TV plan frees the room again, and the
+      // paused plan itself drops out of the tracker - it owes nothing.
+      await prisma.recurringItem.update({ where: { id: tvItem.id }, data: { active: false } });
+      const resolved = await affordData.recheckAffordItems(affordContext);
+      eq("with the TV plan paused, the other two are on track again and the paused plan is not tracked", `${resolved.map((t) => t.name).sort().join(",")}:${tracking.notViableAffordItems(resolved).length}`, "Verify Afford Laptop,Verify Afford Odd:0");
+      eq("a paused plan is not re-checked on its own either", (await affordData.recheckAffordItem(tvItem.id, affordContext) as { ok: boolean; reason?: string }).reason, "no_remaining_schedule");
+      await prisma.recurringItem.update({ where: { id: tvItem.id }, data: { active: true } });
+      eq("resuming it puts the shortfall back", tracking.notViableAffordItems(await affordData.recheckAffordItems(affordContext)).length, 3);
+
+      eq("a hand-entered item is refused by the re-check, countdown or not", (await affordData.recheckAffordItem(rentItem.id, affordContext) as { ok: boolean; reason?: string }).reason, "not_from_afford");
+      eq("a missing item reports not_found", (await affordData.recheckAffordItem("missing", affordContext) as { ok: boolean; reason?: string }).reason, "not_found");
+
+      // An Afford plan whose account has since been archived: the per-account
+      // check has nothing to run against, so there is no verdict and it is not
+      // tracked; the Recurring page's "needs an account" flag covers it.
+      const orphan = await prisma.recurringItem.create({
+        data: { name: "Verify Afford Orphan", amount: 10, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 1), anchorDay: 1, remainingOccurrences: 2, fromAfford: true, accountId: emptyAccount.id },
+      });
+      eq("a plan on an archived account cannot be re-checked", (await affordData.recheckAffordItem(orphan.id, affordContext) as { ok: boolean; reason?: string }).reason, "account_not_active");
+      const withOrphan = await affordData.recheckAffordItems(affordContext);
+      eq("it is left out of the tracked list rather than counted as short", `${withOrphan.some((t) => t.itemId === orphan.id)}:${tracking.notViableAffordItems(withOrphan).length}`, "false:3");
+      await prisma.recurringItem.delete({ where: { id: orphan.id } });
+    }
+
     const listedPlans = await listRecurringItems(affordContext);
-    const laptopRow = listedPlans.subscriptions.find((row) => row.id === plan.id);
-    eq("the plan appears among subscriptions on the Recurring page with its countdown", `${laptopRow?.active}:${laptopRow?.remainingOccurrences}:${laptopRow?.needs}`, "true:3:null");
+    const laptopRow = listedPlans.fromAfford.find((row) => row.id === plan.id);
+    eq("the plan appears in the Recurring page's From Afford section with its countdown", `${laptopRow?.active}:${laptopRow?.remainingOccurrences}:${laptopRow?.needs}:${laptopRow?.fromAfford}`, "true:3:null:true");
+    eq("and never among the subscriptions or contributions, whatever its kind", `${listedPlans.subscriptions.some((row) => row.fromAfford)}:${listedPlans.contributions.some((row) => row.fromAfford)}:${listedPlans.fromAfford.every((row) => row.fromAfford)}`, "false:false:true");
+    eq("the hand-written schedule fixtures stay among the subscriptions", `${listedPlans.subscriptions.some((row) => row.id === rentItem.id)}:${listedPlans.fromAfford.some((row) => row.id === rentItem.id)}`, "true:false");
+    eq("the From Afford section carries its own monthly figure (500 + 33.33 + 5,000 x 26 / 12)", listedPlans.fromAffordMonthly, 11366.66);
     const octSummary = await periodSummaryForAfford(periodInfo({ year: 2026, month: 10, period: "A" }), affordContext);
     eq("the plan is committed in the period its first installment lands in", octSummary.committedItems.find((i) => i.id === plan.id)?.nativeAmount, 500);
 
@@ -4265,6 +4496,7 @@ async function main() {
       const retrofitRow = retrofitRows.subscriptions.find((row) => row.id === retrofit.id);
       const untouchedRow = retrofitRows.subscriptions.find((row) => row.id === untouched.id);
       eq("the Recurring page shows the retrofitted countdown exactly like an Afford-created plan", `${retrofitRow?.active}:${retrofitRow?.remainingOccurrences}:${retrofitRow?.needs}`, "true:2:null");
+      eq("a countdown set by hand does not make the item an Afford plan: it stays among the subscriptions, out of From Afford, and is never re-checked", `${retrofitAfter.fromAfford}:${retrofitRow?.fromAfford}:${retrofitRows.fromAfford.some((row) => row.id === retrofit.id)}:${(await affordData.recheckAffordItems(affordContext)).some((t) => t.itemId === retrofit.id)}`, "false:false:false:false");
       eq("the blank-saved item shows no countdown on the Recurring page", `${untouchedRow?.active}:${untouchedRow?.remainingOccurrences}`, "true:null");
       await postForAfford(civilDate(2026, 8, 20));
       const retrofitPosted = await reloadItem(retrofit.id);

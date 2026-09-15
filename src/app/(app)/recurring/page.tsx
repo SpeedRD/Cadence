@@ -1,4 +1,5 @@
-import { PiggyBank, Plus, Repeat } from "lucide-react";
+import { Calculator, PiggyBank, Plus, Repeat } from "lucide-react";
+import Link from "next/link";
 
 import { PageHeader } from "@/components/page-header";
 import { RecurringDialog } from "@/components/recurring/recurring-dialog";
@@ -13,7 +14,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  FROM_AFFORD_SECTION_ID,
+  summarizeAffordViability,
+  type AffordViability,
+} from "@/lib/afford-tracking";
 import { formatMoney } from "@/lib/currency";
+import { getAffordRechecks } from "@/lib/data/afford";
 import { getAppContext } from "@/lib/data/context";
 import { listRecurringItems } from "@/lib/data/recurring";
 import { toISODate } from "@/lib/date";
@@ -26,8 +33,9 @@ export default async function RecurringPage() {
   const context = await getAppContext();
   const t = getDictionary(context.language).recurring;
   const common = getDictionary(context.language).common;
-  const [data, categories, accounts, goals] = await Promise.all([
+  const [data, rechecks, categories, accounts, goals] = await Promise.all([
     listRecurringItems(context),
+    getAffordRechecks(),
     prisma.category.findMany({
       orderBy: { name: "asc" },
       select: { id: true, name: true, color: true },
@@ -45,6 +53,13 @@ export default async function RecurringPage() {
 
   const today = toISODate(context.today);
   const currency = context.displayCurrency;
+  // One verdict per tracked plan, reduced to the badge each row shows. A
+  // From Afford row with no entry - paused, finished, or its account gone -
+  // simply shows none.
+  const viability: Record<string, AffordViability> = Object.fromEntries(
+    rechecks.map((tracked) => [tracked.itemId, summarizeAffordViability(tracked.verdict)]),
+  );
+  const activeFromAfford = data.fromAfford.filter((row) => row.active).length;
 
   return (
     <div className="space-y-5">
@@ -147,6 +162,46 @@ export default async function RecurringPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Plans recorded by Afford's "I bought this". Their own section, not
+          a subscription with a tag: each one still paying is re-checked here
+          against today's projections (see recheckAffordItems). The id is
+          the Dashboard alert's link target. */}
+      <Card id={FROM_AFFORD_SECTION_ID} className="scroll-mt-20">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Calculator className="size-4 text-muted-foreground" />
+            {t.fromAfford}
+          </CardTitle>
+          <CardDescription>
+            {t.fromAffordDescription(formatMoney(data.fromAffordMonthly, currency), activeFromAfford)}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {data.fromAfford.length === 0 ? (
+            <EmptyState
+              title={t.noFromAffordTitle}
+              description={t.noFromAffordDescription}
+              action={
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/afford">{t.openAfford}</Link>
+                </Button>
+              }
+            />
+          ) : (
+            <RecurringList
+              rows={data.fromAfford}
+              categories={categories}
+              accounts={accounts}
+              goals={goals}
+              displayCurrency={currency}
+              today={context.today}
+              locale={context.language}
+              viability={viability}
+            />
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

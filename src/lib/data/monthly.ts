@@ -245,21 +245,38 @@ async function getFirstActivityDate(): Promise<Date | null> {
  * `currentMonth`. Never includes `currentMonth` itself, and never reaches
  * further back than `firstActivityMonth` - no fake zero-history months before
  * the user started using Cadence.
+ *
+ * `incomeHistoryStartMonth` (Settings' "count income history from", already
+ * bounding comparableHistory and getCategorySuggestions the same way) is a
+ * second, independent lower bound of the same kind, not a parallel mechanism:
+ * the walk stops at whichever of the two boundaries is later (more
+ * restrictive), using the exact same break condition below. Null (the
+ * default) leaves the walk exactly as it was before this parameter existed.
+ * A boundary that leaves fewer than MIN_HISTORICAL_MONTHS is not special-cased
+ * here - getHistoricalMonthlyAverage's existing "not enough history" rule
+ * already covers it, honestly, the same way a brand-new account's own
+ * firstActivityMonth does.
  */
 export function computeCompletedMonthWindows(
   currentMonth: MonthRef,
   firstActivityMonth: MonthRef | null,
   maxCount = MAX_HISTORICAL_MONTHS,
+  incomeHistoryStartMonth: MonthRef | null = null,
 ): MonthWindow[] {
   if (!firstActivityMonth) return [];
 
   const firstActivityWindow = monthWindow(firstActivityMonth);
+  const incomeHistoryWindow = incomeHistoryStartMonth ? monthWindow(incomeHistoryStartMonth) : null;
+  const earliestWindow =
+    incomeHistoryWindow && incomeHistoryWindow.start.getTime() > firstActivityWindow.start.getTime()
+      ? incomeHistoryWindow
+      : firstActivityWindow;
   let cursor: MonthRef = previousMonth(currentMonth);
   const windows: MonthWindow[] = [];
 
   for (let i = 0; i < maxCount; i += 1) {
     const window = monthWindow(cursor);
-    if (window.start.getTime() < firstActivityWindow.start.getTime()) break;
+    if (window.start.getTime() < earliestWindow.start.getTime()) break;
     windows.unshift(window);
     cursor = previousMonth(cursor);
   }
@@ -269,7 +286,9 @@ export function computeCompletedMonthWindows(
 /**
  * Up to `maxCount` completed calendar months, oldest first, ending the month
  * before the current one. See computeCompletedMonthWindows for the boundary
- * rules - this just wires it up to the real first-activity date and "today".
+ * rules - this just wires it up to the real first-activity date, "today", and
+ * (converted to a month the same way every other date here is) Settings'
+ * incomeHistoryStartDate.
  */
 export async function getCompletedMonthWindows(
   context: AppContext,
@@ -277,7 +296,12 @@ export async function getCompletedMonthWindows(
 ): Promise<MonthWindow[]> {
   const firstActivity = await getFirstActivityDate();
   if (!firstActivity) return [];
-  return computeCompletedMonthWindows(monthForDate(context.today), monthForDate(firstActivity), maxCount);
+  return computeCompletedMonthWindows(
+    monthForDate(context.today),
+    monthForDate(firstActivity),
+    maxCount,
+    context.incomeHistoryStartDate ? monthForDate(context.incomeHistoryStartDate) : null,
+  );
 }
 
 interface MonthActuals {

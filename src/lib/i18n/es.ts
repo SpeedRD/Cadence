@@ -83,6 +83,8 @@ export const es = {
     goals: "Metas",
     reports: "Informes",
     settings: "Ajustes",
+    badgeLabel: (count: number) =>
+      count === 1 ? "1 requiere atención" : `${count} requieren atención`,
   },
   shell: {
     paidTwiceAMonth: (range: string) => `Pago dos veces al mes. Los presupuestos van del ${range}.`,
@@ -147,6 +149,15 @@ export const es = {
     notPostingReasonGoalAchieved: "su meta ya está completa",
     notPostingReasonFailed: "la última ejecución falló",
     notPostingLink: "Arreglar en la página de recurrentes",
+    affordShortTitle: (count: number) =>
+      count === 1
+        ? "1 compra desde Cuotas ya no encaja"
+        : `${count} compras desde Cuotas ya no encajan`,
+    affordShortDescription:
+      "Los compromisos agregados desde que se confirmaron redujeron el margen con el que contaban sus pagos restantes. Nada se bloquea: la revisión es orientativa, como la de Cuotas.",
+    affordShortItem: (name: string, amount: string, period: string) =>
+      `${name} - faltan ${amount} en ${period}`,
+    affordShortLink: "Verlas en la página de recurrentes",
     goalsHeading: "Metas",
     overdueNotPosted: "vencido, aún sin registrar",
     plusOutsideBudget: (amount: string) =>
@@ -588,6 +599,21 @@ export const es = {
       `Ninguna cuenta puede sostener esto por sí sola: todas terminarían ${period} por debajo de su colchón protegido.`,
     roomNoneSuggestion:
       "Aun así puedes guardarlo tal cual. Para repartir el costo, crea dos suscripciones más pequeñas, una por cuenta: una suscripción siempre se cobra a una sola cuenta.",
+    fromAfford: "Desde Cuotas",
+    fromAffordDescription: (amount: string, count: number) =>
+      `${amount} al mes entre ${count} plan${count === 1 ? "" : "es"} en curso, cada uno revisado contra las proyecciones de hoy`,
+    noFromAffordTitle: "Sin compras desde Cuotas",
+    noFromAffordDescription:
+      "Una compra que confirmes en la página de Cuotas se sigue aquí y se vuelve a revisar contra tus proyecciones a medida que otros compromisos aparecen o desaparecen.",
+    openAfford: "Abrir Cuotas",
+    stillOnTrack: "Sigue en orden",
+    stillOnTrackHint:
+      "Revisado hoy: cada pago restante sigue pasando las dos comprobaciones de Cuotas contra las proyecciones actuales.",
+    shortBy: (amount: string, period: string) => `Faltan ${amount} en ${period}`,
+    shortByAccountHint: (account: string) =>
+      `Revisado hoy: ${account} terminaría ese periodo por debajo de su colchón protegido. Solo orientativo: nada se bloquea.`,
+    shortByFlexibleHint:
+      "Revisado hoy: lo disponible para gasto flexible de ese periodo quedaría en déficit. Solo orientativo: nada se bloquea.",
   },
   afford: {
     title: "¿Me alcanza?",
@@ -863,6 +889,9 @@ export const es = {
     carryoverDefaultLabel: "Incluir remanente por defecto",
     carryoverDefaultHint:
       "Si está activo, el dinero sin gastar del presupuesto del periodo anterior se precarga como remanente incluido en cada chequeo nuevo.",
+    incomeHistoryStartLabel: "Contar historial de ingresos desde",
+    incomeHistoryStartHint:
+      "Si tu situación de ingresos cambió (un trabajo nuevo, por ejemplo), define esta fecha para que los promedios de Cadence (la proyección de ingresos de Cuotas, las sugerencias por categoría del chequeo de pago) dejen de contar periodos antiguos que ya no aplican. Déjala en blanco para usar todo tu historial como siempre.",
     planningPreferencesSaved: "Preferencias de planificación guardadas",
     essentialCategoriesTitle: "Categorías fijas esenciales",
     essentialCategoriesDescription:

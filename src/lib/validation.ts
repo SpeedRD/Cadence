@@ -580,6 +580,8 @@ export const planningPreferencesSchema = z.object({
     .trim()
     .optional()
     .transform((value) => value === "on" || value === "true"),
+  /** Settings.incomeHistoryStartDate: blank clears it (no boundary), like a goal's target date. */
+  incomeHistoryStartDate: optionalIsoDate,
 });
 
 const rawDescriptionText = z

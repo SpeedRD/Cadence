@@ -25,6 +25,8 @@ export interface RecurringRow {
    * is a plan that has finished, as opposed to one the user paused.
    */
   remainingOccurrences: number | null;
+  /** Recorded by the Afford calculator's "I bought this" (RecurringItem.fromAfford); listed under "From Afford", never among the subscriptions or contributions. */
+  fromAfford: boolean;
   note: string | null;
   categoryId: string | null;
   categoryName: string | null;
@@ -75,6 +77,7 @@ export async function listRecurringItems(context: AppContext) {
       updatedAt: item.updatedAt,
       active: item.active,
       remainingOccurrences: item.remainingOccurrences,
+      fromAfford: item.fromAfford,
       note: item.note,
       categoryId: item.categoryId,
       categoryName: item.category?.name ?? null,
@@ -94,8 +97,11 @@ export async function listRecurringItems(context: AppContext) {
     };
   });
 
-  const subscriptions = rows.filter((row) => row.kind === "SUBSCRIPTION");
-  const contributions = rows.filter((row) => row.kind === "CONTRIBUTION");
+  // A plan Afford recorded has its own section, whatever its kind: it is
+  // never a subscription or a contribution here, not merely grouped apart.
+  const fromAfford = rows.filter((row) => row.fromAfford);
+  const subscriptions = rows.filter((row) => !row.fromAfford && row.kind === "SUBSCRIPTION");
+  const contributions = rows.filter((row) => !row.fromAfford && row.kind === "CONTRIBUTION");
 
   const monthlyTotal = (list: RecurringRow[]) =>
     round2(
@@ -107,8 +113,10 @@ export async function listRecurringItems(context: AppContext) {
   return {
     subscriptions,
     contributions,
+    fromAfford,
     subscriptionsMonthly: monthlyTotal(subscriptions),
     contributionsMonthly: monthlyTotal(contributions),
+    fromAffordMonthly: monthlyTotal(fromAfford),
   };
 }
 

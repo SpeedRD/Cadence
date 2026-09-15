@@ -32,6 +32,8 @@
  * here writes until confirmAffordPurchase() - the calculator is a pure read
  * until "I bought this".
  */
+import { cache } from "react";
+
 import {
   buildInstallments,
   equalInstallmentAmount,
@@ -40,10 +42,12 @@ import {
   type AffordVerdict,
   type PeriodProjection,
 } from "@/lib/afford";
+import { remainingInstallments, type AffordTrackedItem } from "@/lib/afford-tracking";
+import { getSettings } from "@/lib/auth";
 import { convert } from "@/lib/currency";
 import { maxDate } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
-import { defaultProtectedBuffer } from "@/lib/payday";
+import { countsInIncomeHistory, defaultProtectedBuffer } from "@/lib/payday";
 import {
   parsePeriodKey,
   periodForDate,
@@ -58,7 +62,10 @@ import { owedOccurrences } from "@/lib/recurring";
 import type { affordInputSchema } from "@/lib/validation";
 import type { z } from "zod";
 
+import { getAppContext } from "@/lib/data/context";
 import { HISTORY_PERIODS, type ConfirmPaydayCheckinContext } from "@/lib/data/payday";
+
+import type { Prisma } from "@/generated/prisma/client";
 
 /** AppContext plus the buffer settings, the same shape confirmPaydayCheckin takes. */
 export type AffordContext = ConfirmPaydayCheckinContext;
@@ -81,11 +88,19 @@ interface ActiveAccount {
  * installment can land a year out, and the same-half periods between now and
  * then that are neither over nor confirmed have no history to give and would
  * only dilute the average with zeros, so they are walked past.
+ *
+ * `incomeHistoryStartDate` (Settings, "count income history from") is a
+ * second lower bound of the same kind as an account's first activity: a
+ * period that ended before it is dropped from the walk rather than counted as
+ * zero, so averageSinceFirstActivity averages over whatever periods remain
+ * exactly as it does for an account that did not exist yet. Null or absent
+ * leaves the walk untouched.
  */
 export function comparableHistory(
   ref: PeriodRef,
   today: Date,
   confirmed: ReadonlySet<string> = new Set(),
+  incomeHistoryStartDate: Date | null = null,
 ): PeriodInfo[] {
   let cursor = periodInfo(previousComparablePeriod(ref));
   // Bounded for an absurdly distant first payment (~40 years).
@@ -101,7 +116,7 @@ export function comparableHistory(
     periods.push(cursor);
     cursor = periodInfo(previousComparablePeriod(cursor));
   }
-  return periods;
+  return periods.filter((period) => countsInIncomeHistory(period, incomeHistoryStartDate));
 }
 
 /**
@@ -213,11 +228,17 @@ interface ScheduledCommitments {
  *
  * An item or GOAL row with no account (or one on an archived account) counts
  * period-wide but against no account's buffer.
+ *
+ * `excludeItemId` leaves one item out of the walk: the tracker's re-check of
+ * a recorded plan judges that plan's own installments, which are by then
+ * among the active items and would otherwise be counted as a commitment and
+ * subtracted again on top. Absent for an ordinary evaluation.
  */
 async function loadScheduledCommitments(
   periods: PeriodInfo[],
   accounts: ActiveAccount[],
   context: AffordContext,
+  excludeItemId?: string,
 ): Promise<Map<string, ScheduledCommitments>> {
   const result = new Map<string, ScheduledCommitments>(
     periods.map((period) => [period.key, { byAccount: new Map<string, number>(), total: 0 }]),
@@ -239,7 +260,11 @@ async function loadScheduledCommitments(
 
   const [items, checkins] = await Promise.all([
     prisma.recurringItem.findMany({
-      where: { active: true, nextDate: { lte: horizonEnd } },
+      where: {
+        active: true,
+        nextDate: { lte: horizonEnd },
+        ...(excludeItemId ? { id: { not: excludeItemId } } : {}),
+      },
       select: {
         amount: true,
         currency: true,
@@ -298,27 +323,32 @@ async function loadScheduledCommitments(
  * activity. A period confirmed today counts as history from this moment (see
  * comparableHistory), so a purchase evaluated right after a check-in reads
  * the income that check-in just recorded. Commitments are enumerated from the recurring items' schedules in
- * one pass over the whole horizon.
+ * one pass over the whole horizon, leaving out `options.excludeItemId` if
+ * given (see loadScheduledCommitments).
  */
 export async function projectPeriods(
   refs: PeriodRef[],
   chosen: ActiveAccount,
   accounts: ActiveAccount[],
   context: AffordContext,
+  options: { excludeItemId?: string } = {},
 ): Promise<Map<string, PeriodProjection>> {
   const confirmedOpen = await loadConfirmedOpenPeriodKeys(context.today);
   const histories = new Map<string, PeriodInfo[]>();
   const historyKeyFor = new Map<string, string>();
   for (const ref of refs) {
-    const history = comparableHistory(ref, context.today, confirmedOpen);
-    const key = history[0].key;
+    const history = comparableHistory(ref, context.today, confirmedOpen, context.incomeHistoryStartDate);
+    // A "count income history from" date past every comparable period leaves
+    // an empty walk: nothing to load, and every account then projects zero
+    // income over zero periods (basis "none"), as a brand-new account does.
+    const key = history[0]?.key ?? "";
     historyKeyFor.set(periodInfo(ref).key, key);
     if (!histories.has(key)) histories.set(key, history);
   }
 
   const incomeByHistory = new Map<string, PeriodIncome[]>();
   const [scheduled] = await Promise.all([
-    loadScheduledCommitments(refs.map(periodInfo), accounts, context),
+    loadScheduledCommitments(refs.map(periodInfo), accounts, context, options.excludeItemId),
     ...[...histories.entries()].map(async ([key, history]) => {
       const incomes = await Promise.all(
         history.map((period) => loadPeriodIncome(period, accounts, context)),
@@ -376,7 +406,13 @@ export async function projectPeriods(
         committed: round2(commitments?.total ?? 0),
         buffer: round2(periodBuffer),
       },
-      historyPeriods: HISTORY_PERIODS,
+      // The comparable periods actually walked for this projection - `incomes`
+      // is built by mapping over the (possibly boundary-filtered) `history`
+      // array above, so this is HISTORY_PERIODS unless "count income history
+      // from" trimmed it, never the constant regardless of the boundary. What
+      // the results page's copy ("average of your last N comparable pay
+      // periods") reads, so it stays accurate whichever way the boundary lands.
+      historyPeriods: incomes.length,
     });
   }
   return projections;
@@ -462,7 +498,9 @@ export type AffordConfirmation =
  * The one write in this feature. Re-runs the evaluation first so the
  * acknowledgement gate is the server's verdict, not the client's, then creates
  * a single SUBSCRIPTION RecurringItem that counts itself down: from here on
- * the plan is an ordinary recurring item to every other part of the app.
+ * the plan is an ordinary recurring item to posting, the period summary and
+ * the check-in. Only `fromAfford` tells it apart, for the Recurring page's
+ * "From Afford" section and the tracker below.
  */
 export async function confirmAffordPurchase(
   input: AffordInput,
@@ -486,8 +524,129 @@ export async function confirmAffordPurchase(
       anchorDay: input.firstDate.getUTCDate(),
       accountId: evaluation.recorded.accountId,
       remainingOccurrences: evaluation.recorded.count,
+      fromAfford: true,
     },
     select: { id: true },
   });
   return { ok: true, recurringItemId: item.id, verdict: evaluation.verdict };
 }
+
+/**
+ * Still viable? A plan recorded here was judged against projections made on
+ * the day it was confirmed. Every commitment recorded since - another plan,
+ * a new subscription, a check-in's goal funding - shrinks the room the later
+ * periods have, and nothing re-asked the question. The re-check does: the
+ * same two checks evaluateAffordRequest runs, over the plan's *actual*
+ * remaining schedule (its live nextDate, frequency, anchor and countdown -
+ * what posting will charge, not what was typed in), against projections
+ * made now. The plan's own occurrences are left out of the commitments it is
+ * judged against (see loadScheduledCommitments), so re-checking right after
+ * confirming reproduces the confirmed verdict exactly, and the verdict is
+ * Afford's own shape. Read-only, like the calculator.
+ */
+export type AffordRecheck =
+  | { ok: true; verdict: AffordVerdict }
+  | {
+      ok: false;
+      reason: "not_found" | "not_from_afford" | "no_remaining_schedule" | "account_not_active";
+    };
+
+const TRACKED_ITEM_SELECT = {
+  id: true,
+  name: true,
+  amount: true,
+  currency: true,
+  frequency: true,
+  nextDate: true,
+  anchorDay: true,
+  remainingOccurrences: true,
+  accountId: true,
+  active: true,
+  fromAfford: true,
+} satisfies Prisma.RecurringItemSelect;
+
+type TrackedItemRow = Prisma.RecurringItemGetPayload<{ select: typeof TRACKED_ITEM_SELECT }>;
+
+/** Runs the two checks for one loaded plan; null when its account is not among the active ones (the per-account check has nothing to run against). */
+async function recheckLoadedItem(
+  item: TrackedItemRow,
+  accounts: ActiveAccount[],
+  context: AffordContext,
+): Promise<AffordVerdict | null> {
+  const chosen = accounts.find((account) => account.id === item.accountId);
+  if (!chosen) return null;
+  const installments = remainingInstallments(
+    item,
+    num(item.amount),
+    context.today,
+    context.currentPeriod.key,
+  );
+  const refs = [...new Set(installments.map((installment) => installment.periodKey))]
+    .map((key) => parsePeriodKey(key))
+    .filter((ref): ref is PeriodRef => ref !== null);
+  const projections = await projectPeriods(refs, chosen, accounts, context, {
+    excludeItemId: item.id,
+  });
+  return evaluateAffordability({
+    installments,
+    currency: item.currency,
+    projections,
+    rates: context.rates,
+  });
+}
+
+/** Re-checks one plan by id. Plain function so scripts/verify-domain.ts can drive it. */
+export async function recheckAffordItem(
+  itemId: string,
+  context: AffordContext,
+): Promise<AffordRecheck> {
+  const item = await prisma.recurringItem.findUnique({
+    where: { id: itemId },
+    select: TRACKED_ITEM_SELECT,
+  });
+  if (!item) return { ok: false, reason: "not_found" };
+  if (!item.fromAfford) return { ok: false, reason: "not_from_afford" };
+  if (!item.active || !item.remainingOccurrences || item.remainingOccurrences <= 0) {
+    return { ok: false, reason: "no_remaining_schedule" };
+  }
+  const verdict = await recheckLoadedItem(item, await loadActiveAccounts(), context);
+  return verdict ? { ok: true, verdict } : { ok: false, reason: "account_not_active" };
+}
+
+/**
+ * Every plan the tracker follows - active, from Afford, payments left, on an
+ * active account - each re-checked, soonest due first. A plan whose account
+ * has gone (unset, or archived since) is left out: there is no account
+ * check to run, and the Recurring page already flags it as needing one.
+ */
+export async function recheckAffordItems(context: AffordContext): Promise<AffordTrackedItem[]> {
+  const [items, accounts] = await Promise.all([
+    prisma.recurringItem.findMany({
+      where: { fromAfford: true, active: true, remainingOccurrences: { gt: 0 } },
+      orderBy: [{ nextDate: "asc" }, { name: "asc" }],
+      select: TRACKED_ITEM_SELECT,
+    }),
+    loadActiveAccounts(),
+  ]);
+  const verdicts = await Promise.all(items.map((item) => recheckLoadedItem(item, accounts, context)));
+  return items.flatMap((item, index) => {
+    const verdict = verdicts[index];
+    return verdict ? [{ itemId: item.id, name: item.name, verdict }] : [];
+  });
+}
+
+/**
+ * The tracker as a page sees it: the request's own context plus the buffer
+ * settings, computed once per request however many places read it (the nav
+ * badge on every page, the Dashboard alert, the Recurring page's section) and
+ * never kept beyond it.
+ */
+export const getAffordRechecks = cache(async (): Promise<AffordTrackedItem[]> => {
+  const [context, settings] = await Promise.all([getAppContext(), getSettings()]);
+  return recheckAffordItems({
+    ...context,
+    bufferPercent: settings.bufferPercent,
+    bufferFloorAmount: num(settings.bufferFloorAmount),
+    bufferFloorCurrency: settings.bufferFloorCurrency,
+  });
+});

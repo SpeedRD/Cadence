@@ -26,20 +26,40 @@ interface NavItem {
   exact?: boolean;
 }
 
+/** Counts to show as a red pill on a link, by href. Absent or zero means no pill - like an app icon badge. */
+export type NavBadges = Partial<Record<string, number>>;
+
 function isActive(pathname: string, href: string, exact?: boolean) {
   if (exact) return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function CountBadge({ count, label }: { count: number; label: string }) {
+  return (
+    <span
+      aria-label={label}
+      className="figure ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--critical)] px-1 text-[0.625rem] leading-none font-semibold text-white"
+    >
+      {count}
+    </span>
+  );
+}
+
 export function NavLinks({
   variant,
   locale,
+  badges = {},
 }: {
   variant: "sidebar" | "bar";
   locale: Locale;
+  badges?: NavBadges;
 }) {
   const pathname = usePathname();
   const t = getDictionary(locale).nav;
+  const badgeFor = (href: string) => {
+    const count = badges[href] ?? 0;
+    return count > 0 ? <CountBadge count={count} label={t.badgeLabel(count)} /> : null;
+  };
 
   const NAV: NavItem[] = [
     { href: "/", label: t.dashboard, icon: Gauge, exact: true },
@@ -75,6 +95,7 @@ export function NavLinks({
             >
               <item.icon className="size-4" />
               {item.label}
+              {badgeFor(item.href)}
             </Link>
           );
         })}
@@ -106,6 +127,7 @@ export function NavLinks({
             />
             <item.icon className="size-4" />
             {item.label}
+            {badgeFor(item.href)}
           </Link>
         );
       })}

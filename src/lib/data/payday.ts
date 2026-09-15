@@ -17,6 +17,7 @@ import { convert, isSameMoney } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import {
   availableForFlexibleCategories,
+  countsInIncomeHistory,
   planAccountBuffers,
   planGoalFunding,
   type AccountBufferAccount,
@@ -33,6 +34,7 @@ import {
   periodsRemaining,
   previousComparablePeriod,
   previousPeriod,
+  type PeriodInfo,
   type PeriodRef,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
@@ -270,15 +272,20 @@ export async function getCategorySuggestions(
     // comparableRef and stepping one full cycle back each time, fetched in
     // parallel instead of sequentially - each getPeriodSummary() call is an
     // independent DB round-trip, and the dashboard calls this unconditionally
-    // on every load.
-    const cursors: PeriodRef[] = [];
+    // on every load. A period that ended before Settings' "count income
+    // history from" date is dropped here, before anything is fetched - the
+    // same rule Afford's comparableHistory applies - so the per-category
+    // count below runs over the periods that remain, exactly as it already
+    // runs from a category's oldest spending forward.
+    const cursors: PeriodInfo[] = [];
     let cursor = comparableRef;
     for (let i = 0; i < HISTORY_PERIODS; i += 1) {
-      cursors.push(cursor);
+      const info = periodInfo(cursor);
+      if (countsInIncomeHistory(info, context.incomeHistoryStartDate)) cursors.push(info);
       cursor = previousComparablePeriod(cursor);
     }
     const summaries = await Promise.all(
-      cursors.map((ref) => getPeriodSummary(periodInfo(ref), context)),
+      cursors.map((period) => getPeriodSummary(period, context)),
     );
     // `summaries` runs newest first, so the oldest period with any spending is
     // the furthest index the average should reach back to.

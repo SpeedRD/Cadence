@@ -119,7 +119,12 @@ export interface PeriodProjection {
     /** Every income-receiving account's buffer, summed - the check-in's plannedBuffer. */
     buffer: number;
   };
-  /** How many comparable periods were averaged (the newest has the most weight only in that it is guaranteed to be included). */
+  /**
+   * How many comparable periods were actually averaged - up to HISTORY_PERIODS,
+   * fewer when Settings' "count income history from" date drops some of them
+   * (see comparableHistory in src/lib/data/afford.ts). The newest has the most
+   * weight only in that it is guaranteed to be included.
+   */
   historyPeriods: number;
 }
 

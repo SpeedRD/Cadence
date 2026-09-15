@@ -164,6 +164,24 @@ one, showing as finished rather than paused. "Mark as paid off" ends a plan earl
 the remainder was settled outside the app; a finished plan restarts only by editing
 its payments left.
 
+Plans recorded from Afford's **I bought this** have their own **From Afford** section
+rather than sitting among the subscriptions (a hand-entered plan, even one given
+"Payments left", stays a subscription). Each one still paying is re-checked on every
+visit: its remaining payments - the live due dates and countdown, exactly what will
+post - are run through Afford's two checks again against today's projections, with
+the plan's own installments left out of the commitments it is judged against. The
+badge reads **Still on track** while every remaining period passes, or names the
+first period that no longer does and by how much ("Short by DOP 1,683.33 in Oct
+1-15") - typically because a commitment recorded since took the room. The Dashboard
+shows an alert naming those plans and the Recurring nav link carries a count badge
+while any exist; both clear on their own once the room is back (a commitment paused
+or removed, the plan paid off). Advisory only, like Afford itself: nothing is blocked,
+and posting is untouched.
+
+![Recurring page's From Afford section: one plan still on track, another short by a named amount in a named pay period, with the Recurring nav link's red count badge visible in the sidebar](screenshots/recurring-from-afford.png)
+
+![Dashboard alert for a no-longer-viable Afford plan, naming the plan and the shortfall and linking back to the Recurring page](screenshots/dashboard-afford-alert.png)
+
 A **large subscription** — DOP 10,000 or more a charge, converted if entered in another
 currency — gets an advisory room check right in the form, recomputed as the amount,
 currency, frequency or due date changes. It reuses Afford's projection for the one pay
@@ -189,12 +207,14 @@ equal parts, places each on the pay period it lands in, and runs two checks per
 period: the chosen account stays at or above its own protected buffer, and the
 period's available-for-flexible figure stays out of deficit. Installments landing in
 the same period are checked together. Because those periods haven't happened yet,
-income is projected from the average of your last six comparable periods (same half
-of the month) while commitments are exact — every active recurring item's occurrences
-in that period, including installment plans already recorded here. Nothing is written
-until you press **I bought this**, which records one self-limiting recurring
-subscription for the schedule shown; a shortfall verdict has to be acknowledged
-first.
+income is projected from the average of your comparable periods (same half of the
+month) — up to the last six, fewer if a **Count income history from** date (Settings)
+has trimmed some of them off — while commitments are exact: every active recurring
+item's occurrences in that period, including installment plans already recorded here.
+Nothing is written until you press **I bought this**, which records one self-limiting
+recurring subscription for the schedule shown, marked as from Afford so the Recurring
+page can list it apart and keep re-checking it (see "From Afford" above); a shortfall
+verdict has to be acknowledged first.
 
 ### Goals
 
@@ -222,16 +242,33 @@ contributions wrote in the ledger as ordinary, editable transactions.
 Current-period spending by category, a six-pay-period trend, and a calendar-month
 view: average monthly lifestyle spending by category, the last completed months, and
 the averages for committed spending, savings and investing, and total cash outflow.
+The calendar-month average never reaches further back than the month of your first
+recorded activity, and - like Afford's and the payday planner's own pay-period
+averages - an optional **Count income history from** date (Settings) bounds it a
+second way: a completed month ending before that date is left out too, whichever
+boundary is later. A boundary set recently enough to leave fewer than three completed
+months shows as not enough history yet, the same honest result a brand-new account
+gets, rather than an average forced over too little.
 
 ### Settings
 
-![Settings page: display currency, cached exchange rates, planning preferences (buffer percentage and floor), essential fixed categories, goal recalculation, categorization, email connections, and session](screenshots/settings.png)
+![Settings page: display currency, cached exchange rates, planning preferences (buffer percentage and floor, and a Count income history from date), essential fixed categories, goal recalculation, categorization, email connections, and session](screenshots/settings.png)
 
 Display currency; the cached exchange-rate table; how the payday planner sizes the
-protected buffer (percentage of income and a fixed minimum) and whether carryover is
-included by default; category management; changing the PIN; which categories count
-as essential fixed spending; goal-total recalculation; categorizing older imports;
-Gmail/Outlook connections; and locking the app.
+protected buffer (percentage of income and a fixed minimum), whether carryover is
+included by default, and an optional **Count income history from** date; category
+management; changing the PIN; which categories count as essential fixed spending;
+goal-total recalculation; categorizing older imports; Gmail/Outlook connections; and
+locking the app.
+
+"Count income history from" is for when your situation genuinely changed - a new job,
+say - and the older history would only drag the averages the wrong way. With a date
+set, any comparable pay period or completed calendar month that ended before it is
+left out of every history walk that averages one (Afford's income projection, the
+payday planner's category-spending suggestions, and Reports' calendar-month average),
+for every account alike, and whatever remains is averaged over its own count exactly
+as it already is for an account that did not exist yet. A period or month the date
+falls inside still counts in full. Blank - the default - changes nothing.
 
 ![PIN change form in Settings: current PIN, new PIN, and confirmation](screenshots/settings-pin-change.png)
 

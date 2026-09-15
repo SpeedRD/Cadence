@@ -26,7 +26,47 @@ import {
 } from "@/server/actions/recurring";
 import { cn } from "@/lib/utils";
 
+import type { AffordViability } from "@/lib/afford-tracking";
 import type { RecurringRow } from "@/lib/data/recurring";
+
+/**
+ * The tracker's one-line verdict on a plan recorded from Afford (see
+ * summarizeAffordViability): green while every remaining payment still
+ * passes, otherwise the first period that falls short and by how much. The
+ * hint says which of Afford's two checks it was.
+ */
+function ViabilityBadge({
+  viability,
+  accountName,
+  t,
+}: {
+  viability: AffordViability;
+  accountName: string | null;
+  t: ReturnType<typeof getDictionary>["recurring"];
+}) {
+  if (viability.status === "on_track") {
+    return (
+      <span
+        className="rounded-full bg-[var(--good)]/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--good)]"
+        title={t.stillOnTrackHint}
+      >
+        {t.stillOnTrack}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="rounded-full bg-[var(--critical)]/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--critical)]"
+      title={
+        viability.check === "account"
+          ? t.shortByAccountHint(accountName ?? "")
+          : t.shortByFlexibleHint
+      }
+    >
+      {t.shortBy(formatMoney(viability.shortfall, viability.currency), viability.periodLabel)}
+    </span>
+  );
+}
 
 export function RecurringList({
   rows,
@@ -36,6 +76,7 @@ export function RecurringList({
   displayCurrency,
   today,
   locale,
+  viability,
 }: {
   rows: RecurringRow[];
   categories: Option[];
@@ -44,6 +85,8 @@ export function RecurringList({
   displayCurrency: string;
   today: Date;
   locale: Locale;
+  /** By row id, for the From Afford section only; a row without an entry (paused, finished, no active account) shows no verdict. */
+  viability?: Record<string, AffordViability>;
 }) {
   const [editing, setEditing] = useState<RecurringRow | null>(null);
   const [deleting, setDeleting] = useState<RecurringRow | null>(null);
@@ -89,6 +132,13 @@ export function RecurringList({
                   <span className="rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary">
                     {t.paymentsLeft(row.remainingOccurrences)}
                   </span>
+                ) : null}
+                {viability?.[row.id] ? (
+                  <ViabilityBadge
+                    viability={viability[row.id]}
+                    accountName={row.accountName}
+                    t={t}
+                  />
                 ) : null}
                 {row.active && row.needs === "goal_achieved" ? (
                   <span

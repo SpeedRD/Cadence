@@ -103,6 +103,14 @@ model Settings {
   /// The civil date (APP_TIMEZONE) the user last dismissed the auto-opened
   /// payday check-in prompt, so it doesn't force-open again the same day.
   checkinPromptDismissedOn   DateTime? @db.Date
+  /// "Count income history from": a civil date below which no comparable pay
+  /// period is walked when Afford projects income (comparableHistory in
+  /// src/lib/data/afford.ts) or the payday planner averages category spending
+  /// (getCategorySuggestions in src/lib/data/payday.ts) - for when the user's
+  /// situation changed (a new job) and older periods would only distort the
+  /// averages. Global, one date for every account. Null is no boundary: the
+  /// walks run exactly as they did before the column existed.
+  incomeHistoryStartDate     DateTime? @db.Date
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
 }
@@ -273,6 +281,13 @@ model RecurringItem {
   /// out of every "active items" read at once. Written by the Afford
   /// calculator for an installment plan; the recurring form never touches it.
   remainingOccurrences Int?
+  /// True only for a plan the Afford calculator recorded ("I bought this" -
+  /// confirmAffordPurchase in src/lib/data/afford.ts). The recurring form
+  /// never sets it, so an installment plan entered by hand - even one given a
+  /// "Payments left" count - stays false. The Recurring page lists these
+  /// under "From Afford" instead of Subscriptions, and re-checks each one
+  /// still owing payments against current projections.
+  fromAfford   Boolean            @default(false)
   categoryId   String?
   /// The account each posted occurrence is charged to. Required for posting.
   accountId    String?

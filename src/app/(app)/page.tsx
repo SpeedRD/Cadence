@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AffordViabilityAlert } from "@/components/dashboard/afford-viability-alert";
 import { GoalCard } from "@/components/dashboard/goal-card";
 import { MonthlyPaceCard } from "@/components/dashboard/monthly-pace-card";
 import { NotPostingAlert } from "@/components/dashboard/not-posting-alert";
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getSettings } from "@/lib/auth";
 import { isSameDay } from "@/lib/date";
+import { getAffordRechecks } from "@/lib/data/afford";
 import { getAppContext } from "@/lib/data/context";
 import { getDashboardData, UPCOMING_WINDOW_DAYS } from "@/lib/data/dashboard";
 import { getMonthlyPace } from "@/lib/data/monthly";
@@ -25,12 +27,14 @@ export default async function DashboardPage() {
   const context = await getAppContext();
   const dictionary = getDictionary(context.language);
   const t = dictionary.dashboard;
-  const [{ summary, upcoming, goals }, monthlyPace, paydayDraft, settings] = await Promise.all([
-    getDashboardData(context),
-    getMonthlyPace(context),
-    getPaydayCheckinDraft(context),
-    getSettings(),
-  ]);
+  const [{ summary, upcoming, goals }, monthlyPace, paydayDraft, settings, affordRechecks] =
+    await Promise.all([
+      getDashboardData(context),
+      getMonthlyPace(context),
+      getPaydayCheckinDraft(context),
+      getSettings(),
+      getAffordRechecks(),
+    ]);
   const elapsed = daysElapsedInPeriod(context.today, context.currentPeriod);
   const activeGoals = goals.filter((goal) => !goal.achievedAt);
   const shownGoals = activeGoals.length > 0 ? activeGoals : goals;
@@ -75,6 +79,7 @@ export default async function DashboardPage() {
       {context.recurringPosting ? (
         <NotPostingAlert posting={context.recurringPosting} t={t} />
       ) : null}
+      <AffordViabilityAlert tracked={affordRechecks} t={t} />
       {checkinLeads ? checkinCard : null}
       <PeriodHero summary={summary} elapsed={elapsed} suggestedBudget={suggestedBudget} t={t} />
       {checkinLeads ? null : checkinCard}

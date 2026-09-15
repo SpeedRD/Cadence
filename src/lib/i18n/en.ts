@@ -81,6 +81,9 @@ export const en = {
     goals: "Goals",
     reports: "Reports",
     settings: "Settings",
+    /** Read out with the link's label when it carries a count badge. */
+    badgeLabel: (count: number) =>
+      count === 1 ? "1 needs attention" : `${count} need attention`,
   },
   shell: {
     paidTwiceAMonth: (range: string) => `Paid twice a month. Budgets run ${range}.`,
@@ -145,6 +148,15 @@ export const en = {
     notPostingReasonGoalAchieved: "its goal is fully funded",
     notPostingReasonFailed: "last run failed",
     notPostingLink: "Fix on the recurring page",
+    affordShortTitle: (count: number) =>
+      count === 1
+        ? "1 purchase from Afford no longer fits"
+        : `${count} purchases from Afford no longer fit`,
+    affordShortDescription:
+      "Commitments added since these were confirmed have shrunk the room their remaining payments were counting on. Nothing is blocked - the check is advisory, like Afford's.",
+    affordShortItem: (name: string, amount: string, period: string) =>
+      `${name} - short by ${amount} in ${period}`,
+    affordShortLink: "See them on the recurring page",
     goalsHeading: "Goals",
     overdueNotPosted: "overdue, not posted yet",
     plusOutsideBudget: (amount: string) =>
@@ -584,6 +596,21 @@ export const en = {
       `No account can sustain this on its own: each would end ${period} below its protected buffer.`,
     roomNoneSuggestion:
       "You can still save it as is. To spread the cost, create two smaller subscriptions instead, one per account - a subscription is always charged to a single account.",
+    fromAfford: "From Afford",
+    fromAffordDescription: (amount: string, count: number) =>
+      `${amount} a month across ${count} plan${count === 1 ? "" : "s"} still paying - each re-checked against today's projections`,
+    noFromAffordTitle: "No purchases from Afford",
+    noFromAffordDescription:
+      "A purchase you confirm on the Afford page is tracked here and re-checked against your projections as other commitments come and go.",
+    openAfford: "Open Afford",
+    stillOnTrack: "Still on track",
+    stillOnTrackHint:
+      "Re-checked today: every remaining payment still passes both of Afford's checks against current projections.",
+    shortBy: (amount: string, period: string) => `Short by ${amount} in ${period}`,
+    shortByAccountHint: (account: string) =>
+      `Re-checked today: ${account} would end that period below its protected buffer. Advisory only - nothing is blocked.`,
+    shortByFlexibleHint:
+      "Re-checked today: that period's available-for-flexible figure would go into deficit. Advisory only - nothing is blocked.",
   },
   afford: {
     title: "Afford",
@@ -856,6 +883,9 @@ export const en = {
     carryoverDefaultLabel: "Include carryover by default",
     carryoverDefaultHint:
       "When on, unspent money from the previous period's budget pre-fills as included carryover in each new check-in.",
+    incomeHistoryStartLabel: "Count income history from",
+    incomeHistoryStartHint:
+      "If your income situation changed - a new job, for example - set this to stop Cadence's averages (Afford's income projection, the payday planner's category suggestions) from counting older, no-longer-relevant pay periods. Leave blank to use your full history as normal.",
     planningPreferencesSaved: "Planning preferences saved",
     essentialCategoriesTitle: "Essential fixed categories",
     essentialCategoriesDescription:

@@ -26,6 +26,14 @@ export interface AppContext {
    * by hand (scripts) have no posting run behind them.
    */
   recurringPosting?: RecurringPostingSummary | null;
+  /**
+   * Settings.incomeHistoryStartDate - "count income history from". A
+   * comparable pay period that ended before it is left out of Afford's income
+   * projection and the payday planner's category averages. Optional, like
+   * recurringPosting, so a context built by hand (scripts) is unbounded; null
+   * or absent means no boundary.
+   */
+  incomeHistoryStartDate?: Date | null;
 }
 
 /**
@@ -64,5 +72,6 @@ export const getAppContext = cache(async (): Promise<AppContext> => {
     today: now,
     currentPeriod: periodForDate(now),
     recurringPosting,
+    incomeHistoryStartDate: settings.incomeHistoryStartDate,
   };
 });

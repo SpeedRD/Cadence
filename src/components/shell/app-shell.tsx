@@ -1,7 +1,7 @@
 import { TriangleAlert } from "lucide-react";
 import Link from "next/link";
 
-import { NavLinks } from "@/components/shell/nav-links";
+import { NavLinks, type NavBadges } from "@/components/shell/nav-links";
 import { CurrencySwitcher } from "@/components/shell/currency-switcher";
 import { LanguageSwitcher } from "@/components/shell/language-switcher";
 import { LogoutButton } from "@/components/shell/logout-button";
@@ -16,9 +16,12 @@ import { daysElapsedInPeriod, daysRemainingInPeriod } from "@/lib/period";
 
 export function AppShell({
   context,
+  navBadges,
   children,
 }: {
   context: AppContext;
+  /** Per-link counts for the nav, computed by the layout (see AppLayout). */
+  navBadges?: NavBadges;
   children: React.ReactNode;
 }) {
   const { currentPeriod, rates } = context;
@@ -41,7 +44,7 @@ export function AppShell({
           <PeriodRail totalDays={10} elapsed={5} compact className="mb-2.5 w-16" />
           <span className="text-lg font-semibold tracking-tight">Cadence</span>
         </Link>
-        <NavLinks variant="sidebar" locale={context.language} />
+        <NavLinks variant="sidebar" locale={context.language} badges={navBadges} />
         <div className="mt-auto px-5.5 pt-6">
           <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
             {t.shell.paidTwiceAMonth(currentPeriod.period === "A" ? "1-15" : "16-end")}
@@ -84,7 +87,7 @@ export function AppShell({
             </div>
           </div>
           <div className="border-t border-border/70 md:hidden">
-            <NavLinks variant="bar" locale={context.language} />
+            <NavLinks variant="bar" locale={context.language} badges={navBadges} />
           </div>
         </header>
 
