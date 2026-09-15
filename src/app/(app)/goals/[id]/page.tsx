@@ -7,6 +7,7 @@ import {
   ContributionDeleteButton,
   ContributionEditButton,
   GoalActions,
+  ManualContributionEditButton,
 } from "@/components/goals/goal-actions";
 import { Meter } from "@/components/meter";
 import { PageHeader } from "@/components/page-header";
@@ -39,10 +40,18 @@ export default async function GoalDetailPage({
 }) {
   const { id } = await params;
   const context = await getAppContext();
-  const [detail, accounts] = await Promise.all([
+  const [detail, accounts, accountsForEdit] = await Promise.all([
     getGoalDetail(id, context),
     prisma.account.findMany({
       where: { status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, currency: true },
+    }),
+    // Every account regardless of status, so editing a contribution logged
+    // against one since archived still shows it selected - see
+    // ManualContributionEditButton and the transactions page's own
+    // accountsForEdit.
+    prisma.account.findMany({
       orderBy: { name: "asc" },
       select: { id: true, name: true, currency: true },
     }),
@@ -264,6 +273,16 @@ export default async function GoalDetailPage({
                             id={contribution.id}
                             amount={contribution.amount}
                             currency={contribution.currency}
+                          />
+                        ) : contribution.accountId ? (
+                          <ManualContributionEditButton
+                            locale={context.language}
+                            id={contribution.id}
+                            amount={contribution.amount}
+                            currency={contribution.currency}
+                            date={toISODate(contribution.date)}
+                            accountId={contribution.accountId}
+                            accounts={accountsForEdit}
                           />
                         ) : null}
                         <ContributionDeleteButton

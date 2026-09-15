@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ConfirmDelete } from "@/components/form/confirm-delete";
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
+import { AccountSelect, type Option } from "@/components/form/selects";
 import { GoalDialog } from "@/components/goals/goal-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import { getDictionary, type Locale } from "@/lib/i18n";
 import {
   deleteGoalAction,
   deleteContributionAction,
+  updateContributionAction,
   updateRecurringContributionAction,
 } from "@/server/actions/goals";
 
@@ -178,6 +180,85 @@ export function ContributionEditButton({
           className="font-mono"
           defaultValue={amount}
           required
+        />
+      </Field>
+    </FormDialog>
+  );
+}
+
+/**
+ * Corrects a hand-logged contribution in place: amount, date, and which
+ * account the money left. Moving the account re-converts the amount into
+ * that account's own currency, the same as logging a fresh contribution.
+ */
+export function ManualContributionEditButton({
+  id,
+  amount,
+  currency,
+  date,
+  accountId,
+  accounts,
+  locale,
+}: {
+  id: string;
+  amount: number;
+  currency: string;
+  date: string;
+  accountId: string;
+  /** Every account regardless of status, so one since archived still shows selected. */
+  accounts: Option[];
+  locale: Locale;
+}) {
+  const t = getDictionary(locale).goals;
+  const common = getDictionary(locale).common;
+
+  return (
+    <FormDialog
+      title={t.editContributionTitle}
+      description={t.editManualContributionDescription}
+      action={updateContributionAction}
+      submitLabel={common.save}
+      cancelLabel={common.cancel}
+      savedMessage={t.contributionUpdated}
+      trigger={
+        <Button variant="ghost" size="icon-xs" aria-label={t.editContributionAria}>
+          <Pencil className="size-3.5" />
+        </Button>
+      }
+    >
+      <input type="hidden" name="id" value={id} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t.amountWithCurrency(currency)} htmlFor={`manual-contribution-amount-${id}`}>
+          <Input
+            id={`manual-contribution-amount-${id}`}
+            name="amount"
+            inputMode="decimal"
+            className="font-mono"
+            defaultValue={amount}
+            required
+          />
+        </Field>
+        <Field label={common.date} htmlFor={`manual-contribution-date-${id}`}>
+          <Input
+            id={`manual-contribution-date-${id}`}
+            type="date"
+            name="date"
+            defaultValue={date}
+            required
+          />
+        </Field>
+      </div>
+      <Field
+        label={common.account}
+        htmlFor={`manual-contribution-account-${id}`}
+        hint={t.contributionAccountHint}
+      >
+        <AccountSelect
+          id={`manual-contribution-account-${id}`}
+          name="accountId"
+          accounts={accounts}
+          defaultValue={accountId}
+          common={common}
         />
       </Field>
     </FormDialog>

@@ -163,6 +163,81 @@ export async function updateRecurringContributionAmount(
   return { ok: true, goalId: contribution.goalId, transactionAmount };
 }
 
+export type ManualContributionUpdate =
+  | { ok: true; goalId: string; transactionAmount: number | null }
+  | { ok: false; reason: "not_found" }
+  /** Only rows logged by hand are edited this way; a recurring one is corrected via updateRecurringContributionAmount. */
+  | { ok: false; reason: "not_manual" };
+
+/**
+ * Corrects a hand-logged contribution in place - amount, date, and which
+ * account the money left - together with the Transaction logManualContribution
+ * paired it with, in one write. The manual counterpart to
+ * updateRecurringContributionAmount above.
+ *
+ * Changing the account re-converts the amount into that account's own
+ * currency, the same conversion logManualContribution applies at creation;
+ * leaving the account alone keeps the twin in its existing currency and just
+ * carries the new amount and date across. A contribution logged before
+ * contributions had an account has no twin to find - as with the recurring
+ * path, the contribution itself is still corrected, and the account it now
+ * points at takes effect the next time a twin exists to move.
+ */
+export async function updateManualContribution(
+  contributionId: string,
+  input: { amount: number; date: Date; accountId: string },
+  rates?: RateTable,
+): Promise<ManualContributionUpdate> {
+  const contribution = await prisma.goalContribution.findUnique({
+    where: { id: contributionId },
+    select: { id: true, goalId: true, currency: true, recurringExternalId: true },
+  });
+  if (!contribution) return { ok: false, reason: "not_found" };
+  if (contribution.recurringExternalId) return { ok: false, reason: "not_manual" };
+
+  const twin = await prisma.transaction.findFirst({
+    where: { source: "MANUAL", externalId: manualContributionExternalId(contribution.id) },
+    select: { id: true, currency: true, accountId: true },
+  });
+
+  let account: { id: string; currency: string } | null = null;
+  let transactionAmount: number | null = null;
+  if (twin) {
+    account =
+      twin.accountId === input.accountId
+        ? { id: twin.accountId, currency: twin.currency }
+        : await prisma.account.findUniqueOrThrow({
+            where: { id: input.accountId },
+            select: { id: true, currency: true },
+          });
+    const table =
+      rates ?? (account.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
+    transactionAmount = round2(convert(input.amount, contribution.currency, account.currency, table));
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.goalContribution.update({
+      where: { id: contribution.id },
+      data: twin
+        ? { amount: input.amount, date: input.date, accountId: account!.id }
+        : { amount: input.amount, date: input.date },
+    });
+    if (twin && account && transactionAmount !== null) {
+      await tx.transaction.update({
+        where: { id: twin.id },
+        data: {
+          amount: transactionAmount,
+          date: input.date,
+          accountId: account.id,
+          currency: account.currency,
+        },
+      });
+    }
+  });
+
+  return { ok: true, goalId: contribution.goalId, transactionAmount };
+}
+
 /**
  * Deletes a goal. Its contributions cascade at the database, but the MANUAL
  * expenses those contributions wrote have no foreign key and stay in the

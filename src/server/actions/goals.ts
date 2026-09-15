@@ -9,6 +9,7 @@ import {
   rebuildGoalSaved,
   recomputeGoalSaved,
   removeContribution,
+  updateManualContribution,
   updateRecurringContributionAmount,
 } from "@/lib/goals";
 import { getDictionary, isLocale } from "@/lib/i18n";
@@ -19,6 +20,7 @@ import {
   firstError,
   formObject,
   goalSchema,
+  manualContributionEditSchema,
   recurringContributionEditSchema,
 } from "@/lib/validation";
 
@@ -141,6 +143,49 @@ export async function addContributionAction(
     t.contributionLogged,
     justAchieved ? { achievedGoalId: goal.id } : undefined,
   );
+}
+
+/**
+ * Corrects a hand-logged contribution in place: amount, date, and which
+ * account the money left. The manual counterpart to
+ * updateRecurringContributionAction above - see updateManualContribution for
+ * how the paired Transaction is moved and re-converted.
+ */
+export async function updateContributionAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).goals;
+  const parsed = manualContributionEditSchema.safeParse(formObject(formData));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
+
+  // Editing accepts an archived account, same as the transaction form - see
+  // checkReferences.
+  const referenceError = await checkReferences(
+    getDictionary(locale).transactions,
+    [parsed.data.accountId],
+    null,
+    false,
+  );
+  if (referenceError) return fail(referenceError);
+
+  const result = await updateManualContribution(parsed.data.id, {
+    amount: parsed.data.amount,
+    date: parsed.data.date,
+    accountId: parsed.data.accountId,
+  });
+  if (!result.ok) {
+    return fail(
+      result.reason === "not_found" ? t.contributionNoLongerExists : t.contributionNotManual,
+    );
+  }
+  await recomputeGoalSaved(result.goalId);
+
+  revalidateApp();
+  return done(t.contributionUpdated);
 }
 
 export async function deleteContributionAction(

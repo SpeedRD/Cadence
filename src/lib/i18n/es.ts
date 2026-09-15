@@ -753,6 +753,9 @@ export const es = {
       "Registrado automáticamente por un elemento recurrente. Cambiar el monto aquí también actualiza el gasto que escribió en el libro. El monto del elemento para fechas futuras no cambia.",
     contributionUpdated: "Aporte actualizado",
     contributionNotRecurring: "Aquí solo se corrigen aportes registrados por un elemento recurrente; uno manual se elimina y se registra de nuevo",
+    editManualContributionDescription:
+      "Cambiar la cuenta mueve el gasto que escribió en el libro y convierte el monto a la moneda de esa cuenta.",
+    contributionNotManual: "Aquí solo se corrigen aportes registrados a mano",
   },
   reports: {
     title: "Informes",

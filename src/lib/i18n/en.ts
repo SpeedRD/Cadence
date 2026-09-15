@@ -749,6 +749,9 @@ export const en = {
       "Posted automatically by a recurring item. Changing the amount here also updates the expense it wrote in the ledger. The item's own amount for future dates is unchanged.",
     contributionUpdated: "Contribution updated",
     contributionNotRecurring: "Only a contribution posted by a recurring item is corrected here - remove a manual one and log it again",
+    editManualContributionDescription:
+      "Changing the account moves the expense it wrote in the ledger and converts the amount to that account's currency.",
+    contributionNotManual: "Only a contribution logged by hand is corrected here",
   },
   reports: {
     title: "Reports",

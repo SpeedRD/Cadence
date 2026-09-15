@@ -4593,6 +4593,52 @@ async function main() {
       eq("a subscription's RECURRING row pairs with no contribution, so it would be deleted alone", await prisma.goalContribution.count({ where: { recurringExternalId: "verify-sub:2026-08-19" } }), 0);
     }
 
+    // A hand-logged contribution can be corrected in place too - amount, date,
+    // and which account the money left - the manual counterpart to
+    // updateRecurringContributionAmount above.
+    {
+      const missingManualEditAccount = validationLib.manualContributionEditSchema.safeParse({ id: "x", amount: "5.01", date: "2026-08-22" });
+      eq("manualContributionEditSchema refuses an edit with no account field", missingManualEditAccount.success ? "ok" : missingManualEditAccount.error.issues[0]?.message, "Pick an account");
+      const parsedManualEdit = validationLib.manualContributionEditSchema.safeParse({ id: "x", amount: "5.01", date: "2026-08-22", accountId: contribAccount.id });
+      check("manualContributionEditSchema accepts a full edit", parsedManualEdit.success);
+
+      const original = await goalsLib.logManualContribution({ goalId: usdGoal.id, accountId: contribAccount.id, amount: 5, date: civilDate(2026, 8, 20), note: "Verify manual edit" }, rates);
+      await goalsLib.recomputeGoalSaved(usdGoal.id);
+      const savedBeforeManualEdit = num((await prisma.goal.findUniqueOrThrow({ where: { id: usdGoal.id } })).savedAmount);
+
+      // A same-account amount/date correction updates both rows together.
+      const centFix = await goalsLib.updateManualContribution(original.contributionId, { amount: 5.01, date: civilDate(2026, 8, 22), accountId: contribAccount.id }, rates);
+      eq("a one-cent same-account fix succeeds and reports the goal", centFix.ok ? centFix.goalId : centFix.reason, usdGoal.id);
+      await goalsLib.recomputeGoalSaved(usdGoal.id);
+      const contributionAfterCentFix = await prisma.goalContribution.findUniqueOrThrow({ where: { id: original.contributionId } });
+      const twinAfterCentFix = await prisma.transaction.findUniqueOrThrow({ where: { id: original.transactionId } });
+      eq("the GoalContribution carries the corrected amount and date", `${num(contributionAfterCentFix.amount)}:${toISODate(contributionAfterCentFix.date)}`, "5.01:2026-08-22");
+      eq("the paired Transaction carries the same corrected amount and date, same account", `${num(twinAfterCentFix.amount)}:${toISODate(twinAfterCentFix.date)}:${twinAfterCentFix.accountId}`, `5.01:2026-08-22:${contribAccount.id}`);
+      eq("the goal's cached total moved by the one-cent difference", round2(num((await prisma.goal.findUniqueOrThrow({ where: { id: usdGoal.id } })).savedAmount) - savedBeforeManualEdit), 0.01);
+
+      // Moving the account re-converts the amount into the new account's currency.
+      const eurAccount = await prisma.account.create({ data: { name: "Verify Contribution Account EUR", currency: "EUR", type: "CHECKING" } });
+      const moved = await goalsLib.updateManualContribution(original.contributionId, { amount: 5.01, date: civilDate(2026, 8, 22), accountId: eurAccount.id }, rates);
+      eq("moving the contribution to a different-currency account succeeds", moved.ok ? moved.goalId : moved.reason, usdGoal.id);
+      const twinAfterMove = await prisma.transaction.findUniqueOrThrow({ where: { id: original.transactionId } });
+      eq("the paired Transaction moved to the new account, converted to its currency", `${twinAfterMove.accountId}:${num(twinAfterMove.amount)}:${twinAfterMove.currency}`, `${eurAccount.id}:${round2(convert(5.01, "USD", "EUR", rates))}:EUR`);
+      eq("the contribution itself stays in the goal's own currency", (await prisma.goalContribution.findUniqueOrThrow({ where: { id: original.contributionId } })).currency, "USD");
+
+      // A row recurring posting wrote is refused by this path.
+      const autoKeyForManualEdit = "verify-manual-edit-item:2026-08-23";
+      await prisma.transaction.create({ data: { date: civilDate(2026, 8, 23), amount: 9, currency: "USD", type: "EXPENSE", accountId: contribAccount.id, source: "RECURRING", externalId: autoKeyForManualEdit } });
+      const autoForManualEdit = await prisma.goalContribution.create({ data: { goalId: usdGoal.id, amount: 9, currency: "USD", date: civilDate(2026, 8, 23), recurringExternalId: autoKeyForManualEdit } });
+      const refused = await goalsLib.updateManualContribution(autoForManualEdit.id, { amount: 1, date: civilDate(2026, 8, 23), accountId: contribAccount.id }, rates);
+      eq("an auto-posted contribution is refused by the manual edit path", refused.ok ? "edited" : refused.reason, "not_manual");
+      eq("a missing contribution reports not_found", (await goalsLib.updateManualContribution("missing", { amount: 1, date: civilDate(2026, 8, 23), accountId: contribAccount.id }, rates) as { ok: boolean; reason?: string }).reason, "not_found");
+
+      await prisma.goalContribution.delete({ where: { id: autoForManualEdit.id } });
+      await prisma.transaction.deleteMany({ where: { externalId: autoKeyForManualEdit } });
+      await goalsLib.removeContribution({ id: original.contributionId, accountId: eurAccount.id });
+      await goalsLib.recomputeGoalSaved(usdGoal.id);
+      await prisma.account.delete({ where: { id: eurAccount.id } });
+    }
+
     // Deleting a goal leaves the expenses its manual contributions wrote in
     // the ledger as ordinary rows: their goal-contribution key is cleared in
     // the same transaction, so the generic form stops pointing at a goal that
