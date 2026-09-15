@@ -19,7 +19,6 @@ import {
   availableForFlexibleCategories,
   planAccountBuffers,
   planGoalFunding,
-  scaleFlexibleSuggestions,
   type AccountBufferAccount,
   type AccountBufferSubscription,
   type GoalFundingPlan,
@@ -151,6 +150,24 @@ export interface PaydayCategoryDraft {
   basis: SuggestionBasis;
 }
 
+/**
+ * A flexible category as the draft carries it: suggestedAmount is the RAW
+ * getCategorySuggestions() figure, not yet scaled to what the plan has
+ * available - that depends on the income Step 2 records, which is unknown
+ * when the draft is built. The wizard scales it live with
+ * resolveFlexibleCategories(); confirmPaydayCheckin() stores this raw figure
+ * as the allocation's recommendedAmount.
+ */
+export interface PaydayFlexibleCategoryDraft extends PaydayCategoryDraft {
+  /**
+   * plannedAmount is a figure of the user's own - a budget already saved for
+   * the period or a confirmed allocation - and stays put. Otherwise it follows
+   * the live scaled suggestion, exactly like an unedited goal funding row
+   * (PaydayGoalFundingDraft.held).
+   */
+  held: boolean;
+}
+
 export type CarryoverBasis = "prior_period_budget" | "no_prior_budget";
 
 export interface PaydayCheckinDraft {
@@ -166,7 +183,7 @@ export interface PaydayCheckinDraft {
   contributionsTotal: number;
   goals: PaydayGoalDraft[];
   essentialCategories: PaydayCategoryDraft[];
-  flexibleCategories: PaydayCategoryDraft[];
+  flexibleCategories: PaydayFlexibleCategoryDraft[];
   /** Settings.bufferPercent, so Step 3 recomputes each account's buffer live as income is edited. */
   bufferPercent: number;
   /**
@@ -681,12 +698,6 @@ export async function getPaydayCheckinDraft(
       ),
     };
   });
-  const totalIncome = round2(
-    accountDrafts.reduce(
-      (sum, a) => sum + convert(a.incomeEntered, a.currency, context.displayCurrency, context.rates),
-      0,
-    ),
-  );
 
   const subscriptions = planSummary.committedItems
     .filter((i) => i.kind === "SUBSCRIPTION")
@@ -768,7 +779,6 @@ export async function getPaydayCheckinDraft(
       periodsLeft,
     };
   });
-  const goalPlanTotal = round2(goals.reduce((sum, g) => sum + g.plannedAmount, 0));
 
   const suggestionsByCategory = await getCategorySuggestions(
     planRef,
@@ -791,7 +801,6 @@ export async function getPaydayCheckinDraft(
       basis: suggestion.basis,
     };
   });
-  const essentialFixedTotal = round2(essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
 
   const includedCarryover = existing
     ? round2(convert(num(existing.includedCarryover), existing.currency, context.displayCurrency, context.rates))
@@ -799,35 +808,27 @@ export async function getPaydayCheckinDraft(
       ? carryover.amount
       : 0;
 
-  const available = availableForFlexibleCategories({
-    income: totalIncome,
-    includedCarryover,
-    subscriptions: subscriptionsTotal,
-    recurringContributions: contributionsTotal,
-    goalPlan: goalPlanTotal,
-    essentialFixed: essentialFixedTotal,
-    buffer: plannedBuffer,
-  });
-  const scaled = scaleFlexibleSuggestions(
-    flexibleCategoryRows.map((c) => ({ id: c.id, suggested: suggestionsByCategory.get(c.id)?.amount ?? 0 })),
-    available,
-  );
-  const scaledById = new Map(scaled.map((s) => [s.id, s.scaled]));
-  const flexibleCategories: PaydayCategoryDraft[] = flexibleCategoryRows.map((category) => {
+  // Raw suggestions, deliberately not scaled to what the plan has available:
+  // on a fresh check-in no income has been entered yet, so that figure is at
+  // best the carryover and scaling against it zeroed every suggestion. The
+  // wizard resolves these rows live against the income it records
+  // (resolveFlexibleCategories), the same way it resolves goal funding.
+  const flexibleCategories: PaydayFlexibleCategoryDraft[] = flexibleCategoryRows.map((category) => {
     const suggestion = suggestionsByCategory.get(category.id) ?? { amount: 0, basis: "none" as const };
     const existingAlloc = existingAllocationByKey.get(`FLEXIBLE_CATEGORY:${category.id}`);
-    const scaledAmount = scaledById.get(category.id) ?? 0;
+    const existingPlanned =
+      existingBudgetByCategory.get(category.id) ??
+      (existingAlloc
+        ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
+        : undefined);
     return {
       categoryId: category.id,
       name: category.name,
       color: category.color,
-      suggestedAmount: scaledAmount,
-      plannedAmount:
-        existingBudgetByCategory.get(category.id) ??
-        (existingAlloc
-          ? round2(convert(num(existingAlloc.plannedAmount), existingAlloc.currency, context.displayCurrency, context.rates))
-          : scaledAmount),
+      suggestedAmount: suggestion.amount,
+      plannedAmount: existingPlanned ?? suggestion.amount,
       basis: suggestion.basis,
+      held: existingPlanned !== undefined,
     };
   });
 

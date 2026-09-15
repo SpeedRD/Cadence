@@ -46,6 +46,7 @@ import {
   planAccountBuffers,
   planGoalFunding,
   recommendGoalFunding,
+  resolveFlexibleCategories,
   resolveGoalFunding,
   scaleFlexibleSuggestions,
   summarizePaydayDraft,
@@ -1166,7 +1167,10 @@ async function main() {
       ],
       goals: [{ plannedAmount: 4000 }],
       essentialCategories: [{ plannedAmount: 5000 }, { plannedAmount: 1000 }],
-      flexibleCategories: [{ plannedAmount: 2500.5 }, { plannedAmount: 0 }],
+      flexibleCategories: [
+        { suggestedAmount: 900, plannedAmount: 2500.5, held: true },
+        { suggestedAmount: 0, plannedAmount: 0, held: true },
+      ],
       includedCarryover: 2000,
       subscriptionsTotal: 3000,
       contributionsTotal: 1500,
@@ -1176,6 +1180,14 @@ async function main() {
     eq("draft summary converts every account's income into the display currency", summary.totalIncome, 36000);
     eq("draft summary sums essential fixed planned amounts", summary.essentialFixedTotal, 6000);
     eq("draft summary sums flexible planned amounts", summary.flexibleTotal, 2500.5);
+    eq(
+      "draft summary resolves an unheld flexible row against its own available figure, like the wizard does",
+      summarizePaydayDraft(
+        { ...draft, flexibleCategories: [{ suggestedAmount: 25000, plannedAmount: 25000, held: false }] } as typeof draft,
+        draftRates,
+      ).flexibleTotal,
+      19900,
+    );
     eq(
       "draft summary's available figure follows availableForFlexibleCategories",
       summary.available,
@@ -1416,6 +1428,83 @@ async function main() {
   eq("over-budget suggestions scale down proportionally", scaled.map((s) => s.scaled).join(","), "3000,1500,500");
   const deficit = scaleFlexibleSuggestions(suggestions, -500);
   eq("a deficit scales every suggestion to zero, never negative", deficit.every((s) => s.scaled === 0), true);
+
+  {
+    // The rounding gap: each row rounded on its own summed to 18,000.01 at
+    // 18,000 available (a real Step 4 plan on 2026-09-15), and a plan that
+    // only followed the suggestions was flagged as over-allocated by a cent.
+    // The largest row absorbs the difference, exactly as seedGoalFunding
+    // reconciles a goal's per-account split.
+    const centGap = [
+      { id: "bills", suggested: 8333.33 },
+      { id: "dining", suggested: 5223.52 },
+      { id: "entertainment", suggested: 3000 },
+      { id: "groceries", suggested: 4000 },
+      { id: "other", suggested: 0 },
+      { id: "shopping", suggested: 7089.67 },
+      { id: "transport", suggested: 0 },
+    ];
+    const reconciled = scaleFlexibleSuggestions(centGap, 18000);
+    eq(
+      "independently rounded scaled rows are reconciled so they sum to exactly the available amount",
+      round2(reconciled.reduce((sum, s) => sum + s.scaled, 0)),
+      18000,
+    );
+    eq(
+      "only the largest row absorbs the rounding difference; every other row keeps its own rounded share",
+      reconciled.map((s) => s.scaled).join(","),
+      "5425.63,3400.91,1953.23,2604.31,0,4615.92,0",
+    );
+    eq(
+      "suggestions that fit comfortably still pass through unscaled and unchanged",
+      scaleFlexibleSuggestions(centGap, 40500).map((s) => s.scaled).join(","),
+      "8333.33,5223.52,3000,4000,0,7089.67,0",
+    );
+    const sameTotal = [
+      { id: "a", suggested: 0.1 },
+      { id: "b", suggested: 0.1 },
+      { id: "c", suggested: 0.1 },
+    ];
+    eq(
+      "with equally large rows the first one absorbs the rounding difference, as seedGoalFunding picks its largest share",
+      scaleFlexibleSuggestions(sameTotal, 0.2).map((s) => s.scaled).join(","),
+      "0.06,0.07,0.07",
+    );
+  }
+
+  {
+    // The wizard's Step 4 rows: the draft carries each category's raw
+    // suggestion, and the dialog resolves them against the live `available`
+    // figure exactly as it resolves goal funding - an unedited row follows
+    // the scaled suggestion, a held row keeps the user's figure.
+    const flexibleRows = [
+      { categoryId: "groceries", suggestedAmount: 6000, plannedAmount: 6000, held: false },
+      { categoryId: "dining", suggestedAmount: 3000, plannedAmount: 3000, held: false },
+      { categoryId: "shopping", suggestedAmount: 1000, plannedAmount: 250, held: true },
+    ];
+    const describe = (rows: { suggestedAmount: number; plannedAmount: number }[]) =>
+      rows.map((r) => `${r.suggestedAmount}:${r.plannedAmount}`).join(",");
+    eq(
+      "unheld flexible rows plan the live suggestion when it fits; a held row keeps the user's figure",
+      describe(resolveFlexibleCategories(flexibleRows, 20000)),
+      "6000:6000,3000:3000,1000:250",
+    );
+    eq(
+      "a scaled-down suggestion carries into each unheld row's planned amount",
+      describe(resolveFlexibleCategories(flexibleRows, 5000)),
+      "3000:3000,1500:1500,500:250",
+    );
+    eq(
+      "before any income is entered every suggestion resolves to 0 and unheld rows plan 0 - held rows still stay put",
+      describe(resolveFlexibleCategories(flexibleRows, 0)),
+      "0:0,0:0,0:250",
+    );
+    eq(
+      "resolving keeps the rows' other fields (id, held) and never mutates the raw draft",
+      `${resolveFlexibleCategories(flexibleRows, 0).map((r) => `${r.categoryId}:${r.held}`).join(",")}|${flexibleRows[0].suggestedAmount}`,
+      "groceries:false,dining:false,shopping:true|6000",
+    );
+  }
 
   console.log("\n== account archive lifecycle ==");
   const { archiveAccount, restoreAccount, deleteAccountIfSafe, getAccountLedger, setOpeningBalance, correctStartingBalance } =
@@ -1992,18 +2081,17 @@ async function main() {
       negativeAvailable.every((s) => s.scaled === 0),
     );
 
-    // The shared draft's own `available` is already deeply negative at this
-    // point in the script (no income entered yet on this unconfirmed plan),
-    // so this closes the loop end-to-end: real comparable-period/history
-    // recommendations exist (basis last_budget/average, confirmed above) but
-    // the draft still forces every flexible suggestedAmount to 0 rather than
-    // suggesting money that isn't there.
+    // No income has been entered yet on this unconfirmed plan, so the draft
+    // cannot know what is available: it carries the raw recommendation and
+    // leaves the scaling to the wizard, which resolves every unheld row live
+    // against the income Step 2 records (resolveFlexibleCategories). Scaling
+    // here against the not-yet-known figure froze every suggestion at 0.
     const draftDuringDeficit = await getPaydayCheckinDraft(paydayContext);
     const draftDining = draftDuringDeficit.flexibleCategories.find((c) => c.categoryId === diningCat.id);
     eq(
-      "wired end-to-end: a real last_budget recommendation is still forced to 0 while the plan is in deficit",
-      JSON.stringify(draftDining && { basis: draftDining.basis, suggestedAmount: draftDining.suggestedAmount }),
-      JSON.stringify({ basis: "last_budget", suggestedAmount: 0 }),
+      "wired end-to-end: the draft carries the raw last_budget recommendation unscaled, as an unheld row the wizard resolves live",
+      JSON.stringify(draftDining && { basis: draftDining.basis, suggestedAmount: draftDining.suggestedAmount, plannedAmount: draftDining.plannedAmount, held: draftDining.held }),
+      JSON.stringify({ basis: "last_budget", suggestedAmount: 150, plannedAmount: 150, held: false }),
     );
 
     await prisma.transaction.deleteMany({ where: { accountId: recHistoryAccount.id } });
@@ -2244,6 +2332,11 @@ async function main() {
     "reopening the plan shows the manually edited budget, not the amount confirmed earlier",
     draftAfterManualEdit.flexibleCategories.find((c) => c.categoryId === reconfirmedFlexibleCategoryId)?.plannedAmount,
     60,
+  );
+  eq(
+    "a flexible row seeded from an existing budget comes back held, so it does not follow the live suggestion",
+    draftAfterManualEdit.flexibleCategories.find((c) => c.categoryId === reconfirmedFlexibleCategoryId)?.held,
+    true,
   );
   await prisma.budget.update({ where: { id: confirmedFlexibleBudget.id }, data: { amount: 45 } });
 

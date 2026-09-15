@@ -76,7 +76,6 @@ export function summarizePaydayDraft(draft: PaydayCheckinDraft, rates: RateTable
   const essentialFixedTotal = round2(
     draft.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0),
   );
-  const flexibleTotal = round2(draft.flexibleCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const available = availableForFlexibleCategories({
     income: totalIncome,
     includedCarryover: draft.includedCarryover,
@@ -86,6 +85,11 @@ export function summarizePaydayDraft(draft: PaydayCheckinDraft, rates: RateTable
     essentialFixed: essentialFixedTotal,
     buffer: draft.plannedBuffer,
   });
+  // The flexible rows as the wizard would show them: an unheld row's planned
+  // amount is the suggestion scaled to this same available figure.
+  const flexibleTotal = round2(
+    resolveFlexibleCategories(draft.flexibleCategories, available).reduce((sum, c) => sum + c.plannedAmount, 0),
+  );
   return { totalIncome, goalPlanTotal, essentialFixedTotal, flexibleTotal, available };
 }
 
@@ -102,7 +106,12 @@ export interface ScaledFlexibleSuggestion extends FlexibleSuggestion {
  * Scales suggested flexible-category amounts down proportionally so they never
  * sum past `available`. If available <= 0, every suggestion scales to 0 - the
  * planner must not suggest spending money that doesn't exist. If the raw
- * suggestions already fit, they pass through unscaled.
+ * suggestions already fit, they pass through unscaled. Scaled amounts sum to
+ * exactly `available`: each row is rounded to the cent on its own, which can
+ * land the set a cent above or below, so the largest row absorbs the
+ * difference - the same reconciliation seedGoalFunding applies to a goal's
+ * per-account split. Without it a plan that only followed the suggestions
+ * could read as over-allocated by a cent.
  */
 export function scaleFlexibleSuggestions(
   suggestions: FlexibleSuggestion[],
@@ -116,7 +125,53 @@ export function scaleFlexibleSuggestions(
     return suggestions.map((s) => ({ ...s, scaled: round2(s.suggested) }));
   }
   const factor = available / total;
-  return suggestions.map((s) => ({ ...s, scaled: round2(s.suggested * factor) }));
+  const scaled = suggestions.map((s) => round2(s.suggested * factor));
+  const largest = suggestions.reduce(
+    (best, s, index) => (s.suggested > suggestions[best].suggested ? index : best),
+    0,
+  );
+  const others = scaled.reduce((sum, value, index) => (index === largest ? sum : sum + value), 0);
+  scaled[largest] = round2(available - others);
+  return suggestions.map((s, index) => ({ ...s, scaled: scaled[index] }));
+}
+
+export interface FlexibleCategoryRow {
+  categoryId: string;
+  /** The raw suggestion from getCategorySuggestions(), before any scaling. */
+  suggestedAmount: number;
+  plannedAmount: number;
+  /** plannedAmount is the user's own figure (or an earlier confirmation's) rather than the live suggestion. */
+  held: boolean;
+}
+
+/**
+ * The rows Step 4 shows, resolved against `available` the same way Step 3's
+ * goal rows are resolved against the live account headroom: every suggestion
+ * scaled by scaleFlexibleSuggestions() so the set never asks for more than is
+ * available, an unedited row planned at that scaled figure, and a held row at
+ * the user's own. The draft carries the raw suggestions because `available`
+ * depends on the income Step 2 records, which the server does not know when
+ * it builds the draft - scaling there froze every suggestion at 0 until the
+ * wizard was reopened after confirming.
+ */
+export function resolveFlexibleCategories<T extends FlexibleCategoryRow>(
+  categories: T[],
+  available: number,
+): T[] {
+  const scaledById = new Map(
+    scaleFlexibleSuggestions(
+      categories.map((c) => ({ id: c.categoryId, suggested: c.suggestedAmount })),
+      available,
+    ).map((s) => [s.id, s.scaled]),
+  );
+  return categories.map((category) => {
+    const suggestedAmount = scaledById.get(category.categoryId) ?? 0;
+    return {
+      ...category,
+      suggestedAmount,
+      plannedAmount: category.held ? category.plannedAmount : suggestedAmount,
+    };
+  });
 }
 
 export interface AccountBufferAccount {

@@ -26,6 +26,7 @@ import {
   availableForFlexibleCategories,
   planAccountBuffers,
   planGoalFunding,
+  resolveFlexibleCategories,
   resolveGoalFunding,
 } from "@/lib/payday";
 import { cn } from "@/lib/utils";
@@ -168,7 +169,6 @@ export function PaydayCheckinDialog({
   // A goal's total is the live sum of its rows, never entered on its own.
   const goalPlanTotal = round2([...goalFunding.values()].reduce((sum, funding) => sum + funding.total, 0));
   const essentialFixedTotal = round2(plan.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
-  const flexibleTotal = round2(plan.flexibleCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const available = availableForFlexibleCategories({
     income: totalIncome,
     includedCarryover: plan.includedCarryover,
@@ -178,6 +178,17 @@ export function PaydayCheckinDialog({
     essentialFixed: essentialFixedTotal,
     buffer: plannedBuffer,
   });
+  // Step 4's rows follow `available` the way the buffers and goal draws above
+  // follow the income: the draft carries each category's raw suggestion, and
+  // it is scaled here, live, so it tracks every income edit in step 2 and
+  // every commitment change in step 3. An unedited row is planned at that
+  // scaled figure; a held row (edited, or seeded from a saved budget) keeps
+  // its own. These resolved rows are what the payload below sends.
+  const flexibleCategories = useMemo(
+    () => resolveFlexibleCategories(plan.flexibleCategories, available),
+    [plan.flexibleCategories, available],
+  );
+  const flexibleTotal = round2(flexibleCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const needsDeficitAck =
     available < 0 ||
     flexibleTotal > Math.max(0, available) ||
@@ -186,7 +197,7 @@ export function PaydayCheckinDialog({
     plannedBuffer <= 0 || (serverAcknowledgements?.needsZeroBufferAck ?? false);
   const incomeTransactionCount = plan.accounts.filter((a) => a.incomeEntered > 0).length;
   const budgetCount = plan.essentialCategories.length + plan.flexibleCategories.length;
-  const allocatedCategoryCount = [...plan.essentialCategories, ...plan.flexibleCategories].filter(
+  const allocatedCategoryCount = [...plan.essentialCategories, ...flexibleCategories].filter(
     (c) => c.plannedAmount > 0,
   ).length;
   const stepTitles = [t.step1Title, t.step2Title, t.step3Title, t.step4Title, t.step5Title];
@@ -222,11 +233,12 @@ export function PaydayCheckinDialog({
       ),
     }));
   }
+  /** Holds one category's planned amount at the user's figure, so it stops following the live suggestion. */
   function updateFlexible(categoryId: string, plannedAmount: number) {
     setPlan((prev) => ({
       ...prev,
       flexibleCategories: prev.flexibleCategories.map((c) =>
-        c.categoryId === categoryId ? { ...c, plannedAmount } : c,
+        c.categoryId === categoryId ? { ...c, plannedAmount, held: true } : c,
       ),
     }));
   }
@@ -288,7 +300,7 @@ export function PaydayCheckinDialog({
       categoryId: c.categoryId,
       plannedAmount: c.plannedAmount,
     })),
-    flexibleCategories: plan.flexibleCategories.map((c) => ({
+    flexibleCategories: flexibleCategories.map((c) => ({
       categoryId: c.categoryId,
       plannedAmount: c.plannedAmount,
     })),
@@ -382,7 +394,7 @@ export function PaydayCheckinDialog({
             ) : null}
             {step === 4 ? (
               <StepFlexible
-                categories={plan.flexibleCategories}
+                categories={flexibleCategories}
                 displayCurrency={plan.displayCurrency}
                 available={available}
                 daysRemaining={plan.daysRemainingInPlanPeriod}
