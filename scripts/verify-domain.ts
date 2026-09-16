@@ -1197,6 +1197,35 @@ async function main() {
     }),
     -6000,
   );
+  {
+    // The reconciliation gap (every flagged account's reportedGap, in the
+    // display currency) is a ceiling applied after the seven-input formula,
+    // never a change to it: a zero gap is byte-for-byte the old result.
+    const sevenInputs = {
+      income: 40000,
+      includedCarryover: 2000,
+      subscriptions: 3000,
+      recurringContributions: 5000,
+      goalPlan: 6000,
+      essentialFixed: 8000,
+      buffer: 4000,
+    };
+    eq(
+      "a reconciliation gap of zero leaves the available figure exactly as the seven-input formula had it",
+      availableForFlexibleCategories({ ...sevenInputs, reconciliationGap: 0 }),
+      16000,
+    );
+    eq(
+      "a reconciliation gap caps the available figure by exactly that amount, after the seven-input formula",
+      availableForFlexibleCategories({ ...sevenInputs, reconciliationGap: 5000 }),
+      11000,
+    );
+    eq(
+      "the cap can take the available figure below zero - a deficit shown as such, never clamped",
+      availableForFlexibleCategories({ ...sevenInputs, reconciliationGap: 20000 }),
+      -4000,
+    );
+  }
 
   {
     // summarizePaydayDraft is what both the Dashboard check-in summary line
@@ -1206,9 +1235,11 @@ async function main() {
     const draft = {
       displayCurrency: "DOP",
       accounts: [
-        { incomeEntered: 30000, currency: "DOP" },
-        { incomeEntered: 100, currency: "USD" },
+        { accountId: "dop", name: "DOP account", currency: "DOP", incomeEntered: 30000, bufferFloor: 2000, reportedBalance: 10000 },
+        { accountId: "usd", name: "USD account", currency: "USD", incomeEntered: 100, bufferFloor: 33.33, reportedBalance: null },
       ],
+      subscriptions: [],
+      bufferPercent: 10,
       goals: [{ plannedAmount: 4000 }],
       essentialCategories: [{ plannedAmount: 5000 }, { plannedAmount: 1000 }],
       flexibleCategories: [
@@ -1251,6 +1282,33 @@ async function main() {
       summarizePaydayDraft({ ...draft, plannedBuffer: 30000 }, draftRates).available,
       -6500,
     );
+    eq(
+      "a draft whose reported balances are all positive or absent reports a zero reconciliation gap",
+      summary.reconciliationGap,
+      0,
+    );
+    {
+      // The DOP account was already 4,000 in the hole before its pay landed
+      // (Step 1's reported balance is the pre-income figure), so the draft
+      // summary - the Dashboard card and the period hero's suggestion - caps
+      // its available figure by that gap, and its unheld flexible rows follow
+      // the capped figure exactly as the wizard's Step 4 does.
+      const gappedDraft = {
+        ...draft,
+        accounts: [{ ...draft.accounts[0], reportedBalance: -4000 }, draft.accounts[1]],
+      } as typeof draft;
+      const gapped = summarizePaydayDraft(gappedDraft, draftRates);
+      eq("a negative reported balance on a draft account caps the draft summary's available figure by that gap", gapped.available, 15900);
+      eq("the draft summary reports the gap it applied, in the display currency", gapped.reconciliationGap, 4000);
+      eq(
+        "the draft summary's unheld flexible rows resolve against the capped figure",
+        summarizePaydayDraft(
+          { ...gappedDraft, flexibleCategories: [{ suggestedAmount: 25000, plannedAmount: 25000, held: false }] } as typeof draft,
+          draftRates,
+        ).flexibleTotal,
+        15900,
+      );
+    }
   }
 
   {
@@ -1360,6 +1418,35 @@ async function main() {
       "the reported-balance check never changes the income-only headroom, shortfall, or buffer figures",
       hole.belowBuffer === false && hole.shortfall === 0 && hole.suggestedBuffer === 4000 && reconciled.total === 10000,
       JSON.stringify({ belowBuffer: hole.belowBuffer, shortfall: hole.shortfall, buffer: hole.suggestedBuffer, total: reconciled.total }),
+    );
+    // The breakdown's own gap total, summed into the display currency the way
+    // `total` sums the buffers: 11,919 DOP from Hole plus 10 USD (600 DOP) from
+    // a USD account in the hole; accounts with no gap contribute nothing.
+    const gapTotal = planAccountBuffers(
+      [
+        { accountId: "hole", name: "Hole", currency: "DOP", income: 40000, bufferFloor: 2000, reportedBalance: -11919 },
+        { accountId: "usdhole", name: "USD hole", currency: "USD", income: 1000, bufferFloor: 33.33, reportedBalance: -10 },
+        { accountId: "flush", name: "Flush", currency: "DOP", income: 20000, bufferFloor: 2000, reportedBalance: 6000 },
+      ],
+      reconcileSubs,
+      { bufferPercent: 10, displayCurrency: "DOP", rates },
+    );
+    eq(
+      "the breakdown sums every flagged account's gap into the display currency, ignoring accounts with no gap",
+      gapTotal.reconciliationGap,
+      12519,
+    );
+    eq(
+      "with no account flagged the breakdown's gap is exactly zero",
+      planAccountBuffers(
+        [
+          { accountId: "flush", name: "Flush", currency: "DOP", income: 20000, bufferFloor: 2000, reportedBalance: 6000 },
+          { accountId: "silent", name: "Silent", currency: "DOP", income: 20000, bufferFloor: 2000 },
+        ],
+        reconcileSubs,
+        { bufferPercent: 10, displayCurrency: "DOP", rates },
+      ).reconciliationGap,
+      0,
     );
   }
 
@@ -2552,6 +2639,87 @@ async function main() {
   check("confirming an overallocated plan without acknowledging the deficit is rejected", deficitResult.ok === false && deficitResult.reason === "deficit_not_acknowledged");
   const deficitResultAcknowledged = await confirmPaydayCheckin({ ...deficitPayload, acknowledgedDeficit: true }, paydayContext);
   check("acknowledging the deficit allows the same overallocated plan through", deficitResultAcknowledged.ok === true);
+
+  {
+    // Confirm only ever scales flexible budgets down when a reconciliation
+    // gap is capping the plan. Without one, an acknowledged over-allocation
+    // is written exactly as typed - the behaviour every earlier check relies
+    // on. With one, the written budgets are scaled proportionally (largest
+    // row absorbing the rounding, as scaleFlexibleSuggestions does) so they
+    // sum to exactly the capped available figure - which is what the
+    // Dashboard's safe-to-spend reads, without its own formula changing.
+    const flexibleCategoryIds = deficitPayload.flexibleCategories.map((c) => c.categoryId);
+    const writtenFlexibleTotal = async () => {
+      const rows = await prisma.budget.findMany({
+        where: {
+          year: deficitPayload.year,
+          month: deficitPayload.month,
+          period: deficitPayload.period,
+          categoryId: { in: flexibleCategoryIds },
+        },
+      });
+      return round2(rows.reduce((sum, row) => sum + num(row.amount), 0));
+    };
+    const submittedTotal = round2(deficitPayload.flexibleCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
+    check(
+      "without a reconciliation gap, confirm reports that nothing was scaled",
+      deficitResultAcknowledged.ok === true && deficitResultAcknowledged.flexibleScaled === null,
+      JSON.stringify(deficitResultAcknowledged),
+    );
+    eq(
+      "without a reconciliation gap, over-allocated flexible budgets are written exactly as typed",
+      await writtenFlexibleTotal(),
+      submittedTotal,
+    );
+
+    console.log("\n-- a reconciliation gap caps what confirm writes --");
+    const gapPayload = {
+      ...deficitPayload,
+      accounts: deficitPayload.accounts.map((a) =>
+        a.accountId === paydayChecking.id
+          ? { ...a, reportedBalance: -200, incomeEntered: 5000, incomeNote: "Salary" }
+          : a,
+      ),
+      acknowledgedDeficit: true,
+    };
+    const gapResult = await confirmPaydayCheckin(gapPayload, paydayContext);
+    const scaled = gapResult.ok ? gapResult.flexibleScaled : null;
+    check(
+      "with a gap, confirming an over-allocated plan succeeds and reports the scaling",
+      gapResult.ok === true && scaled !== null && scaled !== undefined,
+      JSON.stringify(gapResult),
+    );
+    eq("the scaling report's 'from' is the submitted flexible total", scaled?.from, submittedTotal);
+    check(
+      "the scaled-to figure is positive here and below what was submitted",
+      scaled ? scaled.to > 0 && scaled.to < scaled.from : false,
+      JSON.stringify(scaled),
+    );
+    const writtenAfterGap = await writtenFlexibleTotal();
+    eq("the flexible budgets written sum to exactly the scaled-to figure", writtenAfterGap, scaled?.to);
+    const writtenRows = await prisma.budget.findMany({
+      where: { year: gapPayload.year, month: gapPayload.month, period: gapPayload.period, categoryId: { in: flexibleCategoryIds } },
+    });
+    check(
+      "no written flexible budget exceeds what was submitted for it",
+      writtenRows.every((row) => {
+        const submitted = gapPayload.flexibleCategories.find((c) => c.categoryId === row.categoryId)?.plannedAmount ?? 0;
+        return num(row.amount) <= submitted;
+      }),
+    );
+    const gappedDraft = await getPaydayCheckinDraft(paydayContext);
+    const gappedSummary = summarizePaydayDraft(gappedDraft, rates);
+    eq("the reopened draft reports the gap that capped the plan", gappedSummary.reconciliationGap, 200);
+    eq(
+      "the reopened draft's capped available figure is exactly what the budgets were scaled to",
+      Math.max(0, gappedSummary.available),
+      scaled?.to,
+    );
+    const gapSnapshot = await prisma.paydayAccountSnapshot.findFirst({
+      where: { paydayCheckinId: checkinRow!.id, accountId: paydayChecking.id },
+    });
+    eq("the Step 1 diagnostic is untouched by the cap: the snapshot still stores the reported balance as entered", num(gapSnapshot!.reportedBalance), -200);
+  }
 
   const zeroBufferPayload = { ...zeroedPayload, buffer: 0, acknowledgedDeficit: true, acknowledgedZeroBuffer: false };
   const zeroBufferResult = await confirmPaydayCheckin(zeroBufferPayload, paydayContext);

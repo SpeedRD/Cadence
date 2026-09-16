@@ -85,7 +85,14 @@ and what's left is available for flexible categories. A plan that ends in defici
 or with a zero buffer, can still be confirmed — but only after an explicit
 acknowledgement.
 
-Step 1's reported balance feeds one more figure in this same card: each account's
+Step 1 spells out exactly what "reported balance" means: each account's balance
+**before this period's income landed**, not its current balance if the pay has
+already arrived — the ledger balance already shown for that account is usually the
+right starting point, and the copy points there directly, so re-opening a check-in
+days after payday doesn't invite typing today's actual balance and double-counting
+the paycheck.
+
+That reported balance feeds one more figure in Step 3's buffer card: each account's
 row also shows what it **supports** — that account's own balance before this
 period's income, plus the income, minus its due subscriptions and its own buffer.
 That normally lines up with the income-only figures above it. When the balance was
@@ -93,10 +100,27 @@ already negative before this check-in — money that left the account after the 
 payday but before this one was confirmed, which the period-income math has no way
 to see — supports comes in lower and the row shows an inline warning naming the
 exact gap, even when Step 1 still reads "Matches ledger" (the negative balance came
-from real transactions, not something typed in). It's advisory only: it never
-blocks Step 4, Step 5, or confirming, and there's no checkbox to acknowledge it.
+from real transactions, not something typed in).
+
+That gap **caps "Available for flexible categories"** — Step 3's summary shows a
+"Capped by your reported balance" line for exactly that amount when it applies, so
+the figure never claims the accounts can support more than they actually can. If
+Step 4's allocations still add up to more than the capped figure, confirming scales
+every flexible category down proportionally (the same largest-remainder technique
+the planner already uses to fit suggestions and goal shares to a total) before
+writing the Budget rows the Dashboard's safe-to-spend reads — so that figure inherits
+the correction without its own formula changing — and a toast names the adjustment,
+e.g. "scaled down from DOP 30,000.00 to DOP 18,500.00 - what your reported balance
+supports." There's no separate acknowledgement gate for the gap itself; it works
+through the same mechanism that already asks for confirmation on any over-committed
+plan, since a Step 4 total that now exceeds the lowered figure reads as an ordinary
+over-allocation.
 
 ![Payday check-in step 3's buffer card showing the balance reconciliation warning: one account with a reported balance already negative, its "Supports" figure lower than its income-only figures and an inline warning naming the gap, next to a second account with a clean "Supports" line and no warning](screenshots/payday-step-buffer-reconciliation.png)
+
+![Payday check-in step 3's summary showing the "Capped by your reported balance" line that lowers "Available for flexible categories" by the exact reconciliation gap](screenshots/payday-step-summary-capped.png)
+
+![Payday check-in confirm toast showing a scaled-down allocation: flexible budgets reduced from the submitted total to what the reported balance actually supports](screenshots/payday-confirm-scaled-toast.png)
 
 ### Budgets and safe-to-spend
 

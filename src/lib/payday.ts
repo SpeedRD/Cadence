@@ -43,15 +43,24 @@ export interface FlexibleInput {
   goalPlan: number;
   essentialFixed: number;
   buffer: number;
+  /**
+   * AccountBufferBreakdown.reconciliationGap: how much less the accounts
+   * really support than their income projects (see AccountBufferPlan
+   * .reportedGap), in the display currency. A ceiling applied after the
+   * seven-input formula - it only ever lowers the result, and 0 or absent
+   * leaves it exactly as the formula had it.
+   */
+  reconciliationGap?: number;
 }
 
 /**
  * availableForFlexibleCategories = income + carryover - subscriptions -
- * recurringContributions - goalPlan - essentialFixed - buffer. Can be
- * negative - callers must show that as a deficit, never clamp it to zero.
+ * recurringContributions - goalPlan - essentialFixed - buffer, then capped by
+ * the reconciliation gap when there is one. Can be negative - callers must
+ * show that as a deficit, never clamp it to zero.
  */
 export function availableForFlexibleCategories(input: FlexibleInput): number {
-  return round2(
+  const projected = round2(
     input.income +
       input.includedCarryover -
       input.subscriptions -
@@ -60,6 +69,7 @@ export function availableForFlexibleCategories(input: FlexibleInput): number {
       input.essentialFixed -
       input.buffer,
   );
+  return round2(projected - Math.max(0, input.reconciliationGap ?? 0));
 }
 
 export interface PaydayDraftSummary {
@@ -70,6 +80,40 @@ export interface PaydayDraftSummary {
   flexibleTotal: number;
   /** availableForFlexibleCategories() over the draft - negative when the plan is over-committed. */
   available: number;
+  /** The reconciliation gap that capped `available` (draftAccountBuffers().reconciliationGap); 0 when nothing did. */
+  reconciliationGap: number;
+}
+
+/**
+ * The per-account buffer view for a draft, from the same rows the wizard
+ * shows: each account's Step 2 income and Step 1 reported balance, and the
+ * subscriptions still to be paid from it. The one mapping the dialog's live
+ * Step 3 and summarizePaydayDraft's read-only summary both use, so the gap
+ * that caps the summary is the gap Step 3 showed.
+ */
+export function draftAccountBuffers(
+  draft: Pick<PaydayCheckinDraft, "accounts" | "subscriptions" | "bufferPercent" | "displayCurrency">,
+  rates: RateTable,
+): AccountBufferBreakdown {
+  return planAccountBuffers(
+    draft.accounts.map((account) => ({
+      accountId: account.accountId,
+      name: account.name,
+      currency: account.currency,
+      income: account.incomeEntered,
+      bufferFloor: account.bufferFloor,
+      reportedBalance: account.reportedBalance,
+    })),
+    draft.subscriptions.map((item) => ({
+      recurringItemId: item.recurringItemId,
+      accountId: item.accountId,
+      // Only the occurrences not yet in the ledger count against the account.
+      nativeAmount: item.outstandingNativeAmount,
+      currency: item.currency,
+      alreadyLogged: item.alreadyLogged,
+    })),
+    { bufferPercent: draft.bufferPercent, displayCurrency: draft.displayCurrency, rates },
+  );
 }
 
 /**
@@ -91,6 +135,7 @@ export function summarizePaydayDraft(draft: PaydayCheckinDraft, rates: RateTable
   const essentialFixedTotal = round2(
     draft.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0),
   );
+  const reconciliationGap = draftAccountBuffers(draft, rates).reconciliationGap;
   const available = availableForFlexibleCategories({
     income: totalIncome,
     includedCarryover: draft.includedCarryover,
@@ -99,13 +144,14 @@ export function summarizePaydayDraft(draft: PaydayCheckinDraft, rates: RateTable
     goalPlan: goalPlanTotal,
     essentialFixed: essentialFixedTotal,
     buffer: draft.plannedBuffer,
+    reconciliationGap,
   });
   // The flexible rows as the wizard would show them: an unheld row's planned
   // amount is the suggestion scaled to this same available figure.
   const flexibleTotal = round2(
     resolveFlexibleCategories(draft.flexibleCategories, available).reduce((sum, c) => sum + c.plannedAmount, 0),
   );
-  return { totalIncome, goalPlanTotal, essentialFixedTotal, flexibleTotal, available };
+  return { totalIncome, goalPlanTotal, essentialFixedTotal, flexibleTotal, available, reconciliationGap };
 }
 
 export interface FlexibleSuggestion {
@@ -266,6 +312,13 @@ export interface AccountBufferBreakdown {
   unassignedRecurringItemIds: string[];
   /** Every account's suggested buffer summed into `displayCurrency` - the plan's single protectedBuffer figure. */
   total: number;
+  /**
+   * Every flagged account's reportedGap summed into `displayCurrency` - what
+   * the accounts really support falls short of their income projection by
+   * this much. availableForFlexibleCategories() caps the plan by it; 0 when
+   * no account is flagged, so a plan with no gap is unaffected.
+   */
+  reconciliationGap: number;
 }
 
 /**
@@ -347,6 +400,11 @@ export function planAccountBuffers(
         (sum, plan) => sum + convert(plan.suggestedBuffer, plan.currency, displayCurrency, rates),
         0,
       ),
+    ),
+    reconciliationGap: round2(
+      plans
+        .filter((plan) => plan.belowReported)
+        .reduce((sum, plan) => sum + convert(plan.reportedGap, plan.currency, displayCurrency, rates), 0),
     ),
   };
 }

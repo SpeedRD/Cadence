@@ -1015,6 +1015,8 @@ export const es = {
     step1Title: "Confirma los saldos de las cuentas",
     step1Description:
       "Esto es solo una verificación de conciliación - nunca crea ingresos ni gastos.",
+    step1BalanceMeaning:
+      "El “saldo reportado” es lo que la cuenta tenía antes de que llegara el ingreso de este periodo - no lo que tiene ahora si el pago ya entró y parte ya se gastó. El saldo según el libro que se muestra en cada cuenta es esa cifra (deja fuera el ingreso de este mismo chequeo): parte de él y cámbialo solo si sabes que el libro está mal.",
     ledgerBalance: "Saldo según el libro",
     reportedBalance: "Saldo reportado",
     matchesLedger: "Coincide con el libro",
@@ -1107,6 +1109,7 @@ export const es = {
     summaryGoals: "Plan de metas",
     summaryEssential: "Fijos esenciales",
     summaryBuffer: "Colchón protegido",
+    summaryReconciliationCap: "Tope por tu saldo reportado",
     summaryAvailable: "Disponible para categorías flexibles",
     deficitWarning: (amount: string) =>
       `Este plan queda corto por ${amount} - algo de lo anterior tiene que ceder antes de poder asignar categorías flexibles.`,
@@ -1143,6 +1146,8 @@ export const es = {
     acknowledgeZeroBufferLabel: "Entiendo que este plan no deja colchón protegido.",
     confirmPlan: "Confirmar plan",
     checkinConfirmed: "Chequeo de pago confirmado",
+    checkinConfirmedScaled: (from: string, to: string) =>
+      `Chequeo de pago confirmado. Los presupuestos flexibles se redujeron de ${from} a ${to} - lo que alcanza tu saldo reportado.`,
     editConfirmedPlanNote:
       "Ya confirmaste el chequeo de este periodo - guardar de nuevo lo actualiza en su lugar.",
 

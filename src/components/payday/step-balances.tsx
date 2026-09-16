@@ -27,6 +27,11 @@ export function StepBalances({
           {t.manageAccountsLink}
         </Link>
       </div>
+      {/* What the figure means, because the ledger figure below already leaves
+          this check-in's own income out: reopening days after payday must not
+          invite typing the account's current balance, which would count that
+          income twice in Step 3's reconciliation. */}
+      <p className="text-xs text-muted-foreground">{t.step1BalanceMeaning}</p>
       {accounts.map((account) => {
         const difference = round2(account.reportedBalance - account.expectedLedgerBalance);
         return (

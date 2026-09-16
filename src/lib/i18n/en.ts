@@ -1009,6 +1009,8 @@ export const en = {
     step1Title: "Confirm account balances",
     step1Description:
       "This is a reconciliation check only - it never creates income or expenses.",
+    step1BalanceMeaning:
+      "“Reported balance” is what the account held before this period's income landed - not what it holds now if the pay has already arrived and some of it is spent. The ledger balance shown for each account is that figure (this check-in's own income is left out of it), so start from it and change it only if you know the ledger is wrong.",
     ledgerBalance: "Ledger balance",
     reportedBalance: "Reported balance",
     matchesLedger: "Matches ledger",
@@ -1101,6 +1103,7 @@ export const en = {
     summaryGoals: "Goal plan",
     summaryEssential: "Essential fixed",
     summaryBuffer: "Protected buffer",
+    summaryReconciliationCap: "Capped by your reported balance",
     summaryAvailable: "Available for flexible categories",
     deficitWarning: (amount: string) =>
       `This plan is ${amount} short - something above has to give before you can allocate flexible categories.`,
@@ -1137,6 +1140,8 @@ export const en = {
     acknowledgeZeroBufferLabel: "I understand this plan leaves no protected buffer.",
     confirmPlan: "Confirm plan",
     checkinConfirmed: "Payday check-in confirmed",
+    checkinConfirmedScaled: (from: string, to: string) =>
+      `Payday check-in confirmed. Flexible budgets were scaled down from ${from} to ${to} - what your reported balance supports.`,
     editConfirmedPlanNote:
       "You already confirmed this period's check-in - saving again updates it in place.",
 

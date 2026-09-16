@@ -20,6 +20,7 @@ import {
   countsInIncomeHistory,
   planAccountBuffers,
   planGoalFunding,
+  scaleFlexibleSuggestions,
   type AccountBufferAccount,
   type AccountBufferSubscription,
   type GoalFundingPlan,
@@ -892,8 +893,21 @@ export interface PaydayAcknowledgementState {
   needsZeroBufferAck: boolean;
 }
 
+/**
+ * What confirm did to the flexible budgets when a reconciliation gap capped
+ * the plan below what was submitted: they were scaled down proportionally
+ * from `from` to `to` (both in `currency`, the check-in's display currency)
+ * before being written. The action turns this into the success message, so
+ * the adjustment is never silent.
+ */
+export interface FlexibleScaling {
+  from: number;
+  to: number;
+  currency: string;
+}
+
 export type ConfirmPaydayCheckinResult =
-  | { ok: true }
+  | { ok: true; flexibleScaled: FlexibleScaling | null }
   | { ok: false; reason: "no_active_accounts" }
   | {
       ok: false;
@@ -1075,6 +1089,9 @@ export async function confirmPaydayCheckin(
         bufferFloor: round2(
           convert(context.bufferFloorAmount, context.bufferFloorCurrency, account.currency, context.rates),
         ),
+        // Step 1's figure, so the same reconciliation gap Step 3 showed caps
+        // the plan here too - the client's arithmetic is never trusted for it.
+        reportedBalance: a.reportedBalance,
       };
     }),
     subscriptionDrafts.map((item) => ({
@@ -1170,7 +1187,36 @@ export async function confirmPaydayCheckin(
     goalPlan: goalPlanTotal,
     essentialFixed: essentialFixedTotal,
     buffer: protectedBuffer,
+    reconciliationGap: bufferPlan.reconciliationGap,
   });
+
+  // Only a reconciliation gap ever scales what is written: the Dashboard's
+  // safe-to-spend reads the Budget rows below, so a plan the accounts cannot
+  // really support must not land there as typed. Without a gap an
+  // acknowledged over-allocation is written exactly as submitted, as it
+  // always was. Same proportional scale and largest-row rounding as Step 4's
+  // suggestions, so the written rows sum to exactly the capped figure.
+  const flexibleCap = Math.max(0, available);
+  const scalingNeeded = bufferPlan.reconciliationGap > 0 && flexibleTotal > flexibleCap;
+  const scaledFlexibleById = scalingNeeded
+    ? new Map(
+        scaleFlexibleSuggestions(
+          flexibleInputs.map((c) => ({ id: c.categoryId, suggested: c.plannedAmount })),
+          flexibleCap,
+        ).map((s) => [s.id, s.scaled]),
+      )
+    : null;
+  const flexibleWritten = flexibleInputs.map((c) => ({
+    ...c,
+    plannedAmount: scaledFlexibleById?.get(c.categoryId) ?? c.plannedAmount,
+  }));
+  const flexibleScaled: FlexibleScaling | null = scalingNeeded
+    ? {
+        from: flexibleTotal,
+        to: round2(flexibleWritten.reduce((sum, c) => sum + c.plannedAmount, 0)),
+        currency: context.displayCurrency,
+      }
+    : null;
 
   const needsDeficitAck = available < 0 || flexibleTotal > Math.max(0, available);
   const needsZeroBufferAck = protectedBuffer <= 0;
@@ -1340,7 +1386,7 @@ export async function confirmPaydayCheckin(
         currency: context.displayCurrency,
         basis: suggestionsByCategory.get(c.categoryId)?.basis ?? "none",
       })),
-      ...flexibleInputs.map((c) => ({
+      ...flexibleWritten.map((c) => ({
         paydayCheckinId: checkin.id,
         type: "FLEXIBLE_CATEGORY" as const,
         categoryId: c.categoryId,
@@ -1372,7 +1418,7 @@ export async function confirmPaydayCheckin(
     ];
     await tx.paydayPlanAllocation.createMany({ data: allocationRows });
 
-    for (const categoryInput of [...essentialInputs, ...flexibleInputs]) {
+    for (const categoryInput of [...essentialInputs, ...flexibleWritten]) {
       const existingBudget = await tx.budget.findFirst({
         where: {
           year: planRef.year,
@@ -1418,5 +1464,5 @@ export async function confirmPaydayCheckin(
     }
   });
 
-  return { ok: true };
+  return { ok: true, flexibleScaled };
 }

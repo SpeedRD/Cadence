@@ -24,7 +24,7 @@ import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
 import {
   availableForFlexibleCategories,
-  planAccountBuffers,
+  draftAccountBuffers,
   planGoalFunding,
   resolveFlexibleCategories,
   resolveGoalFunding,
@@ -127,26 +127,14 @@ export function PaydayCheckinDialog({
   // account - exactly what confirmPaydayCheckin() recomputes server-side.
   const bufferPlan = useMemo(
     () =>
-      planAccountBuffers(
-        plan.accounts.map((a) => ({
-          accountId: a.accountId,
-          name: a.name,
-          currency: a.currency,
-          income: a.incomeEntered,
-          bufferFloor: a.bufferFloor,
-          // Step 1's figure, so the buffer view can say what the account
-          // really supports next to what its income alone projects.
-          reportedBalance: a.reportedBalance,
-        })),
-        plan.subscriptions.map((item) => ({
-          recurringItemId: item.recurringItemId,
-          accountId: item.accountId,
-          // Only the occurrences not yet in the ledger, matching the server.
-          nativeAmount: item.outstandingNativeAmount,
-          currency: item.currency,
-          alreadyLogged: item.alreadyLogged,
-        })),
-        { bufferPercent: plan.bufferPercent, displayCurrency: plan.displayCurrency, rates },
+      draftAccountBuffers(
+        {
+          accounts: plan.accounts,
+          subscriptions: plan.subscriptions,
+          bufferPercent: plan.bufferPercent,
+          displayCurrency: plan.displayCurrency,
+        },
+        rates,
       ),
     [plan.accounts, plan.subscriptions, plan.bufferPercent, plan.displayCurrency, rates],
   );
@@ -180,6 +168,10 @@ export function PaydayCheckinDialog({
     goalPlan: goalPlanTotal,
     essentialFixed: essentialFixedTotal,
     buffer: plannedBuffer,
+    // What the accounts really support caps the plan (see
+    // AccountBufferBreakdown.reconciliationGap) - 0 when Step 1 flagged
+    // nothing, so a plan with no gap reads exactly as before.
+    reconciliationGap: bufferPlan.reconciliationGap,
   });
   // Step 4's rows follow `available` the way the buffers and goal draws above
   // follow the income: the draft carries each category's raw suggestion, and

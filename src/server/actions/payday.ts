@@ -1,6 +1,7 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
+import { formatMoney } from "@/lib/currency";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { num } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -71,7 +72,15 @@ export async function confirmPaydayCheckinAction(
   }
 
   revalidateApp();
-  return done(t.checkinConfirmed);
+  // A reconciliation gap can scale the flexible budgets below what was typed
+  // (see confirmPaydayCheckin); the success message names that adjustment
+  // rather than letting it pass silently.
+  const scaled = result.flexibleScaled;
+  return done(
+    scaled
+      ? t.checkinConfirmedScaled(formatMoney(scaled.from, scaled.currency), formatMoney(scaled.to, scaled.currency))
+      : t.checkinConfirmed,
+  );
 }
 
 /** Records that the user dismissed today's auto-opened prompt, so it stays available as a dashboard card without forcing the modal open again the same day. */

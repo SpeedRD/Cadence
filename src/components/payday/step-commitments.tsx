@@ -550,6 +550,14 @@ export function StepCommitments({
             <span>{t.summaryBuffer}</span>
             <span className="figure">-{formatMoney(plannedBuffer, displayCurrency)}</span>
           </div>
+          {bufferPlan.reconciliationGap > 0 ? (
+            // The origin of a capped figure stays visible: the gap the buffer
+            // card flagged above is the last line taken off before "available".
+            <div className="flex justify-between text-muted-foreground">
+              <span>{t.summaryReconciliationCap}</span>
+              <span className="figure">-{formatMoney(bufferPlan.reconciliationGap, displayCurrency)}</span>
+            </div>
+          ) : null}
           <div className="flex justify-between border-t border-border/70 pt-1.5 font-medium">
             <span>{t.summaryAvailable}</span>
             <span className={available < 0 ? "figure text-[var(--critical)]" : "figure"}>
