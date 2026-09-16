@@ -5549,6 +5549,65 @@ async function main() {
     console.log("  ok   test ExchangeRate rows removed");
   }
 
+  console.log("\n== BPD rate cron: proactive cache warm ==");
+  {
+    const { NextRequest } = await import("next/server");
+    const { GET: bpdCronGet } = await import("../src/app/api/cron/bpd-rate/route");
+    const previousSecret = process.env.CRON_SECRET;
+    process.env.CRON_SECRET = "verify-cron-secret";
+    const makeRequest = (auth?: string) =>
+      new NextRequest("http://localhost/api/cron/bpd-rate", {
+        headers: auth ? { authorization: auth } : undefined,
+      });
+
+    const unauthorized = await bpdCronGet(makeRequest("Bearer wrong-secret"));
+    eq("a wrong bearer secret is rejected", unauthorized.status, 401);
+
+    console.log("-- a successful check reports today's rate through the same getBpdRates() an on-demand request uses --");
+    // Seeded directly (not via a mocked fetch): a hang test earlier in this
+    // same process already tripped fetchBpdRates()'s module-level failure
+    // backoff, so a real network attempt here would be silently skipped for
+    // up to 10 minutes - exactly as it should be for a real outage, but not
+    // something this check should race against. A same-day stored row is
+    // read straight back by getBpdRates() with no network call at all (see
+    // src/lib/bpd-rates.ts), so it exercises the real, unmodified function
+    // the cron route calls without depending on that backoff window.
+    await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+    const cronToday = new Date();
+    const cronEntries = toRateTableEntries({ dollarSellRate: 61.1, euroSellRate: 71.9, asOf: cronToday });
+    for (const [targetCurrency, rate] of Object.entries(cronEntries)) {
+      await prisma.exchangeRate.upsert({
+        where: { baseCurrency_targetCurrency_source: { baseCurrency: "USD", targetCurrency, source: BPD_SOURCE } },
+        update: { rate, fetchedAt: new Date(), asOf: cronToday },
+        create: { baseCurrency: "USD", targetCurrency, source: BPD_SOURCE, rate, fetchedAt: new Date(), asOf: cronToday },
+      });
+    }
+    const successResponse = await bpdCronGet(makeRequest("Bearer verify-cron-secret"));
+    const successBody = await successResponse.json();
+    eq("the cron endpoint itself never errors on a successful check", successResponse.status, 200);
+    eq("a successful check reports cached: true", successBody.cached, true);
+
+    console.log("-- a thrown BPD-check failure (e.g. a DB error) is swallowed, never a cron failure --");
+    // bpd-rates.ts imports the shared @/lib/prisma singleton, not this
+    // script's own PrismaClient instance - that's the one to break here.
+    const { prisma: libPrisma } = await import("../src/lib/prisma");
+    const originalFindMany = libPrisma.exchangeRate.findMany;
+    // @ts-expect-error - deliberately broken to prove the route survives it
+    libPrisma.exchangeRate.findMany = async () => {
+      throw new Error("simulated DB failure");
+    };
+    const failedResponse = await bpdCronGet(makeRequest("Bearer verify-cron-secret"));
+    const failedBody = await failedResponse.json();
+    libPrisma.exchangeRate.findMany = originalFindMany;
+    eq("the cron endpoint still returns 200, not an error status", failedResponse.status, 200);
+    eq("...and reports cached: false instead of throwing", failedBody.cached, false);
+
+    await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+    if (previousSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = previousSecret;
+    console.log("  ok   test ExchangeRate rows removed");
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });
