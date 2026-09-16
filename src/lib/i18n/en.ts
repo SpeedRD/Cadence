@@ -1037,6 +1037,9 @@ export const en = {
     accountIncomeReceived: "Income received",
     accountSubscriptionsDue: "Subscriptions due",
     accountLeftAfterSubscriptions: "Left after subscriptions",
+    accountReportedSupports: "Supports (from your reported balance)",
+    accountReportedBelowProjection: (amount: string) =>
+      `Your reported balance supports ${amount} less than this period's income projection - likely money that already left this account before this check-in.`,
     accountSuggestedBuffer: "Suggested buffer",
     accountNoSubscriptionsDue: "Nothing due from this account before next payday.",
     accountAboveBuffer: (amount: string) => `${amount} above its buffer`,

@@ -1304,6 +1304,66 @@ async function main() {
   }
 
   {
+    // Step 1's reported balance is the account's balance *before* this
+    // check-in's income (see ledgerBefore in src/lib/data/payday.ts), so what
+    // the account can really support this period is that balance plus the
+    // income, less its due subscriptions and its own buffer. Measured against
+    // the income-only headroom, the shortfall is exactly how far the account
+    // was already in the hole when the pay landed - money that left before the
+    // check-in, which the period-income figure cannot see. Advisory only.
+    const reconcileSubs = [
+      { recurringItemId: "internet", accountId: "hole", nativeAmount: 2500, currency: "DOP", alreadyLogged: false },
+      { recurringItemId: "gym", accountId: "hole", nativeAmount: 1500, currency: "DOP", alreadyLogged: false },
+      { recurringItemId: "paid", accountId: "hole", nativeAmount: 900, currency: "DOP", alreadyLogged: true },
+      { recurringItemId: "spotify", accountId: "flush", nativeAmount: 500, currency: "DOP", alreadyLogged: false },
+    ];
+    const reconciled = planAccountBuffers(
+      [
+        { accountId: "hole", name: "Hole", currency: "DOP", income: 40000, bufferFloor: 2000, reportedBalance: -11919 },
+        { accountId: "flush", name: "Flush", currency: "DOP", income: 20000, bufferFloor: 2000, reportedBalance: 6000 },
+        { accountId: "even", name: "Even", currency: "DOP", income: 20000, bufferFloor: 2000, reportedBalance: 0 },
+        { accountId: "silent", name: "Silent", currency: "DOP", income: 20000, bufferFloor: 2000 },
+      ],
+      reconcileSubs,
+      { bufferPercent: 10, displayCurrency: "DOP", rates },
+    );
+    const hole = reconciled.accounts.find((a) => a.accountId === "hole")!;
+    const flush = reconciled.accounts.find((a) => a.accountId === "flush")!;
+    const even = reconciled.accounts.find((a) => a.accountId === "even")!;
+    const silent = reconciled.accounts.find((a) => a.accountId === "silent")!;
+    eq(
+      "reported-balance support is reported balance + income - due subscriptions - own buffer, skipping already-paid ones",
+      hole.reportedSupports,
+      -11919 + 40000 - 4000 - 4000,
+    );
+    check(
+      "an account already in the hole before the pay landed is flagged with exactly that gap against its income-only headroom",
+      hole.belowReported === true && hole.reportedGap === 11919 && hole.headroom === 32000,
+      JSON.stringify({ belowReported: hole.belowReported, reportedGap: hole.reportedGap, headroom: hole.headroom }),
+    );
+    check(
+      "an account with money to spare before the pay landed supports more than its headroom and is not flagged",
+      flush.belowReported === false && flush.reportedGap === 0 && flush.reportedSupports === 6000 + 20000 - 500 - 2000,
+      JSON.stringify({ belowReported: flush.belowReported, reportedGap: flush.reportedGap, supports: flush.reportedSupports }),
+    );
+    check(
+      "a reported balance of zero supports exactly the income-only headroom, with no flag",
+      even.belowReported === false && even.reportedGap === 0 && even.reportedSupports === even.headroom,
+      JSON.stringify({ belowReported: even.belowReported, reportedGap: even.reportedGap, supports: even.reportedSupports, headroom: even.headroom }),
+    );
+    check(
+      "an account with no reported balance given reports null support and is never flagged",
+      silent.reportedSupports === null && silent.reportedGap === 0 && silent.belowReported === false,
+      JSON.stringify({ supports: silent.reportedSupports, reportedGap: silent.reportedGap, belowReported: silent.belowReported }),
+    );
+    check(
+      "the reported-balance check never changes the income-only headroom, shortfall, or buffer figures",
+      hole.belowBuffer === false && hole.shortfall === 0 && hole.suggestedBuffer === 4000 && reconciled.total === 10000,
+      JSON.stringify({ belowBuffer: hole.belowBuffer, shortfall: hole.shortfall, buffer: hole.suggestedBuffer, total: reconciled.total }),
+    );
+  }
+
+  {
     // Goal funding draws on the same headroom the buffer view reports: what an
     // account has left after its subscriptions and its own buffer. Popular has
     // 27,000 DOP (450 USD) to spare, BSC 150 USD, and Cash is below its buffer.

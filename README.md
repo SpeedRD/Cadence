@@ -85,6 +85,19 @@ and what's left is available for flexible categories. A plan that ends in defici
 or with a zero buffer, can still be confirmed — but only after an explicit
 acknowledgement.
 
+Step 1's reported balance feeds one more figure in this same card: each account's
+row also shows what it **supports** — that account's own balance before this
+period's income, plus the income, minus its due subscriptions and its own buffer.
+That normally lines up with the income-only figures above it. When the balance was
+already negative before this check-in — money that left the account after the last
+payday but before this one was confirmed, which the period-income math has no way
+to see — supports comes in lower and the row shows an inline warning naming the
+exact gap, even when Step 1 still reads "Matches ledger" (the negative balance came
+from real transactions, not something typed in). It's advisory only: it never
+blocks Step 4, Step 5, or confirming, and there's no checkbox to acknowledge it.
+
+![Payday check-in step 3's buffer card showing the balance reconciliation warning: one account with a reported balance already negative, its "Supports" figure lower than its income-only figures and an inline warning naming the gap, next to a second account with a clean "Supports" line and no warning](screenshots/payday-step-buffer-reconciliation.png)
+
 ### Budgets and safe-to-spend
 
 ![Budgets page: overall period budget, committed and safe-to-spend figures, and a per-category table with progress meters](screenshots/budgets.png)

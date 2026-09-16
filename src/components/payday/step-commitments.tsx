@@ -269,7 +269,24 @@ export function StepCommitments({
                       {t.accountLeftAfterSubscriptions}:{" "}
                       <span className="figure">{formatMoney(plan.remaining, plan.currency)}</span>
                     </span>
+                    {plan.reportedSupports !== null ? (
+                      <span>
+                        {t.accountReportedSupports}:{" "}
+                        <span className="figure">{formatMoney(plan.reportedSupports, plan.currency)}</span>
+                      </span>
+                    ) : null}
                   </div>
+                  {plan.belowReported ? (
+                    // Advisory only: it never feeds the plan's figures and never
+                    // asks for an acknowledgement, unlike the buffer breach below.
+                    <div className="reveal-block">
+                      <Alert>
+                        <AlertDescription>
+                          {t.accountReportedBelowProjection(formatMoney(plan.reportedGap, plan.currency))}
+                        </AlertDescription>
+                      </Alert>
+                    </div>
+                  ) : null}
                   {items.length === 0 ? (
                     <p className="text-xs text-muted-foreground">{t.accountNoSubscriptionsDue}</p>
                   ) : (

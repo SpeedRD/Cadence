@@ -197,6 +197,13 @@ export interface AccountBufferAccount {
   income: number;
   /** The configured buffer floor, converted to the account's own currency. */
   bufferFloor: number;
+  /**
+   * Step 1's reported balance for this account, in its own currency: the
+   * balance *before* this check-in's income, the same convention Step 1
+   * reconciles against (see ledgerBefore in src/lib/data/payday.ts). Absent
+   * or null when the caller has no reported balance to reconcile with.
+   */
+  reportedBalance?: number | null;
 }
 
 export interface AccountBufferSubscription {
@@ -231,6 +238,25 @@ export interface AccountBufferPlan {
   suggestedAccountId: string | null;
   suggestedAccountName: string | null;
   recurringItemIds: string[];
+  /** AccountBufferAccount.reportedBalance as given; null when none was. */
+  reportedBalance: number | null;
+  /**
+   * What the account can really put toward goals and categories this period:
+   * reportedBalance + income - subscriptionsTotal - suggestedBuffer. The same
+   * shape as `headroom`, but starting from what the account actually held
+   * before the pay landed instead of assuming it held nothing it owed. Null
+   * when there is no reported balance to start from.
+   */
+  reportedSupports: number | null;
+  /**
+   * headroom - reportedSupports when positive, else 0: how much less the
+   * account really supports than the income-only figure says. That is exactly
+   * how far the account was already in the hole before this check-in - money
+   * that left it earlier, which the period-income figures cannot see. Advisory
+   * only: nothing in the plan reads it.
+   */
+  reportedGap: number;
+  belowReported: boolean;
 }
 
 export interface AccountBufferBreakdown {
@@ -274,6 +300,9 @@ export function planAccountBuffers(
     const suggestedBuffer = defaultProtectedBuffer(account.income, bufferPercent, account.bufferFloor);
     const remaining = round2(account.income - subscriptionsTotal);
     const headroom = round2(remaining - suggestedBuffer);
+    const reportedBalance = account.reportedBalance ?? null;
+    const reportedSupports = reportedBalance === null ? null : round2(reportedBalance + headroom);
+    const reportedGap = reportedSupports === null ? 0 : Math.max(0, round2(headroom - reportedSupports));
     return {
       accountId: account.accountId,
       name: account.name,
@@ -288,6 +317,10 @@ export function planAccountBuffers(
       suggestedAccountId: null,
       suggestedAccountName: null,
       recurringItemIds: own.map((s) => s.recurringItemId),
+      reportedBalance,
+      reportedSupports,
+      reportedGap,
+      belowReported: reportedGap > 0,
     };
   });
 

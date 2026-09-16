@@ -134,6 +134,9 @@ export function PaydayCheckinDialog({
           currency: a.currency,
           income: a.incomeEntered,
           bufferFloor: a.bufferFloor,
+          // Step 1's figure, so the buffer view can say what the account
+          // really supports next to what its income alone projects.
+          reportedBalance: a.reportedBalance,
         })),
         plan.subscriptions.map((item) => ({
           recurringItemId: item.recurringItemId,

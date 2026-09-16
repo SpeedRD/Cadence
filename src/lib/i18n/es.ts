@@ -1043,6 +1043,9 @@ export const es = {
     accountIncomeReceived: "Ingreso recibido",
     accountSubscriptionsDue: "Suscripciones por pagar",
     accountLeftAfterSubscriptions: "Queda tras las suscripciones",
+    accountReportedSupports: "Alcanza (según tu saldo reportado)",
+    accountReportedBelowProjection: (amount: string) =>
+      `Tu saldo reportado alcanza para ${amount} menos de lo que proyecta el ingreso de este periodo - probablemente dinero que ya salió de esta cuenta antes de este chequeo.`,
     accountSuggestedBuffer: "Colchón sugerido",
     accountNoSubscriptionsDue: "Nada por pagar desde esta cuenta antes del próximo pago.",
     accountAboveBuffer: (amount: string) => `${amount} por encima de su colchón`,
