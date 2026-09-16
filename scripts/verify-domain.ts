@@ -4163,8 +4163,9 @@ async function main() {
       const info = periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" });
       return [key, {
         period: info,
-        account: { accountId: "acc", name: "Checking", currency: account.currency ?? "USD", income: account.income, committed: account.committed, buffer: account.buffer, basis: "average" as const },
-        flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer },
+        account: { accountId: "acc", name: "Checking", currency: account.currency ?? "USD", income: account.income, committed: account.committed, buffer: account.buffer, basis: "average" as const, estimatedGoalFunding: 0 },
+        flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0 },
+        estimatedGoals: [] as import("../src/lib/afford").EstimatedGoalFunding[],
         historyPeriods: 6,
       }] as const;
     };
@@ -4539,6 +4540,14 @@ async function main() {
 
     console.log("\n-- what the rest of the app already knows: achieved goals and confirmed goal plans --");
     {
+      const { getGoalRoadmapAmount: roadmapForAfford, planPeriodRef: planRefForAfford } = await import("../src/lib/data/payday");
+      const { planGoalFunding: planFundingForAfford } = await import("../src/lib/payday");
+      // What a period owes from schedules (and a confirmed check-in) alone:
+      // `committed` less the goal estimate an unconfirmed period carries.
+      const scheduledOf = (figures: { committed: number; estimatedGoalFunding: number }) => round2(figures.committed - figures.estimatedGoalFunding);
+      const noGoals = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+      eq("with no goal to save for, a period with no check-in estimates nothing toward one", `${noGoals.get("2026-10-A")!.account.estimatedGoalFunding}:${noGoals.get("2026-10-A")!.flexible.estimatedGoalFunding}:${noGoals.get("2026-10-A")!.estimatedGoals.length}`, "0:0:0");
+
       // Two contributions on the account, one to a goal that has already
       // reached its target. Posting skips that one (goal_achieved, see
       // skipReasonFor in recurring-posting.ts), so Afford must not count it
@@ -4550,6 +4559,81 @@ async function main() {
         data: { name: "Verify Afford Goal Open", targetAmount: 5000, currency: "USD", targetDate: civilDate(2027, 6, 30) },
       });
       const baseline = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
+
+      console.log("\n-- a period with no check-in yet is estimated to keep funding each open goal at its pace --");
+      // Neither October period has a check-in, so nothing real says what
+      // either will put toward the open goal. Its pace as of today -
+      // getGoalRoadmapAmount over the plan period, the figure the Goals page
+      // shows: 5,000 over the 20 periods from Sep 1-15 to Jun 30, 2027 -
+      // stands in, labelled as an estimate; the achieved goal has no pace and
+      // adds nothing. Oct 16-31 has room for it. Oct 1-15 does not: the TV
+      // plan's two installments, the laptop's first and the rent already take
+      // the account past its income less its buffer, and no other account has
+      // room there either - so, exactly as Step 3 would recommend nothing
+      // from accounts with nothing to spare, nothing is estimated.
+      const openPace = await roadmapForAfford(openGoal.id, planRefForAfford(affordContext), affordContext);
+      eq("the open goal's pace as of today is 5,000 over 20 periods", openPace, 250);
+      const octEstimated = baseline.get("2026-10-B")!;
+      const octNoGoals = noGoals.get("2026-10-B")!;
+      eq("a period with no check-in carries that pace as a named estimate", JSON.stringify(octEstimated.estimatedGoals), JSON.stringify([{ goalId: openGoal.id, name: "Verify Afford Goal Open", amount: 250 }]));
+      eq("an achieved goal is estimated nothing", octEstimated.estimatedGoals.some((goal) => goal.goalId === achievedGoal.id), false);
+      eq("the estimate is in the period-wide commitments", round2(octEstimated.flexible.committed - octNoGoals.flexible.committed), 250);
+      eq("and reported apart as their estimated share", octEstimated.flexible.estimatedGoalFunding, 250);
+      check("the account's share of it is committed against its buffer", octEstimated.account.estimatedGoalFunding > 0 && octEstimated.account.estimatedGoalFunding <= 250, octEstimated.account.estimatedGoalFunding);
+      eq("the account's commitments grew by exactly that share", round2(octEstimated.account.committed - octNoGoals.account.committed), octEstimated.account.estimatedGoalFunding);
+      const estimatePurchase = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Estimate Purchase", firstDate: civilDate(2026, 10, 20), totalAmount: 100, installments: 1 }), affordContext);
+      if (!estimatePurchase.ok) throw new Error("estimate purchase evaluation refused");
+      const estimateVerdict = estimatePurchase.verdict.periods[0];
+      const noGoalsVerdict = affordLib.evaluateAffordability({ installments: estimatePurchase.verdict.installments, currency: "USD", projections: noGoals, rates }).periods[0];
+      eq("the purchase lands in Oct 16-31", estimateVerdict.key, "2026-10-B");
+      eq("the estimate shrinks the room a purchase is judged against, period-wide", round2(noGoalsVerdict.flexible.availableBefore - estimateVerdict.flexible.availableBefore), 250);
+      eq("and on the account, by its share", round2(noGoalsVerdict.account.headroomBefore - estimateVerdict.account.headroomBefore), octEstimated.account.estimatedGoalFunding);
+      eq("the verdict carries the named estimate through for the results page", JSON.stringify(estimateVerdict.estimatedGoals), JSON.stringify(octEstimated.estimatedGoals));
+      eq("and the estimated share of each check's commitments", `${estimateVerdict.account.estimatedGoalFunding}:${estimateVerdict.flexible.estimatedGoalFunding}`, `${octEstimated.account.estimatedGoalFunding}:250`);
+      // The pace is spread over the accounts exactly as a check-in spreads a
+      // goal's roadmap amount: planGoalFunding over each account's projected
+      // headroom (income - scheduled commitments - buffer), never more than
+      // the account has, and the shares add up to the period-wide figure.
+      const perAccount = await Promise.all(activeForAfford.map((account) => affordData.projectPeriods(octoberRefs, account, activeForAfford, affordContext)));
+      const headroomsIn = (key: string) =>
+        activeForAfford.map((account, index) => {
+          const own = perAccount[index].get(key)!.account;
+          return { accountId: account.id, name: account.name, currency: account.currency, headroom: round2(own.income - scheduledOf(own) - own.buffer) };
+        });
+      const expectedDraws = planFundingForAfford([{ goalId: openGoal.id, amount: 250 }], headroomsIn("2026-10-B"), { displayCurrency: "USD", rates })[0].draws;
+      eq("each account's share is planGoalFunding's draw over the accounts' projected headroom", activeForAfford.map((_, index) => perAccount[index].get("2026-10-B")!.account.estimatedGoalFunding).join(","), activeForAfford.map((account) => expectedDraws.find((draw) => draw.accountId === account.id)?.recommendedAmount ?? 0).join(","));
+      eq("the shares sum to the period-wide estimate", round2(activeForAfford.reduce((sum, account, index) => sum + convert(perAccount[index].get("2026-10-B")!.account.estimatedGoalFunding, account.currency, "USD", rates), 0)), 250);
+      check("Oct 1-15 leaves no account any room above its buffer", headroomsIn("2026-10-A").every((account) => account.headroom <= 0), JSON.stringify(headroomsIn("2026-10-A")));
+      eq("so nothing is estimated there: the estimate never plans money that is not there", `${baseline.get("2026-10-A")!.flexible.estimatedGoalFunding}:${baseline.get("2026-10-A")!.estimatedGoals.length}`, "0:0");
+      // A second open goal: each contributes its own pace, oldest goal first
+      // out of one pool of headroom, the order Step 3 funds them in.
+      const secondGoal = await prisma.goal.create({
+        data: { name: "Verify Afford Goal Second", targetAmount: 3000, currency: "USD", targetDate: civilDate(2027, 3, 31) },
+      });
+      const twoGoals = (await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext)).get("2026-10-B")!;
+      eq("a second open goal is estimated at its own pace (3,000 over 14 periods) beside the first", JSON.stringify(twoGoals.estimatedGoals), JSON.stringify([{ goalId: openGoal.id, name: "Verify Afford Goal Open", amount: 250 }, { goalId: secondGoal.id, name: "Verify Afford Goal Second", amount: 214.29 }]));
+      eq("the period-wide estimate is the two paces summed", twoGoals.flexible.estimatedGoalFunding, 464.29);
+      eq("and the commitments grew by that sum", round2(twoGoals.flexible.committed - octNoGoals.flexible.committed), 464.29);
+      // An undated goal: its roadmap figure is its whole remaining balance -
+      // right for the one period a check-in plans, and what the Goals page
+      // and the wizard keep recommending - but repeated in every period ahead
+      // it would commit the same money once per period. Afford estimates
+      // nothing for it, in any period, while the dated goals' paces go on
+      // being estimated exactly as before.
+      const undatedGoal = await prisma.goal.create({ data: { name: "Verify Afford Goal Undated", targetAmount: 2000, currency: "USD" } });
+      eq("the undated goal's own roadmap figure is still its whole remaining balance", await roadmapForAfford(undatedGoal.id, planRefForAfford(affordContext), affordContext), 2000);
+      eq("the payday draft still recommends that whole balance for it, for the one period it plans", (await getPaydayCheckinDraft(affordContext)).goals.find((g) => g.goalId === undatedGoal.id)?.recommendedAmount, 2000);
+      const spanning = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Spanning", firstDate: civilDate(2026, 10, 20), totalAmount: 300, installments: 3 }), affordContext);
+      if (!spanning.ok) throw new Error("spanning evaluation refused");
+      eq("a purchase spanning three unconfirmed periods", spanning.verdict.periods.map((p) => p.key).join(","), "2026-10-B,2026-11-B,2026-12-B");
+      eq("estimates the two dated goals at their paces in every one of them and the undated goal in none", spanning.verdict.periods.map((p) => p.estimatedGoals.map((goal) => `${goal.name}:${goal.amount}`).join("+")).join(" | "), Array(3).fill("Verify Afford Goal Open:250+Verify Afford Goal Second:214.29").join(" | "));
+      eq("so each period's estimated commitment is the dated paces alone, never the undated balance", spanning.verdict.periods.map((p) => p.flexible.estimatedGoalFunding).join(","), "464.29,464.29,464.29");
+      await prisma.goal.delete({ where: { id: undatedGoal.id } });
+      const withoutUndated = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Spanning", firstDate: civilDate(2026, 10, 20), totalAmount: 300, installments: 3 }), affordContext);
+      if (!withoutUndated.ok) throw new Error("spanning re-evaluation refused");
+      const commitmentsOf = (verdict: typeof spanning.verdict) => verdict.periods.map((p) => `${p.key}:${p.account.committed}:${p.flexible.committed}`).join(",");
+      eq("with the undated goal gone, every period's commitments are exactly what they were with it - it contributed nothing", commitmentsOf(withoutUndated.verdict), commitmentsOf(spanning.verdict));
+      await prisma.goal.delete({ where: { id: secondGoal.id } });
       const achievedItem = await prisma.recurringItem.create({
         data: { name: "Verify Afford Achieved Contribution", amount: 70, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 10, 8), anchorDay: 8, accountId: affordAccount.id, goalId: achievedGoal.id },
       });
@@ -4557,25 +4641,31 @@ async function main() {
         data: { name: "Verify Afford Open Contribution", amount: 80, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2026, 10, 9), anchorDay: 9, accountId: affordAccount.id, goalId: openGoal.id },
       });
       const withGoals = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
-      const octAccountDelta = round2(withGoals.get("2026-10-A")!.account.committed - baseline.get("2026-10-A")!.account.committed);
-      const octFlexibleDelta = round2(withGoals.get("2026-10-A")!.flexible.committed - baseline.get("2026-10-A")!.flexible.committed);
+      const octAccountDelta = round2(scheduledOf(withGoals.get("2026-10-A")!.account) - scheduledOf(baseline.get("2026-10-A")!.account));
+      const octFlexibleDelta = round2(scheduledOf(withGoals.get("2026-10-A")!.flexible) - scheduledOf(baseline.get("2026-10-A")!.flexible));
       eq("a contribution to an achieved goal is not a commitment; one to an open goal is", `${octAccountDelta}:${octFlexibleDelta}`, "80:80");
-      eq("neither contribution touches the half of the month it is not due in", round2(withGoals.get("2026-10-B")!.account.committed - baseline.get("2026-10-B")!.account.committed), 0);
+      eq("neither contribution touches the half of the month it is not due in", round2(scheduledOf(withGoals.get("2026-10-B")!.account) - scheduledOf(baseline.get("2026-10-B")!.account)), 0);
+      eq("the scheduled contribution does not change the goal's estimated pace beside it", withGoals.get("2026-10-B")!.flexible.estimatedGoalFunding, 250);
       await prisma.goal.update({ where: { id: achievedGoal.id }, data: { achievedAt: null } });
       const reopened = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
-      eq("clearing achievedAt (raising the target) brings the contribution back, as posting would pick it up again", round2(reopened.get("2026-10-A")!.account.committed - baseline.get("2026-10-A")!.account.committed), 150);
+      eq("clearing achievedAt (raising the target) brings the contribution back, as posting would pick it up again", round2(scheduledOf(reopened.get("2026-10-A")!.account) - scheduledOf(baseline.get("2026-10-A")!.account)), 150);
+      eq("a goal with nothing left to save is still estimated nothing, achieved or not", reopened.get("2026-10-B")!.estimatedGoals.some((goal) => goal.goalId === achievedGoal.id), false);
       await prisma.recurringItem.delete({ where: { id: achievedItem.id } });
 
       // A confirmed check-in for the current period plans 400 toward the open
       // goal from this account. Nothing has moved yet - the user logs the
       // contribution later - but the money is spoken for, so a purchase
-      // landing in that period must see it as committed.
+      // landing in that period must see it as committed - and only it: the
+      // estimate that stood in before the check-in is replaced, never added
+      // on top of the real figure.
       const currentRef = affordContext.currentPeriod;
       eq("the current period is Sep 1-15 (today is Sep 7)", currentRef.key, "2026-09-A");
       const septemberInput = affordInput({ name: "Verify Afford September", firstDate: civilDate(2026, 9, 10), totalAmount: 100, installments: 1 });
       const beforeCheckin = await affordData.evaluateAffordRequest(septemberInput, affordContext);
       if (!beforeCheckin.ok) throw new Error("september evaluation refused");
       eq("the purchase lands in the current period only", beforeCheckin.verdict.periods.map((p) => p.key).join(","), "2026-09-A");
+      const sepBefore = beforeCheckin.verdict.periods[0];
+      check("before the check-in, the current period carries the open goal's estimate", sepBefore.account.estimatedGoalFunding > 0 && sepBefore.flexible.estimatedGoalFunding === 250 && sepBefore.estimatedGoals.length === 1, JSON.stringify({ account: sepBefore.account.estimatedGoalFunding, flexible: sepBefore.flexible.estimatedGoalFunding }));
       const goalPlanResult = await confirmCheckinForAfford(
         {
           year: currentRef.year,
@@ -4600,14 +4690,15 @@ async function main() {
       eq("no contribution has been logged for it", await prisma.goalContribution.count({ where: { goalId: openGoal.id } }), 0);
       const afterCheckin = await affordData.evaluateAffordRequest(septemberInput, affordContext);
       if (!afterCheckin.ok) throw new Error("september re-evaluation refused");
-      const sepBefore = beforeCheckin.verdict.periods[0];
       const sepAfter = afterCheckin.verdict.periods[0];
-      eq("the planned goal draw is committed against the account's buffer", round2(sepAfter.account.committed - sepBefore.account.committed), 400);
-      eq("and against the period's flexible money", round2(sepAfter.flexible.committed - sepBefore.flexible.committed), 400);
-      eq("account headroom and available-for-flexible both drop by the draw", `${round2(sepBefore.account.headroomBefore - sepAfter.account.headroomBefore)}:${round2(sepBefore.flexible.availableBefore - sepAfter.flexible.availableBefore)}`, "400:400");
+      eq("once confirmed, the period carries no estimate at all", `${sepAfter.account.estimatedGoalFunding}:${sepAfter.flexible.estimatedGoalFunding}:${sepAfter.estimatedGoals.length}`, "0:0:0");
+      eq("the planned goal draw is committed against the account's buffer, in the estimate's place", round2(sepAfter.account.committed - scheduledOf(sepBefore.account)), 400);
+      eq("and against the period's flexible money", round2(sepAfter.flexible.committed - scheduledOf(sepBefore.flexible)), 400);
+      eq("account headroom and available-for-flexible both drop by the draw, net of the estimate it replaced", `${round2(sepBefore.account.headroomBefore + sepBefore.account.estimatedGoalFunding - sepAfter.account.headroomBefore)}:${round2(sepBefore.flexible.availableBefore + sepBefore.flexible.estimatedGoalFunding - sepAfter.flexible.availableBefore)}`, "400:400");
       eq("income is still projected from history, not read from the check-in", sepAfter.account.income, sepBefore.account.income);
       const octoberAfterCheckin = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
-      eq("a period with no check-in is untouched", `${round2(octoberAfterCheckin.get("2026-10-A")!.account.committed - reopened.get("2026-10-A")!.account.committed + 70)}:${round2(octoberAfterCheckin.get("2026-10-A")!.flexible.committed - reopened.get("2026-10-A")!.flexible.committed + 70)}`, "0:0");
+      eq("a period with no check-in is untouched", `${round2(scheduledOf(octoberAfterCheckin.get("2026-10-A")!.account) - scheduledOf(reopened.get("2026-10-A")!.account) + 70)}:${round2(scheduledOf(octoberAfterCheckin.get("2026-10-A")!.flexible) - scheduledOf(reopened.get("2026-10-A")!.flexible) + 70)}`, "0:0");
+      eq("and still carries its estimate: the check-in confirmed a different period", octoberAfterCheckin.get("2026-10-B")!.flexible.estimatedGoalFunding, 250);
       // A GOAL row from before per-account funding existed has no account: it
       // counts period-wide, against no account's buffer, like an unlinked item.
       const accountlessRow = await prisma.paydayPlanAllocation.create({
@@ -4615,12 +4706,13 @@ async function main() {
       });
       const withAccountless = await affordData.evaluateAffordRequest(septemberInput, affordContext);
       if (!withAccountless.ok) throw new Error("accountless evaluation refused");
-      eq("an accountless GOAL row counts period-wide only", `${round2(withAccountless.verdict.periods[0].account.committed - sepBefore.account.committed)}:${round2(withAccountless.verdict.periods[0].flexible.committed - sepBefore.flexible.committed)}`, "400:425");
+      eq("an accountless GOAL row counts period-wide only", `${round2(withAccountless.verdict.periods[0].account.committed - scheduledOf(sepBefore.account))}:${round2(withAccountless.verdict.periods[0].flexible.committed - scheduledOf(sepBefore.flexible))}`, "400:425");
       await prisma.paydayPlanAllocation.delete({ where: { id: accountlessRow.id } });
       await prisma.paydayCheckin.update({ where: { id: goalPlanCheckin.id }, data: { status: "DRAFT" } });
       const draftOnly = await affordData.evaluateAffordRequest(septemberInput, affordContext);
       if (!draftOnly.ok) throw new Error("draft evaluation refused");
-      eq("a draft check-in commits nothing", `${round2(draftOnly.verdict.periods[0].account.committed - sepBefore.account.committed)}:${round2(draftOnly.verdict.periods[0].flexible.committed - sepBefore.flexible.committed)}`, "0:0");
+      eq("a draft check-in commits nothing", `${round2(scheduledOf(draftOnly.verdict.periods[0].account) - scheduledOf(sepBefore.account))}:${round2(scheduledOf(draftOnly.verdict.periods[0].flexible) - scheduledOf(sepBefore.flexible))}`, "0:0");
+      eq("and leaves the period unconfirmed, so the estimate is back exactly as before", `${draftOnly.verdict.periods[0].account.estimatedGoalFunding}:${draftOnly.verdict.periods[0].flexible.estimatedGoalFunding}`, `${sepBefore.account.estimatedGoalFunding}:250`);
 
       await prisma.transaction.deleteMany({ where: { source: "PAYDAY_CHECKIN", accountId: { in: activeForAfford.map((a) => a.id) }, date: periodRange(periodInfo(currentRef)) } });
       await prisma.budget.deleteMany({ where: { year: currentRef.year, month: currentRef.month, period: currentRef.period } });
@@ -4628,7 +4720,6 @@ async function main() {
       await prisma.recurringItem.deleteMany({ where: { kind: "CONTRIBUTION", name: { startsWith: "Verify Afford" } } });
       await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
     }
-
     console.log("\n-- a confirmed check-in is history the moment it is confirmed --");
     {
       // The investigation scenario: on Sep 7 the user confirms Sep 1-15 with

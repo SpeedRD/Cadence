@@ -247,7 +247,18 @@ the same period are checked together. Because those periods haven't happened yet
 income is projected from the average of your comparable periods (same half of the
 month) — up to the last six, fewer if a **Count income history from** date (Settings)
 has trimmed some of them off — while commitments are exact: every active recurring
-item's occurrences in that period, including installment plans already recorded here.
+item's occurrences in that period, including installment plans already recorded here,
+plus whatever a confirmed payday check-in already planned toward your goals for that
+period. A period with no confirmed check-in yet instead carries an *estimate* of that
+goal funding — each dated goal's current pace (the same remaining-over-periods-left
+figure the Goals page shows), spread over the accounts by the room each has left, the
+way the check-in itself recommends it — because you most likely will keep funding
+your goals, and assuming zero would overstate the room for anything landing more
+than one period out. The results mark it and name it per goal as not yet confirmed.
+A goal that is reached, or has nothing left to save, is estimated nothing, and so is
+a goal with no target date: its roadmap figure is its whole remaining balance, which
+the check-in recommends for the one period it plans but which cannot be repeated in
+every period ahead.
 Nothing is written until you press **I bought this**, which records one self-limiting
 recurring subscription for the schedule shown, marked as from Afford so the Recurring
 page can list it apart and keep re-checking it (see "From Afford" above); a shortfall

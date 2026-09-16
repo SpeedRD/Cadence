@@ -93,6 +93,19 @@ export function buildInstallments(dates: Date[], amount: number): Installment[] 
   }));
 }
 
+/**
+ * One goal's share of a period's estimated goal funding, in the display
+ * currency: what the period is assumed to put toward the goal at the goal's
+ * current pace, because no confirmed check-in has said what it really will.
+ * Only ever present on a period with no confirmed check-in, and only for a
+ * goal the accounts' projected room let something be set aside for.
+ */
+export interface EstimatedGoalFunding {
+  goalId: string;
+  name: string;
+  amount: number;
+}
+
 /** Everything a period's two checks need, as projected by src/lib/data/afford.ts. */
 export interface PeriodProjection {
   period: PeriodInfo;
@@ -103,22 +116,48 @@ export interface PeriodProjection {
     currency: string;
     /** Comparable-period average of what this account received. */
     income: number;
-    /** What the active recurring items charged to this account owe in the period, enumerated from their schedules - exact, never an average. */
+    /**
+     * What the active recurring items charged to this account owe in the
+     * period, enumerated from their schedules - exact, never an average -
+     * plus what the period puts toward goals from this account: the confirmed
+     * check-in's GOAL rows when it has one, `estimatedGoalFunding` otherwise.
+     */
     committed: number;
     /** defaultProtectedBuffer() over `income`. */
     buffer: number;
     /** "none" when no comparable period had any income for this account - the projection is then a floor, not an average. */
     basis: "average" | "none";
+    /**
+     * The part of `committed` that is only an estimate: this account's share
+     * of every dated goal's current pace, for a period with no confirmed
+     * check-in (see `estimatedGoals`). 0 when the period has one - its real
+     * GOAL rows are in `committed` instead - or nothing is being saved for.
+     */
+    estimatedGoalFunding: number;
   };
   /** The whole period across every active account, in the display currency. */
   flexible: {
     currency: string;
     income: number;
-    /** Every active recurring item's occurrences due in the period, whichever account (or none) funds it. */
+    /** Every active recurring item's occurrences due in the period, whichever account (or none) funds it, plus the period's goal funding - confirmed or, failing that, estimated - like `account.committed`. */
     committed: number;
     /** Every income-receiving account's buffer, summed - the check-in's plannedBuffer. */
     buffer: number;
+    /** The estimated part of `committed`: `estimatedGoals` summed. 0 for a period with a confirmed check-in. */
+    estimatedGoalFunding: number;
   };
+  /**
+   * What the period is estimated to put toward each dated goal, one entry per
+   * goal with a positive amount, in the order the check-in funds them (oldest
+   * goal first). Empty for a period with a confirmed check-in - its GOAL rows
+   * are the real figure, and no estimate is added on top - and for a period
+   * with nothing to estimate. An undated goal never appears: its roadmap
+   * figure is a whole balance, not a pace, and cannot be repeated period
+   * after period (see projectPeriods in src/lib/data/afford.ts). The results
+   * page names each so the user can see that this much of the period's
+   * commitments is not yet confirmed.
+   */
+  estimatedGoals: EstimatedGoalFunding[];
   /**
    * How many comparable periods were actually averaged - up to HISTORY_PERIODS,
    * fewer when Settings' "count income history from" date drops some of them
@@ -136,6 +175,8 @@ export interface AccountCheck {
   committed: number;
   buffer: number;
   basis: "average" | "none";
+  /** The estimated part of `committed` - see PeriodProjection.account.estimatedGoalFunding. */
+  estimatedGoalFunding: number;
   /** income - committed - buffer: the room above the buffer before this purchase. */
   headroomBefore: number;
   /** This purchase's installment(s) due in the period, in the account's currency. */
@@ -151,6 +192,8 @@ export interface FlexibleCheck {
   income: number;
   committed: number;
   buffer: number;
+  /** The estimated part of `committed` - see PeriodProjection.flexible.estimatedGoalFunding. */
+  estimatedGoalFunding: number;
   availableBefore: number;
   /** In the display currency. */
   installment: number;
@@ -168,6 +211,8 @@ export interface PeriodVerdict {
   installmentTotal: number;
   account: AccountCheck;
   flexible: FlexibleCheck;
+  /** PeriodProjection.estimatedGoals as projected: the goals whose pace both checks' commitments include as an estimate. */
+  estimatedGoals: EstimatedGoalFunding[];
   passes: boolean;
 }
 
@@ -227,6 +272,7 @@ export function evaluateAffordability(input: {
       committed: projection.account.committed,
       buffer: projection.account.buffer,
       basis: projection.account.basis,
+      estimatedGoalFunding: projection.account.estimatedGoalFunding,
       headroomBefore,
       installment: accountInstallment,
       headroomAfter,
@@ -256,6 +302,7 @@ export function evaluateAffordability(input: {
       income: projection.flexible.income,
       committed: projection.flexible.committed,
       buffer: projection.flexible.buffer,
+      estimatedGoalFunding: projection.flexible.estimatedGoalFunding,
       availableBefore,
       installment: flexibleInstallment,
       availableAfter,
@@ -270,6 +317,7 @@ export function evaluateAffordability(input: {
       installmentTotal,
       account,
       flexible,
+      estimatedGoals: projection.estimatedGoals,
       passes: account.passes && flexible.passes,
     };
   });

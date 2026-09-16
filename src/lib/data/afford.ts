@@ -25,6 +25,23 @@
  *               posted. A period that already has a confirmed check-in adds
  *               the goal funding that check-in planned: money the user has
  *               committed to move toward a goal but may not have logged yet.
+ *   goals       a period with no confirmed check-in has no such plan, but
+ *               the user will most likely keep funding each dated goal: its
+ *               current pace (getGoalRoadmapAmounts, the same "remaining
+ *               over periods left" figure the Goals page shows and the
+ *               check-in recommends) is assumed for it, spread over the
+ *               accounts by projected headroom exactly as the check-in
+ *               spreads it (planGoalFunding), and counted among the
+ *               commitments - but carried separately as an estimate, and
+ *               named on the results page as one. Unlike income (averaged
+ *               from periods that happened) or a schedule (a fixed event),
+ *               this is discretionary: the user adjusts it check-in to
+ *               check-in, so it is never presented as confirmed. The pace is
+ *               taken once, as of today, and applied to every such period
+ *               alike - walking the remaining balance down through periods
+ *               that have not happened would stack guesses on guesses. An
+ *               undated goal has no pace, only a whole balance, so it is
+ *               estimated nothing (see projectPeriods).
  *   buffer      defaultProtectedBuffer() over the projected income, per
  *               account, as the check-in's per-account buffer card does
  *
@@ -40,6 +57,7 @@ import {
   evaluateAffordability,
   installmentDates,
   type AffordVerdict,
+  type EstimatedGoalFunding,
   type PeriodProjection,
 } from "@/lib/afford";
 import { remainingInstallments, type AffordTrackedItem } from "@/lib/afford-tracking";
@@ -47,7 +65,7 @@ import { getSettings } from "@/lib/auth";
 import { convert } from "@/lib/currency";
 import { maxDate } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
-import { countsInIncomeHistory, defaultProtectedBuffer } from "@/lib/payday";
+import { countsInIncomeHistory, defaultProtectedBuffer, planGoalFunding } from "@/lib/payday";
 import {
   parsePeriodKey,
   periodForDate,
@@ -63,7 +81,12 @@ import type { affordInputSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAppContext } from "@/lib/data/context";
-import { HISTORY_PERIODS, type ConfirmPaydayCheckinContext } from "@/lib/data/payday";
+import {
+  getGoalRoadmapAmounts,
+  HISTORY_PERIODS,
+  planPeriodRef,
+  type ConfirmPaydayCheckinContext,
+} from "@/lib/data/payday";
 
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -204,6 +227,8 @@ async function loadPeriodIncome(
 interface ScheduledCommitments {
   byAccount: Map<string, number>;
   total: number;
+  /** A CONFIRMED check-in exists for the period, so its goal funding (GOAL rows, or none) is in the figures above and is the real thing - nothing is to be estimated for it. */
+  confirmed: boolean;
 }
 
 /**
@@ -224,7 +249,8 @@ interface ScheduledCommitments {
  * in that account's currency. Confirming commits the money; logging the
  * contribution comes later, and Afford does not read the ledger to see
  * whether it has, so a planned draw counts either way. A period with no
- * confirmed check-in has nothing of the kind to add.
+ * confirmed check-in has nothing of the kind to add here; projectPeriods
+ * estimates its goal funding instead, and `confirmed` tells it which is which.
  *
  * An item or GOAL row with no account (or one on an archived account) counts
  * period-wide but against no account's buffer.
@@ -241,7 +267,7 @@ async function loadScheduledCommitments(
   excludeItemId?: string,
 ): Promise<Map<string, ScheduledCommitments>> {
   const result = new Map<string, ScheduledCommitments>(
-    periods.map((period) => [period.key, { byAccount: new Map<string, number>(), total: 0 }]),
+    periods.map((period) => [period.key, { byAccount: new Map<string, number>(), total: 0, confirmed: false }]),
   );
   if (periods.length === 0) return result;
   const horizonEnd = periods.reduce((latest, period) => maxDate(latest, period.end), periods[0].end);
@@ -307,6 +333,7 @@ async function loadScheduledCommitments(
   for (const checkin of checkins) {
     const bucket = result.get(periodInfo(checkin).key);
     if (!bucket) continue;
+    bucket.confirmed = true;
     for (const allocation of checkin.allocations) {
       add(bucket, num(allocation.plannedAmount), allocation.currency, allocation.accountId);
     }
@@ -325,6 +352,18 @@ async function loadScheduledCommitments(
  * the income that check-in just recorded. Commitments are enumerated from the recurring items' schedules in
  * one pass over the whole horizon, leaving out `options.excludeItemId` if
  * given (see loadScheduledCommitments).
+ *
+ * A period with no confirmed check-in also carries an estimate of its goal
+ * funding: every dated goal's pace as of today (getGoalRoadmapAmounts over
+ * the period a check-in opened now would plan for, read once for the whole
+ * horizon), spread over the accounts by planGoalFunding against the headroom
+ * each has left in that period once its income, scheduled commitments and
+ * buffer are projected - the same split, over the same kind of room, that
+ * Step 3 of the check-in recommends. Each account's share joins its
+ * commitments and the total joins the period's, both also reported apart as
+ * `estimatedGoalFunding`, with the goals named in `estimatedGoals`. A period
+ * whose check-in is confirmed already counts the funding it planned and gets
+ * no estimate on top.
  */
 export async function projectPeriods(
   refs: PeriodRef[],
@@ -347,8 +386,9 @@ export async function projectPeriods(
   }
 
   const incomeByHistory = new Map<string, PeriodIncome[]>();
-  const [scheduled] = await Promise.all([
+  const [scheduled, allPaces] = await Promise.all([
     loadScheduledCommitments(refs.map(periodInfo), accounts, context, options.excludeItemId),
+    getGoalRoadmapAmounts(planPeriodRef(context), context),
     ...[...histories.entries()].map(async ([key, history]) => {
       const incomes = await Promise.all(
         history.map((period) => loadPeriodIncome(period, accounts, context)),
@@ -356,6 +396,15 @@ export async function projectPeriods(
       incomeByHistory.set(key, incomes);
     }),
   ]);
+
+  // Only a dated goal has a pace to repeat. An undated goal's roadmap figure
+  // is its whole remaining balance - what the check-in recommends putting
+  // toward it in the one period being planned, to be done with it as fast as
+  // the room allows - and repeating that in every period ahead would commit
+  // the same money once per period. It is left out of the estimate entirely;
+  // a confirmed check-in's real GOAL rows for it still count as they always
+  // did, and every other reader of the roadmap figure is untouched.
+  const goalPaces = allPaces.filter((pace) => pace.targetDate !== null);
 
   const floorFor = (account: ActiveAccount) =>
     round2(convert(context.bufferFloorAmount, context.bufferFloorCurrency, account.currency, context.rates));
@@ -367,13 +416,54 @@ export async function projectPeriods(
     const incomes = incomeByHistory.get(historyKey) ?? [];
     const commitments = scheduled.get(period.key);
 
+    const figures = accounts.map((account) => {
+      const income = averageSinceFirstActivity(incomes.map((byAccount) => byAccount.get(account.id) ?? 0));
+      const scheduledCommitted = round2(commitments?.byAccount.get(account.id) ?? 0);
+      const buffer = defaultProtectedBuffer(income.amount, context.bufferPercent, floorFor(account));
+      return { account, income, scheduledCommitted, buffer };
+    });
+
+    // The goal estimate, for a period with no confirmed check-in: each dated
+    // goal's pace, drawn from the accounts by their projected headroom - what
+    // each has left above its buffer once its scheduled commitments are met
+    // - through the check-in's own split. An account with no room gives
+    // nothing, and a goal the room cannot cover is estimated at what the
+    // room can give, exactly as Step 3 would recommend it. A confirmed
+    // check-in's period keeps its real GOAL rows (already in `commitments`)
+    // and no estimate.
+    const estimatedByAccount = new Map<string, number>();
+    const estimatedGoals: EstimatedGoalFunding[] = [];
+    if (!commitments?.confirmed && goalPaces.length > 0) {
+      const plans = planGoalFunding(
+        goalPaces.map((pace) => ({ goalId: pace.goalId, amount: pace.amount })),
+        figures.map(({ account, income, scheduledCommitted, buffer }) => ({
+          accountId: account.id,
+          name: account.name,
+          currency: account.currency,
+          headroom: round2(income.amount - scheduledCommitted - buffer),
+        })),
+        { displayCurrency: context.displayCurrency, rates: context.rates },
+      );
+      // One plan per pace, in the same order (planGoalFunding maps its goals).
+      plans.forEach((plan, index) => {
+        for (const draw of plan.draws) {
+          estimatedByAccount.set(
+            draw.accountId,
+            round2((estimatedByAccount.get(draw.accountId) ?? 0) + draw.recommendedAmount),
+          );
+        }
+        if (plan.recommendedTotal > 0) {
+          estimatedGoals.push({ goalId: plan.goalId, name: goalPaces[index].name, amount: plan.recommendedTotal });
+        }
+      });
+    }
+    const periodEstimated = round2(estimatedGoals.reduce((sum, goal) => sum + goal.amount, 0));
+
     let periodIncome = 0;
     let periodBuffer = 0;
     let own: PeriodProjection["account"] | null = null;
-    for (const account of accounts) {
-      const income = averageSinceFirstActivity(incomes.map((byAccount) => byAccount.get(account.id) ?? 0));
-      const committed = round2(commitments?.byAccount.get(account.id) ?? 0);
-      const buffer = defaultProtectedBuffer(income.amount, context.bufferPercent, floorFor(account));
+    for (const { account, income, scheduledCommitted, buffer } of figures) {
+      const estimatedGoalFunding = estimatedByAccount.get(account.id) ?? 0;
       periodIncome += convert(income.amount, account.currency, context.displayCurrency, context.rates);
       // Only an account that receives income keeps a buffer out of it - the
       // check-in's planAccountBuffers rule for the period-wide total.
@@ -389,9 +479,10 @@ export async function projectPeriods(
           name: account.name,
           currency: account.currency,
           income: income.amount,
-          committed,
+          committed: round2(scheduledCommitted + estimatedGoalFunding),
           buffer,
           basis: income.periods > 0 ? "average" : "none",
+          estimatedGoalFunding,
         };
       }
     }
@@ -403,9 +494,11 @@ export async function projectPeriods(
       flexible: {
         currency: context.displayCurrency,
         income: round2(periodIncome),
-        committed: round2(commitments?.total ?? 0),
+        committed: round2((commitments?.total ?? 0) + periodEstimated),
         buffer: round2(periodBuffer),
+        estimatedGoalFunding: periodEstimated,
       },
+      estimatedGoals,
       // The comparable periods actually walked for this projection - `incomes`
       // is built by mapping over the (possibly boundary-filtered) `history`
       // array above, so this is HISTORY_PERIODS unless "count income history

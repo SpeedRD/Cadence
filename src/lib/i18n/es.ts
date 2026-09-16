@@ -672,7 +672,7 @@ export const es = {
       `${period}: al período le faltarían ${amount} para sus categorías flexibles.`,
     projectionHeading: "Cómo se proyectan estas cifras",
     projectionDescription: (periods: number, account: string) =>
-      `Todavía no existe un check-in de pago para estos períodos. El ingreso de ${account} se proyecta con el promedio de tus últimos ${periods} períodos comparables (la misma mitad del mes). Sus compromisos son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí. El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
+      `Todavía no existe un check-in de pago para estos períodos. El ingreso de ${account} se proyecta con el promedio de tus últimos ${periods} períodos comparables (la misma mitad del mes). Sus compromisos son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí, más lo que un check-in de pago confirmado haya planificado hacia tus metas para ese período. Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo. El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
     projectionAccountColumns: (account: string) => `${account} (proyectado)`,
     projectionPeriodColumns: "Todas las cuentas (proyectado)",
     projectionIncome: "Ingreso",
@@ -680,6 +680,10 @@ export const es = {
     projectionBuffer: "Colchón",
     noHistoryForAccount: (account: string, periods: number) =>
       `${account} no recibió ingresos en los últimos ${periods} períodos comparables, así que su ingreso proyectado es cero y solo aplica el mínimo del colchón.`,
+    estimatedInCommitments: "incluye un aporte estimado a metas *",
+    estimatedGoalItem: (amount: string, goal: string) => `${amount} hacia ${goal}`,
+    estimatedGoalFunding: (period: string, goals: string[]) =>
+      `* ${period}: los compromisos incluyen un estimado de ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} y ${goals[goals.length - 1]}, cada una a su ritmo actual` : `${goals[0]} a su ritmo actual`} - todavía no confirmado por un check-in de pago, así que puede cambiar cuando hagas el check-in de ese período.`,
     recordHeading: "Registrarla",
     recordedNote: (amount: string, frequency: string, count: number, date: string) =>
       `Registra una suscripción de ${amount} ${frequency}, ${count} veces a partir del ${date}. Se apaga sola después del último pago y aparece en todo lo que muestra suscripciones: Recurrentes, el check-in de pago, la contabilización y los informes.`,

@@ -89,6 +89,11 @@ export function AffordResults({
   const t = getDictionary(locale).afford;
   const canConfirm = !stale && (verdict.viable || acknowledged);
   const periodsWithoutHistory = verdict.periods.filter((period) => period.account.basis === "none");
+  // Periods with no confirmed check-in whose commitments carry an estimate of
+  // what they will put toward goals - marked in both tables and spelled out
+  // under the projection, goal by goal, so the estimate is never mistaken for
+  // a confirmed figure.
+  const periodsWithEstimate = verdict.periods.filter((period) => period.estimatedGoals.length > 0);
   const accountCurrency = verdict.periods[0]?.account.currency ?? recorded.currency;
   const displayCurrency = verdict.periods[0]?.flexible.currency ?? recorded.currency;
 
@@ -160,6 +165,11 @@ export function AffordResults({
                         {index === 0 && period.installments.length > 1 ? (
                           <span className="block text-[0.625rem] text-muted-foreground">
                             {t.checkedTogether(period.installments.length)}
+                          </span>
+                        ) : null}
+                        {index === 0 && period.estimatedGoals.length > 0 ? (
+                          <span className="block text-[0.625rem] text-muted-foreground">
+                            {t.estimatedInCommitments}
                           </span>
                         ) : null}
                       </TableCell>
@@ -285,6 +295,7 @@ export function AffordResults({
                   </TableCell>
                   <TableCell className="figure text-right">
                     {formatMoney(period.account.committed, period.account.currency)}
+                    {period.estimatedGoals.length > 0 ? <span className="text-muted-foreground"> *</span> : null}
                   </TableCell>
                   <TableCell className="figure text-right">
                     {formatMoney(period.account.buffer, period.account.currency)}
@@ -294,6 +305,7 @@ export function AffordResults({
                   </TableCell>
                   <TableCell className="figure text-right">
                     {formatMoney(period.flexible.committed, period.flexible.currency)}
+                    {period.estimatedGoals.length > 0 ? <span className="text-muted-foreground"> *</span> : null}
                   </TableCell>
                   <TableCell className="figure text-right">
                     {formatMoney(period.flexible.buffer, period.flexible.currency)}
@@ -302,6 +314,20 @@ export function AffordResults({
               ))}
             </TableBody>
           </Table>
+          {periodsWithEstimate.length > 0 ? (
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              {periodsWithEstimate.map((period) => (
+                <li key={period.key}>
+                  {t.estimatedGoalFunding(
+                    period.period.label,
+                    period.estimatedGoals.map((goal) =>
+                      t.estimatedGoalItem(formatMoney(goal.amount, period.flexible.currency), goal.name),
+                    ),
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {periodsWithoutHistory.length > 0 ? (
             <p className="text-xs text-[var(--warning)]">
               {t.noHistoryForAccount(accountName, historyPeriods)}

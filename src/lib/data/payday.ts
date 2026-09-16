@@ -353,28 +353,60 @@ function dueContributionsByGoal(committedItems: CommittedItem[]): Map<string, nu
   return byGoal;
 }
 
+/** One goal still being saved for and its roadmap pace for a plan period, in the display currency. */
+export interface GoalRoadmapPace {
+  goalId: string;
+  name: string;
+  amount: number;
+  /** Null for a goal with no target date - `amount` is then its whole remaining balance, a figure for the one period being planned rather than a per-period pace. */
+  targetDate: Date | null;
+}
+
 /**
- * goalRoadmapAmount() for one goal from live data - the same figure the
- * check-in draft and confirm compute for it - so the goal page measures a
- * confirmed plan against the real pace rather than against whatever the
- * accounts' room let the plan schedule. Null for a goal that is achieved or
- * has none left to save; a goal with no target date gets its whole remaining
- * balance, as goalRoadmapAmount describes.
+ * goalRoadmapAmount() for every goal still being saved for, from live data -
+ * the same figure the check-in draft and confirm compute for each - in the
+ * order the check-in funds them (listGoals: oldest goal first). A goal that
+ * is achieved or has none left to save is left out; a goal with no target
+ * date gets its whole remaining balance, as goalRoadmapAmount describes. One
+ * read of the goals and one of the plan period's summary however many goals
+ * there are. Afford reads this to estimate what a period with no confirmed
+ * check-in will keep putting toward each goal (dated goals only - see
+ * projectPeriods for why a whole-balance figure cannot be repeated).
+ */
+export async function getGoalRoadmapAmounts(
+  planRef: PeriodRef,
+  context: AppContext,
+): Promise<GoalRoadmapPace[]> {
+  const plan = periodInfo(planRef);
+  const [goals, planSummary] = await Promise.all([listGoals(context), getPeriodSummary(plan, context)]);
+  const dueByGoal = dueContributionsByGoal(planSummary.committedItems);
+  return goals
+    .filter((goal) => !goal.achievedAt && goal.remaining > 0)
+    .map((goal) => ({
+      goalId: goal.id,
+      name: goal.name,
+      amount: goalRoadmapAmount(
+        { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate },
+        plan.start,
+        dueByGoal.get(goal.id) ?? 0,
+      ),
+      targetDate: goal.targetDate,
+    }));
+}
+
+/**
+ * getGoalRoadmapAmounts() for one goal, so the goal page measures a confirmed
+ * plan against the real pace rather than against whatever the accounts' room
+ * let the plan schedule. Null for a goal that is achieved or has none left to
+ * save (or does not exist).
  */
 export async function getGoalRoadmapAmount(
   goalId: string,
   planRef: PeriodRef,
   context: AppContext,
 ): Promise<number | null> {
-  const plan = periodInfo(planRef);
-  const [goals, planSummary] = await Promise.all([listGoals(context), getPeriodSummary(plan, context)]);
-  const goal = goals.find((g) => g.id === goalId);
-  if (!goal || goal.achievedAt || goal.remaining <= 0) return null;
-  return goalRoadmapAmount(
-    { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate },
-    plan.start,
-    dueContributionsByGoal(planSummary.committedItems).get(goal.id) ?? 0,
-  );
+  const paces = await getGoalRoadmapAmounts(planRef, context);
+  return paces.find((pace) => pace.goalId === goalId)?.amount ?? null;
 }
 
 export async function getAvailableCarryover(

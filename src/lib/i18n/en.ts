@@ -669,7 +669,7 @@ export const en = {
       `${period}: the period would be ${amount} short for its flexible categories.`,
     projectionHeading: "How these figures are projected",
     projectionDescription: (periods: number, account: string) =>
-      `No payday check-in exists for these periods yet. ${account}'s income is projected from the average of your last ${periods} comparable pay periods (same half of the month). Its commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here. The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
+      `No payday check-in exists for these periods yet. ${account}'s income is projected from the average of your last ${periods} comparable pay periods (same half of the month). Its commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here - plus whatever a confirmed payday check-in planned toward your goals for that period. Where no check-in is confirmed yet, an estimate stands in for that goal funding: what you would keep putting toward each goal at its current pace, marked * and spelled out below. The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
     projectionAccountColumns: (account: string) => `${account} (projected)`,
     projectionPeriodColumns: "All accounts (projected)",
     projectionIncome: "Income",
@@ -677,6 +677,10 @@ export const en = {
     projectionBuffer: "Buffer",
     noHistoryForAccount: (account: string, periods: number) =>
       `${account} received no income in the last ${periods} comparable periods, so its projected income is zero and only the buffer floor applies.`,
+    estimatedInCommitments: "includes an estimated goal contribution *",
+    estimatedGoalItem: (amount: string, goal: string) => `${amount} toward ${goal}`,
+    estimatedGoalFunding: (period: string, goals: string[]) =>
+      `* ${period}: commitments include an estimated ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} and ${goals[goals.length - 1]}, each at its current pace` : `${goals[0]} at its current pace`} - not yet confirmed by a payday check-in, so it may change when you do that period's check-in.`,
     recordHeading: "Record it",
     recordedNote: (amount: string, frequency: string, count: number, date: string) =>
       `Records one subscription of ${amount} ${frequency}, ${count} times starting ${date}. It stops on its own after the last payment and shows up everywhere a subscription does - Recurring, the payday check-in, posting, reports.`,
