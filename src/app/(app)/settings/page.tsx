@@ -84,6 +84,11 @@ export default async function SettingsPage() {
                 ? t.rateServiceUnreachable
                 : ""}
             </p>
+            {context.rates.fetchedAt && (
+              <p className="text-xs text-muted-foreground">
+                {context.rates.source === "bpd" ? t.rateSourceBpd : t.rateSourceOpenErApi}
+              </p>
+            )}
           </CardContent>
         </Card>
 

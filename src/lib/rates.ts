@@ -1,3 +1,4 @@
+import { getBpdRates, toRateTableEntries } from "@/lib/bpd-rates";
 import {
   BASE_CURRENCY,
   CURRENCIES,
@@ -12,6 +13,8 @@ const RATE_API_URL = "https://open.er-api.com/v6/latest/USD";
 const FETCH_TIMEOUT_MS = 6000;
 /** After a failed fetch, don't hammer the API on every render. */
 const FAILURE_BACKOFF_MS = 10 * 60 * 1000;
+/** Every open.er-api.com-sourced ExchangeRate row carries this source. */
+const OPEN_ER_API_SOURCE = "open-er-api";
 
 /** Last resort if the API is unreachable and nothing has ever been stored. */
 const FALLBACK_RATES: Record<string, number> = { USD: 1, DOP: 60, EUR: 0.92 };
@@ -66,8 +69,32 @@ async function fetchUsdRates(): Promise<Record<string, number> | null> {
  * FALLBACK_RATES), never emitted with a hole in it.
  */
 export async function getRateTable(): Promise<RateTable> {
+  const table = await getOpenErApiRateTable();
+  return preferBpdRates(table);
+}
+
+/**
+ * Overrides DOP and EUR with Banco Popular Dominicano's same-day published
+ * rate when one is available (see src/lib/bpd-rates.ts), and marks the table
+ * `source: "bpd"` accordingly; silently keeps `table` unchanged otherwise - a
+ * missing, stale, or unfetchable BPD rate is not an error here, just
+ * "nothing to prefer", so `source` stays whatever getOpenErApiRateTable set.
+ * Deliberately leaves `stale` and `fetchedAt` describing the open.er-api.com
+ * table underneath: this only changes which number two of its entries carry
+ * (and where they're attributed to), not the table's own freshness
+ * bookkeeping.
+ */
+async function preferBpdRates(table: RateTable): Promise<RateTable> {
+  const bpd = await getBpdRates();
+  if (!bpd) return table;
+  const { DOP, EUR } = toRateTableEntries(bpd);
+  if (!isUsableRate(DOP) || !isUsableRate(EUR)) return table;
+  return { ...table, rates: { ...table.rates, DOP, EUR }, source: "bpd" };
+}
+
+async function getOpenErApiRateTable(): Promise<RateTable> {
   const stored = await prisma.exchangeRate.findMany({
-    where: { baseCurrency: BASE_CURRENCY },
+    where: { baseCurrency: BASE_CURRENCY, source: OPEN_ER_API_SOURCE },
   });
   const byTarget = new Map(stored.map((row) => [row.targetCurrency, row]));
   const now = Date.now();
@@ -91,6 +118,7 @@ export async function getRateTable(): Promise<RateTable> {
       rates,
       fetchedAt: byTarget.get(BASE_CURRENCY)?.fetchedAt ?? null,
       stale: substituted,
+      source: OPEN_ER_API_SOURCE,
     };
   }
 
@@ -106,21 +134,23 @@ export async function getRateTable(): Promise<RateTable> {
       for (const code of CURRENCIES) {
         await prisma.exchangeRate.upsert({
           where: {
-            baseCurrency_targetCurrency: {
+            baseCurrency_targetCurrency_source: {
               baseCurrency: BASE_CURRENCY,
               targetCurrency: code,
+              source: OPEN_ER_API_SOURCE,
             },
           },
           update: { rate: rates[code], fetchedAt },
           create: {
             baseCurrency: BASE_CURRENCY,
             targetCurrency: code,
+            source: OPEN_ER_API_SOURCE,
             rate: rates[code],
             fetchedAt,
           },
         });
       }
-      return { rates, fetchedAt, stale: false };
+      return { rates, fetchedAt, stale: false, source: OPEN_ER_API_SOURCE };
     }
     // The payload omitted (or zeroed) a currency we display. Half of it stored
     // and returned as fresh would silently mix denominations, so treat it as a
@@ -141,7 +171,7 @@ export async function getRateTable(): Promise<RateTable> {
       (latest, row) => (row.fetchedAt > latest ? row.fetchedAt : latest),
       stored[0].fetchedAt,
     );
-    return { rates, fetchedAt: newest, stale: true };
+    return { rates, fetchedAt: newest, stale: true, source: OPEN_ER_API_SOURCE };
   }
 
   // Nothing stored and nothing fetched: hardcoded constants, flagged stale so

@@ -836,6 +836,8 @@ export const es = {
     lastFetched: (datetime: string) => `Última actualización ${datetime}`,
     noRatesFetched: "Aún no se han obtenido tasas",
     rateServiceUnreachable: " · el servicio de tasas no estaba disponible; se usan los últimos valores conocidos",
+    rateSourceBpd: "de Banco Popular",
+    rateSourceOpenErApi: "de open.er-api.com (tasa de mercado)",
     goalProgress: "Progreso de metas",
     goalProgressDescription:
       "Los totales de las metas se cachean por velocidad. Los aportes son la fuente de verdad: reconstruye la caché a partir de ellos si algo se ve mal.",

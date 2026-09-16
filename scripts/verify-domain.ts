@@ -11,7 +11,15 @@ import "dotenv/config";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
+import {
+  BPD_SOURCE,
+  fetchBpdRates,
+  isSameUtcDay,
+  parseBpdPayload,
+  toRateTableEntries,
+} from "../src/lib/bpd-rates";
 import { convert, type RateTable } from "../src/lib/currency";
+import { getRateTable } from "../src/lib/rates";
 import {
   DATE_FORMATS,
   parseAmount,
@@ -309,7 +317,12 @@ async function main() {
   eq("isCashflow(EXTERNAL_TRANSFER) is false - it never counts as income or spending", isCashflow("EXTERNAL_TRANSFER"), false);
 
   console.log("\n== currency conversion through USD ==");
-  const rates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.5 }, fetchedAt: new Date(), stale: false };
+  const rates: RateTable = {
+    rates: { USD: 1, DOP: 60, EUR: 0.5 },
+    fetchedAt: new Date(),
+    stale: false,
+    source: "open-er-api",
+  };
   eq("USD to DOP", convert(100, "USD", "DOP", rates), 6000);
   eq("DOP to USD", convert(6000, "DOP", "USD", rates), 100);
   eq("EUR to DOP has no stored pair", convert(10, "EUR", "DOP", rates), 1200);
@@ -1231,7 +1244,12 @@ async function main() {
     // summarizePaydayDraft is what both the Dashboard check-in summary line
     // and the period hero's recommended overall budget read - it must convert
     // income per account and apply the same formula as above.
-    const draftRates: RateTable = { rates: { USD: 1, DOP: 60 }, fetchedAt: new Date(), stale: false };
+    const draftRates: RateTable = {
+      rates: { USD: 1, DOP: 60 },
+      fetchedAt: new Date(),
+      stale: false,
+      source: "open-er-api",
+    };
     const draft = {
       displayCurrency: "DOP",
       accounts: [
@@ -5383,6 +5401,152 @@ async function main() {
     eq("a near miss, a different length and an empty candidate are all refused", `${recovery.verifyRecoverySecret("Verify-recovery-secret")}:${recovery.verifyRecoverySecret("verify-recovery-secret-longer")}:${recovery.verifyRecoverySecret("")}`, "false:false:false");
     if (previous === undefined) delete process.env.RECOVERY_SECRET;
     else process.env.RECOVERY_SECRET = previous;
+  }
+
+  console.log("\n== Banco Popular Dominicano exchange rate preference ==");
+  {
+    console.log("-- parseBpdPayload / toRateTableEntries / isSameUtcDay (pure) --");
+    const validPayload = {
+      d: {
+        results: [
+          { DollarSellRate: 60.05, EuroSellRate: 70.7, BuySellRatesAsOf: "2026-09-15T09:05:00Z" },
+        ],
+      },
+    };
+    const parsed = parseBpdPayload(validPayload);
+    eq(
+      "a valid payload parses the sell rates and asOf",
+      parsed ? `${parsed.dollarSellRate}:${parsed.euroSellRate}:${parsed.asOf.toISOString()}` : "null",
+      "60.05:70.7:2026-09-15T09:05:00.000Z",
+    );
+    eq("the DOP table entry is the raw dollar sell rate", parsed ? toRateTableEntries(parsed).DOP : null, 60.05);
+    eq(
+      "the EUR table entry is the dollar/euro cross-rate, not the raw euro sell rate",
+      parsed ? round2(toRateTableEntries(parsed).EUR) : null,
+      round2(60.05 / 70.7),
+    );
+    eq(
+      "an out-of-range dollar sell rate is rejected",
+      parseBpdPayload({ d: { results: [{ DollarSellRate: 5, EuroSellRate: 70.7, BuySellRatesAsOf: "2026-09-15T09:05:00Z" }] } }),
+      null,
+    );
+    eq(
+      "an out-of-range euro sell rate is rejected",
+      parseBpdPayload({ d: { results: [{ DollarSellRate: 60.05, EuroSellRate: 999, BuySellRatesAsOf: "2026-09-15T09:05:00Z" }] } }),
+      null,
+    );
+    eq(
+      "a missing BuySellRatesAsOf is rejected",
+      parseBpdPayload({ d: { results: [{ DollarSellRate: 60.05, EuroSellRate: 70.7 }] } }),
+      null,
+    );
+    eq(
+      "an unparseable BuySellRatesAsOf is rejected",
+      parseBpdPayload({ d: { results: [{ DollarSellRate: 60.05, EuroSellRate: 70.7, BuySellRatesAsOf: "not-a-date" }] } }),
+      null,
+    );
+    eq("a response with no results is rejected", parseBpdPayload({ d: { results: [] } }), null);
+    eq("a non-object payload is rejected", parseBpdPayload(null), null);
+
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+    eq("the same instant is the same UTC day", isSameUtcDay(today, today), true);
+    eq("24 hours earlier is always a different UTC day", isSameUtcDay(today, yesterday), false);
+
+    console.log("-- fetchBpdRates(): a hung response is abandoned at the configured hard timeout --");
+    const hangingFetch = ((_input: unknown, init?: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted.", "AbortError")),
+        );
+      })) as typeof fetch;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = hangingFetch;
+    const hangStart = Date.now();
+    const hangResult = await fetchBpdRates();
+    const hangElapsedMs = Date.now() - hangStart;
+    globalThis.fetch = originalFetch;
+    eq("a hung BPD response resolves to null rather than throwing or hanging forever", hangResult, null);
+    check(
+      `the hang is abandoned near its configured timeout, not left open (${hangElapsedMs}ms, expected roughly 4000ms)`,
+      hangElapsedMs >= 3500 && hangElapsedMs <= 7000,
+    );
+
+    console.log("-- getRateTable(): stays fast and falls back cleanly when BPD hangs --");
+    // Seed a fresh open.er-api.com table so getRateTable() resolves it from the
+    // DB with no network call, isolating BPD's hang as the only variable.
+    const fetchedAt = new Date();
+    for (const [targetCurrency, rate] of Object.entries({ USD: 1, DOP: 59, EUR: 0.9 })) {
+      await prisma.exchangeRate.upsert({
+        where: { baseCurrency_targetCurrency_source: { baseCurrency: "USD", targetCurrency, source: "open-er-api" } },
+        update: { rate, fetchedAt },
+        create: { baseCurrency: "USD", targetCurrency, source: "open-er-api", rate, fetchedAt },
+      });
+    }
+    globalThis.fetch = hangingFetch;
+    const tableHangStart = Date.now();
+    const hungTable = await getRateTable();
+    const tableHangElapsedMs = Date.now() - tableHangStart;
+    globalThis.fetch = originalFetch;
+    eq(
+      "USD/DOP/EUR fall back to the open.er-api.com-sourced table when BPD hangs, with no error",
+      `${hungTable.rates.USD}:${hungTable.rates.DOP}:${hungTable.rates.EUR}`,
+      "1:59:0.9",
+    );
+    eq("the table reports open-er-api as its source when BPD hangs", hungTable.source, "open-er-api");
+    // A prior failure's backoff can make this call return even faster than the
+    // timeout alone would - either way, "fast" is the guarantee being checked.
+    check(
+      `getRateTable() itself never waits past a bounded ceiling while BPD hangs (${tableHangElapsedMs}ms)`,
+      tableHangElapsedMs <= 7000,
+    );
+
+    console.log("-- getRateTable(): a same-day BPD rate is preferred for DOP and EUR --");
+    async function seedBpdRow(dollarSellRate: number, euroSellRate: number, asOf: Date) {
+      const entries = toRateTableEntries({ dollarSellRate, euroSellRate, asOf });
+      for (const [targetCurrency, rate] of Object.entries(entries)) {
+        await prisma.exchangeRate.upsert({
+          where: { baseCurrency_targetCurrency_source: { baseCurrency: "USD", targetCurrency, source: BPD_SOURCE } },
+          update: { rate, fetchedAt: new Date(), asOf },
+          create: { baseCurrency: "USD", targetCurrency, source: BPD_SOURCE, rate, fetchedAt: new Date(), asOf },
+        });
+      }
+    }
+    await seedBpdRow(62.5, 71.25, today);
+    const preferred = await getRateTable();
+    eq("USD stays the identity rate regardless of BPD", preferred.rates.USD, 1);
+    eq("a same-day BPD rate is preferred for DOP over open.er-api.com's", preferred.rates.DOP, 62.5);
+    eq(
+      "a same-day BPD rate is preferred for EUR, as a derived USD cross-rate, over open.er-api.com's",
+      round2(preferred.rates.EUR),
+      round2(62.5 / 71.25),
+    );
+    eq("the table reports bpd as its source once a same-day BPD rate is preferred", preferred.source, "bpd");
+
+    console.log("-- getRateTable(): a stale (yesterday's) BPD rate is never preferred --");
+    await seedBpdRow(63, 72, yesterday);
+    // Whether this resolves via the still-active backoff from the hang test
+    // above or via a live re-check, the guarantee under test is the same: a
+    // stale stored row is never returned as-is, and it is never preferred.
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          d: { results: [{ DollarSellRate: 63, EuroSellRate: 72, BuySellRatesAsOf: yesterday.toISOString() }] },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+    const stalePreferred = await getRateTable();
+    globalThis.fetch = originalFetch;
+    eq("a stale BPD rate is not preferred for DOP; open.er-api.com's is used", stalePreferred.rates.DOP, 59);
+    eq("a stale BPD rate is not preferred for EUR; open.er-api.com's is used", stalePreferred.rates.EUR, 0.9);
+    eq(
+      "the table reverts to open-er-api as its source once the BPD rate goes stale, not stuck on bpd from the prior fetch",
+      stalePreferred.source,
+      "open-er-api",
+    );
+
+    await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+    console.log("  ok   test ExchangeRate rows removed");
   }
 
   console.log("\n== cleanup ==");

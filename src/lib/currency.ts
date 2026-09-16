@@ -29,12 +29,21 @@ export interface RateTable {
   rates: Record<string, number>;
   fetchedAt: Date | null;
   stale: boolean;
+  /**
+   * Which source produced the DOP/EUR rates currently in `rates` - "bpd" only
+   * when getRateTable() actually preferred a same-day Banco Popular rate over
+   * open.er-api.com's for this table (see preferBpdRates in src/lib/rates.ts),
+   * "open-er-api" otherwise (including the hardcoded FALLBACK_RATES case,
+   * where fetchedAt is null and a source label has nothing to attach to).
+   */
+  source: "open-er-api" | "bpd";
 }
 
 export const IDENTITY_RATES: RateTable = {
   rates: Object.fromEntries(CURRENCIES.map((code) => [code, 1])),
   fetchedAt: null,
   stale: true,
+  source: "open-er-api",
 };
 
 /**
