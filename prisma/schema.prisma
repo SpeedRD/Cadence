@@ -372,7 +372,7 @@ model GoalContribution {
 /// rate = units of targetCurrency per 1 baseCurrency. source distinguishes
 /// the open.er-api.com table (considered fresh for 24h from fetchedAt) from
 /// Banco Popular Dominicano's published rate for DOP/EUR (source "bpd",
-/// considered fresh only for the calendar day named by asOf - see
+/// considered fresh within BPD_RATE_MAX_AGE_DAYS calendar days of asOf - see
 /// src/lib/bpd-rates.ts). asOf is null for open.er-api.com rows, which don't
 /// publish a rate date distinct from when we fetched them.
 model ExchangeRate {

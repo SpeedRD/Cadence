@@ -24,6 +24,16 @@ const BPD_FETCH_TIMEOUT_MS = 4000;
 /** After a failed fetch, don't retry on every render. */
 const FAILURE_BACKOFF_MS = 10 * 60 * 1000;
 
+/**
+ * How many calendar days old a stored or freshly-fetched BPD rate may be and
+ * still be preferred over open.er-api.com's. The bank doesn't publish every
+ * business day (confirmed 2026-09-16: still showing Sep 15's rate on Sep
+ * 17), so "today only" rejected rates that were still far more accurate than
+ * the market-mid fallback; this bounds the staleness instead of requiring an
+ * exact match, so a silently ancient rate still gets rejected eventually.
+ */
+export const BPD_RATE_MAX_AGE_DAYS = 7;
+
 export const BPD_SOURCE = "bpd";
 
 /**
@@ -63,6 +73,22 @@ export function isSameUtcDay(a: Date, b: Date): boolean {
     a.getUTCMonth() === b.getUTCMonth() &&
     a.getUTCDate() === b.getUTCDate()
   );
+}
+
+/** Whole UTC calendar days between `asOf` and `now` (0 = same UTC day). */
+function utcDaysBetween(asOf: Date, now: Date): number {
+  const asOfUtcMidnight = Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate());
+  const nowUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.round((nowUtcMidnight - asOfUtcMidnight) / (24 * 60 * 60 * 1000));
+}
+
+/**
+ * `asOf` is today or up to BPD_RATE_MAX_AGE_DAYS calendar days in the past -
+ * never in the future, and never older than the bounded window.
+ */
+function isWithinFreshnessWindow(asOf: Date, now: Date): boolean {
+  const ageDays = utcDaysBetween(asOf, now);
+  return ageDays >= 0 && ageDays <= BPD_RATE_MAX_AGE_DAYS;
 }
 
 /**
@@ -124,15 +150,17 @@ export async function fetchBpdRates(): Promise<BpdRates | null> {
 }
 
 /**
- * Same-day BPD-sourced DOP/USD and DOP/EUR sell rates, cached in
- * ExchangeRate under source="bpd" alongside (not overwriting) the
- * open.er-api.com rows. The bank republishes once per business day, so a
- * stored row whose `asOf` is today is reused without a network call; only a
- * missing or stale stored row triggers a fetch.
+ * BPD-sourced DOP/USD and DOP/EUR sell rates, cached in ExchangeRate under
+ * source="bpd" alongside (not overwriting) the open.er-api.com rows. The
+ * bank republishes roughly once per business day but can go several days
+ * without a new one, so a stored row whose `asOf` is within
+ * BPD_RATE_MAX_AGE_DAYS of today is reused without a network call; only a
+ * missing or out-of-window stored row triggers a fetch.
  *
  * Returns null on any failure - timeout, malformed response, an
- * out-of-range rate, or an asOf that isn't today - so `getRateTable()` can
- * fall back to open.er-api.com silently, never throwing.
+ * out-of-range rate, or an asOf outside the freshness window - so
+ * `getRateTable()` can fall back to open.er-api.com silently, never
+ * throwing.
  */
 export async function getBpdRates(): Promise<BpdRates | null> {
   const now = new Date();
@@ -143,7 +171,12 @@ export async function getBpdRates(): Promise<BpdRates | null> {
   const dopRow = stored.find((row) => row.targetCurrency === "DOP");
   const eurRow = stored.find((row) => row.targetCurrency === "EUR");
 
-  if (dopRow?.asOf && eurRow?.asOf && isSameUtcDay(dopRow.asOf, now) && isSameUtcDay(eurRow.asOf, now)) {
+  if (
+    dopRow?.asOf &&
+    eurRow?.asOf &&
+    isWithinFreshnessWindow(dopRow.asOf, now) &&
+    isWithinFreshnessWindow(eurRow.asOf, now)
+  ) {
     const dollarSellRate = Number(dopRow.rate);
     const euroCrossRate = Number(eurRow.rate);
     if (isPlausibleDopRate(dollarSellRate) && euroCrossRate > 0) {
@@ -156,7 +189,7 @@ export async function getBpdRates(): Promise<BpdRates | null> {
 
   const fetched = await fetchBpdRates();
   if (!fetched) return null;
-  if (!isSameUtcDay(fetched.asOf, now)) return null;
+  if (!isWithinFreshnessWindow(fetched.asOf, now)) return null;
 
   const entries = toRateTableEntries(fetched);
   const fetchedAt = new Date();

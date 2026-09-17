@@ -840,7 +840,7 @@ export const es = {
     lastFetched: (datetime: string) => `Última actualización ${datetime}`,
     noRatesFetched: "Aún no se han obtenido tasas",
     rateServiceUnreachable: " · el servicio de tasas no estaba disponible; se usan los últimos valores conocidos",
-    rateSourceBpd: "de Banco Popular",
+    rateSourceBpd: (date: string) => `de Banco Popular (${date})`,
     rateSourceOpenErApi: "de open.er-api.com (tasa de mercado)",
     goalProgress: "Progreso de metas",
     goalProgressDescription:

@@ -835,7 +835,7 @@ export const en = {
     lastFetched: (datetime: string) => `Last fetched ${datetime}`,
     noRatesFetched: "No rates fetched yet",
     rateServiceUnreachable: " · the rate service was unreachable, using the last known values",
-    rateSourceBpd: "from Banco Popular",
+    rateSourceBpd: (date: string) => `from Banco Popular (${date})`,
     rateSourceOpenErApi: "from open.er-api.com (market rate)",
     goalProgress: "Goal progress",
     goalProgressDescription:

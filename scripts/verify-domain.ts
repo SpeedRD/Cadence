@@ -12,6 +12,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import {
+  BPD_RATE_MAX_AGE_DAYS,
   BPD_SOURCE,
   fetchBpdRates,
   isSameUtcDay,
@@ -322,6 +323,7 @@ async function main() {
     fetchedAt: new Date(),
     stale: false,
     source: "open-er-api",
+    asOf: null,
   };
   eq("USD to DOP", convert(100, "USD", "DOP", rates), 6000);
   eq("DOP to USD", convert(6000, "DOP", "USD", rates), 100);
@@ -1249,6 +1251,7 @@ async function main() {
       fetchedAt: new Date(),
       stale: false,
       source: "open-er-api",
+      asOf: null,
     };
     const draft = {
       displayCurrency: "DOP",
@@ -5477,6 +5480,73 @@ async function main() {
     eq("transferSchema: zero is refused", zero.success ? "accepted" : zero.error.issues[0]?.message, "Enter an amount greater than 0");
   }
 
+  console.log("\n== transfer leg integrity (DB constraint trigger) ==");
+  {
+    // A transferId is not a foreign key to anything - it's just a shared
+    // value application code has always been trusted to write in pairs. This
+    // section proves the last-line-of-defense CONSTRAINT TRIGGER: normal
+    // paired writes/deletes still commit untouched, and a lone leg (however
+    // it comes to exist) is rejected at commit with a specific message.
+    const legAccount = await prisma.account.create({
+      data: { name: "Verify Transfer Integrity", currency: "USD", type: "CHECKING" },
+    });
+
+    // -- normal operation: writing both legs together in one DB transaction --
+    const pairId = crypto.randomUUID();
+    await prisma.$transaction([
+      prisma.transaction.create({
+        data: { date: civilDate(2026, 9, 17), amount: 25, currency: "USD", type: "TRANSFER", accountId: legAccount.id, transferId: pairId, transferDirection: "OUT", source: "MANUAL" },
+      }),
+      prisma.transaction.create({
+        data: { date: civilDate(2026, 9, 17), amount: 25, currency: "USD", type: "TRANSFER", accountId: legAccount.id, transferId: pairId, transferDirection: "IN", source: "MANUAL" },
+      }),
+    ]);
+    eq("a normal paired transfer write still commits under the constraint trigger", await prisma.transaction.count({ where: { transferId: pairId } }), 2);
+
+    // -- normal operation: deleting both legs together (the deleteTransactionAction cascade) --
+    await prisma.transaction.deleteMany({ where: { transferId: pairId } });
+    eq("deleting both legs together (the transfer delete cascade) still commits under the constraint trigger", await prisma.transaction.count({ where: { transferId: pairId } }), 0);
+
+    // -- violation: inserting a lone leg with no sibling is rejected at commit --
+    const orphanId = crypto.randomUUID();
+    let orphanError: string | null = null;
+    try {
+      await prisma.transaction.create({
+        data: { date: civilDate(2026, 9, 17), amount: 25, currency: "USD", type: "TRANSFER", accountId: legAccount.id, transferId: orphanId, transferDirection: "OUT", source: "MANUAL" },
+      });
+    } catch (error) {
+      orphanError = error instanceof Error ? error.message : String(error);
+    }
+    check("inserting a single transfer leg with no sibling is rejected", orphanError !== null);
+    check(
+      "the rejection names the specific integrity violation, not a generic constraint-violation code",
+      orphanError !== null && orphanError.includes("Transfer integrity violation") && orphanError.includes(orphanId) && orphanError.includes("1 legs"),
+    );
+    eq("the rejected insert leaves no orphaned row behind (implicit transaction rolled back)", await prisma.transaction.count({ where: { transferId: orphanId } }), 0);
+
+    // -- violation: clearing one leg's transferId orphans its sibling --
+    const pairId2 = crypto.randomUUID();
+    const [legA] = await prisma.$transaction([
+      prisma.transaction.create({ data: { date: civilDate(2026, 9, 17), amount: 10, currency: "USD", type: "TRANSFER", accountId: legAccount.id, transferId: pairId2, transferDirection: "OUT", source: "MANUAL" } }),
+      prisma.transaction.create({ data: { date: civilDate(2026, 9, 17), amount: 10, currency: "USD", type: "TRANSFER", accountId: legAccount.id, transferId: pairId2, transferDirection: "IN", source: "MANUAL" } }),
+    ]);
+    let orphanUpdateError: string | null = null;
+    try {
+      await prisma.transaction.update({ where: { id: legA.id }, data: { transferId: null } });
+    } catch (error) {
+      orphanUpdateError = error instanceof Error ? error.message : String(error);
+    }
+    check(
+      "clearing one leg's transferId (orphaning its sibling) is rejected",
+      orphanUpdateError !== null && orphanUpdateError.includes("Transfer integrity violation") && orphanUpdateError.includes(pairId2) && orphanUpdateError.includes("1 legs"),
+    );
+    eq("the rejected update leaves the pair untouched", await prisma.transaction.count({ where: { transferId: pairId2 } }), 2);
+
+    await prisma.transaction.deleteMany({ where: { transferId: pairId2 } });
+    await prisma.account.delete({ where: { id: legAccount.id } });
+    console.log("  ok   transfer integrity trigger fixtures removed");
+  }
+
   console.log("\n== pin recovery secret ==");
   {
     const recovery = await import("../src/lib/recovery");
@@ -5496,6 +5566,12 @@ async function main() {
 
   console.log("\n== Banco Popular Dominicano exchange rate preference ==");
   {
+    // Earlier sections exercise recurring-item posting, which calls
+    // getRateTable() (and therefore getBpdRates()) for real - if BPD's live
+    // endpoint happened to answer, that already cached a real same-day row.
+    // Clear it so the checks below start from a known, controlled state.
+    await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD", source: BPD_SOURCE } });
+
     console.log("-- parseBpdPayload / toRateTableEntries / isSameUtcDay (pure) --");
     const validPayload = {
       d: {
@@ -5613,31 +5689,81 @@ async function main() {
       round2(62.5 / 71.25),
     );
     eq("the table reports bpd as its source once a same-day BPD rate is preferred", preferred.source, "bpd");
+    eq(
+      "the table carries the BPD rate's own asOf date when preferred",
+      preferred.asOf ? preferred.asOf.toISOString() : null,
+      today.toISOString(),
+    );
 
-    console.log("-- getRateTable(): a stale (yesterday's) BPD rate is never preferred --");
-    await seedBpdRow(63, 72, yesterday);
+    eq("the freshness window is documented as a single named constant, 7 days", BPD_RATE_MAX_AGE_DAYS, 7);
+
+    console.log("-- getRateTable(): a BPD rate a few days old, but within the freshness window, is still preferred --");
+    const threeDaysAgo = new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000);
+    await seedBpdRow(64, 73, threeDaysAgo);
+    const withinWindow = await getRateTable();
+    eq("a BPD rate 3 days old is preferred for DOP over open.er-api.com's", withinWindow.rates.DOP, 64);
+    eq(
+      "a BPD rate 3 days old is preferred for EUR, as a derived USD cross-rate, over open.er-api.com's",
+      round2(withinWindow.rates.EUR),
+      round2(64 / 73),
+    );
+    eq("the table reports bpd as its source for a 3-day-old rate", withinWindow.source, "bpd");
+    eq(
+      "the table carries the 3-day-old rate's own asOf date",
+      withinWindow.asOf ? withinWindow.asOf.toISOString() : null,
+      threeDaysAgo.toISOString(),
+    );
+
+    console.log("-- getRateTable(): a BPD rate older than the freshness window is never preferred --");
+    const eightDaysAgo = new Date(today.getTime() - 8 * 24 * 60 * 60 * 1000);
+    await seedBpdRow(63, 72, eightDaysAgo);
     // Whether this resolves via the still-active backoff from the hang test
     // above or via a live re-check, the guarantee under test is the same: a
-    // stale stored row is never returned as-is, and it is never preferred.
+    // stored row past the freshness window is never returned as-is, and it is
+    // never preferred.
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
-          d: { results: [{ DollarSellRate: 63, EuroSellRate: 72, BuySellRatesAsOf: yesterday.toISOString() }] },
+          d: { results: [{ DollarSellRate: 63, EuroSellRate: 72, BuySellRatesAsOf: eightDaysAgo.toISOString() }] },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       )) as typeof fetch;
     const stalePreferred = await getRateTable();
     globalThis.fetch = originalFetch;
-    eq("a stale BPD rate is not preferred for DOP; open.er-api.com's is used", stalePreferred.rates.DOP, 59);
-    eq("a stale BPD rate is not preferred for EUR; open.er-api.com's is used", stalePreferred.rates.EUR, 0.9);
+    eq("a BPD rate 8 days old is not preferred for DOP; open.er-api.com's is used", stalePreferred.rates.DOP, 59);
+    eq("a BPD rate 8 days old is not preferred for EUR; open.er-api.com's is used", stalePreferred.rates.EUR, 0.9);
     eq(
-      "the table reverts to open-er-api as its source once the BPD rate goes stale, not stuck on bpd from the prior fetch",
+      "the table reverts to open-er-api as its source once the BPD rate falls outside the freshness window, not stuck on bpd from the prior fetch",
       stalePreferred.source,
       "open-er-api",
     );
+    eq("the table carries no asOf date once it reverts to open-er-api", stalePreferred.asOf ?? null, null);
 
     await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
     console.log("  ok   test ExchangeRate rows removed");
+  }
+
+  console.log("\n== Settings: Banco Popular rate source line includes the rate's own date ==");
+  {
+    const { getDictionary } = await import("../src/lib/i18n");
+    const en = getDictionary("en");
+    const es = getDictionary("es");
+    const sampleDate = new Date("2026-09-15T09:05:00Z");
+    eq(
+      "en: rateSourceBpd embeds the rate's own formatted date",
+      en.settingsPage.rateSourceBpd(formatDate(sampleDate)),
+      "from Banco Popular (Sep 15, 2026)",
+    );
+    eq(
+      "es: rateSourceBpd embeds the rate's own formatted date",
+      es.settingsPage.rateSourceBpd(formatDate(sampleDate)),
+      "de Banco Popular (Sep 15, 2026)",
+    );
+    eq(
+      "en: rateSourceOpenErApi is unchanged - no date, open.er-api.com has its own fetchedAt instead",
+      en.settingsPage.rateSourceOpenErApi,
+      "from open.er-api.com (market rate)",
+    );
   }
 
   console.log("\n== BPD rate cron: proactive cache warm ==");

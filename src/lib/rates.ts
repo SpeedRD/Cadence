@@ -89,7 +89,7 @@ async function preferBpdRates(table: RateTable): Promise<RateTable> {
   if (!bpd) return table;
   const { DOP, EUR } = toRateTableEntries(bpd);
   if (!isUsableRate(DOP) || !isUsableRate(EUR)) return table;
-  return { ...table, rates: { ...table.rates, DOP, EUR }, source: "bpd" };
+  return { ...table, rates: { ...table.rates, DOP, EUR }, source: "bpd", asOf: bpd.asOf };
 }
 
 async function getOpenErApiRateTable(): Promise<RateTable> {
@@ -119,6 +119,7 @@ async function getOpenErApiRateTable(): Promise<RateTable> {
       fetchedAt: byTarget.get(BASE_CURRENCY)?.fetchedAt ?? null,
       stale: substituted,
       source: OPEN_ER_API_SOURCE,
+      asOf: null,
     };
   }
 
@@ -150,7 +151,7 @@ async function getOpenErApiRateTable(): Promise<RateTable> {
           },
         });
       }
-      return { rates, fetchedAt, stale: false, source: OPEN_ER_API_SOURCE };
+      return { rates, fetchedAt, stale: false, source: OPEN_ER_API_SOURCE, asOf: null };
     }
     // The payload omitted (or zeroed) a currency we display. Half of it stored
     // and returned as fresh would silently mix denominations, so treat it as a
@@ -171,7 +172,7 @@ async function getOpenErApiRateTable(): Promise<RateTable> {
       (latest, row) => (row.fetchedAt > latest ? row.fetchedAt : latest),
       stored[0].fetchedAt,
     );
-    return { rates, fetchedAt: newest, stale: true, source: OPEN_ER_API_SOURCE };
+    return { rates, fetchedAt: newest, stale: true, source: OPEN_ER_API_SOURCE, asOf: null };
   }
 
   // Nothing stored and nothing fetched: hardcoded constants, flagged stale so

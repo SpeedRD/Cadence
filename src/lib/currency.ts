@@ -31,12 +31,19 @@ export interface RateTable {
   stale: boolean;
   /**
    * Which source produced the DOP/EUR rates currently in `rates` - "bpd" only
-   * when getRateTable() actually preferred a same-day Banco Popular rate over
-   * open.er-api.com's for this table (see preferBpdRates in src/lib/rates.ts),
-   * "open-er-api" otherwise (including the hardcoded FALLBACK_RATES case,
-   * where fetchedAt is null and a source label has nothing to attach to).
+   * when getRateTable() actually preferred a fresh-enough Banco Popular rate
+   * over open.er-api.com's for this table (see preferBpdRates in
+   * src/lib/rates.ts), "open-er-api" otherwise (including the hardcoded
+   * FALLBACK_RATES case, where fetchedAt is null and a source label has
+   * nothing to attach to).
    */
   source: "open-er-api" | "bpd";
+  /**
+   * The calendar day Banco Popular published the DOP/EUR rates currently in
+   * `rates`, set only when `source` is "bpd" - null otherwise, since
+   * open.er-api.com's freshness is already described by `fetchedAt`.
+   */
+  asOf: Date | null;
 }
 
 export const IDENTITY_RATES: RateTable = {
@@ -44,6 +51,7 @@ export const IDENTITY_RATES: RateTable = {
   fetchedAt: null,
   stale: true,
   source: "open-er-api",
+  asOf: null,
 };
 
 /**
