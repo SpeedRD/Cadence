@@ -1,4 +1,4 @@
-import { LogOut, Mail, RefreshCw, Tags } from "lucide-react";
+import { Download, LogOut, Mail, RefreshCw, Tags } from "lucide-react";
 import Link from "next/link";
 
 import { ActionButton } from "@/components/form/action-button";
@@ -197,6 +197,21 @@ export default async function SettingsPage() {
               <Tags className="size-3.5" />
               {t.categorizeHistoryAction}
             </ActionButton>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t.exportTitle}</CardTitle>
+            <CardDescription>{t.exportDescription}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline" size="sm">
+              <a href="/api/export" download>
+                <Download className="size-3.5" />
+                {t.exportAll}
+              </a>
+            </Button>
           </CardContent>
         </Card>
 

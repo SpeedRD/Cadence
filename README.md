@@ -153,9 +153,14 @@ deterministic merchant-name categorization rules and a review step that can grou
 repeated rows into a recurring item or record a pair as a transfer. Rows that match
 a CSV row already in the ledger (same account, date, amount, currency and
 description) are shown as possible duplicates and skipped unless you import them
-anyway, so re-importing an overlapping statement adds nothing twice. Every row
-shows where it came from: manual, CSV, Gmail, Outlook, a payday check-in, an
-opening balance, or automatic recurring posting.
+anyway, so re-importing an overlapping statement adds nothing twice. Two optional
+column mappings cover a file that already names the account and category per row,
+such as Cadence's own `transactions.csv` export: with an Account column set, only
+the rows naming the account you picked are imported (one pass per account brings
+a multi-account file back), and a Category column files each row under the
+category whose name it carries. Every row shows where it came from: manual, CSV,
+Gmail, Outlook, a payday check-in, an opening balance, or automatic recurring
+posting.
 
 ### Review queue
 
@@ -306,8 +311,17 @@ Display currency; the cached exchange-rate table; how the payday planner sizes t
 protected buffer (percentage of income and a fixed minimum), whether carryover is
 included by default, and an optional **Count income history from** date; category
 management; changing the PIN; which categories count as essential fixed spending;
-goal-total recalculation; categorizing older imports; Gmail/Outlook connections; and
-locking the app.
+goal-total recalculation; categorizing older imports; a full data export;
+Gmail/Outlook connections; and locking the app.
+
+**Export all** downloads a ZIP with one CSV per data type: transactions, goals, goal
+contributions, recurring items, budgets, accounts (archived ones included) and
+categories, with readable headers in the app's language, ISO dates and plain
+two-decimal amounts. `transactions.csv` is laid out for the CSV importer (Date,
+Amount with spending negative, Description first, then Account, Currency, Category
+and the rest), so it re-imports through the importer's defaults plus its Account and
+Category column mappings; the other six are backups with no import path, so every
+column they carry is included and linked rows are named rather than shown by id.
 
 "Count income history from" is for when your situation genuinely changed - a new job,
 say - and the older history would only drag the averages the wrong way. With a date

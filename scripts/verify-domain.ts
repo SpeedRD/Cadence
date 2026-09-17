@@ -5825,6 +5825,123 @@ async function main() {
     console.log("  ok   test ExchangeRate rows removed");
   }
 
+  console.log("\n== data export (Settings > Export all) ==");
+  {
+    const { formatCsv } = await import("../src/lib/csv");
+    const { createZip } = await import("../src/lib/zip");
+    const { buildExportFiles, buildExportArchive, EXPORT_FILE_NAMES, exportArchiveName } =
+      await import("../src/lib/data/export");
+    const { balanceSign } = await import("../src/lib/transactions");
+    const { inflateRawSync, crc32 } = await import("node:zlib");
+
+    console.log("-- formatCsv is parseCsv's inverse --");
+    const tricky = [
+      ["Date", "Amount", "Description"],
+      ["2026-09-02", "-12.50", 'Coffee, "large"'],
+      ["2026-09-03", "1234.56", "Two\nlines"],
+      ["2026-09-04", "0.01", " padded "],
+      ["2026-09-05", "", "Café con leche"],
+    ];
+    const csvText = formatCsv(tricky);
+    check("output starts with a UTF-8 byte order mark", csvText.startsWith("﻿"));
+    check("rows end in CRLF", csvText.endsWith("\r\n") && csvText.includes('"Coffee, ""large"""\r\n'));
+    eq("parseCsv reads back every cell unchanged", JSON.stringify(parseCsv(csvText)), JSON.stringify(tricky));
+    eq("a plain field is not quoted", formatCsv([["2026-09-02", "-12.50", "Coffee"]]), "﻿2026-09-02,-12.50,Coffee\r\n");
+
+    console.log("-- createZip writes a readable archive --");
+    const zipStamp = new Date("2026-09-17T10:20:30Z");
+    const zipped = createZip([
+      { name: "a.csv", data: "x,y\r\n1,2\r\n", modifiedAt: zipStamp },
+      { name: "b.csv", data: "é\r\n", modifiedAt: zipStamp },
+    ]);
+    const eocdOffset = zipped.length - 22;
+    eq("ends with the end-of-central-directory signature", zipped.readUInt32LE(eocdOffset), 0x06054b50);
+    eq("the central directory lists both entries", zipped.readUInt16LE(eocdOffset + 10), 2);
+    const centralOffset = zipped.readUInt32LE(eocdOffset + 16);
+    eq("the central directory starts where the entries end", zipped.readUInt32LE(centralOffset), 0x02014b50);
+    const readEntry = (buffer: Buffer, offset: number) => {
+      eq(`local header at ${offset} carries the signature`, buffer.readUInt32LE(offset), 0x04034b50);
+      const compressedSize = buffer.readUInt32LE(offset + 18);
+      const nameLength = buffer.readUInt16LE(offset + 26);
+      const name = buffer.subarray(offset + 30, offset + 30 + nameLength).toString("utf8");
+      const start = offset + 30 + nameLength;
+      const data = inflateRawSync(buffer.subarray(start, start + compressedSize));
+      eq(`${name}: stored CRC matches the inflated bytes`, buffer.readUInt32LE(offset + 14), crc32(data));
+      eq(`${name}: stored size matches the inflated bytes`, buffer.readUInt32LE(offset + 22), data.length);
+      return { name, text: data.toString("utf8"), next: start + compressedSize };
+    };
+    const first = readEntry(zipped, 0);
+    const second = readEntry(zipped, first.next);
+    eq("first entry name", first.name, "a.csv");
+    eq("first entry inflates to its text", first.text, "x,y\r\n1,2\r\n");
+    eq("second entry keeps UTF-8 content", second.text, "é\r\n");
+    eq("the entries end exactly where the central directory begins", second.next, centralOffset);
+    eq("the archive name is stamped with the civil day", exportArchiveName(civilDate(2026, 9, 17)), "cadence-export-2026-09-17.zip");
+
+    console.log("-- buildExportFiles covers every row of every type --");
+    const files = await buildExportFiles("en");
+    eq("one file per data type, in order", files.map((file) => file.name).join(","), EXPORT_FILE_NAMES.join(","));
+    const parsedFiles = new Map(files.map((file) => [file.name, parseCsv(file.text)]));
+    const dataRowCount = (name: string) => (parsedFiles.get(name)?.length ?? 0) - 1;
+    eq("transactions.csv has one row per Transaction", dataRowCount("transactions.csv"), await prisma.transaction.count());
+    eq("goals.csv has one row per Goal", dataRowCount("goals.csv"), await prisma.goal.count());
+    eq("goal_contributions.csv has one row per GoalContribution", dataRowCount("goal_contributions.csv"), await prisma.goalContribution.count());
+    eq("recurring_items.csv has one row per RecurringItem", dataRowCount("recurring_items.csv"), await prisma.recurringItem.count());
+    eq("budgets.csv has one row per Budget", dataRowCount("budgets.csv"), await prisma.budget.count());
+    eq("accounts.csv has one row per Account, archived included", dataRowCount("accounts.csv"), await prisma.account.count());
+    eq("categories.csv has one row per Category", dataRowCount("categories.csv"), await prisma.category.count());
+    for (const file of files) {
+      const table = parsedFiles.get(file.name) ?? [];
+      const width = table[0]?.length ?? 0;
+      check(`${file.name}: every row has the header's ${width} columns`, table.every((row) => row.length === width));
+      check(`${file.name}: headers are labels, not field names`, !table[0].some((cell) => /[a-z][A-Z]/.test(cell)));
+    }
+    eq(
+      "transactions.csv leads with the importer's default Date, Amount, Description columns",
+      (parsedFiles.get("transactions.csv") ?? [])[0].slice(0, 3).join(","),
+      "Date,Amount,Description",
+    );
+
+    console.log("-- transactions.csv reads back through the importer's own parsers with its defaults --");
+    const stored = await prisma.transaction.findMany({
+      include: { account: { select: { name: true } }, category: { select: { name: true } } },
+    });
+    const storedById = new Map(stored.map((row) => [row.id, row]));
+    const transactionTable = parsedFiles.get("transactions.csv") ?? [];
+    const header = transactionTable[0];
+    const col = (name: string) => header.indexOf(name);
+    let readBack = 0;
+    for (const cells of transactionTable.slice(1)) {
+      const original = storedById.get(cells[col("ID")]);
+      if (!original) continue;
+      const date = parseDateWithFormat(cells[0], "YYYY-MM-DD");
+      const rawAmount = parseAmount(cells[1]);
+      const signedOriginal = balanceSign(original.type, original.transferDirection) * num(original.amount);
+      const sameDate = date !== null && toISODate(date) === toISODate(original.date);
+      const sameAmount = rawAmount !== null && Math.abs(rawAmount - signedOriginal) < 0.005;
+      const sameNote = cells[2] === (original.note ?? "");
+      const sameAccount = cells[col("Account")] === original.account.name;
+      const sameCurrency = cells[col("Currency")] === original.currency;
+      const sameCategory = cells[col("Category")] === (original.category?.name ?? "");
+      if (sameDate && sameAmount && sameNote && sameAccount && sameCurrency && sameCategory) readBack += 1;
+      else check(`transaction ${original.id} round-trips`, false, cells.join(" | "));
+    }
+    eq("every stored transaction reads back with the same date, signed amount, note, account, currency and category", readBack, stored.length);
+    const spending = stored.find((row) => row.type === "EXPENSE");
+    const income = stored.find((row) => row.type === "INCOME");
+    const rowFor = (id: string | undefined) => transactionTable.find((cells) => cells[col("ID")] === id);
+    check("an expense is written negative (spending) for the importer's signed convention", (parseAmount(rowFor(spending?.id)?.[1] ?? "") ?? 0) < 0);
+    check("income is written positive", (parseAmount(rowFor(income?.id)?.[1] ?? "") ?? 0) > 0);
+    check("type and source are shown as labels", rowFor(spending?.id)?.[col("Type")] === "Expense" && /^[A-Z]/.test(rowFor(spending?.id)?.[col("Source")] ?? ""));
+
+    console.log("-- the ZIP download holds those same files --");
+    const archive = await buildExportArchive("es");
+    eq("the archive lists all seven files", archive.readUInt16LE(archive.length - 22 + 10), EXPORT_FILE_NAMES.length);
+    const firstEntry = readEntry(archive, 0);
+    eq("its first entry is transactions.csv", firstEntry.name, "transactions.csv");
+    check("headers follow the app language (Spanish here)", firstEntry.text.startsWith("﻿Fecha,Monto,Descripción"));
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });

@@ -34,6 +34,7 @@ import {
   parseDateWithFormat,
   type DateFormat,
 } from "@/lib/csv";
+import { EXPLICIT_NO_CATEGORY } from "@/lib/categorization-rules";
 import { CURRENCIES, formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -59,6 +60,15 @@ interface ParsedRow {
   note: string;
   type: "EXPENSE" | "INCOME";
   valid: boolean;
+  /** The optional account column names an account other than the one picked - skipped, not unreadable. */
+  otherAccount: boolean;
+  /** The optional category column matched one of the user's categories by name. */
+  columnCategoryId: string | null;
+}
+
+/** How the optional Account and Category columns match names: trimmed, case-insensitive. */
+function normalizeName(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function StepLabel({ index, title }: { index: string; title: string }) {
@@ -96,6 +106,10 @@ export function CsvImporter({
   const [dateColumn, setDateColumn] = useState(0);
   const [amountColumn, setAmountColumn] = useState(1);
   const [noteColumn, setNoteColumn] = useState(2);
+  // Optional, for a file that already names the account and category per
+  // row (Cadence's own transactions.csv export does). Null means unmapped.
+  const [accountColumn, setAccountColumn] = useState<number | null>(null);
+  const [categoryColumn, setCategoryColumn] = useState<number | null>(null);
   const [dateFormat, setDateFormat] = useState<DateFormat>("YYYY-MM-DD");
   const [signMode, setSignMode] = useState<SignMode>("signed");
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
@@ -144,11 +158,24 @@ export function CsvImporter({
     [rows, hasHeader],
   );
 
+  const selectedAccountName = accounts.find((account) => account.id === accountId)?.name ?? "";
+  const categoryIdByName = useMemo(
+    () => new Map(categories.map((category) => [normalizeName(category.name), category.id])),
+    [categories],
+  );
+
   const parsed: ParsedRow[] = useMemo(() => {
     return dataRows.map((cells) => {
       const date = parseDateWithFormat(cells[dateColumn] ?? "", dateFormat);
       const rawAmount = parseAmount(cells[amountColumn] ?? "");
       const note = (cells[noteColumn] ?? "").trim();
+      const otherAccount =
+        accountColumn !== null &&
+        normalizeName(cells[accountColumn] ?? "") !== normalizeName(selectedAccountName);
+      const columnCategoryId =
+        categoryColumn === null
+          ? null
+          : (categoryIdByName.get(normalizeName(cells[categoryColumn] ?? "")) ?? null);
       const type: "EXPENSE" | "INCOME" =
         signMode === "signed"
           ? (rawAmount ?? 0) < 0
@@ -164,13 +191,27 @@ export function CsvImporter({
         amount,
         note,
         type,
-        valid: Boolean(date) && amount !== null && amount > 0,
+        valid: Boolean(date) && amount !== null && amount > 0 && !otherAccount,
+        otherAccount,
+        columnCategoryId,
       };
     });
-  }, [dataRows, dateColumn, amountColumn, noteColumn, dateFormat, signMode]);
+  }, [
+    dataRows,
+    dateColumn,
+    amountColumn,
+    noteColumn,
+    accountColumn,
+    categoryColumn,
+    selectedAccountName,
+    categoryIdByName,
+    dateFormat,
+    signMode,
+  ]);
 
   const validRows = parsed.filter((row) => row.valid);
-  const skipped = parsed.length - validRows.length;
+  const otherAccountCount = parsed.filter((row) => row.otherAccount).length;
+  const skipped = parsed.length - validRows.length - otherAccountCount;
 
   const { groups, unknownRowIndexes } = useMemo(
     () =>
@@ -288,10 +329,21 @@ export function CsvImporter({
         type,
         transferDirection: type === "EXTERNAL_TRANSFER" ? (rowDirectionOverrides.get(index) ?? null) : null,
         note: row.note || null,
+        // A review-step decision wins, then the row's own category column,
+        // then the file-wide pick. With a category column mapped, "No
+        // category" means exactly that (the file is authoritative, so a
+        // blank cell stays uncategorized); without one it is left to the
+        // server's merchant rules, as before.
         categoryId:
           type === "EXTERNAL_TRANSFER"
             ? null
-            : (rowCategoryOverrides.get(index) ?? (categoryId === "none" ? null : categoryId)),
+            : (rowCategoryOverrides.get(index) ??
+              row.columnCategoryId ??
+              (categoryId !== "none"
+                ? categoryId
+                : categoryColumn !== null
+                  ? EXPLICIT_NO_CATEGORY
+                  : null)),
         importAnyway: duplicateHits[index] !== undefined,
       };
     }),
@@ -332,6 +384,8 @@ export function CsvImporter({
               setDateColumn(0);
               setAmountColumn(Math.min(1, width - 1));
               setNoteColumn(Math.min(2, width - 1));
+              setAccountColumn(null);
+              setCategoryColumn(null);
             }}
           />
           {fileName ? (
@@ -427,6 +481,25 @@ export function CsvImporter({
                 </Field>
               </div>
 
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label={t.accountColumn} hint={t.accountColumnHint}>
+                  <OptionalColumnSelect
+                    options={columnOptions}
+                    value={accountColumn}
+                    onChange={setAccountColumn}
+                    noneLabel={t.noColumn}
+                  />
+                </Field>
+                <Field label={t.categoryColumn} hint={t.categoryColumnHint}>
+                  <OptionalColumnSelect
+                    options={columnOptions}
+                    value={categoryColumn}
+                    onChange={setCategoryColumn}
+                    noneLabel={t.noColumn}
+                  />
+                </Field>
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-3">
                 <Field label={t.importInto}>
                   <PickerSelect
@@ -481,6 +554,7 @@ export function CsvImporter({
                     {t.skippedSuffix}
                   </>
                 ) : null}
+                {otherAccountCount > 0 ? <> · {t.otherAccountSuffix(otherAccountCount)}</> : null}
               </p>
 
               <div className="overflow-x-auto rounded-md border border-border/70">
@@ -506,7 +580,7 @@ export function CsvImporter({
                           {row.note || "-"}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
-                          {row.valid ? row.type.toLowerCase() : t.skipped}
+                          {row.valid ? row.type.toLowerCase() : row.otherAccount ? t.otherAccount : t.skipped}
                         </TableCell>
                         <TableCell className="text-right">
                           <span className="figure text-sm">
@@ -649,6 +723,29 @@ function ColumnSelect({
       options={options}
       value={String(value)}
       onChange={(next) => onChange(Number(next))}
+    />
+  );
+}
+
+const NO_COLUMN = "none";
+
+/** A column picker with a leading "None" choice, for the optional mappings. */
+function OptionalColumnSelect({
+  options,
+  value,
+  onChange,
+  noneLabel,
+}: {
+  options: { value: string; label: string }[];
+  value: number | null;
+  onChange: (value: number | null) => void;
+  noneLabel: string;
+}) {
+  return (
+    <PickerSelect
+      options={[{ value: NO_COLUMN, label: noneLabel }, ...options]}
+      value={value === null ? NO_COLUMN : String(value)}
+      onChange={(next) => onChange(next === NO_COLUMN ? null : Number(next))}
     />
   );
 }

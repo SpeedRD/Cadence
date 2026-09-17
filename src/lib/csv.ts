@@ -51,6 +51,23 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
+/**
+ * The inverse of parseCsv: RFC 4180 output (CRLF line endings, a field quoted
+ * whenever it holds a comma, a quote, a line break or edge whitespace, quotes
+ * doubled). Prefixed with a UTF-8 byte order mark so spreadsheet apps open
+ * accented text correctly; parseCsv strips the mark on the way back in.
+ */
+export function formatCsv(rows: readonly (readonly string[])[]): string {
+  const lines = rows.map((row) => row.map(formatCsvField).join(","));
+  return `﻿${lines.join("\r\n")}\r\n`;
+}
+
+function formatCsvField(value: string): string {
+  if (value === "") return "";
+  const needsQuotes = /[",\r\n]/.test(value) || value !== value.trim();
+  return needsQuotes ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
 export const DATE_FORMATS = ["YYYY-MM-DD", "MM/DD/YYYY", "DD/MM/YYYY"] as const;
 export type DateFormat = (typeof DATE_FORMATS)[number];
 
