@@ -30,7 +30,7 @@ import { formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { buildTransferPrefill, type DetectedGroup } from "@/lib/import-grouping";
-import type { CsvDuplicateHit } from "@/server/actions/import";
+import type { CsvDuplicateHit, CsvExtraordinaryHit } from "@/server/actions/import";
 
 export interface ReviewRow {
   date: Date;
@@ -65,6 +65,10 @@ export function ImportReview({
   duplicateHits,
   duplicateDecisions,
   onDecideDuplicateAction,
+  extraordinaryRowIndexes,
+  extraordinaryHits,
+  extraordinaryDecisions,
+  onDecideExtraordinaryAction,
 }: {
   groups: DetectedGroup[];
   unknownRowIndexes: number[];
@@ -90,17 +94,29 @@ export function ImportReview({
   /** Per-row choice; a row with no entry is skipped. */
   duplicateDecisions: Record<number, "import" | "skip">;
   onDecideDuplicateAction: (rowIndexes: number[], decision: "import" | "skip") => void;
+  /** Rows the server found unusually large for their category (see detectCsvExtraordinaryAction). */
+  extraordinaryRowIndexes: number[];
+  extraordinaryHits: Record<number, CsvExtraordinaryHit>;
+  /** Per-row verdict; a row with no entry imports as normal spending. */
+  extraordinaryDecisions: Record<number, "extraordinary" | "normal">;
+  onDecideExtraordinaryAction: (rowIndexes: number[], decision: "extraordinary" | "normal") => void;
 }) {
   const dictionary = getDictionary(locale);
   const t = dictionary.transactions;
   const [unknownExpanded, setUnknownExpanded] = useState(false);
   const [duplicatesExpanded, setDuplicatesExpanded] = useState(true);
+  const [extraordinaryExpanded, setExtraordinaryExpanded] = useState(true);
 
   const categoryIdByName = new Map(
     categories.map((category) => [category.name.toLowerCase(), category.id]),
   );
 
-  if (groups.length === 0 && unknownRowIndexes.length === 0 && duplicateRowIndexes.length === 0) {
+  if (
+    groups.length === 0 &&
+    unknownRowIndexes.length === 0 &&
+    duplicateRowIndexes.length === 0 &&
+    extraordinaryRowIndexes.length === 0
+  ) {
     return null;
   }
 
@@ -164,6 +180,45 @@ export function ImportReview({
                 locale={locale}
                 decisions={duplicateDecisions}
                 onDecideAction={onDecideDuplicateAction}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {extraordinaryRowIndexes.length > 0 ? (
+        <div className="rounded-md border border-border/50 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">{t.possibleExtraordinaryTitle}</p>
+              <p className="text-xs text-muted-foreground">
+                {t.patternRowCount(extraordinaryRowIndexes.length)} · {t.possibleExtraordinaryDescription}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => setExtraordinaryExpanded((value) => !value)}
+            >
+              {t.reviewIndividually}
+              {extraordinaryExpanded ? (
+                <ChevronUp className="size-3.5" />
+              ) : (
+                <ChevronDown className="size-3.5" />
+              )}
+            </Button>
+          </div>
+          {extraordinaryExpanded ? (
+            <div className="mt-3">
+              <ExtraordinaryRowsPanel
+                rowIndexes={extraordinaryRowIndexes}
+                rows={rows}
+                hits={extraordinaryHits}
+                currency={currency}
+                locale={locale}
+                decisions={extraordinaryDecisions}
+                onDecideAction={onDecideExtraordinaryAction}
               />
             </div>
           ) : null}
@@ -734,6 +789,141 @@ function DuplicateRowsPanel({
                       onClick={() => onDecideAction([index], importing ? "skip" : "import")}
                     >
                       {importing ? t.skipDuplicate : t.importAnyway}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The "unusually large" bucket: spending rows well above their category's
+ * typical amount (see src/lib/extraordinary.ts). Same shape as the duplicates
+ * panel - pick rows, apply one verdict to them - but the verdict is
+ * one-off-or-normal, and normal is the default: a row is only ever marked a
+ * one-off because the user said so.
+ */
+function ExtraordinaryRowsPanel({
+  rowIndexes,
+  rows,
+  hits,
+  currency,
+  locale,
+  decisions,
+  onDecideAction,
+}: {
+  rowIndexes: number[];
+  rows: ReviewRow[];
+  hits: Record<number, CsvExtraordinaryHit>;
+  currency: string;
+  locale: Locale;
+  decisions: Record<number, "extraordinary" | "normal">;
+  onDecideAction: (rowIndexes: number[], decision: "extraordinary" | "normal") => void;
+}) {
+  const dictionary = getDictionary(locale);
+  const t = dictionary.transactions;
+  const common = dictionary.common;
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  const allSelected = rowIndexes.length > 0 && rowIndexes.every((index) => selected.has(index));
+  const toggleRow = (index: number) => {
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rowIndexes));
+  const applyToSelected = (decision: "extraordinary" | "normal") => {
+    if (selected.size === 0) return;
+    onDecideAction(Array.from(selected), decision);
+    setSelected(new Set());
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          <Checkbox
+            id="import-review-extraordinary-select-all"
+            checked={allSelected}
+            onCheckedChange={() => toggleAll()}
+            aria-label={t.selectAllAria}
+          />
+          <Label
+            htmlFor="import-review-extraordinary-select-all"
+            className="text-xs font-normal text-muted-foreground"
+          >
+            {t.selectedCount(selected.size)}
+          </Label>
+        </div>
+        {selected.size > 0 ? (
+          <>
+            <Button type="button" variant="outline" size="xs" onClick={() => applyToSelected("extraordinary")}>
+              {t.markExtraordinary}
+            </Button>
+            <Button type="button" variant="ghost" size="xs" onClick={() => applyToSelected("normal")}>
+              {t.keepAsNormal}
+            </Button>
+          </>
+        ) : null}
+      </div>
+
+      <div className="overflow-x-auto rounded-md border border-border/50">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-8" />
+              <TableHead className="w-28">{common.date}</TableHead>
+              <TableHead>{common.note}</TableHead>
+              <TableHead className="w-32 text-right">{common.amount}</TableHead>
+              <TableHead className="w-44">{t.reviewGroup}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rowIndexes.map((index) => {
+              const row = rows[index];
+              const hit = hits[index];
+              const marked = decisions[index] === "extraordinary";
+              return (
+                <TableRow key={index}>
+                  <TableCell>
+                    <Checkbox
+                      checked={selected.has(index)}
+                      onCheckedChange={() => toggleRow(index)}
+                      aria-label={t.selectRowAria}
+                    />
+                  </TableCell>
+                  <TableCell className="figure figure-sm text-xs">{toISODate(row.date)}</TableCell>
+                  <TableCell className="max-w-[22rem] text-sm">
+                    <span className="block truncate">{row.note || "-"}</span>
+                    {hit ? (
+                      <span className="block text-xs text-muted-foreground">
+                        {t.typicalForCategory(hit.categoryName, formatMoney(hit.median, hit.medianCurrency))}
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <span className="figure text-sm">{formatMoney(row.amount, currency)}</span>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    <span className={marked ? "text-foreground" : "text-muted-foreground"}>
+                      {marked ? t.appliedExtraordinary : t.appliedNormal}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      className="ml-1"
+                      onClick={() => onDecideAction([index], marked ? "normal" : "extraordinary")}
+                    >
+                      {marked ? t.keepAsNormal : t.markExtraordinary}
                     </Button>
                   </TableCell>
                 </TableRow>

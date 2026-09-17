@@ -293,7 +293,15 @@ export async function getCategorySuggestions(
     summaries.forEach((summary, index) => {
       for (const line of summary.categories) {
         if (!line.categoryId || !remaining.includes(line.categoryId)) continue;
-        historicalTotals.set(line.categoryId, (historicalTotals.get(line.categoryId) ?? 0) + line.spent);
+        // A one-off the user confirmed as extraordinary is not typical
+        // spending, so it is left out of the sum (Transaction.isExtraordinary,
+        // see src/lib/extraordinary.ts). The period still counts as one the
+        // category was active in - the money was really spent - so the
+        // divisor below is unchanged.
+        historicalTotals.set(
+          line.categoryId,
+          (historicalTotals.get(line.categoryId) ?? 0) + line.spent - line.extraordinarySpent,
+        );
         if (line.spent > 0) {
           historicalPeriodCount.set(line.categoryId, index + 1);
         }

@@ -41,11 +41,19 @@ export const PERIOD_A_LAST_DAY = 15;
 
 /**
  * A pay boundary that lands on a weekend is paid on the preceding Friday:
- * Saturday moves back 1 day, Sunday 2. Weekdays are returned untouched, and
- * neither shift can cross out of the month (the earliest boundary is the 15th).
+ * Saturday moves back 1 day, Sunday 2. Weekdays are returned untouched.
  * Weekends only - deliberately no holiday calendar.
+ *
+ * Neither shift can cross out of the month for a *pay* boundary (the
+ * earliest one is the 15th) - but the function itself doesn't assume that:
+ * civilDate()'s own day-overflow handling means a boundary near the 1st
+ * legitimately resolves into the previous month, which is exactly what
+ * RecurringItem.SEMI_MONTHLY needs (src/lib/recurring.ts reuses this
+ * directly, rather than a second copy of the same rule, for its two anchor
+ * days) and what src/lib/recurring-detection.ts's own pattern-matching copy
+ * mirrors for the same reason.
  */
-function payDayOfMonth(year: number, month: number, boundaryDay: number): number {
+export function payDayOfMonth(year: number, month: number, boundaryDay: number): number {
   const weekday = civilDate(year, month, boundaryDay).getUTCDay();
   if (weekday === 6) return boundaryDay - 1; // Saturday -> Friday
   if (weekday === 0) return boundaryDay - 2; // Sunday -> Friday

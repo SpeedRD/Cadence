@@ -1,3 +1,16 @@
+/** "1st", "2nd", "3rd", "11th", "21st"... */
+function ordinalEn(day: number): string {
+  const tens = day % 100;
+  if (tens >= 11 && tens <= 13) return `${day}th`;
+  const suffix = day % 10 === 1 ? "st" : day % 10 === 2 ? "nd" : day % 10 === 3 ? "rd" : "th";
+  return `${day}${suffix}`;
+}
+
+/** "the 16th", or "the last day of the month" for an anchor of 31 (clamped in shorter months). */
+function dayOfMonthEn(day: number): string {
+  return day >= 31 ? "the last day of the month" : `the ${ordinalEn(day)}`;
+}
+
 export const en = {
   common: {
     save: "Save",
@@ -58,6 +71,7 @@ export const en = {
     frequencyLabels: {
       WEEKLY: "Weekly",
       BIWEEKLY: "Every 2 weeks",
+      SEMI_MONTHLY: "Twice a month",
       MONTHLY: "Monthly",
       YEARLY: "Yearly",
     } as Record<string, string>,
@@ -389,6 +403,11 @@ export const en = {
       `Showing the first ${n} of ${total} rows.`,
     importCount: (n: number) => `Import ${n} transaction${n === 1 ? "" : "s"}`,
     imported: (count: number) => `Imported ${count} transaction${count === 1 ? "" : "s"}`,
+    importLooksRecurring: (count: number) =>
+      count === 1
+        ? "1 pattern in your spending looks recurring"
+        : `${count} patterns in your spending look recurring`,
+    reviewOnRecurring: "Review",
     invalidDateRow: "A row has an invalid date",
     couldNotReadRows: "Could not read the parsed rows",
     accountNoLongerExists: "That account no longer exists",
@@ -456,6 +475,27 @@ export const en = {
     duplicatesNeedReview: (n: number) =>
       `${n} row${n === 1 ? " matches" : "s match"} transactions already imported - review the possible duplicates first`,
     importCollision: "Some of these rows were imported a moment ago - check the ledger and try again",
+    // Extraordinary (one-off) expenses - see src/lib/extraordinary.ts.
+    extraordinaryBadge: "One-off",
+    markExtraordinary: "Mark as one-off",
+    unmarkExtraordinary: "Not a one-off",
+    markedExtraordinary: "Marked as a one-off - left out of typical-spending averages",
+    unmarkedExtraordinary: "Counted as normal spending again",
+    extraordinaryNotApplicable: "Only an expense you logged or imported can be marked as a one-off",
+    extraordinaryPromptTitle: "Was this a one-off?",
+    extraordinaryPromptDescription: (amount: string, category: string, typical: string) =>
+      `${amount} is well above what you usually spend on ${category} (typically around ${typical}). A one-off is still counted as spending, but left out of the averages behind payday suggestions and the monthly pace.`,
+    extraordinaryYes: "Yes, it was a one-off",
+    extraordinaryNo: "No, normal spending",
+    possibleExtraordinaryTitle: "Unusually large",
+    possibleExtraordinaryDescription:
+      "These rows are well above what you usually spend in their category. They import as normal spending unless you mark them as one-offs, which keeps them out of the averages behind payday suggestions and the monthly pace.",
+    checkingExtraordinary: "Checking for unusually large rows...",
+    typicalForCategory: (category: string, typical: string) =>
+      `${category} · typically around ${typical}`,
+    keepAsNormal: "Keep as normal",
+    appliedExtraordinary: "One-off",
+    appliedNormal: "Normal spending",
     receivedAmountLabel: (code: string) => `Actual amount received (${code})`,
     receivedAmountHint:
       "Leave blank to record the same amount on both sides, converted at today's rate. Fill it in to record exactly what the bank credited.",
@@ -603,6 +643,10 @@ export const en = {
     frequency: "Frequency",
     nextDue: "Next due",
     nextDueHint: "Every due date up to today is posted automatically.",
+    /** Only shown when Frequency is "Twice a month" - the day this item's *other* charge lands on each month. */
+    secondDueDay: "Second due day",
+    secondDueDayHint:
+      "The other day of the month this charges on. A day that falls on a weekend is posted the Friday before, same as Next due.",
     goal: "Goal",
     accountHint: "Each due date is charged to this account.",
     paymentsLeftLabel: "Payments left",
@@ -681,6 +725,37 @@ export const en = {
       `Re-checked today: ${account} would end that period below its protected buffer. Advisory only - nothing is blocked.`,
     shortByFlexibleHint:
       "Re-checked today: that period's available-for-flexible figure would go into deficit. Advisory only - nothing is blocked.",
+    suggestionsTitle: "Looks recurring",
+    suggestionsDescription: (count: number) =>
+      count === 1
+        ? "1 pattern in your manual and imported spending repeats on a schedule but isn't tracked yet. Nothing is added until you say so."
+        : `${count} patterns in your manual and imported spending repeat on a schedule but aren't tracked yet. Nothing is added until you say so.`,
+    /** "Twice a month, around the 1st and the 16th" - anchorDays as the detector reports them (see RecurringCandidate). */
+    suggestionCadence: (cadence: string, anchorDays: number[]) => {
+      switch (cadence) {
+        case "WEEKLY":
+          return "Weekly";
+        case "BIWEEKLY":
+          return "Every 2 weeks";
+        case "SEMI_MONTHLY":
+          return `Twice a month, around ${dayOfMonthEn(anchorDays[0])} and ${dayOfMonthEn(anchorDays[1])}`;
+        case "YEARLY":
+          return `Yearly, around ${dayOfMonthEn(anchorDays[0])}`;
+        case "MONTHLY":
+        default:
+          return `Monthly, around ${dayOfMonthEn(anchorDays[0])}`;
+      }
+    },
+    suggestionEvidence: (count: number, first: string, last: string) =>
+      `${count} charges, ${first} to ${last}`,
+    addAsRecurring: "Add as recurring",
+    dismissSuggestion: "Dismiss",
+    dismissSuggestionHint: "Never suggest this again",
+    showCharges: (count: number) => `Show ${count} charges`,
+    hideCharges: "Hide charges",
+    suggestionAdded: (name: string) => `${name} added to your subscriptions`,
+    suggestionDismissed: "Dismissed. It won't be suggested again.",
+    suggestionGone: "That suggestion is no longer there. Reload the page to see what's current.",
   },
   afford: {
     title: "Afford",

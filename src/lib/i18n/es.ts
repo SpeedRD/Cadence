@@ -1,5 +1,10 @@
 import type { Dictionary } from "./en";
 
+/** "del día 16", o "del último día del mes" para un ancla de 31 (recortada en meses más cortos). */
+function dayOfMonthEs(day: number): string {
+  return day >= 31 ? "del último día del mes" : `del día ${day}`;
+}
+
 export const es = {
   common: {
     save: "Guardar",
@@ -60,6 +65,7 @@ export const es = {
     frequencyLabels: {
       WEEKLY: "Semanal",
       BIWEEKLY: "Cada 2 semanas",
+      SEMI_MONTHLY: "Dos veces al mes",
       MONTHLY: "Mensual",
       YEARLY: "Anual",
     } as Record<string, string>,
@@ -390,6 +396,11 @@ export const es = {
       `Mostrando las primeras ${n} de ${total} filas.`,
     importCount: (n: number) => `Importar ${n} ${n === 1 ? "transacción" : "transacciones"}`,
     imported: (count: number) => `${count} ${count === 1 ? "transacción" : "transacciones"} importada${count === 1 ? "" : "s"}`,
+    importLooksRecurring: (count: number) =>
+      count === 1
+        ? "1 patrón en tus gastos parece recurrente"
+        : `${count} patrones en tus gastos parecen recurrentes`,
+    reviewOnRecurring: "Revisar",
     invalidDateRow: "Una fila tiene una fecha inválida",
     couldNotReadRows: "No se pudieron leer las filas procesadas",
     accountNoLongerExists: "Esa cuenta ya no existe",
@@ -457,6 +468,27 @@ export const es = {
     duplicatesNeedReview: (n: number) =>
       `${n} fila${n === 1 ? " coincide" : "s coinciden"} con transacciones ya importadas: revisa primero los posibles duplicados`,
     importCollision: "Algunas de estas filas se importaron hace un momento: revisa el libro e intenta de nuevo",
+    // Gastos extraordinarios (únicos) - ver src/lib/extraordinary.ts.
+    extraordinaryBadge: "Único",
+    markExtraordinary: "Marcar como gasto único",
+    unmarkExtraordinary: "No es un gasto único",
+    markedExtraordinary: "Marcado como gasto único: queda fuera de los promedios de gasto habitual",
+    unmarkedExtraordinary: "Vuelve a contar como gasto normal",
+    extraordinaryNotApplicable: "Solo un gasto que registraste o importaste puede marcarse como único",
+    extraordinaryPromptTitle: "¿Fue un gasto único?",
+    extraordinaryPromptDescription: (amount: string, category: string, typical: string) =>
+      `${amount} está muy por encima de lo que sueles gastar en ${category} (normalmente alrededor de ${typical}). Un gasto único sigue contando como gasto, pero queda fuera de los promedios detrás de las sugerencias del día de pago y del ritmo mensual.`,
+    extraordinaryYes: "Sí, fue un gasto único",
+    extraordinaryNo: "No, gasto normal",
+    possibleExtraordinaryTitle: "Inusualmente grandes",
+    possibleExtraordinaryDescription:
+      "Estas filas están muy por encima de lo que sueles gastar en su categoría. Se importan como gasto normal a menos que las marques como únicas, lo que las deja fuera de los promedios detrás de las sugerencias del día de pago y del ritmo mensual.",
+    checkingExtraordinary: "Buscando filas inusualmente grandes...",
+    typicalForCategory: (category: string, typical: string) =>
+      `${category} · normalmente alrededor de ${typical}`,
+    keepAsNormal: "Dejar como normal",
+    appliedExtraordinary: "Gasto único",
+    appliedNormal: "Gasto normal",
     receivedAmountLabel: (code: string) => `Monto realmente recibido (${code})`,
     receivedAmountHint:
       "Déjalo en blanco para registrar el mismo monto en ambos lados, convertido a la tasa de hoy. Escríbelo para registrar exactamente lo que acreditó el banco.",
@@ -605,6 +637,9 @@ export const es = {
     frequency: "Frecuencia",
     nextDue: "Próximo vencimiento",
     nextDueHint: "Cada vencimiento hasta hoy se registra automáticamente.",
+    secondDueDay: "Segundo día de vencimiento",
+    secondDueDayHint:
+      "El otro día del mes en que se cobra esto. Un día que cae en fin de semana se registra el viernes anterior, igual que Próximo vencimiento.",
     goal: "Meta",
     accountHint: "Cada vencimiento se carga a esta cuenta.",
     paymentsLeftLabel: "Pagos restantes",
@@ -683,6 +718,36 @@ export const es = {
       `Revisado hoy: ${account} terminaría ese periodo por debajo de su colchón protegido. Solo orientativo: nada se bloquea.`,
     shortByFlexibleHint:
       "Revisado hoy: lo disponible para gasto flexible de ese periodo quedaría en déficit. Solo orientativo: nada se bloquea.",
+    suggestionsTitle: "Parecen recurrentes",
+    suggestionsDescription: (count: number) =>
+      count === 1
+        ? "1 patrón en tus gastos manuales e importados se repite según un calendario pero aún no está registrado. No se agrega nada hasta que lo confirmes."
+        : `${count} patrones en tus gastos manuales e importados se repiten según un calendario pero aún no están registrados. No se agrega nada hasta que lo confirmes.`,
+    suggestionCadence: (cadence: string, anchorDays: number[]) => {
+      switch (cadence) {
+        case "WEEKLY":
+          return "Semanal";
+        case "BIWEEKLY":
+          return "Cada 2 semanas";
+        case "SEMI_MONTHLY":
+          return `Dos veces al mes, alrededor ${dayOfMonthEs(anchorDays[0])} y ${dayOfMonthEs(anchorDays[1])}`;
+        case "YEARLY":
+          return `Anual, alrededor ${dayOfMonthEs(anchorDays[0])}`;
+        case "MONTHLY":
+        default:
+          return `Mensual, alrededor ${dayOfMonthEs(anchorDays[0])}`;
+      }
+    },
+    suggestionEvidence: (count: number, first: string, last: string) =>
+      `${count} cobros, de ${first} a ${last}`,
+    addAsRecurring: "Agregar como recurrente",
+    dismissSuggestion: "Descartar",
+    dismissSuggestionHint: "No volver a sugerir esto",
+    showCharges: (count: number) => `Ver ${count} cobros`,
+    hideCharges: "Ocultar cobros",
+    suggestionAdded: (name: string) => `${name} agregado a tus suscripciones`,
+    suggestionDismissed: "Descartado. No se volverá a sugerir.",
+    suggestionGone: "Esa sugerencia ya no está. Recarga la página para ver lo actual.",
   },
   afford: {
     title: "¿Me alcanza?",

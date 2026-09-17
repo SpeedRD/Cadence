@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { monthlyEquivalent } from "@/lib/recurring";
 
 import type { AppContext } from "@/lib/data/context";
+import type { Prisma } from "@/generated/prisma/client";
 import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
 
 export interface RecurringRow {
@@ -16,6 +17,13 @@ export interface RecurringRow {
   displayAmount: number;
   monthlyDisplayAmount: number;
   nextDate: Date;
+  /**
+   * SEMI_MONTHLY only: the item's other due day each month, direct and
+   * unclamped - unlike anchorDay (never exposed here, since it's always
+   * re-derived from nextDate), the edit form needs this value as-is to
+   * prefill its own dedicated field.
+   */
+  secondAnchorDay: number | null;
   /** The row's version when it was read, so the edit form can refuse a stale save. */
   updatedAt: Date;
   active: boolean;
@@ -74,6 +82,7 @@ export async function listRecurringItems(context: AppContext) {
         monthlyEquivalent(displayAmount, item.frequency),
       ),
       nextDate: item.nextDate,
+      secondAnchorDay: item.secondAnchorDay,
       updatedAt: item.updatedAt,
       active: item.active,
       remainingOccurrences: item.remainingOccurrences,
@@ -118,6 +127,65 @@ export async function listRecurringItems(context: AppContext) {
     contributionsMonthly: monthlyTotal(contributions),
     fromAffordMonthly: monthlyTotal(fromAfford),
   };
+}
+
+/** Which of a recurring item's links is missing or unusable. */
+export type RecurringReferenceProblem = "account" | "category" | "goal";
+
+/**
+ * Posting refuses an item on an archived account, so saving one would create
+ * something that silently never posts; a stale category or goal id would
+ * otherwise arrive as a raw foreign-key error. The first problem found, or
+ * null when every link the item carries is usable.
+ */
+export async function checkRecurringReferences(
+  refs: {
+    accountId?: string | null;
+    categoryId?: string | null;
+    goalId?: string | null;
+  },
+  db: Prisma.TransactionClient = prisma,
+): Promise<RecurringReferenceProblem | null> {
+  const account = refs.accountId
+    ? await db.account.findUnique({ where: { id: refs.accountId }, select: { status: true } })
+    : null;
+  if (!account || account.status !== "ACTIVE") return "account";
+  if (refs.categoryId) {
+    const category = await db.category.findUnique({
+      where: { id: refs.categoryId },
+      select: { id: true },
+    });
+    if (!category) return "category";
+  }
+  if (refs.goalId) {
+    const goal = await db.goal.findUnique({ where: { id: refs.goalId }, select: { id: true } });
+    if (!goal) return "goal";
+  }
+  return null;
+}
+
+/** Everything a new RecurringItem row carries, as the Recurring form's schema produces it. */
+export type NewRecurringItem = Prisma.RecurringItemUncheckedCreateInput;
+
+export type CreateRecurringItemResult =
+  | { ok: true; id: string }
+  | { ok: false; problem: RecurringReferenceProblem };
+
+/**
+ * The one way a RecurringItem is created: the reference checks above, then
+ * the row. The Recurring form (saveRecurringAction) and an accepted pattern
+ * suggestion (acceptRecurringSuggestion) both come through here, so an item
+ * can never be created on an archived account by either. `db` lets a caller
+ * that creates several items at once run them inside one transaction.
+ */
+export async function createRecurringItem(
+  data: NewRecurringItem,
+  db: Prisma.TransactionClient = prisma,
+): Promise<CreateRecurringItemResult> {
+  const problem = await checkRecurringReferences(data, db);
+  if (problem) return { ok: false, problem };
+  const created = await db.recurringItem.create({ data, select: { id: true } });
+  return { ok: true, id: created.id };
 }
 
 /**

@@ -36,6 +36,7 @@ async function loadDueContributionsByGoal(context: AppContext): Promise<DueContr
       frequency: true,
       nextDate: true,
       anchorDay: true,
+      secondAnchorDay: true,
     },
   });
 

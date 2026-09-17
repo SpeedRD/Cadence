@@ -263,7 +263,7 @@ async function postOccurrence(
   rates: RateTable,
   claimedBefore: number,
 ): Promise<{ result: OccurrenceResult; goalContribution: boolean; completed: boolean } | null> {
-  const next = advanceDate(due, item.frequency, item.anchorDay);
+  const next = advanceDate(due, item.frequency, item.anchorDay, item.secondAnchorDay);
   const goalId = item.kind === "CONTRIBUTION" ? item.goalId : null;
   const externalId = recurringExternalId(item.id, due);
 
@@ -470,7 +470,7 @@ export async function postDueRecurringItems(
           completed = true;
           break;
         }
-        occurrence = advanceDate(occurrence, item.frequency, item.anchorDay);
+        occurrence = advanceDate(occurrence, item.frequency, item.anchorDay, item.secondAnchorDay);
       }
     } catch (error) {
       summary.itemsFailed += 1;

@@ -162,6 +162,18 @@ category whose name it carries. Every row shows where it came from: manual, CSV,
 Gmail, Outlook, a payday check-in, an opening balance, or automatic recurring
 posting.
 
+An expense that is unusually large for its category - more than three times the
+median of the category's organic spending over the last six months, once it has at
+least three prior transactions to measure against - is offered as a possible
+**one-off** at the point of entry: a question after saving a manual transaction,
+and an "Unusually large" group in the CSV review step. Nothing is decided for you:
+the row lands as normal spending unless you confirm it, and any organic expense can
+be marked or unmarked as a one-off from the row menu at any time. A one-off still
+counts as spending everywhere - balances, period totals, budgets - but is left out
+of the two averages that estimate typical spending: the payday check-in's category
+suggestions and Reports' calendar-month average. Automatically posted recurring
+charges are never classified; their amounts are scheduled, not organic.
+
 ### Review queue
 
 ![Review queue for email-derived transactions, empty, with the Manage connections action](screenshots/review.png)
@@ -236,6 +248,33 @@ always charged to a single account. It never blocks saving, and a contribution i
 checked here — its funding is planned per account in the payday check-in's Step 3.
 
 ![Large-subscription room check in the Recurring form: each account's headroom before and after the charge, with the one that keeps its buffer recommended](screenshots/recurring-large-subscription.png)
+
+A bill you pay but never set up is found for you. Every visit to the page scans
+your manual and imported spending for a merchant charged the same amount (within
+10%) on a schedule at least three times, and lists what it finds under **Looks
+recurring** with the cadence, the account, the category the charges are filed
+under, the next due date and the charges themselves. Nothing is created until you
+click **Add as recurring**, which makes the real subscription through the same path
+as the form; **Dismiss** is permanent for that merchant on that account, however
+many more charges arrive. A charge posted by an existing item, a confirmed one-off,
+income, and anything an active item already covers are never evidence, and a
+pattern that has stopped is not suggested. Weekly, every-2-weeks, monthly and yearly
+are read from the gaps between charges; **twice a month** is read from the days of
+the month instead, since its gaps look exactly like a biweekly's: two anchor days
+about half a month apart that the charges land on, with the same weekend slop a
+payday gets (a 1st that falls on a Sunday is paid on the Friday before). A biweekly
+charge drifts across the month and cannot fit two anchors without leaning on those
+shifts, and the reading that needs fewer of them wins. Accepting a twice-a-month pattern creates one real **twice a month** recurring
+item, anchored on both days - the Recurring form can create one directly too, with
+a second "Second due day" field that appears once that frequency is picked. Each
+of its two due days is independently weekend-shifted the same way a payday is, so
+posting, Afford's projections and every other consumer of a recurring schedule see
+the real dates, month to month, including the case where one shift pushes a due
+date into the previous calendar month (the 1st landing on a Saturday posts on the
+last day of the month before). The large-subscription room check doesn't run for
+one, since its projection has no notion of two due days in a period; Afford's own
+installment calculator doesn't offer the frequency either, for the same reason.
+A CSV import that completes a pattern says so in its confirmation, with a link here.
 
 ### Afford
 

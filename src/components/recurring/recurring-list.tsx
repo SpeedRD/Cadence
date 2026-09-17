@@ -249,6 +249,7 @@ export function RecurringList({
             frequency: editing.frequency,
             kind: editing.kind,
             nextDate: toISODate(editing.nextDate),
+            secondAnchorDay: editing.secondAnchorDay,
             updatedAt: editing.updatedAt.toISOString(),
             categoryId: editing.categoryId ?? "none",
             accountId: editing.accountId,

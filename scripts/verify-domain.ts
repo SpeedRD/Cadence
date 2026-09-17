@@ -28,9 +28,11 @@ import {
   parseDateWithFormat,
 } from "../src/lib/csv";
 import {
+  addDays,
   appTimeZone,
   civilDate,
   civilDateInZone,
+  daysBetween,
   daysInMonth,
   DEFAULT_APP_TIMEZONE,
   formatDate,
@@ -61,7 +63,7 @@ import {
   suggestCoverShortfall,
   summarizePaydayDraft,
 } from "../src/lib/payday";
-import { advanceDate } from "../src/lib/recurring";
+import { advanceDate, monthlyEquivalent, owedOccurrences } from "../src/lib/recurring";
 import {
   EXPLICIT_NO_CATEGORY,
   resolveImportCategoryId,
@@ -169,6 +171,140 @@ async function main() {
   eq("monthly clamps to month end", toISODate(advanceDate(civilDate(2026, 1, 31), "MONTHLY")), "2026-02-28");
   eq("biweekly adds 14 days", toISODate(advanceDate(civilDate(2026, 8, 20), "BIWEEKLY")), "2026-09-03");
   eq("yearly adds a year", toISODate(advanceDate(civilDate(2026, 8, 20), "YEARLY")), "2027-08-20");
+
+  console.log("\n== recurring advancement: SEMI_MONTHLY ==");
+  {
+    // Aug 1 2026 is a Saturday -> shifts back to Jul 31 (crossing months).
+    // Aug 16 2026 is a Sunday -> shifts back to Aug 14.
+    eq(
+      "same month, no shift: Jul 1 -> Jul 16",
+      toISODate(advanceDate(civilDate(2026, 7, 1), "SEMI_MONTHLY", 1, 16)),
+      "2026-07-16",
+    );
+    eq(
+      "the next slot (Aug 1) shifts back into the *previous* month: Jul 16 -> Jul 31",
+      toISODate(advanceDate(civilDate(2026, 7, 16), "SEMI_MONTHLY", 1, 16)),
+      "2026-07-31",
+    );
+    eq(
+      "from a shifted occurrence, the next is the *other* anchor's slot (Aug 16 -> Aug 14), not the same one again",
+      toISODate(advanceDate(civilDate(2026, 7, 31), "SEMI_MONTHLY", 1, 16)),
+      "2026-08-14",
+    );
+    eq(
+      "and from there, back to the first anchor with no shift: Aug 14 -> Sep 1",
+      toISODate(advanceDate(civilDate(2026, 8, 14), "SEMI_MONTHLY", 1, 16)),
+      "2026-09-01",
+    );
+    eq(
+      "the two anchors are interchangeable - passing them in the other order behaves identically",
+      toISODate(advanceDate(civilDate(2026, 7, 16), "SEMI_MONTHLY", 16, 1)),
+      "2026-07-31",
+    );
+    eq(
+      "anchored on the 15th and the last day of the month (anchor 31, clamped) - the app's own paydays",
+      [
+        toISODate(advanceDate(civilDate(2026, 6, 15), "SEMI_MONTHLY", 15, 31)),
+        toISODate(advanceDate(civilDate(2026, 6, 30), "SEMI_MONTHLY", 15, 31)),
+        toISODate(advanceDate(civilDate(2026, 7, 15), "SEMI_MONTHLY", 15, 31)),
+      ].join(","),
+      "2026-06-30,2026-07-15,2026-07-31",
+    );
+    eq(
+      "no secondAnchorDay degrades to a plain single-anchor monthly advance rather than crashing",
+      toISODate(advanceDate(civilDate(2026, 7, 1), "SEMI_MONTHLY", 1, null)),
+      "2026-08-01",
+    );
+    eq(
+      "every other frequency is unaffected: WEEKLY",
+      toISODate(advanceDate(civilDate(2026, 7, 1), "WEEKLY")),
+      "2026-07-08",
+    );
+    eq(
+      "every other frequency is unaffected: MONTHLY anchored on the 31st, clamped in February",
+      toISODate(advanceDate(civilDate(2027, 1, 31), "MONTHLY", 31)),
+      "2027-02-28",
+    );
+
+    console.log("-- owedOccurrences across a window (pure) --");
+    const semiItem = {
+      nextDate: civilDate(2026, 7, 1),
+      frequency: "SEMI_MONTHLY" as const,
+      anchorDay: 1,
+      secondAnchorDay: 16,
+    };
+    eq(
+      "a window spanning several months returns every weekend-shifted occurrence, in order",
+      owedOccurrences(semiItem, civilDate(2026, 7, 1), civilDate(2026, 9, 1)).map(toISODate).join(","),
+      "2026-07-01,2026-07-16,2026-07-31,2026-08-14,2026-09-01",
+    );
+    eq(
+      "a window entirely before nextDate is empty",
+      owedOccurrences(semiItem, civilDate(2026, 6, 1), civilDate(2026, 6, 30)).length,
+      0,
+    );
+    eq(
+      // Existing owedOccurrences semantics, unchanged: the one outstanding
+      // backlog date (nextDate itself), then only occurrences that actually
+      // fall inside [from, to] - occurrences before `from` are not
+      // individually re-reported.
+      "a window that starts after nextDate returns the outstanding backlog date, then only occurrences inside the window",
+      owedOccurrences(semiItem, civilDate(2026, 8, 1), civilDate(2026, 8, 20)).map(toISODate).join(","),
+      "2026-07-01,2026-08-14",
+    );
+    eq(
+      "a finite item's countdown is spent one per occurrence, across both anchors",
+      owedOccurrences({ ...semiItem, remainingOccurrences: 3 }, civilDate(2026, 7, 1), civilDate(2027, 1, 1))
+        .map(toISODate)
+        .join(","),
+      "2026-07-01,2026-07-16,2026-07-31",
+    );
+
+    eq("twice a month is double the per-charge monthly-equivalent amount", monthlyEquivalent(50, "SEMI_MONTHLY"), 100);
+
+    console.log("-- property sweep: alternation never skips, repeats, or locks onto one anchor --");
+    // A handful of representative anchor pairs (including ones that clamp in
+    // February) at every start day across three years, walked 30 steps.
+    let sweepFailures = 0;
+    const anchorPairs: [number, number][] = [
+      [1, 16], [15, 31], [5, 20], [10, 25], [1, 15], [16, 1], [28, 13], [30, 15],
+    ];
+    for (const [a, b] of anchorPairs) {
+      for (let offset = 0; offset < 365 * 3; offset += 11) {
+        const start = advanceDate(addDays(civilDate(2024, 1, 1), offset), "SEMI_MONTHLY", a, b);
+        let cursor = start;
+        const diffs: number[] = [];
+        const steps: Date[] = [cursor];
+        for (let i = 0; i < 30; i += 1) {
+          const next = advanceDate(cursor, "SEMI_MONTHLY", a, b);
+          const gap = daysBetween(cursor, next);
+          if (gap < 10 || gap > 20) sweepFailures += 1;
+          cursor = next;
+          steps.push(cursor);
+        }
+        // A genuinely alternating walk visits each anchor roughly every
+        // other step; a walk stuck on one anchor would instead keep
+        // landing near the same day every step. Anchors above 28 clamp
+        // (and can then weekend-shift) in February, moving one two-step
+        // pair by a few extra days - the same "Jan 31 -> Feb 28 -> Mar 31"
+        // effect MONTHLY already has - so this checks the median two-step
+        // difference across the whole walk, which one Feb clamp can't skew.
+        for (let i = 0; i + 2 < steps.length; i += 1) {
+          const d0 = steps[i].getUTCDate();
+          const d2raw = steps[i + 2].getUTCDate();
+          const d2 = d0 > 25 && d2raw < 5 ? d2raw + 31 : d2raw > 25 && d0 < 5 ? d0 + 31 : d2raw;
+          diffs.push(Math.abs(d0 - d2));
+        }
+        const sortedDiffs = [...diffs].sort((x, y) => x - y);
+        if ((sortedDiffs[Math.floor(sortedDiffs.length / 2)] ?? 0) > 2) sweepFailures += 1;
+      }
+    }
+    eq(
+      `every gap stays within a half-month band and the walk keeps alternating, across ${anchorPairs.length} anchor pairs x every start day in three years`,
+      sweepFailures,
+      0,
+    );
+  }
 
   console.log("\n== csv parsing ==");
   eq("all three formats supported", DATE_FORMATS.length, 3);
@@ -975,7 +1111,7 @@ async function main() {
   const monthlyContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 7, 31), currentPeriod: periodForDate(civilDate(2026, 7, 31)) };
   const recurringForMatch = (await prisma.recurringItem.findMany({
     where: { active: true, kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] }, name: { startsWith: "Verify" } },
-    select: { id: true, name: true, amount: true, currency: true, categoryId: true, kind: true, frequency: true, nextDate: true, anchorDay: true, createdAt: true },
+    select: { id: true, name: true, amount: true, currency: true, categoryId: true, kind: true, frequency: true, nextDate: true, anchorDay: true, secondAnchorDay: true, createdAt: true },
   })).map((item) => ({ ...item, amount: Number(item.amount) }));
   const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
 
@@ -3957,6 +4093,52 @@ async function main() {
     const newWithOriginal = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", nextDate: "2027-02-28", originalNextDate: "2027-02-28" });
     eq("a new item anchors even if an original date is sent (nothing to preserve)", newWithOriginal.success ? newWithOriginal.data.anchorDay : "rejected", 28);
 
+    console.log("-- SEMI_MONTHLY: the second due day (pure) --");
+    const semiForm = { ...baseForm, frequency: "SEMI_MONTHLY", accountId: "acc_1" };
+    const missingSecond = recurringSchema.safeParse(semiForm);
+    eq("a semi-monthly item needs a second due day", missingSecond.success ? "accepted" : missingSecond.error.issues[0]?.message, "Pick the second due day");
+    for (const bad of ["0", "32", "-1", "2.5", "three"]) {
+      const rejected = recurringSchema.safeParse({ ...semiForm, secondAnchorDay: bad });
+      eq(`a second due day of "${bad}" is rejected`, rejected.success ? "accepted" : rejected.error.issues[0]?.message, "Use a day from 1 to 31");
+    }
+    const sameDay = recurringSchema.safeParse({ ...semiForm, secondAnchorDay: "1" }); // nextDate is 2026-09-01
+    eq("a second due day equal to the first is rejected", sameDay.success ? "accepted" : sameDay.error.issues[0]?.message, "Pick two different days");
+    eq("that error is translated for the Spanish UI", sameDay.success ? "accepted" : firstValidationError(sameDay.error, "es"), "Elige dos días diferentes");
+    const semiOk = recurringSchema.safeParse({ ...semiForm, secondAnchorDay: "16" });
+    eq("a valid pair saves with both anchors set", semiOk.success ? `${semiOk.data.anchorDay}/${semiOk.data.secondAnchorDay}` : "rejected", "1/16");
+    const monthlyDropsSecond = recurringSchema.safeParse({ ...baseForm, accountId: "acc_1", secondAnchorDay: "16" });
+    eq("a MONTHLY item drops a stale second due day left over from switching frequency back", monthlyDropsSecond.success ? String(monthlyDropsSecond.data.secondAnchorDay) : "rejected", "null");
+    // secondAnchorDay is a plain, directly-entered field, unlike anchorDay -
+    // an edit that resubmits the same stored value needs no re-anchor guard
+    // and keeps recomputing nextDate exactly as typed, every time.
+    const semiEditUnchanged = recurringSchema.safeParse({ ...semiForm, id: "item_1", secondAnchorDay: "16", originalNextDate: "2026-09-01" });
+    eq("an edit that resubmits the same second day keeps it, with no special-casing", semiEditUnchanged.success ? semiEditUnchanged.data.secondAnchorDay : "rejected", 16);
+
+    const semiAccount = await prisma.account.create({ data: { name: "Verify Semi Monthly Account", currency: "USD", type: "CHECKING" } });
+    const semiCreated = recurringSchema.safeParse({ ...semiForm, secondAnchorDay: "16" });
+    if (!semiCreated.success) throw new Error(`semi-monthly form rejected: ${semiCreated.error.issues[0]?.message}`);
+    {
+      const { createRecurringItem } = await import("../src/lib/data/recurring");
+      const { id: _id, updatedAt: _updatedAt, ...values } = semiCreated.data;
+      const created = await createRecurringItem({ ...values, accountId: semiAccount.id });
+      check("createRecurringItem accepts a SEMI_MONTHLY item built by the form's own schema", created.ok, JSON.stringify(created));
+      if (created.ok) {
+        const row = await prisma.recurringItem.findUniqueOrThrow({ where: { id: created.id } });
+        eq(
+          "the row is a real SEMI_MONTHLY item with both anchors, exactly as the form collected them",
+          `${row.frequency}/${row.anchorDay}/${row.secondAnchorDay}/${toISODate(row.nextDate)}`,
+          "SEMI_MONTHLY/1/16/2026-09-01",
+        );
+        eq(
+          "and owedOccurrences walks it correctly from here",
+          owedOccurrences(row, civilDate(2026, 9, 1), civilDate(2026, 10, 1)).map(toISODate).join(","),
+          "2026-09-01,2026-09-16,2026-10-01",
+        );
+        await prisma.recurringItem.delete({ where: { id: created.id } });
+      }
+    }
+    await prisma.account.delete({ where: { id: semiAccount.id } });
+
     const anchorAccount = await prisma.account.create({ data: { name: "Verify Anchor Account", currency: "USD", type: "CHECKING" } });
     const anchored = await prisma.recurringItem.create({
       data: { name: "Verify Anchor 31", amount: 12, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2027, 2, 28), anchorDay: 31, accountId: anchorAccount.id },
@@ -4186,6 +4368,68 @@ async function main() {
     await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Posting" } } });
     await prisma.goal.delete({ where: { id: postingGoal.id } });
     await prisma.account.deleteMany({ where: { id: { in: [postingAccount.id, archivedPostingAccount.id] } } });
+  }
+
+  console.log("\n== recurring posting: SEMI_MONTHLY ==");
+  {
+    const { postDueRecurringItems: postSemiMonthly } = await import("../src/lib/recurring-posting");
+    // Aug 1 2026 is a Saturday (shifts back into July); Aug 16 is a Sunday
+    // (shifts back to Aug 14) - the same weekend- and month-crossing shift
+    // the pure owedOccurrences checks exercise, now proven through the real
+    // posting job end to end.
+    const semiPostingToday = civilDate(2026, 8, 20);
+    const semiPostingAccount = await prisma.account.create({
+      data: { name: "Verify Semi Posting Account", currency: "USD", type: "CHECKING" },
+    });
+    const semiPostingItem = await prisma.recurringItem.create({
+      data: {
+        name: "Verify Semi Posting Rent",
+        amount: 500,
+        currency: "USD",
+        frequency: "SEMI_MONTHLY",
+        kind: "SUBSCRIPTION",
+        nextDate: civilDate(2026, 7, 1),
+        anchorDay: 1,
+        secondAnchorDay: 16,
+        accountId: semiPostingAccount.id,
+      },
+    });
+    const semiPostedRows = () =>
+      prisma.transaction.findMany({
+        where: { source: "RECURRING", externalId: { startsWith: `${semiPostingItem.id}:` } },
+        orderBy: { date: "asc" },
+      });
+
+    const semiRun = await postSemiMonthly(semiPostingToday);
+    eq("the item posts", semiRun.itemsPosted, 1);
+    eq("four transactions created - one per elapsed monthly occurrence on each anchor", semiRun.transactionsCreated, 4);
+    const semiRows = await semiPostedRows();
+    eq(
+      "both of the item's monthly occurrences post, on their real weekend- and month-shifted dates",
+      semiRows.map((row) => toISODate(row.date)).join(","),
+      "2026-07-01,2026-07-16,2026-07-31,2026-08-14",
+    );
+    eq("each posted row carries the item's amount, account and RECURRING source", semiRows.every((row) => num(row.amount) === 500 && row.accountId === semiPostingAccount.id && row.source === "RECURRING"), true);
+    eq(
+      "the externalId pins the item to its own (real, shifted) due date, not the raw anchor day",
+      semiRows.map((row) => row.externalId).join(","),
+      [
+        `${semiPostingItem.id}:2026-07-01`,
+        `${semiPostingItem.id}:2026-07-16`,
+        `${semiPostingItem.id}:2026-07-31`,
+        `${semiPostingItem.id}:2026-08-14`,
+      ].join(","),
+    );
+    const semiAfterFirstRun = await prisma.recurringItem.findUniqueOrThrow({ where: { id: semiPostingItem.id } });
+    eq("the item advances past both anchors, landing on the next unposted (Sep 1, no shift)", toISODate(semiAfterFirstRun.nextDate), "2026-09-01");
+
+    const semiSecondRun = await postSemiMonthly(semiPostingToday);
+    eq("a fully caught-up run posts nothing more for it", (await semiPostedRows()).length, 4);
+    check("the second run does not report it skipped or failed", !semiSecondRun.skipped.some((item) => item.id === semiPostingItem.id) && !semiSecondRun.failed.some((item) => item.id === semiPostingItem.id));
+
+    await prisma.transaction.deleteMany({ where: { accountId: semiPostingAccount.id } });
+    await prisma.recurringItem.delete({ where: { id: semiPostingItem.id } });
+    await prisma.account.delete({ where: { id: semiPostingAccount.id } });
   }
 
   console.log("\n== afford: installment plans ==");
@@ -6061,6 +6305,537 @@ async function main() {
     const firstEntry = readEntry(archive, 0);
     eq("its first entry is transactions.csv", firstEntry.name, "transactions.csv");
     check("headers follow the app language (Spanish here)", firstEntry.text.startsWith("﻿Fecha,Monto,Descripción"));
+  }
+
+  console.log("\n== extraordinary expenses ==");
+  {
+    const { classifyExtraordinary, median, EXTRAORDINARY_MIN_HISTORY, EXTRAORDINARY_MULTIPLIER } =
+      await import("../src/lib/extraordinary");
+    const { findExtraordinaryCandidates } = await import("../src/lib/data/extraordinary");
+    const { canBeExtraordinary } = await import("../src/lib/transactions");
+    const { getCategorySuggestions: suggestFor } = await import("../src/lib/data/payday");
+    const { classifyCompletedMonth: classifyMonth, getCurrentMonthPace: currentPace } =
+      await import("../src/lib/data/monthly");
+    const { monthWindow: windowFor } = await import("../src/lib/month");
+
+    console.log("-- classification (pure) --");
+    eq("median of an odd count is the middle value", median([110, 90, 100]), 100);
+    eq("median of an even count is the mean of the two middle values", median([90, 100, 110, 400]), 105);
+    eq("median of nothing is 0", median([]), 0);
+    eq("the threshold is 3x the median", EXTRAORDINARY_MULTIPLIER, 3);
+    eq("at least 3 prior transactions are needed for a verdict", EXTRAORDINARY_MIN_HISTORY, 3);
+    eq("two prior amounts give no verdict at all, however large the candidate", classifyExtraordinary([100, 100], 10000), null);
+    eq("no prior amounts give no verdict", classifyExtraordinary([], 10000), null);
+    eq(
+      "three similar amounts and a candidate at 4x the median: possibly extraordinary",
+      JSON.stringify(classifyExtraordinary([90, 100, 110], 400)),
+      JSON.stringify({ possiblyExtraordinary: true, median: 100, sampleSize: 3 }),
+    );
+    eq("exactly 3x is not above the threshold", classifyExtraordinary([90, 100, 110], 300)?.possiblyExtraordinary, false);
+    eq("2.5x is ordinary", classifyExtraordinary([90, 100, 110], 250)?.possiblyExtraordinary, false);
+    eq("a median of 0 never flags anything", classifyExtraordinary([0, 0, 0], 50)?.possiblyExtraordinary, false);
+    eq(
+      "the median is robust to one earlier outlier in the history",
+      classifyExtraordinary([90, 100, 110, 5000], 310)?.possiblyExtraordinary,
+      false, // median 105, threshold 315
+    );
+
+    console.log("-- which rows may be marked (pure) --");
+    check("a manual expense may be marked", canBeExtraordinary({ type: "EXPENSE", source: "MANUAL", externalId: null }));
+    check("a CSV expense may be marked", canBeExtraordinary({ type: "EXPENSE", source: "CSV", externalId: "csv:abc:1" }));
+    check("a RECURRING row never is - its amount is scheduled, not organic", !canBeExtraordinary({ type: "EXPENSE", source: "RECURRING", externalId: "item:2026-08-01" }));
+    check("income never is", !canBeExtraordinary({ type: "INCOME", source: "MANUAL", externalId: null }));
+    check("a transfer leg never is", !canBeExtraordinary({ type: "TRANSFER", source: "MANUAL", externalId: null }));
+    check("the expense a goal contribution wrote never is", !canBeExtraordinary({ type: "EXPENSE", source: "MANUAL", externalId: "goal-contribution:abc" }));
+
+    console.log("-- against a category's recent history (database) --");
+    const extraAccount = await prisma.account.create({
+      data: { name: "Verify Extraordinary", currency: "USD", type: "CHECKING" },
+    });
+    const extraCategory = await prisma.category.create({ data: { name: "Verify Extraordinary Cat", kind: "EXPENSE" } });
+    const thinCategory = await prisma.category.create({ data: { name: "Verify Extraordinary Thin", kind: "EXPENSE" } });
+    const extraContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 9, 17), currentPeriod: periodForDate(civilDate(2026, 9, 17)) };
+    const extraRow = (amount: number, extra: Partial<{ source: "MANUAL" | "RECURRING"; categoryId: string; externalId: string; currency: string }> = {}) => ({
+      date: civilDate(2026, 8, 20),
+      amount,
+      currency: extra.currency ?? "USD",
+      type: "EXPENSE" as const,
+      accountId: extraAccount.id,
+      categoryId: extra.categoryId ?? extraCategory.id,
+      source: extra.source ?? ("MANUAL" as const),
+      externalId: extra.externalId,
+    });
+    await prisma.transaction.createMany({
+      data: [
+        extraRow(100),
+        extraRow(110),
+        extraRow(90),
+        // Scheduled, not organic: never part of the history the median is taken over.
+        extraRow(5000, { source: "RECURRING", externalId: "verify-extraordinary-item:2026-08-20" }),
+        extraRow(100, { categoryId: thinCategory.id }),
+        extraRow(100, { categoryId: thinCategory.id }),
+      ],
+    });
+    const created = await prisma.transaction.findFirst({ where: { accountId: extraAccount.id } });
+    eq("a new row is never flagged by default", created?.isExtraordinary, false);
+
+    const candidates = await findExtraordinaryCandidates(
+      [
+        { key: "4x", categoryId: extraCategory.id, amount: 400, currency: "USD" },
+        { key: "just-over-3x-of-100", categoryId: extraCategory.id, amount: 310, currency: "USD" },
+        { key: "2.5x", categoryId: extraCategory.id, amount: 250, currency: "USD" },
+        { key: "dop", categoryId: extraCategory.id, amount: 24000, currency: "DOP" }, // 400 USD at the harness rate
+        { key: "thin", categoryId: thinCategory.id, amount: 10000, currency: "USD" },
+      ],
+      extraContext,
+    );
+    eq(
+      "4x the category's median is surfaced, with the median it was measured against",
+      JSON.stringify(candidates.get("4x")),
+      JSON.stringify({ possiblyExtraordinary: true, median: 100, sampleSize: 3, categoryId: extraCategory.id, categoryName: "Verify Extraordinary Cat", currency: "USD" }),
+    );
+    check(
+      "the RECURRING row is not in the history: the median is 100, not 105, so 310 still trips 3x",
+      candidates.has("just-over-3x-of-100"),
+    );
+    check("2.5x is not surfaced", !candidates.has("2.5x"));
+    check("a candidate in another currency is compared in the display currency", candidates.has("dop"));
+    check("a category with only two prior transactions never gets a suggestion", !candidates.has("thin"));
+    eq("nothing was written by measuring", await prisma.transaction.count({ where: { accountId: extraAccount.id } }), 6);
+
+    console.log("-- accepting the suggestion excludes the row from both averages; declining leaves it in --");
+    // The 400 lands the same way a declined suggestion leaves it: unflagged.
+    const bigOne = await prisma.transaction.create({ data: extraRow(400) });
+    // The RECURRING fixture has made its point; the rest of the block reads
+    // the category's organic rows only, so the figures below stay exact.
+    await prisma.transaction.deleteMany({ where: { accountId: extraAccount.id, source: "RECURRING" } });
+
+    const planRef = { year: 2026, month: 9, period: "B" as const };
+    const augustWindow = windowFor({ year: 2026, month: 8 });
+    const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
+    const paceContext = { ...extraContext, today: civilDate(2026, 8, 25), currentPeriod: periodForDate(civilDate(2026, 8, 25)) };
+
+    const suggestionsDeclined = await suggestFor(planRef, [{ id: extraCategory.id }], extraContext);
+    eq(
+      "declined (unflagged): the payday suggestion averages every row, the 400 included",
+      JSON.stringify(suggestionsDeclined.get(extraCategory.id)),
+      JSON.stringify({ amount: 700, basis: "average" }),
+    );
+    const augustDeclined = await classifyMonth(augustWindow, extraContext, [], categoryMeta);
+    const paceDeclined = await currentPace(paceContext);
+
+    await prisma.transaction.update({ where: { id: bigOne.id }, data: { isExtraordinary: true } });
+    const suggestionsAccepted = await suggestFor(planRef, [{ id: extraCategory.id }], extraContext);
+    eq(
+      "accepted: the payday suggestion leaves the one-off out of the sum, over the same number of periods",
+      JSON.stringify(suggestionsAccepted.get(extraCategory.id)),
+      JSON.stringify({ amount: 300, basis: "average" }),
+    );
+    const augustAccepted = await classifyMonth(augustWindow, extraContext, [], categoryMeta);
+    eq("accepted: the completed month's lifestyle figure drops by exactly the one-off", round2(augustDeclined.lifestyle - augustAccepted.lifestyle), 400);
+    const acceptedLine = augustAccepted.lifestyleByCategory.find((line) => line.categoryId === extraCategory.id);
+    eq("accepted: the month's own per-category line is typical spending only", acceptedLine?.spent, 300);
+    const paceAccepted = await currentPace(paceContext);
+    eq(
+      "the month in progress still counts it - spent so far is a statement of fact, not an average",
+      paceAccepted.lifestyleSpentSoFar,
+      paceDeclined.lifestyleSpentSoFar,
+    );
+    const historyAfterFlag = await findExtraordinaryCandidates(
+      [{ key: "again", categoryId: extraCategory.id, amount: 310, currency: "USD" }],
+      extraContext,
+    );
+    check("a confirmed one-off is not in the history the next candidate is measured against", historyAfterFlag.has("again"));
+
+    console.log("-- the manual toggle works in both directions on an ordinary row --");
+    const ordinary = await prisma.transaction.findFirst({ where: { accountId: extraAccount.id, amount: 110 } });
+    await prisma.transaction.update({ where: { id: ordinary!.id }, data: { isExtraordinary: true } });
+    eq(
+      "marking an ordinary row by hand excludes it too, whether or not the threshold ever suggested it",
+      suggestionsAccepted.get(extraCategory.id)!.amount - (await suggestFor(planRef, [{ id: extraCategory.id }], extraContext)).get(extraCategory.id)!.amount,
+      110,
+    );
+    await prisma.transaction.update({ where: { id: ordinary!.id }, data: { isExtraordinary: false } });
+    await prisma.transaction.update({ where: { id: bigOne.id }, data: { isExtraordinary: false } });
+    eq(
+      "unmarking restores both rows to the average exactly",
+      JSON.stringify((await suggestFor(planRef, [{ id: extraCategory.id }], extraContext)).get(extraCategory.id)),
+      JSON.stringify({ amount: 700, basis: "average" }),
+    );
+    eq("and the completed month is back to its declined figure", (await classifyMonth(augustWindow, extraContext, [], categoryMeta)).lifestyle, augustDeclined.lifestyle);
+
+    await prisma.transaction.deleteMany({ where: { accountId: extraAccount.id } });
+    await prisma.account.delete({ where: { id: extraAccount.id } });
+    await prisma.category.deleteMany({ where: { id: { in: [extraCategory.id, thinCategory.id] } } });
+    console.log("  ok   extraordinary fixtures removed");
+  }
+
+  console.log("\n== recurring pattern detection ==");
+  {
+    const {
+      detectRecurringPatterns,
+      dominantAmountCluster,
+      fitSemiMonthlyAnchors,
+      inferCadence,
+      isOrganicExpense,
+      MIN_OCCURRENCES,
+    } = await import("../src/lib/recurring-detection");
+    type DetectableTransaction = import("../src/lib/recurring-detection").DetectableTransaction;
+    const { addDays: plusDays } = await import("../src/lib/date");
+
+    const detectToday = civilDate(2026, 9, 17);
+    let nextDetectId = 0;
+    const organic = (
+      date: Date,
+      amount: number,
+      note: string,
+      extra: Partial<DetectableTransaction> = {},
+    ): DetectableTransaction => ({
+      id: `detect-${(nextDetectId += 1)}`,
+      date,
+      amount,
+      currency: "USD",
+      type: "EXPENSE",
+      source: "CSV",
+      accountId: "acct-a",
+      categoryId: null,
+      note,
+      externalId: null,
+      isExtraordinary: false,
+      ...extra,
+    });
+    const detect = (
+      transactions: DetectableTransaction[],
+      extra: Partial<Parameters<typeof detectRecurringPatterns>[0]> = {},
+    ) => detectRecurringPatterns({ transactions, trackedItems: [], dismissed: [], today: detectToday, ...extra });
+
+    console.log("-- which rows count as evidence (pure) --");
+    check("a manual expense counts", isOrganicExpense(organic(detectToday, 10, "GYM", { source: "MANUAL" })));
+    check("a CSV expense counts", isOrganicExpense(organic(detectToday, 10, "GYM")));
+    check("a RECURRING-posted row never does - it is the schedule, not evidence of one", !isOrganicExpense(organic(detectToday, 10, "GYM", { source: "RECURRING" })));
+    check("a confirmed one-off never does", !isOrganicExpense(organic(detectToday, 10, "GYM", { isExtraordinary: true })));
+    check("income never does", !isOrganicExpense(organic(detectToday, 10, "GYM", { type: "INCOME" })));
+    check("a transfer leg never does", !isOrganicExpense(organic(detectToday, 10, "GYM", { type: "TRANSFER" })));
+    check("the expense a goal contribution wrote never does", !isOrganicExpense(organic(detectToday, 10, "GYM", { source: "MANUAL", externalId: "goal-contribution:abc" })));
+    check("a row with no description cannot be grouped, so it never does", !isOrganicExpense(organic(detectToday, 10, "  ")));
+
+    console.log("-- amount tolerance band (pure) --");
+    eq("identical amounts are one cluster", JSON.stringify(dominantAmountCluster([14.99, 14.99, 14.99]).members), "[0,1,2]");
+    eq("a price hike within 10% stays in the cluster", JSON.stringify(dominantAmountCluster([14.99, 14.99, 15.49, 15.49]).members), "[0,1,2,3]");
+    eq("cent-level drift on a cheap bill stays in (the 1.00 floor beats 10%)", JSON.stringify(dominantAmountCluster([3.0, 3.35, 3.1]).members), "[0,1,2]");
+    eq("an amount 25% off is not the same bill", JSON.stringify(dominantAmountCluster([20, 20, 25]).members), "[0,1]");
+    eq("the biggest cluster wins, not the median (Prime among Amazon orders)", JSON.stringify(dominantAmountCluster([14.99, 63.2, 14.99, 120, 14.99, 9.5]).members), "[0,2,4]");
+
+    console.log("-- cadence from intervals (pure) --");
+    const monthlyDates = [civilDate(2026, 6, 12), civilDate(2026, 7, 12), civilDate(2026, 8, 12), civilDate(2026, 9, 12)];
+    eq("the same day each month is MONTHLY", inferCadence(monthlyDates)?.cadence, "MONTHLY");
+    eq("... anchored on that day", inferCadence(monthlyDates)?.anchorDays.join(","), "12");
+    eq("every 7 days is WEEKLY", inferCadence([civilDate(2026, 8, 3), civilDate(2026, 8, 10), civilDate(2026, 8, 17), civilDate(2026, 8, 24)])?.cadence, "WEEKLY");
+    eq("once a year is YEARLY", inferCadence([civilDate(2024, 3, 5), civilDate(2025, 3, 5), civilDate(2026, 3, 5)])?.cadence, "YEARLY");
+    eq("a monthly bill with one month missing from the ledger is still MONTHLY (>= 50% of gaps)", inferCadence([civilDate(2026, 5, 12), civilDate(2026, 6, 12), civilDate(2026, 8, 12), civilDate(2026, 9, 12)])?.cadence, "MONTHLY");
+    eq("a monthly bill on the 31st is clamped in short months but keeps its anchor", inferCadence([civilDate(2026, 5, 31), civilDate(2026, 6, 30), civilDate(2026, 7, 31), civilDate(2026, 8, 31)])?.anchorDays.join(","), "31");
+    eq("a monthly bill pulled off a weekend keeps its anchor (Aug 1 2026 is a Saturday -> Jul 31)", inferCadence([civilDate(2026, 6, 1), civilDate(2026, 7, 1), civilDate(2026, 7, 31), civilDate(2026, 9, 1)])?.anchorDays.join(","), "1");
+    eq("irregular gaps (9, 23, 41 days) fit no cadence", inferCadence([civilDate(2026, 6, 1), civilDate(2026, 6, 10), civilDate(2026, 7, 3), civilDate(2026, 8, 13)]), null);
+    eq("two dates (one gap) are never enough", inferCadence([civilDate(2026, 6, 12), civilDate(2026, 7, 12)]), null);
+
+    console.log("-- semi-monthly vs biweekly: day-of-month clustering, not gap length (pure) --");
+    // Anchored on the 1st and 16th. Aug 1 2026 is a Saturday and Aug 16 a
+    // Sunday, so those two land on the preceding Friday, exactly as period.ts
+    // moves a payday. Gaps: 15,15,15,15,14,18,15 - six of seven are within
+    // 14+-2, so a gap-only rule would call this biweekly.
+    const semiMonthly = [
+      civilDate(2026, 6, 1), civilDate(2026, 6, 16),
+      civilDate(2026, 7, 1), civilDate(2026, 7, 16),
+      civilDate(2026, 7, 31), civilDate(2026, 8, 14),
+      civilDate(2026, 9, 1), civilDate(2026, 9, 16),
+    ];
+    eq("1st & 16th with weekend pull-backs is SEMI_MONTHLY", inferCadence(semiMonthly)?.cadence, "SEMI_MONTHLY");
+    eq("... anchored on the 1st and the 16th", inferCadence(semiMonthly)?.anchorDays.join(","), "1,16");
+    const semiFit = fitSemiMonthlyAnchors(semiMonthly);
+    eq("the anchor fit counts the occurrences that needed a weekend shift", semiFit?.shifted, 2);
+    eq("... and the exact ones", semiFit?.exact, 6);
+    // Every 14 days from Fri Jun 5: days of month 5,19,3,17,31,14,28,11 - drifting.
+    const biweekly = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => civilDate(2026, 6, 5 + 14 * i));
+    eq("every 14 days drifting across the month is BIWEEKLY", inferCadence(biweekly)?.cadence, "BIWEEKLY");
+    eq("... with no anchor day", inferCadence(biweekly)?.anchorDays.length, 0);
+    eq("a biweekly debit that slips to Monday is still BIWEEKLY", inferCadence([civilDate(2026, 6, 5), civilDate(2026, 6, 19), civilDate(2026, 7, 6), civilDate(2026, 7, 17), civilDate(2026, 7, 31), civilDate(2026, 8, 14), civilDate(2026, 8, 28)])?.cadence, "BIWEEKLY");
+    // Only the first four biweekly dates: Jun 5, 19, Jul 3, 17. Anchors 5 & 19
+    // would explain them, but only by leaning on two weekend shifts (Jul 5 and
+    // Jul 19 are Sundays) - the biweekly reading needs none, so it wins.
+    eq("four biweekly dates that happen to fit two weekend-shifted anchors are still BIWEEKLY", inferCadence(biweekly.slice(0, 4))?.cadence, "BIWEEKLY");
+    eq("three semi-monthly dates already classify (Jun 1, Jun 16, Jul 1)", inferCadence(semiMonthly.slice(0, 3))?.cadence, "SEMI_MONTHLY");
+    const paydays = [civilDate(2026, 6, 15), civilDate(2026, 6, 30), civilDate(2026, 7, 15), civilDate(2026, 7, 31), civilDate(2026, 8, 14), civilDate(2026, 8, 31), civilDate(2026, 9, 15)];
+    eq("the 15th and the last day of the month - the app's own paydays - is SEMI_MONTHLY", inferCadence(paydays)?.cadence, "SEMI_MONTHLY");
+    eq("... anchored on the 15th and the 31st (clamped to each month's real end)", inferCadence(paydays)?.anchorDays.join(","), "15,31");
+    eq("a semi-monthly bill with one stray extra charge still fits (>= 80% of occurrences from five on)", inferCadence([civilDate(2026, 5, 1), civilDate(2026, 5, 15), civilDate(2026, 6, 1), civilDate(2026, 6, 16), civilDate(2026, 7, 1), civilDate(2026, 7, 16), civilDate(2026, 7, 31), civilDate(2026, 8, 14), civilDate(2026, 8, 20), civilDate(2026, 9, 1)])?.cadence, "SEMI_MONTHLY");
+    // Inside February 28 days is both two biweekly gaps and one month, so
+    // three dates there are a dead heat; the mean gap (14, not 15.2) then
+    // reads biweekly until the next charge settles it.
+    eq("a dead heat inside February (2nd & 16th, all Mondays, 14 days apart) reads as BIWEEKLY until a later charge settles it", inferCadence([civilDate(2026, 2, 2), civilDate(2026, 2, 16), civilDate(2026, 3, 2)])?.cadence, "BIWEEKLY");
+    eq("... which Apr 2 does: the lattice would want Mar 30", inferCadence([civilDate(2026, 2, 2), civilDate(2026, 2, 16), civilDate(2026, 3, 2), civilDate(2026, 3, 16), civilDate(2026, 4, 2)])?.cadence, "SEMI_MONTHLY");
+
+    // Property check over the calendar: a strict 14-day series starting on
+    // any day of 2026, with each date pulled back off a weekend, must never
+    // read as semi-monthly, at three, five or six occurrences.
+    const pullBack = (date: Date) => {
+      const weekday = date.getUTCDay();
+      return weekday === 6 ? plusDays(date, -1) : weekday === 0 ? plusDays(date, -2) : date;
+    };
+    let biweeklyMisread = 0;
+    let biweeklyChecked = 0;
+    for (const count of [3, 5, 6]) {
+      for (let offset = 0; offset < 365; offset += 1) {
+        const start = plusDays(civilDate(2026, 1, 1), offset);
+        const dates = Array.from({ length: count }, (_, i) => pullBack(plusDays(start, 14 * i)));
+        biweeklyChecked += 1;
+        if (inferCadence(dates)?.cadence === "SEMI_MONTHLY") biweeklyMisread += 1;
+      }
+    }
+    eq(`no biweekly series starting anywhere in 2026 reads as SEMI_MONTHLY (${biweeklyChecked} series)`, biweeklyMisread, 0);
+    // And a 1st & 16th series with the payday weekend rule, starting in any
+    // month of 2025-2026, reads as SEMI_MONTHLY from five occurrences on.
+    let semiMisread = 0;
+    let semiChecked = 0;
+    for (const count of [5, 6, 8]) {
+      for (let monthOffset = 0; monthOffset < 24; monthOffset += 1) {
+        const dates = Array.from({ length: count }, (_, i) => {
+          const monthIndex = monthOffset + Math.floor(i / 2);
+          const year = 2025 + Math.floor(monthIndex / 12);
+          const month = (monthIndex % 12) + 1;
+          return pullBack(civilDate(year, month, i % 2 === 0 ? 1 : 16));
+        });
+        semiChecked += 1;
+        if (inferCadence(dates)?.cadence !== "SEMI_MONTHLY") semiMisread += 1;
+      }
+    }
+    eq(`every 1st & 16th series starting in any month of 2025-2026 reads as SEMI_MONTHLY from five charges on (${semiChecked} series)`, semiMisread, 0);
+
+    console.log("-- candidates from transactions (pure) --");
+    const gym = semiMonthly.map((date) => organic(date, 25, "PLANET FITNESS 1234"));
+    const gymCandidates = detect(gym);
+    eq("a semi-monthly gym is one candidate", gymCandidates.length, 1);
+    eq("... classified SEMI_MONTHLY", gymCandidates[0]?.cadence, "SEMI_MONTHLY");
+    eq("... named from the cleaned merchant text", gymCandidates[0]?.name, "Planet Fitness");
+    eq("... keyed by the normalised merchant", gymCandidates[0]?.merchantKey, "PLANET FITNESS");
+    eq("... with the two anchor days", gymCandidates[0]?.anchorDays.join(","), "1,16");
+    eq("... and one next due date per anchor, the first on or after today (Sep 17)", gymCandidates[0]?.nextDates.map(toISODate).join(","), "2026-10-01,2026-10-16");
+    eq("... backed by all eight charges, oldest first", gymCandidates[0]?.occurrences.map((row) => toISODate(row.date)).join(","), semiMonthly.map(toISODate).join(","));
+    eq("... at the amount as last charged", gymCandidates[0]?.amount, 25);
+    eq("... in the charges' currency and account", `${gymCandidates[0]?.currency}/${gymCandidates[0]?.accountId}`, "USD/acct-a");
+    eq("... noting where the evidence came from", gymCandidates[0]?.detectedFrom, "CSV");
+    const biCandidates = detect(biweekly.map((date) => organic(date, 12.5, "BLUE APRON")));
+    eq("a biweekly box is BIWEEKLY", biCandidates[0]?.cadence, "BIWEEKLY");
+    eq("... next due 14 days after the last charge (Sep 11 -> Sep 25)", biCandidates[0]?.nextDates.map(toISODate).join(","), "2026-09-25");
+
+    eq("the minimum is three occurrences", MIN_OCCURRENCES, 3);
+    eq("two charges never suggest anything", detect([organic(civilDate(2026, 7, 12), 9.99, "NETFLIX.COM"), organic(civilDate(2026, 8, 12), 9.99, "NETFLIX.COM")]).length, 0);
+    const netflix3 = [civilDate(2026, 7, 12), civilDate(2026, 8, 12), civilDate(2026, 9, 12)].map((date) => organic(date, 9.99, "NETFLIX.COM 866-579-7172", { source: "MANUAL", categoryId: "cat-sub" }));
+    const netflixCandidates = detect(netflix3);
+    eq("three do", netflixCandidates.length, 1);
+    eq("... as MONTHLY on the 12th, next Oct 12", `${netflixCandidates[0]?.cadence}/${netflixCandidates[0]?.anchorDays.join(",")}/${netflixCandidates[0]?.nextDates.map(toISODate).join(",")}`, "MONTHLY/12/2026-10-12");
+    eq("... carrying the category the charges were filed under", netflixCandidates[0]?.categoryId, "cat-sub");
+    eq("... and the manual source", netflixCandidates[0]?.detectedFrom, "MANUAL");
+    eq("a confirmed one-off is not evidence: flagging one of the three leaves two", detect([netflix3[0], netflix3[1], { ...netflix3[2], isExtraordinary: true }]).length, 0);
+    eq("a RECURRING-posted row is not evidence either", detect([netflix3[0], netflix3[1], { ...netflix3[2], source: "RECURRING" }]).length, 0);
+    eq("a flagged one-off at the same merchant does not join the evidence either", detect([...netflix3, organic(civilDate(2026, 9, 14), 9.99, "NETFLIX.COM", { isExtraordinary: true })])[0]?.occurrences.length, 3);
+
+    console.log("-- what is not suggested (pure) --");
+    const tracked = (item: Partial<import("../src/lib/recurring-detection").TrackedRecurringItem>) => ({
+      trackedItems: [{ name: "Netflix", amount: 9.99, currency: "USD", accountId: "acct-a", categoryId: null, active: true, ...item }],
+    });
+    eq("a pattern an active item already tracks (name matches, amount within band) is skipped", detect(netflix3, tracked({})).length, 0);
+    eq("... or one on the same account, category and amount when the name differs", detect(netflix3, tracked({ name: "Streaming", categoryId: "cat-sub" })).length, 0);
+    eq("... but a paused item does not count as tracking it", detect(netflix3, tracked({ active: false })).length, 1);
+    eq("... nor an item at a different amount", detect(netflix3, tracked({ amount: 19.99 })).length, 1);
+    eq("... nor one in another currency", detect(netflix3, tracked({ currency: "DOP" })).length, 1);
+    const dismissedNetflix = { dismissed: [{ accountId: "acct-a", merchantKey: "NETFLIX COM" }] };
+    eq("a dismissed merchant on that account is never suggested again", detect(netflix3, dismissedNetflix).length, 0);
+    eq("... however many more charges arrive", detect([...netflix3, organic(civilDate(2026, 9, 13), 9.99, "NETFLIX.COM")], dismissedNetflix).length, 0);
+    eq("... but the same merchant on another account still is", detect(netflix3.map((row) => ({ ...row, accountId: "acct-b" })), dismissedNetflix).length, 1);
+    eq("the same merchant on two accounts is two candidates", detect([...netflix3, ...netflix3.map((row) => ({ ...row, id: `${row.id}-b`, accountId: "acct-b" }))]).length, 2);
+    eq("a pattern that stopped (last charge in March, today Sep 17) is not suggested", detect([civilDate(2026, 1, 12), civilDate(2026, 2, 12), civilDate(2026, 3, 12)].map((date) => organic(date, 9.99, "NETFLIX.COM"))).length, 0);
+    eq("a monthly bill last seen 40 days ago is still alive, and its next date skips the one already missed", detect([civilDate(2026, 6, 8), civilDate(2026, 7, 8), civilDate(2026, 8, 8)].map((date) => organic(date, 9.99, "NETFLIX.COM")))[0]?.nextDates.map(toISODate).join(","), "2026-10-08");
+    eq("the next date is never today's charge again (last charge today -> next month)", detect([civilDate(2026, 7, 17), civilDate(2026, 8, 17), civilDate(2026, 9, 17)].map((date) => organic(date, 9.99, "NETFLIX.COM")))[0]?.nextDates.map(toISODate).join(","), "2026-10-17");
+    eq("candidates come back most charges first, then by name", detect([...gym, ...netflix3]).map((candidate) => candidate.name).join("|"), "Planet Fitness|Netflix Com");
+  }
+
+  console.log("\n== recurring suggestions (database) ==");
+  {
+    const { findRecurringSuggestions, acceptRecurringSuggestion, dismissRecurringSuggestion, recurringItemForCandidate } =
+      await import("../src/lib/data/recurring-suggestions");
+    const suggestToday = civilDate(2026, 9, 17);
+    const suggestContext = {
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today: suggestToday,
+      currentPeriod: periodForDate(suggestToday),
+    };
+    const usdAccount = await prisma.account.create({
+      data: { name: "Verify Suggest USD", currency: "USD", type: "CHECKING" },
+    });
+    const dopAccount = await prisma.account.create({
+      data: { name: "Verify Suggest DOP", currency: "DOP", type: "CHECKING" },
+    });
+    const suggestCategory = await prisma.category.create({ data: { name: "Verify Suggest Cat", kind: "EXPENSE" } });
+    const suggestRow = (
+      date: Date,
+      amount: number,
+      note: string,
+      extra: Partial<{ accountId: string; currency: string; source: "MANUAL" | "CSV" | "RECURRING"; categoryId: string; type: "EXPENSE" | "INCOME"; isExtraordinary: boolean; externalId: string }> = {},
+    ) => ({
+      date,
+      amount,
+      currency: extra.currency ?? "USD",
+      type: extra.type ?? ("EXPENSE" as const),
+      accountId: extra.accountId ?? usdAccount.id,
+      categoryId: extra.categoryId ?? null,
+      note,
+      source: extra.source ?? ("CSV" as const),
+      externalId: extra.externalId,
+      isExtraordinary: extra.isExtraordinary ?? false,
+    });
+    const gymDates = [
+      civilDate(2026, 6, 1), civilDate(2026, 6, 16), civilDate(2026, 7, 1), civilDate(2026, 7, 16),
+      civilDate(2026, 7, 31), civilDate(2026, 8, 14), civilDate(2026, 9, 1), civilDate(2026, 9, 16),
+    ];
+    const boxDates = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => civilDate(2026, 6, 5 + 14 * i));
+    await prisma.transaction.createMany({
+      data: [
+        ...gymDates.map((date) => suggestRow(date, 25, "VERIFY GYM PLANET FITNESS 1234")),
+        ...boxDates.map((date) => suggestRow(date, 12.5, "VERIFY BOX BLUE APRON")),
+        ...[civilDate(2026, 7, 12), civilDate(2026, 8, 12), civilDate(2026, 9, 12)].map((date) =>
+          suggestRow(date, 9.99, "VERIFY STREAM NETFLIX.COM 866-579-7172", { source: "MANUAL", categoryId: suggestCategory.id }),
+        ),
+        ...[civilDate(2026, 7, 3), civilDate(2026, 8, 3), civilDate(2026, 9, 3)].map((date) =>
+          suggestRow(date, 1500, "VERIFY PHONE CLARO", { accountId: dopAccount.id, currency: "DOP" }),
+        ),
+        // Noise that must not count: a posted occurrence, a confirmed
+        // one-off, income at the same merchant, and a merchant seen twice.
+        suggestRow(civilDate(2026, 9, 10), 25, "VERIFY GYM PLANET FITNESS 1234", { source: "RECURRING", externalId: "verify-suggest-item:2026-09-10" }),
+        suggestRow(civilDate(2026, 9, 12), 12.5, "VERIFY BOX BLUE APRON", { isExtraordinary: true }),
+        suggestRow(civilDate(2026, 9, 13), 25, "VERIFY GYM PLANET FITNESS 1234", { type: "INCOME" }),
+        suggestRow(civilDate(2026, 8, 20), 5.99, "VERIFY TWICE SPOTIFY"),
+        suggestRow(civilDate(2026, 9, 20), 5.99, "VERIFY TWICE SPOTIFY"),
+      ],
+    });
+    const seededCount = await prisma.transaction.count({ where: { accountId: { in: [usdAccount.id, dopAccount.id] } } });
+
+    const suggestions = await findRecurringSuggestions(suggestContext);
+    const mine = suggestions.filter((row) => row.merchantKey.startsWith("VERIFY "));
+    eq(
+      "the four patterns are suggested, most charges first then by name; Spotify's two charges are not",
+      mine.map((row) => `${row.name}:${row.cadence}:${row.occurrences.length}`).join("|"),
+      "Verify Box Blue Apron:BIWEEKLY:8|Verify Gym Planet Fitness:SEMI_MONTHLY:8|Verify Phone Claro:MONTHLY:3|Verify Stream Netflix Com:MONTHLY:3",
+    );
+    const gymSuggestion = mine.find((row) => row.merchantKey === "VERIFY GYM PLANET FITNESS");
+    const boxSuggestion = mine.find((row) => row.merchantKey === "VERIFY BOX BLUE APRON");
+    const netflixSuggestion = mine.find((row) => row.merchantKey === "VERIFY STREAM NETFLIX COM");
+    const claroSuggestion = mine.find((row) => row.merchantKey === "VERIFY PHONE CLARO");
+    eq("the posted occurrence and the income row at the gym were not evidence", gymSuggestion?.occurrences.length, 8);
+    eq("the gym is anchored on the 1st and 16th, next due Oct 1 and Oct 16", `${gymSuggestion?.anchorDays.join(",")} ${gymSuggestion?.nextDates.map(toISODate).join(",")}`, "1,16 2026-10-01,2026-10-16");
+    eq("the one-off at the box was not evidence", boxSuggestion?.occurrences.length, 8);
+    eq("each suggestion names its account", `${gymSuggestion?.accountName}/${claroSuggestion?.accountName}`, "Verify Suggest USD/Verify Suggest DOP");
+    eq("... and its category when the charges have one", `${netflixSuggestion?.categoryName}/${gymSuggestion?.categoryName}`, "Verify Suggest Cat/null");
+    eq("... and converts the amount to the display currency (1,500 DOP at 60 = 25 USD)", `${claroSuggestion?.amount} ${claroSuggestion?.currency} = ${claroSuggestion?.displayAmount}`, "1500 DOP = 25");
+    eq("finding suggestions wrote nothing", await prisma.transaction.count({ where: { accountId: { in: [usdAccount.id, dopAccount.id] } } }), seededCount);
+    eq("... and created no recurring item", await prisma.recurringItem.count({ where: { name: { startsWith: "Verify Suggest" } } }), 0);
+
+    console.log("-- accepting creates the real item(s) through the shared creation path --");
+    const acceptedNetflix = await acceptRecurringSuggestion({ accountId: usdAccount.id, merchantKey: "VERIFY STREAM NETFLIX COM" }, suggestContext);
+    check("accepting the monthly one succeeds", acceptedNetflix.ok, JSON.stringify(acceptedNetflix));
+    const netflixItems = await prisma.recurringItem.findMany({ where: { name: { startsWith: "Verify Stream Netflix" } } });
+    eq("... creating exactly one RecurringItem", netflixItems.length, 1);
+    const netflixItem = netflixItems[0];
+    eq("... named after the merchant", netflixItem?.name, "Verify Stream Netflix Com");
+    eq("... as an active monthly subscription at the last charged amount", `${netflixItem?.kind}/${netflixItem?.frequency}/${num(netflixItem!.amount)} ${netflixItem?.currency}/${netflixItem?.active}`, "SUBSCRIPTION/MONTHLY/9.99 USD/true");
+    eq("... due next on Oct 12 and anchored on the 12th", `${toISODate(netflixItem!.nextDate)}/${netflixItem?.anchorDay}`, "2026-10-12/12");
+    eq("... charged to the charges' account and filed under their category", `${netflixItem?.accountId === usdAccount.id}/${netflixItem?.categoryId === suggestCategory.id}`, "true/true");
+    eq("... open-ended, not from Afford, and marked as detected from manual entries", `${netflixItem?.remainingOccurrences}/${netflixItem?.fromAfford}/${netflixItem?.detectedFrom}`, "null/false/MANUAL");
+    eq("... with the latest raw description as its note", netflixItem?.note, "VERIFY STREAM NETFLIX.COM 866-579-7172");
+    check("the item is now what tracks the pattern, so it is no longer suggested", !(await findRecurringSuggestions(suggestContext)).some((row) => row.merchantKey === "VERIFY STREAM NETFLIX COM"));
+    const acceptedTwice = await acceptRecurringSuggestion({ accountId: usdAccount.id, merchantKey: "VERIFY STREAM NETFLIX COM" }, suggestContext);
+    eq("accepting it again finds nothing to accept, and creates nothing", `${JSON.stringify(acceptedTwice)}/${await prisma.recurringItem.count({ where: { name: { startsWith: "Verify Stream Netflix" } } })}`, '{"ok":false,"reason":"not_found"}/1');
+
+    const acceptedGym = await acceptRecurringSuggestion({ accountId: usdAccount.id, merchantKey: "VERIFY GYM PLANET FITNESS" }, suggestContext);
+    check("accepting the semi-monthly one succeeds", acceptedGym.ok, JSON.stringify(acceptedGym));
+    const gymItems = await prisma.recurringItem.findMany({ where: { name: { startsWith: "Verify Gym Planet Fitness" } } });
+    eq("... as one real SEMI_MONTHLY item, not two MONTHLY ones", gymItems.length, 1);
+    const gymItem = gymItems[0];
+    eq("... named after the merchant, with no per-day suffix", gymItem?.name, "Verify Gym Planet Fitness");
+    eq("... anchored on both due days", `${gymItem?.anchorDay}/${gymItem?.secondAnchorDay}`, "1/16");
+    eq(
+      // The candidate's two next-dates are Oct 1 and Oct 16 in that order
+      // here, so the earlier one (Oct 1) is exactly recurringItemForCandidate's
+      // usual, non-flipped case.
+      "... due next on the earlier of its two upcoming occurrences (Oct 1)",
+      toISODate(gymItem!.nextDate),
+      "2026-10-01",
+    );
+    eq("... at the charged amount, on the charges' account, detected from CSV", `${num(gymItem!.amount)}/${gymItem?.accountId === usdAccount.id}/${gymItem?.detectedFrom}`, "25/true/CSV");
+    // Nov 1 2026 is a Sunday, so that occurrence's real date shifts back to
+    // Oct 30 (Friday) - exactly the weekend rule this walk exists to apply.
+    eq("... and owedOccurrences now walks it correctly, alternating both anchors with the real weekend shifts", owedOccurrences(gymItem!, civilDate(2026, 10, 1), civilDate(2026, 11, 1)).map(toISODate).join(","), "2026-10-01,2026-10-16,2026-10-30");
+    check("the gym is no longer suggested either", !(await findRecurringSuggestions(suggestContext)).some((row) => row.merchantKey === "VERIFY GYM PLANET FITNESS"));
+    eq("nothing was posted by accepting: the next date is in the future", await prisma.transaction.count({ where: { source: "RECURRING", externalId: { startsWith: `${gymItem!.id}:` } } }), 0);
+
+    console.log("-- recurringItemForCandidate: nextDate is the chronologically sooner anchor, not always index 0 (pure) --");
+    {
+      const baseCandidate = {
+        accountId: "acc_1",
+        merchantKey: "VERIFY PURE GYM",
+        name: "Verify Pure Gym",
+        amount: 40,
+        currency: "USD",
+        cadence: "SEMI_MONTHLY" as const,
+        categoryId: null,
+        detectedFrom: "CSV" as const,
+        sampleNote: "VERIFY PURE GYM",
+        occurrences: [],
+      };
+      // Detection reports one next-date per anchor, in anchorDays' own
+      // (smaller-day-first) order - here [anchor 1's next: Nov 1, anchor
+      // 16's next: Oct 16], which is *not* chronological order.
+      const flipped = recurringItemForCandidate({
+        ...baseCandidate,
+        anchorDays: [1, 16],
+        nextDates: [civilDate(2026, 11, 1), civilDate(2026, 10, 16)],
+      });
+      eq("the earlier of the two (Oct 16) is picked, not nextDates[0] blindly", toISODate(flipped.nextDate as Date), "2026-10-16");
+      eq("anchorDay/secondAnchorDay still come from anchorDays directly, unaffected by the flip", `${flipped.anchorDay}/${flipped.secondAnchorDay}`, "1/16");
+      const ordinary = recurringItemForCandidate({
+        ...baseCandidate,
+        anchorDays: [1, 16],
+        nextDates: [civilDate(2026, 10, 1), civilDate(2026, 10, 16)],
+      });
+      eq("the ordinary (already-sorted) case is unaffected", toISODate(ordinary.nextDate as Date), "2026-10-01");
+      const monthly = recurringItemForCandidate({ ...baseCandidate, cadence: "MONTHLY", anchorDays: [12], nextDates: [civilDate(2026, 10, 12)] });
+      eq("a single-date cadence is unaffected", `${toISODate(monthly.nextDate as Date)}/${monthly.secondAnchorDay}`, "2026-10-12/null");
+    }
+
+    console.log("-- dismissing is permanent --");
+    await dismissRecurringSuggestion({ accountId: usdAccount.id, merchantKey: "VERIFY BOX BLUE APRON" });
+    check("a dismissed pattern is gone from the suggestions", !(await findRecurringSuggestions(suggestContext)).some((row) => row.merchantKey === "VERIFY BOX BLUE APRON"));
+    await prisma.transaction.createMany({
+      data: [civilDate(2026, 9, 25), civilDate(2026, 10, 9)].map((date) => suggestRow(date, 12.5, "VERIFY BOX BLUE APRON")),
+    });
+    check("... and stays gone as more matching charges arrive", !(await findRecurringSuggestions(suggestContext)).some((row) => row.merchantKey === "VERIFY BOX BLUE APRON"));
+    await dismissRecurringSuggestion({ accountId: usdAccount.id, merchantKey: "VERIFY BOX BLUE APRON" });
+    eq("dismissing twice keeps one row", await prisma.recurringSuggestionDismissal.count({ where: { accountId: usdAccount.id } }), 1);
+    eq("accepting a dismissed pattern finds nothing", JSON.stringify(await acceptRecurringSuggestion({ accountId: usdAccount.id, merchantKey: "VERIFY BOX BLUE APRON" }, suggestContext)), '{"ok":false,"reason":"not_found"}');
+    eq("the other account's dismissals are untouched", await prisma.recurringSuggestionDismissal.count({ where: { accountId: dopAccount.id } }), 0);
+
+    console.log("-- an archived account's charges are left alone --");
+    await prisma.account.update({ where: { id: dopAccount.id }, data: { status: "ARCHIVED", archivedAt: new Date() } });
+    check("a pattern on an archived account is not suggested (the item could not post)", !(await findRecurringSuggestions(suggestContext)).some((row) => row.merchantKey === "VERIFY PHONE CLARO"));
+    eq("... and cannot be accepted", JSON.stringify(await acceptRecurringSuggestion({ accountId: dopAccount.id, merchantKey: "VERIFY PHONE CLARO" }, suggestContext)), '{"ok":false,"reason":"not_found"}');
+
+    await prisma.recurringItem.deleteMany({ where: { OR: [{ name: { startsWith: "Verify Stream Netflix" } }, { name: { startsWith: "Verify Gym Planet Fitness" } }] } });
+    await prisma.transaction.deleteMany({ where: { accountId: { in: [usdAccount.id, dopAccount.id] } } });
+    await prisma.account.deleteMany({ where: { id: { in: [usdAccount.id, dopAccount.id] } } });
+    eq("deleting the account removes its dismissals with it", await prisma.recurringSuggestionDismissal.count({ where: { accountId: usdAccount.id } }), 0);
+    await prisma.category.delete({ where: { id: suggestCategory.id } });
+    console.log("  ok   recurring suggestion fixtures removed");
   }
 
   console.log("\n== cleanup ==");

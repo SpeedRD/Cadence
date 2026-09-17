@@ -1,9 +1,10 @@
-import { Calculator, PiggyBank, Plus, Repeat } from "lucide-react";
+import { Calculator, PiggyBank, Plus, Repeat, Sparkles } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/page-header";
 import { RecurringDialog } from "@/components/recurring/recurring-dialog";
 import { RecurringList } from "@/components/recurring/recurring-list";
+import { RecurringSuggestions } from "@/components/recurring/recurring-suggestions";
 import { EmptyState } from "@/components/stat";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +24,7 @@ import { formatMoney } from "@/lib/currency";
 import { getAffordRechecks } from "@/lib/data/afford";
 import { getAppContext } from "@/lib/data/context";
 import { listRecurringItems } from "@/lib/data/recurring";
+import { findRecurringSuggestions } from "@/lib/data/recurring-suggestions";
 import { toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
@@ -33,9 +35,10 @@ export default async function RecurringPage() {
   const context = await getAppContext();
   const t = getDictionary(context.language).recurring;
   const common = getDictionary(context.language).common;
-  const [data, rechecks, categories, accounts, goals] = await Promise.all([
+  const [data, rechecks, suggestions, categories, accounts, goals] = await Promise.all([
     listRecurringItems(context),
     getAffordRechecks(),
+    findRecurringSuggestions(context),
     prisma.category.findMany({
       orderBy: { name: "asc" },
       select: { id: true, name: true, color: true },
@@ -82,6 +85,30 @@ export default async function RecurringPage() {
           />
         }
       />
+
+      {/* Patterns in the organic ledger that look like an untracked bill
+          (src/lib/recurring-detection.ts), scanned on every load of this
+          page. Only here when there is something to review: each row is
+          added or dismissed by hand, and the section goes away on its own
+          once nothing is left. */}
+      {suggestions.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="size-4 text-primary" />
+              {t.suggestionsTitle}
+            </CardTitle>
+            <CardDescription>{t.suggestionsDescription(suggestions.length)}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RecurringSuggestions
+              suggestions={suggestions}
+              displayCurrency={currency}
+              locale={context.language}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card>

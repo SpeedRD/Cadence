@@ -173,6 +173,7 @@ async function ownCommitmentInPeriod(
       frequency: true,
       nextDate: true,
       anchorDay: true,
+      secondAnchorDay: true,
       remainingOccurrences: true,
       accountId: true,
       kind: true,

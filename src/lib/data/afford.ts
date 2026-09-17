@@ -297,6 +297,7 @@ async function loadScheduledCommitments(
         frequency: true,
         nextDate: true,
         anchorDay: true,
+        secondAnchorDay: true,
         remainingOccurrences: true,
         accountId: true,
         kind: true,
@@ -652,6 +653,11 @@ const TRACKED_ITEM_SELECT = {
   frequency: true,
   nextDate: true,
   anchorDay: true,
+  // A From Afford item is only ever created by confirmAffordPurchase, whose
+  // own frequency picker (AFFORD_FREQUENCIES) excludes SEMI_MONTHLY - so this
+  // is always null in practice. Selected anyway so this row is a complete
+  // ScheduledItem, matching every other real RecurringItem select.
+  secondAnchorDay: true,
   remainingOccurrences: true,
   accountId: true,
   active: true,

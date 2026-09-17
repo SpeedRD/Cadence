@@ -22,7 +22,7 @@ import {
 import { formatMoney } from "@/lib/currency";
 import { formatDate, fromISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
-import { RECURRING_FREQUENCIES } from "@/lib/labels";
+import { AFFORD_FREQUENCIES } from "@/lib/labels";
 import { round2 } from "@/lib/money";
 import { periodForDate } from "@/lib/period";
 import { confirmAffordAction, evaluateAffordAction } from "@/server/actions/afford";
@@ -80,7 +80,7 @@ export function AffordCalculator({
   const amount = equalInstallmentAmount(total, count);
   const firstDateParsed = fromISODate(firstDate);
   const dates = firstDateParsed
-    ? installmentDates(firstDateParsed, frequency as (typeof RECURRING_FREQUENCIES)[number], count)
+    ? installmentDates(firstDateParsed, frequency as (typeof AFFORD_FREQUENCIES)[number], count)
     : [];
   const installments = amount > 0 ? buildInstallments(dates, amount) : [];
   const installmentsTotal = round2(amount * count);
@@ -210,7 +210,7 @@ export function AffordCalculator({
                 <EnumSelect
                   id="afford-frequency"
                   name="frequency"
-                  options={RECURRING_FREQUENCIES}
+                  options={AFFORD_FREQUENCIES}
                   labels={common.frequencyLabels}
                   defaultValue={frequency}
                   onValueChange={setFrequency}

@@ -43,7 +43,7 @@ export function remainingInstallments(
       amount: round2(amount),
       periodKey: cursor.getTime() < today.getTime() ? currentPeriodKey : periodForDate(cursor).key,
     });
-    cursor = advanceDate(cursor, item.frequency, item.anchorDay);
+    cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
   }
   return rows;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { FormDialog } from "@/components/form/form-dialog";
 import { Field } from "@/components/form/field";
@@ -11,10 +11,13 @@ import {
   EnumSelect,
   type Option,
 } from "@/components/form/selects";
+import { ExtraordinaryPrompt } from "@/components/transactions/extraordinary-prompt";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { saveTransactionAction } from "@/server/actions/transactions";
+
+import type { ActionState, ExtraordinarySuggestion } from "@/server/actions/utils";
 
 export interface TransactionFormValues {
   id?: string;
@@ -80,7 +83,20 @@ export function TransactionDialog({
     }
   }
 
+  // A save that created an unusually large expense comes back with a
+  // suggestion (ActionState.extraordinarySuggestion). The row is already
+  // saved, so the question is asked after the form has closed and toasted,
+  // in its own small dialog; only the "New transaction" instance, which the
+  // page keeps mounted, ever receives one - edits are never classified.
+  const [suggestion, setSuggestion] = useState<ExtraordinarySuggestion | null>(null);
+  const handleSuccess = useCallback((state: NonNullable<ActionState>) => {
+    setSuggestion(state.extraordinarySuggestion ?? null);
+  }, []);
+  const closeSuggestion = useCallback(() => setSuggestion(null), []);
+
   return (
+    <>
+    <ExtraordinaryPrompt suggestion={suggestion} onCloseAction={closeSuggestion} locale={locale} />
     <FormDialog
       title={editing ? t.editTransaction : t.newTransaction}
       description={
@@ -93,6 +109,7 @@ export function TransactionDialog({
       trigger={trigger}
       open={open}
       onOpenChange={setOpen}
+      onSuccess={handleSuccess}
     >
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
 
@@ -184,5 +201,6 @@ export function TransactionDialog({
         />
       </Field>
     </FormDialog>
+    </>
   );
 }

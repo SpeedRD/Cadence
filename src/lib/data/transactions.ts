@@ -37,6 +37,8 @@ export interface TransactionRow {
    * locks the row up front, as the actions would refuse it after the fact.
    */
   hasLinkedGoalContribution: boolean;
+  /** The user marked this expense as a one-off - see Transaction.isExtraordinary. */
+  isExtraordinary: boolean;
   note: string | null;
   transferId: string | null;
   transferDirection: string | null;
@@ -147,6 +149,7 @@ export async function listTransactions(
       source: transaction.source,
       externalId: transaction.externalId,
       hasLinkedGoalContribution: contributionKey !== null && pairedKeys.has(contributionKey),
+      isExtraordinary: transaction.isExtraordinary,
       note: transaction.note,
       transferId: transaction.transferId,
       transferDirection: transaction.transferDirection,

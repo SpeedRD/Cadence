@@ -126,6 +126,16 @@ function toTitleCase(key: string): string {
     .join(" ");
 }
 
+/**
+ * The name a merchant is shown under - its cleaned key in title case
+ * ("NETFLIX.COM 866-579-7172" -> "Netflix Com"). Shared with the recurring
+ * pattern detector (src/lib/recurring-detection.ts) so a suggestion there and
+ * a group card here name the same merchant the same way.
+ */
+export function merchantDisplayName(note: string): string {
+  return toTitleCase(cleanMerchantKey(note));
+}
+
 function dayGaps(dates: Date[]): number[] {
   const sorted = [...dates].sort((a, b) => a.getTime() - b.getTime());
   const gaps: number[] = [];
@@ -214,7 +224,7 @@ function buildGroup(
     // direction prefix (see the transfer bucket key below) to keep incoming
     // and outgoing groups distinct, but that's an internal identity detail
     // and must never leak into what the user sees.
-    displayName: toTitleCase(cleanMerchantKey(rows[0].note)),
+    displayName: merchantDisplayName(rows[0].note),
     sampleNote: rows[0].note,
     rowIndexes: rows.map((row) => row.index),
     count: rows.length,

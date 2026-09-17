@@ -52,6 +52,8 @@ export interface RecurringFormValues {
   active?: boolean;
   /** Payments still owed for a finite plan; null or undefined for an open-ended item. */
   remainingOccurrences?: number | null;
+  /** Only meaningful when frequency is SEMI_MONTHLY: the item's other due day each month. */
+  secondAnchorDay?: number | null;
 }
 
 export function RecurringDialog({
@@ -132,13 +134,19 @@ export function RecurringDialog({
   const updateRoomInputs = (patch: Partial<RoomInputs>) =>
     setRoomInputs((current) => ({ ...current, ...patch }));
 
-  // Only a subscription with an amount is checked; a contribution never is
-  // (its funding is planned per account in the payday check-in's Step 3).
-  // The last result stays on screen while a new one is in flight, so the
-  // panel does not flicker between keystrokes; the account pick only changes
-  // which row is marked, so it does not re-run the projection.
-  const shouldCheckRoom = open && kind === "SUBSCRIPTION" && roomInputs.amount.trim() !== "";
   const { amount, currency, frequency, nextDate } = roomInputs;
+  const isSemiMonthly = frequency === "SEMI_MONTHLY";
+  // Only a subscription with an amount is checked; a contribution never is
+  // (its funding is planned per account in the payday check-in's Step 3),
+  // and neither is a SEMI_MONTHLY item - the room check's own occurrence
+  // count (installmentDates in src/lib/afford.ts) walks a single anchor day
+  // and has no second one to work with, so a twice-a-month charge would be
+  // undercounted by half rather than checked correctly. The last result
+  // stays on screen while a new one is in flight, so the panel does not
+  // flicker between keystrokes; the account pick only changes which row is
+  // marked, so it does not re-run the projection.
+  const shouldCheckRoom =
+    open && kind === "SUBSCRIPTION" && frequency !== "SEMI_MONTHLY" && amount.trim() !== "";
   const itemId = values.id;
   useEffect(() => {
     if (!shouldCheckRoom) return;
@@ -283,6 +291,27 @@ export function RecurringDialog({
           />
         </Field>
       </div>
+
+      {isSemiMonthly ? (
+        <Field
+          label={t.secondDueDay}
+          htmlFor="recurring-second-anchor"
+          hint={t.secondDueDayHint}
+        >
+          <Input
+            id="recurring-second-anchor"
+            name="secondAnchorDay"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={31}
+            step={1}
+            className="font-mono"
+            defaultValue={values.secondAnchorDay ?? ""}
+            required
+          />
+        </Field>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label={common.category} htmlFor="recurring-category">

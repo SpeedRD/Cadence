@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { recomputeGoalSaved, removeContribution } from "@/lib/goals";
 import { checkReferences } from "@/lib/references";
 import {
+  canBeExtraordinary,
   manualContributionIdFromTransaction,
   recurringContributionKeyFromTransaction,
   transactionEditBlock,
@@ -21,7 +22,10 @@ import {
   transferSchema,
 } from "@/lib/validation";
 
-import { done, fail, revalidateApp, type ActionState } from "./utils";
+import { getAppContext } from "@/lib/data/context";
+import { findExtraordinaryCandidates } from "@/lib/data/extraordinary";
+
+import { done, fail, revalidateApp, type ActionState, type ExtraordinarySuggestion } from "./utils";
 
 export async function saveTransactionAction(
   _previous: ActionState,
@@ -62,11 +66,63 @@ export async function saveTransactionAction(
     }
     await prisma.transaction.update({ where: { id }, data: values });
   } else {
-    await prisma.transaction.create({ data: { ...values, source: "MANUAL" } });
+    // Measured before the row lands so it is not its own history. The row is
+    // saved unflagged whatever the verdict; a hit only asks the form to put
+    // the question to the user (see src/lib/extraordinary.ts).
+    const suggestion =
+      values.type === "EXPENSE" && values.categoryId
+        ? await findExtraordinaryCandidates(
+            [{ key: "new", categoryId: values.categoryId, amount: values.amount, currency: values.currency }],
+            await getAppContext(),
+          )
+        : null;
+    const created = await prisma.transaction.create({ data: { ...values, source: "MANUAL" } });
+    const hit = suggestion?.get("new");
+    if (hit) {
+      const extraordinarySuggestion: ExtraordinarySuggestion = {
+        transactionId: created.id,
+        amount: values.amount,
+        currency: values.currency,
+        categoryName: hit.categoryName,
+        median: hit.median,
+        medianCurrency: hit.currency,
+      };
+      revalidateApp();
+      return done(t.transactionAdded, { extraordinarySuggestion });
+    }
   }
 
   revalidateApp();
   return done(id ? t.transactionUpdated : t.transactionAdded);
+}
+
+/**
+ * The user's own verdict on one expense: mark it as a one-off, or take the
+ * mark back. Available from the Transactions page on any organic expense,
+ * whether or not the threshold ever suggested it - the only way the flag is
+ * ever written. A RECURRING row is refused: its amount is scheduled, not
+ * organic, so there is nothing to classify (see canBeExtraordinary).
+ */
+export async function setExtraordinaryAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).transactions;
+  const id = String(formData.get("id") ?? "").trim();
+  const isExtraordinary = String(formData.get("isExtraordinary") ?? "") === "true";
+  if (!id) return fail(t.transactionNoLongerExists);
+
+  const existing = await prisma.transaction.findUnique({ where: { id } });
+  if (!existing) return fail(t.transactionNoLongerExists);
+  if (!canBeExtraordinary(existing)) return fail(t.extraordinaryNotApplicable);
+
+  await prisma.transaction.update({ where: { id }, data: { isExtraordinary } });
+
+  revalidateApp();
+  return done(isExtraordinary ? t.markedExtraordinary : t.unmarkedExtraordinary);
 }
 
 export async function deleteTransactionAction(

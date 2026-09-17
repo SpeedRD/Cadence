@@ -13,6 +13,14 @@ export interface CategoryLine {
   name: string;
   color: string;
   spent: number;
+  /**
+   * The part of `spent` from transactions the user confirmed as extraordinary
+   * (Transaction.isExtraordinary). Still real spending, so it stays inside
+   * `spent` for every actual figure; the payday planner's category average
+   * subtracts it to estimate typical spending. 0 on a line built from rows
+   * that already left such transactions out.
+   */
+  extraordinarySpent: number;
   budget: number | null;
 }
 
@@ -103,6 +111,7 @@ export async function getPeriodSummary(
         type: true,
         source: true,
         categoryId: true,
+        isExtraordinary: true,
       },
     }),
     prisma.category.findMany({ orderBy: { name: "asc" } }),
@@ -167,6 +176,9 @@ export async function getPeriodSummary(
   );
 
   const spentByCategory = new Map<string | null, number>();
+  // Confirmed one-offs, by the same key: reported beside each line's spending
+  // (never subtracted from it) so an average can leave them out.
+  const extraordinaryByCategory = new Map<string | null, number>();
   let spent = 0;
   let totalSpent = 0;
   let income = 0;
@@ -185,6 +197,9 @@ export async function getPeriodSummary(
         ? transaction.categoryId
         : null;
     spentByCategory.set(key, (spentByCategory.get(key) ?? 0) + amount);
+    if (transaction.isExtraordinary) {
+      extraordinaryByCategory.set(key, (extraordinaryByCategory.get(key) ?? 0) + amount);
+    }
 
     const outsideBudget =
       transaction.source === "RECURRING" ||
@@ -245,6 +260,7 @@ export async function getPeriodSummary(
       name: category.name,
       color: category.color,
       spent: round2(spentByCategory.get(category.id) ?? 0),
+      extraordinarySpent: round2(extraordinaryByCategory.get(category.id) ?? 0),
       budget: budgetByCategory.get(category.id) ?? null,
     }));
 
@@ -255,6 +271,7 @@ export async function getPeriodSummary(
       name: "Uncategorized",
       color: "#7a8590",
       spent: round2(uncategorized),
+      extraordinarySpent: round2(extraordinaryByCategory.get(null) ?? 0),
       budget: null,
     });
   }

@@ -104,6 +104,25 @@ export function transactionEditBlock(row: {
   return null;
 }
 
+/**
+ * Rows the user may mark as a one-off (Transaction.isExtraordinary, see
+ * src/lib/extraordinary.ts): organic expenses only. A RECURRING row's amount
+ * is scheduled, not organic, so it is never classified; income, transfers and
+ * opening balances are not spending at all. The expense a goal contribution
+ * wrote is savings, not a purchase. Defined here, without a database import,
+ * so the transaction table offers the toggle on exactly the rows the action
+ * accepts.
+ */
+export function canBeExtraordinary(row: {
+  type: string;
+  source: string;
+  externalId: string | null;
+}): boolean {
+  if (row.type !== "EXPENSE") return false;
+  if (row.source === "RECURRING") return false;
+  return manualContributionIdFromTransaction(row) === null;
+}
+
 export interface TransferLeg {
   amount: number;
   currency: string;

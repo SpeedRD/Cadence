@@ -1,13 +1,15 @@
 "use client";
 
-import { Lock, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Lock, MoreHorizontal, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { startTransition, useActionState, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { ConfirmDelete } from "@/components/form/confirm-delete";
 import type { Option } from "@/components/form/selects";
 import { SourceBadge } from "@/components/source-badge";
 import { TransactionDialog } from "@/components/transactions/transaction-dialog";
 import { TransferDialog } from "@/components/transactions/transfer-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -26,8 +28,8 @@ import {
 import { formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
-import { transactionEditBlock } from "@/lib/transactions";
-import { deleteTransactionAction } from "@/server/actions/transactions";
+import { canBeExtraordinary, transactionEditBlock } from "@/lib/transactions";
+import { deleteTransactionAction, setExtraordinaryAction } from "@/server/actions/transactions";
 import { cn } from "@/lib/utils";
 
 import type { TransactionRow } from "@/lib/data/transactions";
@@ -116,6 +118,23 @@ export function TransactionTable({
   const [editing, setEditing] = useState<TransactionRow | null>(null);
   const [deleting, setDeleting] = useState<TransactionRow | null>(null);
 
+  // The one-off toggle needs no input beyond the row, so it is one shared
+  // action for the whole table, fired straight from the row menu.
+  const [toggleState, toggleAction] = useActionState(setExtraordinaryAction, null);
+  const handledToggle = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!toggleState || toggleState.at === handledToggle.current) return;
+    handledToggle.current = toggleState.at;
+    if (toggleState.ok) toast.success(toggleState.message ?? common.saved);
+    else if (toggleState.error) toast.error(toggleState.error);
+  }, [toggleState, common.saved]);
+  const toggleExtraordinary = (row: TransactionRow) => {
+    const formData = new FormData();
+    formData.set("id", row.id);
+    formData.set("isExtraordinary", row.isExtraordinary ? "false" : "true");
+    startTransition(() => toggleAction(formData));
+  };
+
   const editingTransfer = editing?.transferId ? editing : null;
   const editingPlain = editing && !editing.transferId ? editing : null;
 
@@ -153,16 +172,26 @@ export function TransactionTable({
                               ? t.openingBalance
                               : (row.categoryName ?? t.uncategorized))}
                     </span>
-                    {row.categoryName ? (
+                    {row.categoryName || row.isExtraordinary ? (
                       <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
-                        <span
-                          className="size-1.5 rounded-full"
-                          style={{
-                            backgroundColor:
-                              row.categoryColor ?? "var(--muted-foreground)",
-                          }}
-                        />
-                        {row.categoryName}
+                        {row.categoryName ? (
+                          <>
+                            <span
+                              className="size-1.5 rounded-full"
+                              style={{
+                                backgroundColor:
+                                  row.categoryColor ?? "var(--muted-foreground)",
+                              }}
+                            />
+                            {row.categoryName}
+                          </>
+                        ) : null}
+                        {row.isExtraordinary ? (
+                          <Badge variant="outline" className="h-4 px-1.5 text-[0.625rem]">
+                            <Sparkles className="size-2.5" />
+                            {t.extraordinaryBadge}
+                          </Badge>
+                        ) : null}
                       </span>
                     ) : null}
                   </div>
@@ -227,6 +256,15 @@ export function TransactionTable({
                             <DropdownMenuItem onSelect={() => setEditing(row)}>
                               <Pencil className="size-3.5" />
                               {common.edit}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {/* The one-off flag, on every organic expense
+                              (canBeExtraordinary), whether or not the
+                              threshold ever suggested it. */}
+                          {canBeExtraordinary(row) ? (
+                            <DropdownMenuItem onSelect={() => toggleExtraordinary(row)}>
+                              <Sparkles className="size-3.5" />
+                              {row.isExtraordinary ? t.unmarkExtraordinary : t.markExtraordinary}
                             </DropdownMenuItem>
                           ) : null}
                           <DropdownMenuItem

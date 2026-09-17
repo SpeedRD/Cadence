@@ -49,12 +49,25 @@ export const CATEGORY_KIND_LABELS: Record<string, string> = {
 export const RECURRING_FREQUENCIES = [
   "WEEKLY",
   "BIWEEKLY",
+  "SEMI_MONTHLY",
   "MONTHLY",
   "YEARLY",
 ] as const;
+/**
+ * RECURRING_FREQUENCIES minus SEMI_MONTHLY, for the Afford calculator's own
+ * frequency picker. Afford's installment walk (installmentDates in
+ * src/lib/afford.ts) has only ever taken one anchor day; giving a semi-
+ * monthly installment plan its own due-day pair is a different feature this
+ * app doesn't have, so the calculator simply never offers the option rather
+ * than silently mis-computing an installment schedule for it.
+ */
+export const AFFORD_FREQUENCIES = RECURRING_FREQUENCIES.filter(
+  (frequency) => frequency !== "SEMI_MONTHLY",
+);
 export const FREQUENCY_LABELS: Record<string, string> = {
   WEEKLY: "Weekly",
   BIWEEKLY: "Every 2 weeks",
+  SEMI_MONTHLY: "Twice a month",
   MONTHLY: "Monthly",
   YEARLY: "Yearly",
 };

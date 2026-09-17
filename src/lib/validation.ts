@@ -267,6 +267,9 @@ export const budgetSchema = z.object({
  * submitted (a stale pick from switching Kind back never survives).
  */
 const REMAINING_OCCURRENCES_MESSAGE = `Leave payments left blank, or use between 1 and ${MAX_INSTALLMENTS}`;
+const SECOND_ANCHOR_DAY_REQUIRED_MESSAGE = "Pick the second due day";
+const SECOND_ANCHOR_DAY_RANGE_MESSAGE = "Use a day from 1 to 31";
+const SECOND_ANCHOR_DAY_DISTINCT_MESSAGE = "Pick two different days";
 
 export const recurringSchema = z
   .object({
@@ -332,6 +335,26 @@ export const recurringSchema = z
       .trim()
       .optional()
       .transform((value) => value === "on" || value === "true"),
+    /**
+     * RecurringItem.secondAnchorDay - only meaningful (and required) when
+     * frequency is SEMI_MONTHLY, the item's other due day each month. Unlike
+     * anchorDay it is never derived from a date field: the form collects it
+     * directly as a plain day-of-month, so an edit that leaves it alone
+     * resubmits the same stored value rather than needing a re-anchor guard.
+     */
+    secondAnchorDay: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value, ctx) => {
+        if (!value) return null;
+        const day = Number(value);
+        if (!Number.isInteger(day) || day < 1 || day > 31) {
+          ctx.addIssue({ code: "custom", message: SECOND_ANCHOR_DAY_RANGE_MESSAGE });
+          return z.NEVER;
+        }
+        return day;
+      }),
   })
   .transform(({ originalNextDate, ...value }, ctx) => {
     if (value.accountId === null) {
@@ -353,14 +376,32 @@ export const recurringSchema = z
       originalNextDate !== null &&
       originalNextDate.getTime() === value.nextDate.getTime();
     const anchorDay = dateUnchanged ? undefined : value.nextDate.getUTCDate();
+    // Required only for SEMI_MONTHLY, and dropped for every other frequency
+    // regardless of what was submitted - the same "a stale value left over
+    // from switching Kind back never survives" rule goalId already follows.
+    // Checked against the *typed* due date's own day (not `anchorDay`, which
+    // may be undefined on an unchanged edit) since that's always available
+    // and is exactly what the second day would otherwise collide with.
+    let secondAnchorDay: number | null = null;
+    if (value.frequency === "SEMI_MONTHLY") {
+      if (value.secondAnchorDay === null) {
+        ctx.addIssue({ code: "custom", message: SECOND_ANCHOR_DAY_REQUIRED_MESSAGE, path: ["secondAnchorDay"] });
+        return z.NEVER;
+      }
+      if (value.secondAnchorDay === value.nextDate.getUTCDate()) {
+        ctx.addIssue({ code: "custom", message: SECOND_ANCHOR_DAY_DISTINCT_MESSAGE, path: ["secondAnchorDay"] });
+        return z.NEVER;
+      }
+      secondAnchorDay = value.secondAnchorDay;
+    }
     if (value.kind === "CONTRIBUTION") {
       if (value.goalId === null) {
         ctx.addIssue({ code: "custom", message: "Pick a goal", path: ["goalId"] });
         return z.NEVER;
       }
-      return { ...value, anchorDay, accountId: value.accountId, goalId: value.goalId };
+      return { ...value, anchorDay, secondAnchorDay, accountId: value.accountId, goalId: value.goalId };
     }
-    return { ...value, anchorDay, accountId: value.accountId, goalId: null };
+    return { ...value, anchorDay, secondAnchorDay, accountId: value.accountId, goalId: null };
   });
 
 export const goalSchema = z.object({
@@ -428,6 +469,17 @@ export const settingsSchema = z.object({
 export const recurringAccountSchema = z.object({
   id: z.string().trim().min(1),
   accountId: z.string().trim().min(1, "Pick an account"),
+});
+
+/**
+ * A recurring-pattern suggestion's identity (see SuggestionRef in
+ * src/lib/data/recurring-suggestions.ts): the only thing the Recurring
+ * page's Add/Dismiss buttons send. Everything the item is created from is
+ * re-derived on the server.
+ */
+export const suggestionRefSchema = z.object({
+  accountId: z.string().trim().min(1),
+  merchantKey: z.string().trim().min(1),
 });
 
 /**
@@ -656,6 +708,9 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Use between 1 and 120 installments": "Usa entre 1 y 120 cuotas",
   "Leave payments left blank, or use between 1 and 120":
     "Deja los pagos restantes en blanco, o usa entre 1 y 120",
+  "Pick the second due day": "Elige el segundo día de vencimiento",
+  "Use a day from 1 to 31": "Usa un día del 1 al 31",
+  "Pick two different days": "Elige dos días diferentes",
   "That price is too small to split into that many installments":
     "Ese precio es demasiado pequeño para dividirlo en tantas cuotas",
 };

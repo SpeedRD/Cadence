@@ -80,6 +80,10 @@ enum PayPeriod {
 enum RecurringFrequency {
   WEEKLY
   BIWEEKLY
+  /// Twice a month, on two independent days (RecurringItem.anchorDay and
+  /// .secondAnchorDay), each weekend-shifted the way a payday is - see
+  /// advanceDate() in src/lib/recurring.ts.
+  SEMI_MONTHLY
   MONTHLY
   YEARLY
 }
@@ -116,19 +120,20 @@ model Settings {
 }
 
 model Account {
-  id                 String                  @id @default(cuid())
-  name               String
-  currency           String
-  type               AccountType             @default(CHECKING)
-  status             AccountStatus           @default(ACTIVE)
-  archivedAt         DateTime?
-  createdAt          DateTime                @default(now())
-  transactions       Transaction[]
-  stagedTransactions StagedTransaction[]
-  paydaySnapshots    PaydayAccountSnapshot[]
-  paydayAllocations  PaydayPlanAllocation[]
-  recurringItems     RecurringItem[]
-  goalContributions  GoalContribution[]
+  id                            String                         @id @default(cuid())
+  name                          String
+  currency                      String
+  type                          AccountType                    @default(CHECKING)
+  status                        AccountStatus                  @default(ACTIVE)
+  archivedAt                    DateTime?
+  createdAt                     DateTime                       @default(now())
+  transactions                  Transaction[]
+  stagedTransactions            StagedTransaction[]
+  paydaySnapshots               PaydayAccountSnapshot[]
+  paydayAllocations             PaydayPlanAllocation[]
+  recurringItems                RecurringItem[]
+  goalContributions             GoalContribution[]
+  recurringSuggestionDismissals RecurringSuggestionDismissal[]
 
   @@index([name])
   @@index([status, name])
@@ -174,6 +179,11 @@ model Transaction {
   transferId        String?
   /// OUT on the source leg, IN on the destination leg, null otherwise.
   transferDirection TransferDirection?
+  /// A one-off the user confirmed as such (see src/lib/extraordinary.ts):
+  /// left out of the averages that estimate typical spending - the payday
+  /// planner's category suggestions and Reports' monthly pace - while still
+  /// counting as real spending everywhere else. Only ever set by the user.
+  isExtraordinary   Boolean            @default(false)
   createdAt         DateTime           @default(now())
 
   account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
@@ -258,21 +268,27 @@ model Budget {
 /// pre-existing rows survive, but an item missing the link its kind needs is
 /// skipped (never advanced) by the posting job until the user sets it.
 model RecurringItem {
-  id           String             @id @default(cuid())
-  name         String
-  amount       Decimal            @db.Decimal(14, 2)
-  currency     String
-  frequency    RecurringFrequency
-  kind         RecurringKind
-  nextDate     DateTime           @db.Date
+  id                   String             @id @default(cuid())
+  name                 String
+  amount               Decimal            @db.Decimal(14, 2)
+  currency             String
+  frequency            RecurringFrequency
+  kind                 RecurringKind
+  nextDate             DateTime           @db.Date
   /// The day of the month this item is really due on. advanceDate() clamps to
   /// this rather than to the previous occurrence's day, so a short February can
   /// never drag every later occurrence back with it. Set from the date the user
   /// picks and only ever rewritten by an explicit edit - automatic posting
   /// never touches it. Null only for rows written outside the app, where
   /// posting falls back to the occurrence's own day (the pre-anchor behaviour).
-  anchorDay    Int?
-  active       Boolean            @default(true)
+  anchorDay            Int?
+  /// SEMI_MONTHLY only: the second of the item's two due days each month.
+  /// anchorDay and this are otherwise interchangeable - advanceDate() finds
+  /// each anchor's own next weekend-shifted realization and walks to
+  /// whichever comes sooner, so neither field is "first" in any ordering
+  /// sense. Null for every other frequency.
+  secondAnchorDay      Int?
+  active               Boolean            @default(true)
   /// How many more occurrences to post before the item switches itself off.
   /// Null means unbounded - every ordinary subscription or contribution, and
   /// every row that existed before this column. A number counts down by one
@@ -287,18 +303,20 @@ model RecurringItem {
   /// "Payments left" count - stays false. The Recurring page lists these
   /// under "From Afford" instead of Subscriptions, and re-checks each one
   /// still owing payments against current projections.
-  fromAfford   Boolean            @default(false)
-  categoryId   String?
+  fromAfford           Boolean            @default(false)
+  categoryId           String?
   /// The account each posted occurrence is charged to. Required for posting.
-  accountId    String?
+  accountId            String?
   /// CONTRIBUTION only: the goal each posted occurrence is logged against.
   /// Ignored for SUBSCRIPTION items.
-  goalId       String?
-  note         String?
-  /// Set by Phase 2 auto-detection; unused for now.
-  detectedFrom TransactionSource?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  goalId               String?
+  note                 String?
+  /// Where the charges that suggested this item came from (MANUAL or CSV),
+  /// set when the user accepts a suggestion on the Recurring page (see
+  /// src/lib/data/recurring-suggestions.ts). Null for an item entered by hand.
+  detectedFrom         TransactionSource?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
   category          Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   account           Account?               @relation(fields: [accountId], references: [id], onDelete: SetNull)
@@ -310,6 +328,23 @@ model RecurringItem {
   @@index([kind])
   @@index([accountId])
   @@index([goalId])
+}
+
+/// A recurring-pattern suggestion the user dismissed on the Recurring page:
+/// this merchant (the same cleaned key the CSV review groups by, see
+/// cleanMerchantKey in src/lib/import-grouping.ts) on this account is never
+/// suggested again, however many more matching charges arrive. Accepting a
+/// suggestion writes nothing here - the RecurringItem it creates is what
+/// stops it being suggested (see src/lib/recurring-detection.ts).
+model RecurringSuggestionDismissal {
+  id          String   @id @default(cuid())
+  accountId   String
+  merchantKey String
+  dismissedAt DateTime @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, merchantKey])
 }
 
 model Goal {
@@ -330,17 +365,17 @@ model Goal {
 }
 
 model GoalContribution {
-  id              String   @id @default(cuid())
-  goalId          String
-  amount          Decimal  @db.Decimal(14, 2)
-  currency        String
-  date            DateTime @db.Date
-  note            String?
+  id                  String   @id @default(cuid())
+  goalId              String
+  amount              Decimal  @db.Decimal(14, 2)
+  currency            String
+  date                DateTime @db.Date
+  note                String?
   /// Set only when recurring posting created this row automatically (see
   /// src/lib/recurring-posting.ts); null for manually-logged contributions.
   /// Only good for finding the item that is still there - the FK nulls this on
   /// delete, so classification must not depend on it (see recurringExternalId).
-  recurringItemId String?
+  recurringItemId     String?
   /// The externalId of the Transaction this row was posted alongside, i.e.
   /// "<recurringItemId>:<YYYY-MM-DD>". A plain string with no foreign key, so
   /// deleting the RecurringItem cannot erase it the way it erases
@@ -355,8 +390,8 @@ model GoalContribution {
   /// Null for rows logged before contributions moved real money (nothing to
   /// backfill: they never had a source account) and for auto-posted rows,
   /// whose account is the RecurringItem's.
-  accountId       String?
-  createdAt       DateTime @default(now())
+  accountId           String?
+  createdAt           DateTime @default(now())
 
   goal          Goal           @relation(fields: [goalId], references: [id], onDelete: Cascade)
   recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)

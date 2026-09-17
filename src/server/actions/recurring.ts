@@ -10,10 +10,21 @@ import {
   recurringAccountSchema,
   recurringSchema,
   subscriptionRoomSchema,
+  suggestionRefSchema,
 } from "@/lib/validation";
 
 import { getAppContext } from "@/lib/data/context";
-import { markRecurringItemPaidOff, setRecurringItemAccount } from "@/lib/data/recurring";
+import {
+  checkRecurringReferences,
+  createRecurringItem,
+  markRecurringItemPaidOff,
+  setRecurringItemAccount,
+  type RecurringReferenceProblem,
+} from "@/lib/data/recurring";
+import {
+  acceptRecurringSuggestion,
+  dismissRecurringSuggestion,
+} from "@/lib/data/recurring-suggestions";
 import { checkSubscriptionRoom, type SubscriptionRoom } from "@/lib/data/subscription-room";
 import { isFinishedPlan } from "@/lib/recurring";
 
@@ -32,31 +43,9 @@ export async function saveRecurringAction(
 
   const { id, updatedAt, ...values } = parsed.data;
 
-  // Posting refuses an item on an archived account, so saving one here would
-  // create something that silently never posts. Checking the category and goal
-  // too keeps a stale id from arriving as a raw foreign-key error.
-  const account = await prisma.account.findUnique({
-    where: { id: values.accountId },
-    select: { status: true },
-  });
-  if (!account) return fail(t.accountNoLongerActive);
-  if (account.status !== "ACTIVE") return fail(t.accountNoLongerActive);
-  if (values.categoryId) {
-    const category = await prisma.category.findUnique({
-      where: { id: values.categoryId },
-      select: { id: true },
-    });
-    if (!category) return fail(t.categoryNoLongerExists);
-  }
-  if (values.goalId) {
-    const goal = await prisma.goal.findUnique({
-      where: { id: values.goalId },
-      select: { id: true },
-    });
-    if (!goal) return fail(t.goalNoLongerExists);
-  }
-
   if (id) {
+    const problem = await checkRecurringReferences(values);
+    if (problem) return fail(referenceProblemMessage(problem, t));
     // This form posts every field, including ones it only read. If something
     // else changed the item while the form was open - the payday wizard
     // reassigning its account in another tab is the case that bites - saving
@@ -75,11 +64,21 @@ export async function saveRecurringAction(
       return fail(stillThere ? t.itemChangedElsewhere : t.itemNoLongerExists);
     }
   } else {
-    await prisma.recurringItem.create({ data: values });
+    const created = await createRecurringItem(values);
+    if (!created.ok) return fail(referenceProblemMessage(created.problem, t));
   }
 
   revalidateApp();
   return done(id ? t.itemUpdated : t.itemAdded);
+}
+
+function referenceProblemMessage(
+  problem: RecurringReferenceProblem,
+  t: ReturnType<typeof getDictionary>["recurring"],
+): string {
+  if (problem === "category") return t.categoryNoLongerExists;
+  if (problem === "goal") return t.goalNoLongerExists;
+  return t.accountNoLongerActive;
 }
 
 export async function deleteRecurringAction(
@@ -167,6 +166,55 @@ export async function reassignRecurringAccountAction(
 
   revalidateApp();
   return done(t.itemUpdated);
+}
+
+/**
+ * "Add as recurring" on a pattern suggestion. The form carries only the
+ * suggestion's identity; the item's name, amount, cadence and dates come
+ * from detection re-run against the ledger now, through the same creation
+ * path the Recurring form uses. Nothing is ever created without this click.
+ */
+export async function acceptRecurringSuggestionAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).recurring;
+  const parsed = suggestionRefSchema.safeParse(formObject(formData));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
+
+  const result = await acceptRecurringSuggestion(parsed.data, await getAppContext());
+  if (!result.ok) {
+    return fail(result.reason === "not_found" ? t.suggestionGone : referenceProblemMessage(result.reason, t));
+  }
+
+  revalidateApp();
+  return done(t.suggestionAdded(result.candidate.name));
+}
+
+/** "Dismiss" on a pattern suggestion: it is never suggested again for that account. */
+export async function dismissRecurringSuggestionAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).recurring;
+  const parsed = suggestionRefSchema.safeParse(formObject(formData));
+  if (!parsed.success) return fail(firstError(parsed.error, locale));
+
+  const account = await prisma.account.findUnique({
+    where: { id: parsed.data.accountId },
+    select: { id: true },
+  });
+  if (!account) return fail(t.suggestionGone);
+  await dismissRecurringSuggestion(parsed.data);
+
+  revalidateApp();
+  return done(t.suggestionDismissed);
 }
 
 export type SubscriptionRoomResult = { ok: true; room: SubscriptionRoom } | { ok: false };

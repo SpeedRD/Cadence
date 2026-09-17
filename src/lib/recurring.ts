@@ -1,4 +1,5 @@
 import { addDays, civilDate, daysInMonth } from "@/lib/date";
+import { payDayOfMonth } from "@/lib/period";
 
 import type { RecurringFrequency } from "@/generated/prisma/enums";
 
@@ -19,24 +20,90 @@ function occurrenceAfter(date: Date, months: number, anchorDay: number): Date {
 }
 
 /**
+ * `anchor`'s realization `monthsAhead` months after `date`'s own month (0 =
+ * the same month), weekend-shifted the way a pay boundary is - Saturday
+ * pulled back a day, Sunday two (src/lib/period.ts's own payDayOfMonth,
+ * reused directly rather than re-implemented here). That shift can spill
+ * into the previous calendar month (an anchor of 1 falling on a Saturday
+ * lands on the last day of the month before) - civilDate()'s day-overflow
+ * handling resolves that correctly, the same way it resolves anchorDay 31
+ * clamped to a short month.
+ */
+function semiMonthlyRealization(date: Date, monthsAhead: number, anchor: number): Date {
+  const monthIndex = date.getUTCMonth() + monthsAhead;
+  const year = date.getUTCFullYear() + Math.floor(monthIndex / 12);
+  const month = (((monthIndex % 12) + 12) % 12) + 1;
+  const rawDay = Math.min(anchor, daysInMonth(year, month));
+  return civilDate(year, month, payDayOfMonth(year, month, rawDay));
+}
+
+/**
+ * The next SEMI_MONTHLY realization of `anchor` strictly after `date`,
+ * walking forward a month at a time. Bounded defensively (realizations
+ * strictly increase by roughly a month each step, so this never takes more
+ * than a couple of tries in practice) rather than trusting that to hold for
+ * every possible input.
+ */
+function nextAnchorRealizationAfter(date: Date, anchor: number): Date {
+  let monthsAhead = 0;
+  let candidate = semiMonthlyRealization(date, monthsAhead, anchor);
+  while (candidate.getTime() <= date.getTime() && monthsAhead < 24) {
+    monthsAhead += 1;
+    candidate = semiMonthlyRealization(date, monthsAhead, anchor);
+  }
+  return candidate;
+}
+
+/**
+ * The next SEMI_MONTHLY occurrence after `date`: the sooner of the two
+ * anchors' own next realizations, found independently of each other rather
+ * than by asking "which anchor does `date` itself stand in for, in which
+ * month" - that classification breaks exactly when a shift has pushed an
+ * anchor's realization into the *previous* calendar month (anchorDay 1
+ * shifted onto the last Friday of the month before), where `date`'s own
+ * .getUTCMonth() no longer names the month the anchor was really due in.
+ */
+function semiMonthlyAdvance(date: Date, anchorDay: number, secondAnchorDay: number): Date {
+  const first = nextAnchorRealizationAfter(date, anchorDay);
+  const second = nextAnchorRealizationAfter(date, secondAnchorDay);
+  return first.getTime() <= second.getTime() ? first : second;
+}
+
+/**
  * The next occurrence after `date` for a given frequency.
  *
  * `anchorDay` is RecurringItem.anchorDay - the day of the month the item is
- * really due on. It matters only for MONTHLY and YEARLY, the two frequencies
- * that can land in a month too short to hold the day. Omitting it falls back to
- * `date`'s own day, which is correct only for an occurrence that has never been
- * clamped; every caller that has an item in hand should pass the stored anchor.
+ * really due on. It matters only for MONTHLY, YEARLY and SEMI_MONTHLY, the
+ * frequencies that can land in a month too short to hold the day. Omitting it
+ * falls back to `date`'s own day, which is correct only for an occurrence
+ * that has never been clamped; every caller that has an item in hand should
+ * pass the stored anchor.
+ *
+ * `secondAnchorDay` is RecurringItem.secondAnchorDay, the other of
+ * SEMI_MONTHLY's two due days - both weekend-shifted the way a payday is
+ * (see semiMonthlyAdvance). Omitting it degrades a SEMI_MONTHLY item to a
+ * plain single-anchor monthly advance rather than crashing, for a caller
+ * that has not been extended for the second anchor; every real
+ * RecurringItem row always carries both.
  */
 export function advanceDate(
   date: Date,
   frequency: RecurringFrequency,
   anchorDay?: number | null,
+  secondAnchorDay?: number | null,
 ): Date {
   switch (frequency) {
     case "WEEKLY":
       return addDays(date, 7);
     case "BIWEEKLY":
       return addDays(date, 14);
+    case "SEMI_MONTHLY": {
+      const first = anchorDay ?? date.getUTCDate();
+      if (secondAnchorDay === null || secondAnchorDay === undefined) {
+        return occurrenceAfter(date, 1, first);
+      }
+      return semiMonthlyAdvance(date, first, secondAnchorDay);
+    }
     case "YEARLY":
       return occurrenceAfter(date, 12, anchorDay ?? date.getUTCDate());
     case "MONTHLY":
@@ -50,6 +117,8 @@ export interface ScheduledItem {
   nextDate: Date;
   frequency: RecurringFrequency;
   anchorDay?: number | null;
+  /** RecurringItem.secondAnchorDay - only meaningful when frequency is SEMI_MONTHLY. */
+  secondAnchorDay?: number | null;
   /**
    * RecurringItem.remainingOccurrences: how many more times the item posts,
    * counted from nextDate, before it switches itself off. Null or absent
@@ -93,7 +162,7 @@ export function owedOccurrences(item: ScheduledItem, from: Date, to: Date): Date
   let cursor = item.nextDate;
   for (let i = 0; i < MAX_OCCURRENCE_WALK && i < remaining && cursor.getTime() <= to.getTime(); i += 1) {
     if (cursor.getTime() >= from.getTime()) dates.push(cursor);
-    cursor = advanceDate(cursor, item.frequency, item.anchorDay);
+    cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
   }
   return dates;
 }
@@ -108,6 +177,8 @@ export function monthlyEquivalent(
       return (amount * 52) / 12;
     case "BIWEEKLY":
       return (amount * 26) / 12;
+    case "SEMI_MONTHLY":
+      return amount * 2;
     case "YEARLY":
       return amount / 12;
     case "MONTHLY":

@@ -45,8 +45,10 @@ import {
 } from "@/lib/import-grouping";
 import {
   detectCsvDuplicatesAction,
+  detectCsvExtraordinaryAction,
   importTransactionsAction,
   type CsvDuplicateHit,
+  type CsvExtraordinaryHit,
 } from "@/server/actions/import";
 import { cn } from "@/lib/utils";
 
@@ -132,6 +134,21 @@ export function CsvImporter({
     key: string;
     decisions: Record<number, "import" | "skip">;
   } | null>(null);
+  // Rows unusually large for the category they will land in (by validRows
+  // index), found by the server the same way, and the per-row verdict: absent
+  // or "normal" means ordinary spending, "extraordinary" means the user marked
+  // it a one-off. The answer is keyed by its inputs like the duplicate check
+  // (the category decisions above are among them, so it re-runs as the review
+  // changes); the verdicts are keyed by row alone, so answering one row
+  // survives a decision on another, and a verdict is only ever read for a row
+  // the latest answer still lists.
+  const [extraordinaryResult, setExtraordinaryResult] = useState<{
+    key: string;
+    hits: Record<number, CsvExtraordinaryHit>;
+  } | null>(null);
+  const [extraordinaryDecisions, setExtraordinaryDecisions] = useState<
+    Record<number, "extraordinary" | "normal">
+  >({});
 
   const [state, formAction, pending] = useActionState(
     importTransactionsAction,
@@ -144,11 +161,19 @@ export function CsvImporter({
     handled.current = state.at;
     if (state.ok) {
       toast.success(state.message ?? common.saved);
+      // The rows just imported may have completed a pattern the Recurring
+      // page can now suggest (see importTransactionsAction). A pointer, not
+      // a detour: the import still lands on the transactions list.
+      if (state.recurringSuggestions) {
+        toast(t.importLooksRecurring(state.recurringSuggestions), {
+          action: { label: t.reviewOnRecurring, onClick: () => router.push("/recurring") },
+        });
+      }
       router.push("/transactions");
     } else if (state.error) {
       toast.error(state.error);
     }
-  }, [state, router]);
+  }, [state, router, t, common]);
 
   const headerCells = rows[0] ?? [];
 
@@ -317,36 +342,95 @@ export function CsvImporter({
   const importIndexes = validRows.map((_, index) => index).filter((index) => !isSkippedDuplicate(index));
   const skippedDuplicateCount = validRows.length - importIndexes.length;
 
+  // Every row that will be imported, resolved as the server will see it.
+  const resolvedRows = importIndexes.map((index) => {
+    const row = validRows[index];
+    const type = rowTypeOverrides.get(index) ?? row.type;
+    return {
+      index,
+      date: toISODate(row.date as Date),
+      amount: row.amount as number,
+      type,
+      transferDirection: type === "EXTERNAL_TRANSFER" ? (rowDirectionOverrides.get(index) ?? null) : null,
+      note: row.note || null,
+      // A review-step decision wins, then the row's own category column,
+      // then the file-wide pick. With a category column mapped, "No
+      // category" means exactly that (the file is authoritative, so a
+      // blank cell stays uncategorized); without one it is left to the
+      // server's merchant rules, as before.
+      categoryId:
+        type === "EXTERNAL_TRANSFER"
+          ? null
+          : (rowCategoryOverrides.get(index) ??
+            row.columnCategoryId ??
+            (categoryId !== "none"
+              ? categoryId
+              : categoryColumn !== null
+                ? EXPLICIT_NO_CATEGORY
+                : null)),
+      importAnyway: duplicateHits[index] !== undefined,
+    };
+  });
+
+  // Ask the server which spending rows are unusually large for the category
+  // they will land in - after the duplicate answer, since a skipped duplicate
+  // is not imported and so not measured. Same debounce and staleness rule as
+  // the duplicate check.
+  const extraordinaryKey = JSON.stringify({
+    currency,
+    rows: resolvedRows
+      .filter((row) => row.type === "EXPENSE")
+      .map((row) => [row.index, row.amount, row.note, row.categoryId]),
+  });
+  const hasRowsToMeasure = !checkingDuplicates && resolvedRows.some((row) => row.type === "EXPENSE");
+  const extraordinaryRequest = useRef(0);
+  useEffect(() => {
+    if (!hasRowsToMeasure) return;
+    const request = ++extraordinaryRequest.current;
+    const timer = setTimeout(async () => {
+      const payload = JSON.parse(extraordinaryKey) as {
+        currency: string;
+        rows: [number, number, string | null, string | null][];
+      };
+      const result = await detectCsvExtraordinaryAction({
+        currency: payload.currency,
+        rows: payload.rows.map(([index, amount, note, rowCategoryId]) => ({
+          index,
+          amount,
+          type: "EXPENSE",
+          note,
+          categoryId: rowCategoryId,
+        })),
+      });
+      if (request !== extraordinaryRequest.current) return;
+      if (!result.ok) {
+        toast.error(result.error);
+        setExtraordinaryResult({ key: extraordinaryKey, hits: {} });
+        return;
+      }
+      setExtraordinaryResult({
+        key: extraordinaryKey,
+        hits: Object.fromEntries(result.hits.map((hit) => [hit.index, hit])),
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [extraordinaryKey, hasRowsToMeasure]);
+
+  const checkingExtraordinary = hasRowsToMeasure && extraordinaryResult?.key !== extraordinaryKey;
+  const extraordinaryHits = extraordinaryResult?.key === extraordinaryKey ? extraordinaryResult.hits : {};
+  const extraordinaryRowIndexes = Object.keys(extraordinaryHits).map(Number).sort((a, b) => a - b);
+  // Marked as a one-off only when the row is a current hit and the user said
+  // so; the default, and the answer for every unreviewed row, is normal.
+  const isMarkedExtraordinary = (index: number) =>
+    extraordinaryHits[index] !== undefined && extraordinaryDecisions[index] === "extraordinary";
+
   const payload = JSON.stringify({
     accountId,
     currency,
-    rows: importIndexes.map((index) => {
-      const row = validRows[index];
-      const type = rowTypeOverrides.get(index) ?? row.type;
-      return {
-        date: toISODate(row.date as Date),
-        amount: row.amount as number,
-        type,
-        transferDirection: type === "EXTERNAL_TRANSFER" ? (rowDirectionOverrides.get(index) ?? null) : null,
-        note: row.note || null,
-        // A review-step decision wins, then the row's own category column,
-        // then the file-wide pick. With a category column mapped, "No
-        // category" means exactly that (the file is authoritative, so a
-        // blank cell stays uncategorized); without one it is left to the
-        // server's merchant rules, as before.
-        categoryId:
-          type === "EXTERNAL_TRANSFER"
-            ? null
-            : (rowCategoryOverrides.get(index) ??
-              row.columnCategoryId ??
-              (categoryId !== "none"
-                ? categoryId
-                : categoryColumn !== null
-                  ? EXPLICIT_NO_CATEGORY
-                  : null)),
-        importAnyway: duplicateHits[index] !== undefined,
-      };
-    }),
+    rows: resolvedRows.map(({ index, ...row }) => ({
+      ...row,
+      isExtraordinary: isMarkedExtraordinary(index),
+    })),
   });
 
   const columnOptions = Array.from({ length: columnCount }, (_, index) => ({
@@ -377,6 +461,7 @@ export function CsvImporter({
               setGroupDecisions({});
               setUnknownRowDecisions({});
               setGroupTypeDecisions({});
+              setExtraordinaryDecisions({});
               const width = parsedRows.reduce(
                 (max, row) => Math.max(max, row.length),
                 0,
@@ -652,13 +737,28 @@ export function CsvImporter({
                     return { key: duplicateKey, decisions: next };
                   })
                 }
+                extraordinaryRowIndexes={extraordinaryRowIndexes}
+                extraordinaryHits={extraordinaryHits}
+                extraordinaryDecisions={extraordinaryDecisions}
+                onDecideExtraordinaryAction={(rowIndexes, decision) =>
+                  setExtraordinaryDecisions((previous) => {
+                    const next = { ...previous };
+                    for (const index of rowIndexes) next[index] = decision;
+                    return next;
+                  })
+                }
               />
 
               <form action={formAction} className="flex items-center gap-3">
                 <input type="hidden" name="payload" value={payload} />
                 <SubmitButton
                   pending={pending}
-                  disabled={unresolvedTransferGroups.length > 0 || checkingDuplicates || importIndexes.length === 0}
+                  disabled={
+                    unresolvedTransferGroups.length > 0 ||
+                    checkingDuplicates ||
+                    checkingExtraordinary ||
+                    importIndexes.length === 0
+                  }
                 >
                   {t.importCount(importIndexes.length)}
                 </SubmitButton>
@@ -668,6 +768,8 @@ export function CsvImporter({
                   </span>
                 ) : checkingDuplicates ? (
                   <span className="text-sm text-muted-foreground">{t.checkingDuplicates}</span>
+                ) : checkingExtraordinary ? (
+                  <span className="text-sm text-muted-foreground">{t.checkingExtraordinary}</span>
                 ) : state?.error ? (
                   <span className="text-sm text-destructive">{state.error}</span>
                 ) : skippedDuplicateCount > 0 ? (

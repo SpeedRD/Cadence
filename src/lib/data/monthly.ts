@@ -13,6 +13,9 @@
  * Classification rules (see AGENTS.md for the full spec):
  *   lifestyle          = EXPENSE transactions, not Savings/Investment category,
  *                        not matched to a subscription/contribution recurring item.
+ *                        For a completed month, also not a one-off the user
+ *                        confirmed extraordinary (Transaction.isExtraordinary):
+ *                        the historical average is typical spending only.
  *   committed          = SUBSCRIPTION charges - every RECURRING transaction the
  *                        posting job wrote for one, plus, only for a month with
  *                        no such charge, the item's scheduled monthly-equivalent
@@ -92,6 +95,7 @@ export interface RecurringForMatch {
 /** A recurring item with the extra schedule/history fields month maths needs. */
 export interface RecurringForMonth extends RecurringForMatch {
   anchorDay: number | null;
+  secondAnchorDay: number | null;
   createdAt: Date;
 }
 
@@ -101,6 +105,11 @@ interface MatchableTransaction {
   currency: string;
   categoryId: string | null;
   note: string | null;
+}
+
+/** MatchableTransaction plus the user's one-off flag, for the classification loop. */
+interface ClassifiableTransaction extends MatchableTransaction {
+  isExtraordinary: boolean;
 }
 
 export interface RecurringMatchResult {
@@ -202,6 +211,7 @@ async function loadActiveRecurringForMatch(): Promise<RecurringForMonth[]> {
       frequency: true,
       nextDate: true,
       anchorDay: true,
+      secondAnchorDay: true,
       createdAt: true,
     },
   });
@@ -323,6 +333,11 @@ interface MonthActuals {
  * between historical and current-month figures is how the caller fills the gap
  * between "actual" and "scheduled" (see classifyCompletedMonth vs
  * getCurrentMonthPace).
+ *
+ * `excludeExtraordinary` leaves out transactions the user confirmed as
+ * one-offs (Transaction.isExtraordinary, see src/lib/extraordinary.ts), so a
+ * completed month feeds the historical average with typical spending only.
+ * The month in progress keeps them: "spent so far" is a statement of fact.
  */
 async function computeMonthActuals(
   window: MonthWindow,
@@ -330,6 +345,7 @@ async function computeMonthActuals(
   context: AppContext,
   recurringItems: RecurringForMonth[],
   categories: CategoryMeta[],
+  excludeExtraordinary = false,
 ): Promise<MonthActuals> {
   const rangeEnd = minDate(window.end, throughDate);
   const [transactions, goalContributions] = await Promise.all([
@@ -343,6 +359,7 @@ async function computeMonthActuals(
         note: true,
         source: true,
         externalId: true,
+        isExtraordinary: true,
       },
     }),
     // Every contribution in the window; which of them are already represented
@@ -357,12 +374,13 @@ async function computeMonthActuals(
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
 
-  const matchable: MatchableTransaction[] = transactions.map((tx) => ({
+  const matchable: ClassifiableTransaction[] = transactions.map((tx) => ({
     id: tx.id,
     amount: num(tx.amount),
     currency: tx.currency,
     categoryId: tx.categoryId,
     note: tx.note,
+    isExtraordinary: tx.isExtraordinary,
   }));
   const itemById = new Map(recurringItems.map((item) => [item.id, item]));
 
@@ -459,10 +477,17 @@ async function computeMonthActuals(
 
   let lifestyle = 0;
   let savingsFromCategory = 0;
-  const lifestyleByCategoryMap = new Map<string | null, { name: string; color: string; total: number }>();
+  const lifestyleByCategoryMap = new Map<
+    string | null,
+    { name: string; color: string; total: number; extraordinary: number }
+  >();
 
   for (const tx of matchable) {
     if (accountedForIds.has(tx.id)) continue;
+    // A confirmed one-off is real spending but not typical spending: excluded
+    // here, alongside the rows a recurring item already accounts for, when
+    // the caller is measuring what a month usually costs.
+    if (excludeExtraordinary && tx.isExtraordinary) continue;
     const category = tx.categoryId ? categoryById.get(tx.categoryId) : undefined;
     const amount = toDisplay(tx.amount, tx.currency);
     if (category?.isSavingsDefault) {
@@ -475,8 +500,10 @@ async function computeMonthActuals(
       name: category?.name ?? "Uncategorized",
       color: category?.color ?? "#7a8590",
       total: 0,
+      extraordinary: 0,
     };
     existing.total += amount;
+    if (tx.isExtraordinary) existing.extraordinary += amount;
     lifestyleByCategoryMap.set(key, existing);
   }
 
@@ -486,6 +513,7 @@ async function computeMonthActuals(
       name: value.name,
       color: value.color,
       spent: round2(value.total),
+      extraordinarySpent: round2(value.extraordinary),
       budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
@@ -535,7 +563,9 @@ export async function classifyCompletedMonth(
   recurringItems: RecurringForMonth[],
   categories: CategoryMeta[],
 ): Promise<MonthlyBreakdown> {
-  const actuals = await computeMonthActuals(window, window.end, context, recurringItems, categories);
+  // Confirmed one-offs are left out: a completed month's figures exist to be
+  // averaged into what a month usually costs (getHistoricalMonthlyAverage).
+  const actuals = await computeMonthActuals(window, window.end, context, recurringItems, categories, true);
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
 
@@ -635,6 +665,8 @@ export async function getHistoricalMonthlyAverage(context: AppContext): Promise<
       name: value.name,
       color: value.color,
       spent: round2(value.total / n),
+      // Completed months already leave confirmed one-offs out (classifyCompletedMonth).
+      extraordinarySpent: 0,
       budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
