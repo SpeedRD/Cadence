@@ -58,6 +58,7 @@ import {
   resolveFlexibleCategories,
   resolveGoalFunding,
   scaleFlexibleSuggestions,
+  suggestCoverShortfall,
   summarizePaydayDraft,
 } from "../src/lib/payday";
 import { advanceDate } from "../src/lib/recurring";
@@ -1468,6 +1469,126 @@ async function main() {
         { bufferPercent: 10, displayCurrency: "DOP", rates },
       ).reconciliationGap,
       0,
+    );
+
+    // suggestCoverShortfall composes the same reconciliationGap and headroom
+    // figures into a recommendation: which other account to draw from. Hole
+    // is flagged for 11,919 DOP; Even and Silent both have 18,000 DOP of
+    // headroom (tied, Even listed first) and neither is itself flagged, so
+    // Even is picked and the whole gap is covered.
+    const coverFull = suggestCoverShortfall("hole", reconciled.accounts, {
+      displayCurrency: "DOP",
+      rates,
+    });
+    check(
+      "the best unflagged account with the most headroom is recommended, covering the gap in full",
+      coverFull?.sourceAccountId === "even" && coverFull.amount === 11919 && coverFull.fullyCovers === true,
+      JSON.stringify(coverFull),
+    );
+  }
+
+  {
+    // Plain "nothing to spare anywhere" case: the only other account exists
+    // but its headroom is exactly zero (its due subscriptions already use up
+    // everything past its own buffer) - not a candidate, so null rather than
+    // an empty or unhelpful suggestion.
+    const noHeadroomAccounts = [
+      { accountId: "gap", name: "Gap", currency: "DOP", income: 20000, bufferFloor: 2000, reportedBalance: -1000 },
+      { accountId: "tapped", name: "Tapped", currency: "DOP", income: 20000, bufferFloor: 2000 },
+    ];
+    const noHeadroomSubs = [
+      { recurringItemId: "rent2", accountId: "tapped", nativeAmount: 18000, currency: "DOP", alreadyLogged: false },
+    ];
+    const noHeadroomPlan = planAccountBuffers(noHeadroomAccounts, noHeadroomSubs, {
+      bufferPercent: 10,
+      displayCurrency: "DOP",
+      rates,
+    });
+    const tapped = noHeadroomPlan.accounts.find((a) => a.accountId === "tapped")!;
+    eq("the scenario's own setup: tapped's due subscription leaves exactly zero headroom", tapped.headroom, 0);
+    eq(
+      "no other account has any headroom to spare - nothing safe to suggest",
+      suggestCoverShortfall("gap", noHeadroomPlan.accounts, { displayCurrency: "DOP", rates }),
+      null,
+    );
+  }
+
+  {
+    // A rich account that is itself flagged belowReported must never be
+    // offered as a source - its own headroom is the pre-correction figure.
+    // flaggedRich has 90,000 DOP of headroom but a 1 DOP reconciliation gap
+    // of its own; poorHelper (unflagged) has only 8,000 (10,000 income less
+    // its 2,000 buffer), less than short's 50,000 gap, so the honest answer
+    // is a partial suggestion for exactly poorHelper's headroom - never
+    // flaggedRich's, and never poorHelper's headroom summed with
+    // tinyHelper's to manufacture full coverage.
+    const excludeAccounts = [
+      { accountId: "short", name: "Short", currency: "DOP", income: 40000, bufferFloor: 2000, reportedBalance: -50000 },
+      { accountId: "flaggedRich", name: "Flagged Rich", currency: "DOP", income: 100000, bufferFloor: 2000, reportedBalance: -1 },
+      { accountId: "poorHelper", name: "Poor Helper", currency: "DOP", income: 10000, bufferFloor: 2000 },
+      { accountId: "tinyHelper", name: "Tiny Helper", currency: "DOP", income: 5000, bufferFloor: 2000 },
+    ];
+    const excludePlan = planAccountBuffers(excludeAccounts, [], { bufferPercent: 10, displayCurrency: "DOP", rates });
+    const short = excludePlan.accounts.find((a) => a.accountId === "short")!;
+    const flaggedRich = excludePlan.accounts.find((a) => a.accountId === "flaggedRich")!;
+    check(
+      "the scenario's own setup: short is flagged with a large gap, flaggedRich is flagged despite huge headroom",
+      short.belowReported === true && short.reportedGap === 50000 && flaggedRich.belowReported === true,
+      JSON.stringify({ shortGap: short.reportedGap, flaggedRichFlagged: flaggedRich.belowReported }),
+    );
+    const coverExcluding = suggestCoverShortfall("short", excludePlan.accounts, {
+      displayCurrency: "DOP",
+      rates,
+    });
+    check(
+      "a source account that is itself flagged belowReported is skipped even though it has the most headroom, and the honest partial amount is the best eligible account's headroom alone",
+      coverExcluding?.sourceAccountId === "poorHelper" &&
+        coverExcluding.amount === 8000 &&
+        coverExcluding.fullyCovers === false,
+      JSON.stringify(coverExcluding),
+    );
+
+    // With the only two candidates removed, nothing eligible is left even
+    // though flaggedRich still has headroom to spare - null, not a fallback
+    // to the flagged account.
+    const noneEligible = suggestCoverShortfall(
+      "short",
+      excludePlan.accounts.filter((a) => a.accountId !== "poorHelper" && a.accountId !== "tinyHelper"),
+      { displayCurrency: "DOP", rates },
+    );
+    eq("with every other account either flagged or gone, there is nothing safe to suggest", noneEligible, null);
+  }
+
+  {
+    // Two accounts each flagged with their own reconciliation gap: neither
+    // should be recommended to cover the other, even though each has some
+    // headroom - suggestCoverShortfall must return null for both rather than
+    // pointing one flagged account at another.
+    const bothFlaggedAccounts = [
+      { accountId: "alpha", name: "Alpha", currency: "DOP", income: 30000, bufferFloor: 2000, reportedBalance: -5000 },
+      { accountId: "beta", name: "Beta", currency: "DOP", income: 30000, bufferFloor: 2000, reportedBalance: -3000 },
+    ];
+    const bothFlaggedPlan = planAccountBuffers(bothFlaggedAccounts, [], {
+      bufferPercent: 10,
+      displayCurrency: "DOP",
+      rates,
+    });
+    const alpha = bothFlaggedPlan.accounts.find((a) => a.accountId === "alpha")!;
+    const beta = bothFlaggedPlan.accounts.find((a) => a.accountId === "beta")!;
+    check(
+      "the scenario's own setup: both accounts are flagged belowReported",
+      alpha.belowReported === true && beta.belowReported === true,
+      JSON.stringify({ alphaFlagged: alpha.belowReported, betaFlagged: beta.belowReported }),
+    );
+    eq(
+      "neither flagged account recommends the other as a source",
+      suggestCoverShortfall("alpha", bothFlaggedPlan.accounts, { displayCurrency: "DOP", rates }),
+      null,
+    );
+    eq(
+      "the same holds in the other direction",
+      suggestCoverShortfall("beta", bothFlaggedPlan.accounts, { displayCurrency: "DOP", rates }),
+      null,
     );
   }
 

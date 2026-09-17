@@ -9,6 +9,7 @@ import { StepCommitments } from "@/components/payday/step-commitments";
 import { StepConfirm } from "@/components/payday/step-confirm";
 import { StepFlexible } from "@/components/payday/step-flexible";
 import { StepIncome } from "@/components/payday/step-income";
+import { TransferDialog } from "@/components/transactions/transfer-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { convert, type RateTable } from "@/lib/currency";
+import { toISODate } from "@/lib/date";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
@@ -28,6 +30,8 @@ import {
   planGoalFunding,
   resolveFlexibleCategories,
   resolveGoalFunding,
+  suggestCoverShortfall,
+  type CoverShortfallSuggestion,
 } from "@/lib/payday";
 import { cn } from "@/lib/utils";
 import { confirmPaydayCheckinAction } from "@/server/actions/payday";
@@ -157,6 +161,22 @@ export function PaydayCheckinDialog({
       plan.goals.map((g, index) => [g.goalId, resolveGoalFunding(fundingPlans[index], g.funding, options)]),
     );
   }, [plan.goals, bufferPlan.accounts, plan.displayCurrency, rates]);
+  // Which other account to draw from to close each flagged account's
+  // reconciliation gap - see suggestCoverShortfall. Keyed by the flagged
+  // account so Step 3 can look its suggestion up next to that account's
+  // warning; an account with no suggestion (nothing safe to draw from) has no
+  // entry.
+  const coverShortfallByAccount = useMemo(() => {
+    const options = { displayCurrency: plan.displayCurrency, rates };
+    const entries: [string, CoverShortfallSuggestion][] = [];
+    for (const account of bufferPlan.accounts) {
+      if (!account.belowReported) continue;
+      const suggestion = suggestCoverShortfall(account.accountId, bufferPlan.accounts, options);
+      if (suggestion) entries.push([account.accountId, suggestion]);
+    }
+    return new Map(entries);
+  }, [bufferPlan.accounts, plan.displayCurrency, rates]);
+  const [coverTransfer, setCoverTransfer] = useState<CoverShortfallSuggestion | null>(null);
   // A goal's total is the live sum of its rows, never entered on its own.
   const goalPlanTotal = round2([...goalFunding.values()].reduce((sum, funding) => sum + funding.total, 0));
   const essentialFixedTotal = round2(plan.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
@@ -379,6 +399,8 @@ export function PaydayCheckinDialog({
                 available={available}
                 goalFunding={goalFunding}
                 onGoalFundingChange={updateGoalFunding}
+                coverShortfallByAccount={coverShortfallByAccount}
+                onCoverShortfall={setCoverTransfer}
                 onEssentialChange={updateEssential}
                 onCarryoverChange={(value) =>
                   setPlan((prev) => ({ ...prev, includedCarryover: value }))
@@ -441,6 +463,27 @@ export function PaydayCheckinDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+
+      {/* Nested on top of the wizard, the same controlled-open, no-trigger
+          pattern transaction-table.tsx uses for an edit: the user still
+          reviews and submits it themselves, this only supplies better
+          defaults than empty fields (see suggestCoverShortfall). */}
+      {coverTransfer ? (
+        <TransferDialog
+          accounts={plan.accounts.map((a) => ({ id: a.accountId, name: a.name, currency: a.currency }))}
+          locale={locale}
+          open
+          onOpenChange={(next) => !next && setCoverTransfer(null)}
+          values={{
+            date: toISODate(new Date()),
+            fromAccountId: coverTransfer.sourceAccountId,
+            toAccountId: coverTransfer.gapAccountId,
+            amount: coverTransfer.amount,
+            currency: coverTransfer.sourceCurrency,
+            receivedAmount: coverTransfer.receivedAmount,
+          }}
+        />
+      ) : null}
     </Dialog>
   );
 }

@@ -409,6 +409,73 @@ export function planAccountBuffers(
   };
 }
 
+export interface CoverShortfallSuggestion {
+  /** The account with the reconciliation gap - the transfer's destination. */
+  gapAccountId: string;
+  /** The other account with the most headroom - the transfer's suggested source. */
+  sourceAccountId: string;
+  sourceAccountName: string;
+  sourceCurrency: string;
+  /**
+   * What to draw from the source account, in its own currency: the gap and
+   * the source's headroom compared in the display currency the same way
+   * planAccountBuffers compares headroom across accounts, then converted
+   * back and clamped to the source's own headroom so it can never recommend
+   * pushing the source below its own buffer.
+   */
+  amount: number;
+  gapCurrency: string;
+  /** The same suggested figure in the gap account's own currency - the receiving leg's declared amount for a cross-currency transfer. */
+  receivedAmount: number;
+  /** False when the source account's headroom does not fully cover the gap - a partial suggestion, never a multi-account split. */
+  fullyCovers: boolean;
+}
+
+/**
+ * For an account flagged belowReported (see AccountBufferPlan.reportedGap),
+ * which other account to draw from to close it: the account with the most
+ * spare headroom, transferring min(gap, that headroom) - the same "most room
+ * this period" comparison planAccountBuffers already makes for a buffer
+ * breach (suggestedAccountId), applied to the reconciliation gap instead.
+ *
+ * An account itself flagged belowReported is never offered as a source: its
+ * own headroom is the pre-correction, income-only figure, and this account's
+ * gap already showed that figure overstates what it really has. Returns null
+ * when the given account isn't flagged, or no eligible other account has any
+ * spare headroom - the same "nothing safe to suggest" result either way.
+ */
+export function suggestCoverShortfall(
+  gapAccountId: string,
+  accounts: AccountBufferPlan[],
+  options: { displayCurrency: string; rates: RateTable },
+): CoverShortfallSuggestion | null {
+  const { displayCurrency, rates } = options;
+  const gapAccount = accounts.find((a) => a.accountId === gapAccountId);
+  if (!gapAccount || !gapAccount.belowReported) return null;
+
+  const gapDisplay = convert(gapAccount.reportedGap, gapAccount.currency, displayCurrency, rates);
+  const candidates = accounts
+    .filter((a) => a.accountId !== gapAccountId && !a.belowReported && a.headroom > 0)
+    .map((a) => ({ account: a, headroomDisplay: convert(a.headroom, a.currency, displayCurrency, rates) }))
+    .sort((a, b) => b.headroomDisplay - a.headroomDisplay);
+  const source = candidates[0];
+  if (!source) return null;
+
+  const suggestedDisplay = Math.min(gapDisplay, source.headroomDisplay);
+  return {
+    gapAccountId,
+    sourceAccountId: source.account.accountId,
+    sourceAccountName: source.account.name,
+    sourceCurrency: source.account.currency,
+    amount: round2(
+      Math.min(convert(suggestedDisplay, displayCurrency, source.account.currency, rates), source.account.headroom),
+    ),
+    gapCurrency: gapAccount.currency,
+    receivedAmount: round2(convert(suggestedDisplay, displayCurrency, gapAccount.currency, rates)),
+    fullyCovers: source.headroomDisplay >= gapDisplay,
+  };
+}
+
 export interface GoalFundingGoal {
   goalId: string;
   /** What the goal needs set aside this period, in the display currency - its roadmap recommendedAmount. */

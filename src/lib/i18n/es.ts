@@ -1134,6 +1134,11 @@ export const es = {
       `Pagar todo lo que vence aquí quedaría corto por ${amount}.`,
     accountBelowBufferWithAlternative: (amount: string, accountName: string) =>
       `Pagar todo lo que vence aquí quedaría corto por ${amount} - ${accountName} tiene más margen este periodo.`,
+    coverShortfallSuggestion: (amount: string, accountName: string) =>
+      `Cúbrelo: mueve ${amount} desde ${accountName}.`,
+    coverShortfallPartialSuggestion: (amount: string, accountName: string) =>
+      `Cubre parte: mueve ${amount} desde ${accountName} - no alcanza para cerrar el faltante por completo.`,
+    coverShortfallButton: "Cúbrelo",
     subscriptionAccountLabel: (name: string) => `Cuenta para ${name}`,
     unfundedSubscriptionsHeading: "Sin una cuenta con ingreso que las cubra",
     unfundedSubscriptionsDescription:

@@ -1129,6 +1129,11 @@ export const en = {
       `Posting everything due here would fall short by ${amount}.`,
     accountBelowBufferWithAlternative: (amount: string, accountName: string) =>
       `Posting everything due here would fall short by ${amount} - ${accountName} has more room this period.`,
+    coverShortfallSuggestion: (amount: string, accountName: string) =>
+      `Cover it: move ${amount} from ${accountName}.`,
+    coverShortfallPartialSuggestion: (amount: string, accountName: string) =>
+      `Cover part of it: move ${amount} from ${accountName} - not enough there to close the gap in full.`,
+    coverShortfallButton: "Cover it",
     subscriptionAccountLabel: (name: string) => `Account for ${name}`,
     unfundedSubscriptionsHeading: "Not covered by an account with income",
     unfundedSubscriptionsDescription:

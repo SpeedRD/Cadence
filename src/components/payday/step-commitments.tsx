@@ -4,6 +4,7 @@ import { Field } from "@/components/form/field";
 import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -17,7 +18,12 @@ import { formatMoney } from "@/lib/currency";
 import { formatDayMonth } from "@/lib/date";
 import { round2 } from "@/lib/money";
 import type { Dictionary } from "@/lib/i18n";
-import type { AccountBufferBreakdown, GoalFundingRow, ResolvedGoalFunding } from "@/lib/payday";
+import type {
+  AccountBufferBreakdown,
+  CoverShortfallSuggestion,
+  GoalFundingRow,
+  ResolvedGoalFunding,
+} from "@/lib/payday";
 import type {
   CarryoverBasis,
   PaydayAccountDraft,
@@ -190,6 +196,8 @@ export function StepCommitments({
   available,
   goalFunding,
   onGoalFundingChange,
+  coverShortfallByAccount,
+  onCoverShortfall,
   onEssentialChange,
   onCarryoverChange,
   pickAnAccountLabel,
@@ -219,6 +227,10 @@ export function StepCommitments({
   goalFunding: Map<string, ResolvedGoalFunding>;
   /** One account's draw for one goal, in that account's own currency. */
   onGoalFundingChange: (goalId: string, accountId: string, plannedAmount: number) => void;
+  /** Which other account to draw from to close a flagged account's reconciliation gap - see suggestCoverShortfall. Keyed by the flagged account; an account with nothing safe to draw from has no entry. */
+  coverShortfallByAccount: Map<string, CoverShortfallSuggestion>;
+  /** Opens the Transfer dialog pre-filled with the suggestion; nothing here creates a transfer. */
+  onCoverShortfall: (suggestion: CoverShortfallSuggestion) => void;
   onEssentialChange: (categoryId: string, plannedAmount: number) => void;
   onCarryoverChange: (value: number) => void;
   pickAnAccountLabel: string;
@@ -279,12 +291,34 @@ export function StepCommitments({
                   {plan.belowReported ? (
                     // Advisory only: it never feeds the plan's figures and never
                     // asks for an acknowledgement, unlike the buffer breach below.
-                    <div className="reveal-block">
+                    <div className="reveal-block space-y-2">
                       <Alert>
                         <AlertDescription>
                           {t.accountReportedBelowProjection(formatMoney(plan.reportedGap, plan.currency))}
                         </AlertDescription>
                       </Alert>
+                      {(() => {
+                        const cover = coverShortfallByAccount.get(plan.accountId);
+                        if (!cover) return null;
+                        const amount = formatMoney(cover.amount, cover.sourceCurrency);
+                        return (
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <span className="text-muted-foreground">
+                              {cover.fullyCovers
+                                ? t.coverShortfallSuggestion(amount, cover.sourceAccountName)
+                                : t.coverShortfallPartialSuggestion(amount, cover.sourceAccountName)}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="xs"
+                              onClick={() => onCoverShortfall(cover)}
+                            >
+                              {t.coverShortfallButton}
+                            </Button>
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : null}
                   {items.length === 0 ? (
