@@ -417,6 +417,124 @@ export async function getGoalRoadmapAmount(
   return paces.find((pace) => pace.goalId === goalId)?.amount ?? null;
 }
 
+/**
+ * One goal's standing this plan period: its roadmap pace beside what the
+ * period's confirmed check-in actually set aside for it. What the goal page's
+ * "planned this period" line and its "behind the roadmap" / room-shortfall
+ * notes read, and what the Inbox's goal detector (src/lib/insights.ts) reads
+ * to say the same thing - one computation, two surfaces.
+ */
+export interface GoalRoadmapStatus {
+  goalId: string;
+  name: string;
+  targetDate: Date | null;
+  /** The plan period the check-in and the pace are for. */
+  period: PeriodInfo;
+  /** getGoalRoadmapAmount() for the plan period, in the display currency; null for a goal that is achieved or has none left to save. */
+  roadmapAmount: number | null;
+  /**
+   * The confirmed check-in's GOAL rows for the goal - one per account it draws
+   * on, each in that account's currency, or a single accountless row from a
+   * check-in confirmed before funding was per-account - summed into the
+   * display currency. `plannedAmount` is what the user chose; `recommendedAmount`
+   * summed the same way is what the accounts' room let the plan schedule.
+   * Null when the plan period has no confirmed check-in with rows for it.
+   */
+  planned: { plannedAmount: number; recommendedAmount: number } | null;
+}
+
+/**
+ * getGoalRoadmapStatus() for every goal that has either a roadmap pace or a
+ * GOAL row on the plan period's confirmed check-in, in pace order (the
+ * check-in's funding order) with plan-only goals after. One read of the
+ * check-in's GOAL rows and one getGoalRoadmapAmounts() walk however many
+ * goals there are.
+ */
+export async function getGoalRoadmapStatuses(context: AppContext): Promise<GoalRoadmapStatus[]> {
+  const planRef = planPeriodRef(context);
+  const period = periodInfo(planRef);
+  const [checkin, paces] = await Promise.all([
+    prisma.paydayCheckin.findFirst({
+      where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
+      select: {
+        allocations: {
+          where: { type: "GOAL", goalId: { not: null } },
+          select: {
+            goalId: true,
+            plannedAmount: true,
+            recommendedAmount: true,
+            currency: true,
+            goal: { select: { name: true, targetDate: true } },
+          },
+        },
+      },
+    }),
+    getGoalRoadmapAmounts(planRef, context),
+  ]);
+
+  // The goal's figure is its rows summed into the display currency, rounded
+  // as each row lands - the same fold the goal page always ran.
+  const plannedByGoal = new Map<
+    string,
+    { name: string; targetDate: Date | null; plannedAmount: number; recommendedAmount: number }
+  >();
+  for (const allocation of checkin?.allocations ?? []) {
+    if (!allocation.goalId || !allocation.goal) continue;
+    const sum = plannedByGoal.get(allocation.goalId) ?? {
+      name: allocation.goal.name,
+      targetDate: allocation.goal.targetDate,
+      plannedAmount: 0,
+      recommendedAmount: 0,
+    };
+    plannedByGoal.set(allocation.goalId, {
+      ...sum,
+      plannedAmount: round2(
+        sum.plannedAmount +
+          convert(num(allocation.plannedAmount), allocation.currency, context.displayCurrency, context.rates),
+      ),
+      recommendedAmount: round2(
+        sum.recommendedAmount +
+          convert(num(allocation.recommendedAmount), allocation.currency, context.displayCurrency, context.rates),
+      ),
+    });
+  }
+
+  const statuses: GoalRoadmapStatus[] = paces.map((pace) => {
+    const planned = plannedByGoal.get(pace.goalId);
+    plannedByGoal.delete(pace.goalId);
+    return {
+      goalId: pace.goalId,
+      name: pace.name,
+      targetDate: pace.targetDate,
+      period,
+      roadmapAmount: pace.amount,
+      planned: planned
+        ? { plannedAmount: planned.plannedAmount, recommendedAmount: planned.recommendedAmount }
+        : null,
+    };
+  });
+  for (const [goalId, planned] of plannedByGoal) {
+    statuses.push({
+      goalId,
+      name: planned.name,
+      targetDate: planned.targetDate,
+      period,
+      roadmapAmount: null,
+      planned: { plannedAmount: planned.plannedAmount, recommendedAmount: planned.recommendedAmount },
+    });
+  }
+  return statuses;
+}
+
+/** getGoalRoadmapStatuses() for one goal; null when it has neither a pace nor a confirmed plan this period (or does not exist). */
+export async function getGoalRoadmapStatus(
+  goalId: string,
+  context: AppContext,
+): Promise<GoalRoadmapStatus | null> {
+  const statuses = await getGoalRoadmapStatuses(context);
+  return statuses.find((status) => status.goalId === goalId) ?? null;
+}
+
 export async function getAvailableCarryover(
   planRef: PeriodRef,
   context: AppContext,

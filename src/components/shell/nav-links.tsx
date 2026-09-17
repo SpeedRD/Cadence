@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bell,
   Calculator,
   Coins,
   Flag,
@@ -63,6 +64,11 @@ export function NavLinks({
 
   const NAV: NavItem[] = [
     { href: "/", label: t.dashboard, icon: Gauge, exact: true },
+    // Every standing insight in one place (src/lib/insights.ts); the badge
+    // counts them. The bell rather than the inbox tray: "inbox" already means
+    // a connected mailbox on the Settings connections page, and the tray icon
+    // is the Review queue's below.
+    { href: "/inbox", label: t.inbox, icon: Bell },
     { href: "/transactions", label: t.transactions, icon: Receipt },
     // Kept as "Review", not renamed to "Inbox" to match the icon: "inbox"
     // already means a connected mailbox on the Settings connections page.

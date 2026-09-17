@@ -22,13 +22,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { convert, formatMoney } from "@/lib/currency";
+import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getGoalDetail } from "@/lib/data/goals";
-import { getGoalRoadmapAmount, planPeriodRef } from "@/lib/data/payday";
+import { getGoalRoadmapStatus } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
-import { num, round2 } from "@/lib/money";
+import { round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Goal - Cadence" };
@@ -57,40 +57,17 @@ export default async function GoalDetailPage({
     }),
   ]);
   if (!detail) notFound();
-  const planRef = planPeriodRef(context);
-  const [confirmedCheckin, roadmapAmount] = await Promise.all([
-    prisma.paydayCheckin.findFirst({
-      where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
-      include: { allocations: { where: { type: "GOAL", goalId: id } } },
-    }),
-    // The real pace for the plan period, computed live - or, for a goal with
-    // no target date, its whole remaining balance. The rows' own
-    // recommendedAmount is each account's share of that figure capped by the
-    // account's room, so summing them says what the accounts could fund - not
-    // what the goal needs. "Behind" is measured against the figure itself.
-    getGoalRoadmapAmount(id, planRef, context),
-  ]);
-  // One GOAL row per account the goal draws on, each in that account's
-  // currency - or, from a check-in confirmed before funding was per-account,
-  // a single accountless row in the check-in's currency. The goal's planned
-  // figure is the rows summed into the display currency; `recommendedAmount`
-  // summed the same way is what the accounts' room let the plan schedule.
-  const plannedAllocation =
-    confirmedCheckin && confirmedCheckin.allocations.length > 0
-      ? confirmedCheckin.allocations.reduce(
-          (sum, allocation) => ({
-            plannedAmount: round2(
-              sum.plannedAmount +
-                convert(num(allocation.plannedAmount), allocation.currency, context.displayCurrency, context.rates),
-            ),
-            recommendedAmount: round2(
-              sum.recommendedAmount +
-                convert(num(allocation.recommendedAmount), allocation.currency, context.displayCurrency, context.rates),
-            ),
-          }),
-          { plannedAmount: 0, recommendedAmount: 0 },
-        )
-      : null;
+  // The real pace for the plan period, computed live - or, for a goal with
+  // no target date, its whole remaining balance - beside what the period's
+  // confirmed check-in planned for the goal (its GOAL rows summed into the
+  // display currency). The rows' own recommendedAmount is each account's
+  // share of that figure capped by the account's room, so summing them says
+  // what the accounts could fund - not what the goal needs. "Behind" is
+  // measured against the figure itself. The Inbox's goal detector reads the
+  // same status, so the two never disagree.
+  const roadmapStatus = await getGoalRoadmapStatus(id, context);
+  const roadmapAmount = roadmapStatus?.roadmapAmount ?? null;
+  const plannedAllocation = roadmapStatus?.planned ?? null;
 
   const { summary, contributions, contributionTotal, displayContributionTotal } = detail;
   const today = toISODate(context.today);

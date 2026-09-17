@@ -4,6 +4,7 @@ import { MAX_INSTALLMENTS, equalInstallmentAmount } from "@/lib/afford";
 import { CURRENCIES } from "@/lib/currency";
 import { fromISODate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
+import { INSIGHT_SOURCES } from "@/lib/insights";
 import { AMOUNT_MAX, parseAmountInput, round2, type ParsedAmount } from "@/lib/money";
 import {
   ACCOUNT_TYPES,
@@ -480,6 +481,16 @@ export const recurringAccountSchema = z.object({
 export const suggestionRefSchema = z.object({
   accountId: z.string().trim().min(1),
   merchantKey: z.string().trim().min(1),
+});
+
+/**
+ * An Inbox insight's identity (see InsightRef in src/lib/insights.ts): the
+ * only thing its Dismiss button sends. The source must be a registered
+ * detector; the key is whatever identity that detector gave the insight.
+ */
+export const insightRefSchema = z.object({
+  source: z.enum(INSIGHT_SOURCES),
+  key: z.string().trim().min(1),
 });
 
 /**

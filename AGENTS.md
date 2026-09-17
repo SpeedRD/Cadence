@@ -29,5 +29,12 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - New `/api/cron/*` routes must be added to `BEARER_AUTH_PATHS` in
   `src/proxy.ts`, or the proxy redirects them to `/login` before the
   handler's bearer check ever runs.
+- Standing signals ("insights") go through one registry,
+  `INSIGHT_DETECTORS` in `src/lib/insights.ts`: a detector is a pure
+  `(InsightContext) => Insight[]` that re-presents a result the app already
+  computes, never a second copy of its detection logic. The Inbox page and
+  the nav badge both read the request-cached `getInsights()` in
+  `src/lib/data/insights.ts`; dismissals live in `InsightDismissal`
+  (source + key), not in per-source tables.
 - Screenshots in `screenshots/` are captured from a throwaway database seeded
   with fictional data. Never commit a screenshot taken against real data.

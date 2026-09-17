@@ -347,6 +347,24 @@ model RecurringSuggestionDismissal {
   @@unique([accountId, merchantKey])
 }
 
+/// An insight the user dismissed on the Inbox page (src/lib/insights.ts):
+/// the same lightweight pattern as RecurringSuggestionDismissal, generalized
+/// to every insight source. `source` names the detector and `key` the
+/// identity that detector gives each insight (a recurring item's id, a
+/// goal's id, an account + merchant pair...), so a dismissed insight never
+/// comes back however long its underlying condition persists. `source` is a
+/// plain string rather than an enum so a new detector needs no migration;
+/// the sources are validated in code (INSIGHT_SOURCES). No foreign keys: a
+/// row whose entity is gone is simply never matched again.
+model InsightDismissal {
+  id          String   @id @default(cuid())
+  source      String
+  key         String
+  dismissedAt DateTime @default(now())
+
+  @@unique([source, key])
+}
+
 model Goal {
   id           String    @id @default(cuid())
   name         String

@@ -49,6 +49,28 @@ income logged. Below it: the monthly spending pace against your own average, act
 goals, and everything due in the next seven days. If a recurring item cannot post
 (missing account or goal, archived account), the dashboard says so.
 
+### Inbox
+
+Every standing signal the app has noticed, in one place: a recurring item that
+cannot post, an Afford plan whose remaining payments no longer fit, a charge pattern
+that looks like an untracked bill, a goal whose confirmed plan for the period is
+behind its roadmap. Each one keeps appearing where it always did (the Dashboard
+alerts, the Recurring page's badges and "Looks recurring" card, the goal page's
+roadmap note) - the Inbox is a second place for the same signals, not a
+replacement, and it re-presents each signal's own result rather than detecting
+anything on its own. Items are grouped by severity in the app's own two terms:
+**Needs attention** (red, like the nav badge: money already committed is not where
+the plan says it is) first, **Advisory** (amber, like Afford's checks: nothing is
+blocked or changed) after. Each carries the figures that triggered it, a link to
+the surface that can resolve it, and **Dismiss**, which keeps it out of the Inbox
+for good even while its condition persists - the same permanent, keyed dismissal
+the Recurring page's suggestions have, generalized to every source. Dismissing
+changes nothing else: the Dashboard alert, the Recurring badge or the goal page's
+note still show the signal until it is actually resolved. The Inbox nav link
+carries a count of everything still listed, so the badge and the page always agree.
+Under the hood each source is one pure detector registered in
+`src/lib/insights.ts`; a new kind of insight is one more function there.
+
 ### Payday check-in
 
 A five-step planner that runs each payday: **confirm account balances → record
@@ -227,12 +249,12 @@ the plan's own installments left out of the commitments it is judged against. Th
 badge reads **Still on track** while every remaining period passes, or names the
 first period that no longer does and by how much ("Short by DOP 1,683.33 in Oct
 1-15") - typically because a commitment recorded since took the room. The Dashboard
-shows an alert naming those plans and the Recurring nav link carries a count badge
-while any exist; both clear on their own once the room is back (a commitment paused
-or removed, the plan paid off). Advisory only, like Afford itself: nothing is blocked,
-and posting is untouched.
+shows an alert naming those plans, and each one is listed in the Inbox and counted
+by its nav badge while it lasts; all of it clears on its own once the room is back
+(a commitment paused or removed, the plan paid off). Advisory only, like Afford
+itself: nothing is blocked, and posting is untouched.
 
-![Recurring page's From Afford section: one plan still on track, another short by a named amount in a named pay period, with the Recurring nav link's red count badge visible in the sidebar](screenshots/recurring-from-afford.png)
+![Recurring page's From Afford section: one plan still on track, another short by a named amount in a named pay period, with the nav's red count badge visible in the sidebar](screenshots/recurring-from-afford.png)
 
 ![Dashboard alert for a no-longer-viable Afford plan, naming the plan and the shortfall and linking back to the Recurring page](screenshots/dashboard-afford-alert.png)
 
@@ -324,8 +346,11 @@ in that account's currency alongside the contribution (the pair is deleted toget
 too). Auto-posted contributions from recurring items land here as well; their amount
 can be corrected in place, which updates the ledger row they wrote, and removing one
 from either side removes both. A goal that reaches its target is marked as achieved.
-Deleting a goal removes its contribution history but leaves the expenses those
-contributions wrote in the ledger as ordinary, editable transactions.
+Once the period's check-in is confirmed, the goal page shows what it planned for the
+goal beside the live roadmap figure and says by how much the plan is behind; a dated
+goal in that state is also an advisory item in the Inbox. Deleting a goal removes its
+contribution history but leaves the expenses those contributions wrote in the ledger
+as ordinary, editable transactions.
 
 ### Reports
 
@@ -417,7 +442,8 @@ screen by whoever holds the server's `RECOVERY_SECRET`, when that variable is se
    category budgets, confirm.
 6. Before an installment purchase, run it through Afford; if you buy it, record it
    there and it becomes a recurring item with a countdown.
-7. Watch the dashboard's safe-to-spend per day through the period.
+7. Watch the dashboard's safe-to-spend per day through the period, and the Inbox
+   for anything that needs a decision from you.
 
 ## Tech stack
 

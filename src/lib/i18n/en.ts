@@ -155,6 +155,7 @@ export const en = {
     goals: "Goals",
     reports: "Reports",
     settings: "Settings",
+    inbox: "Inbox",
     /** Read out with the link's label when it carries a count badge. */
     badgeLabel: (count: number) =>
       count === 1 ? "1 needs attention" : `${count} need attention`,
@@ -1145,6 +1146,65 @@ export const en = {
     accountNoLongerExists: "That account no longer exists",
     transactionAlreadyExists: "This transaction already exists",
     nothingToReject: "Nothing to reject",
+  },
+  inbox: {
+    title: "Inbox",
+    description:
+      "Everything Cadence has noticed that is still waiting on you, from every part of the app in one place. Each item also stays where it came from until it is resolved.",
+    pendingCount: (count: number) =>
+      count === 1 ? "1 item needs attention" : `${count} items need attention`,
+    emptyTitle: "Nothing needs attention",
+    emptyDescription:
+      "Recurring items are posting, your Afford plans still fit, no untracked patterns turned up, and every goal plan is on its roadmap.",
+    /** Severity headings. "Needs attention" is the nav badge's own phrase; "Advisory" is how Afford describes a check that blocks nothing. */
+    severityCritical: "Needs attention",
+    severityAdvisory: "Advisory",
+    severityCriticalHint: "Money already committed is not where the plan says it is.",
+    severityAdvisoryHint: "Worth a look; nothing is blocked or changed by it.",
+    sourceNotPosting: "Recurring",
+    sourceAffordViability: "Afford",
+    sourceRecurringSuggestion: "Looks recurring",
+    sourceGoalBehind: "Goals",
+    dismiss: "Dismiss",
+    dismissHint: "Remove from the Inbox for good. Where it came from is unchanged.",
+    dismissed: "Dismissed. It won't come back to the Inbox.",
+    dismissUnknown: "That item is no longer in the Inbox",
+    /** The link each insight carries to the surface that can resolve it. */
+    openRecurring: "Fix on the recurring page",
+    openFromAfford: "See it on the recurring page",
+    openSuggestion: "Review on the recurring page",
+    openGoal: "Open the goal",
+    // Titles and evidence labels, per source. Evidence carries the figures
+    // that triggered the insight, formatted by the page.
+    notPostingTitle: (name: string) => `${name} is not posting`,
+    notPostingReason: "Why",
+    notPostingDue: "Still due",
+    notPostingKind: "Kind",
+    notPostingKindSubscription: "Subscription",
+    notPostingKindContribution: "Goal contribution",
+    affordTitle: (name: string) => `${name} from Afford no longer fits`,
+    affordShortfall: "Short by",
+    affordPeriod: "In",
+    affordCheck: "Check that fails",
+    affordCheckAccount: (account: string) => `${account} would end the period below its buffer`,
+    affordCheckFlexible: "Available for flexible categories would go into deficit",
+    affordHeadroom: "Room left after it",
+    affordInstallment: "Installment due there",
+    suggestionTitle: (name: string) => `${name} looks recurring`,
+    suggestionAmount: "Last charged",
+    suggestionCadence: "Cadence",
+    suggestionCharges: "Charges",
+    suggestionChargesValue: (count: number, first: string, last: string) =>
+      `${count}, ${first} to ${last}`,
+    suggestionAccount: "Account",
+    suggestionNext: "Next expected",
+    goalTitle: (name: string) => `${name} is behind its roadmap`,
+    goalBehindBy: "Behind by",
+    goalRoadmap: "Roadmap this period",
+    goalPlanned: "Planned this period",
+    goalPeriod: "Period",
+    goalTarget: "Target date",
+    goalRoomShortfall: "Room couldn't cover",
   },
   payday: {
     bannerTitle: "Payday check-in ready",

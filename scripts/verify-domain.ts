@@ -6838,6 +6838,230 @@ async function main() {
     console.log("  ok   recurring suggestion fixtures removed");
   }
 
+  console.log("\n== insight engine (pure) ==");
+  {
+    const insights = await import("../src/lib/insights");
+    const { getDictionary } = await import("../src/lib/i18n");
+    const { insightRefSchema } = await import("../src/lib/validation");
+    const en = getDictionary("en");
+    const emptyContext: import("../src/lib/insights").InsightContext = {
+      dictionary: en,
+      displayCurrency: "USD",
+      recurringPosting: null,
+      affordRechecks: [],
+      recurringSuggestions: [],
+      goalRoadmaps: [],
+    };
+    eq("the registry holds one detector per source, in source order", insights.INSIGHT_DETECTORS.length, insights.INSIGHT_SOURCES.length);
+    eq("nothing to notice is an empty list, not an error", insights.detectInsights(emptyContext).length, 0);
+    eq("an insight's id is its source and key", insights.insightId({ source: "goal_behind", key: "g1" }), "goal_behind:g1");
+    eq("a registered source is recognised; anything else is not", `${insights.isInsightSource("not_posting")}:${insights.isInsightSource("weather")}`, "true:false");
+    eq("the dismiss form's schema takes a registered source and a key only", JSON.stringify(insightRefSchema.safeParse({ source: "afford_viability", key: " item_1 " }).data), '{"source":"afford_viability","key":"item_1"}');
+    eq("... and refuses an unregistered source", insightRefSchema.safeParse({ source: "weather", key: "x" }).success, false);
+
+    console.log("-- not posting: this request's posting run, skipped and failed --");
+    const posting: import("../src/lib/recurring-posting").RecurringPostingSummary = {
+      today: "2026-09-17", itemsDue: 3, itemsPosted: 1, transactionsCreated: 1, goalContributionsCreated: 0, itemsSkipped: 1,
+      skipped: [{ id: "item_gym", name: "Gym", kind: "SUBSCRIPTION", nextDate: "2026-09-05", reason: "missing_account" }],
+      occurrencesAlreadyLogged: 0, occurrencesAlreadyPosted: 0, itemsCapped: 0, itemsFailed: 1,
+      failed: [{ id: "item_fund", name: "Fund", error: "boom" }],
+      itemsCompleted: 0,
+    };
+    const notPosting = insights.detectNotPosting({ ...emptyContext, recurringPosting: posting });
+    eq("one insight per skipped or failed item, keyed by the item's id", notPosting.map((i) => i.id).join(","), "not_posting:item_gym,not_posting:item_fund");
+    eq("both are critical: money the plan counts on is not moving", notPosting.map((i) => i.severity).join(","), "critical,critical");
+    eq("the title names the item", notPosting[0].title, "Gym is not posting");
+    eq("the evidence carries the reason (the Dashboard alert's own words) and the still-due date as a date", JSON.stringify(notPosting[0].evidence.slice(0, 2)), JSON.stringify([{ kind: "text", label: "Why", value: "no account set" }, { kind: "date", label: "Still due", date: "2026-09-05" }]));
+    eq("a failed item carries its error", notPosting[1].evidence[0].kind === "text" ? notPosting[1].evidence[0].value : "?", "last run failed: boom");
+    eq("both point at the Recurring page and can be dismissed", `${notPosting[0].actionHref}:${notPosting[0].dismissible}`, "/recurring:true");
+    eq("a context with no posting run (a hand-built one) yields none", insights.detectNotPosting(emptyContext).length, 0);
+
+    console.log("-- afford viability: the tracker's verdicts --");
+    const affordLib = await import("../src/lib/afford");
+    const projectionFor = (key: string, account: { income: number; committed: number; buffer: number }, flexible: { income: number; committed: number; buffer: number }) => {
+      const info = periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" });
+      return [key, {
+        period: info,
+        account: { accountId: "acc", name: "Checking", currency: "USD", income: account.income, committed: account.committed, buffer: account.buffer, basis: "average" as const, estimatedGoalFunding: 0 },
+        flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0 },
+        estimatedGoals: [] as import("../src/lib/afford").EstimatedGoalFunding[],
+        historyPeriods: 6,
+      }] as const;
+    };
+    const octFirst = civilDate(2026, 10, 1);
+    const shortVerdict = affordLib.evaluateAffordability({
+      installments: affordLib.buildInstallments([octFirst], 500),
+      currency: "USD",
+      projections: new Map([projectionFor("2026-10-A", { income: 1000, committed: 850, buffer: 100 }, { income: 5000, committed: 1000, buffer: 500 })]),
+      rates,
+    });
+    const fineVerdict = affordLib.evaluateAffordability({
+      installments: affordLib.buildInstallments([octFirst], 100),
+      currency: "USD",
+      projections: new Map([projectionFor("2026-10-A", { income: 1000, committed: 150, buffer: 100 }, { income: 1000, committed: 150, buffer: 100 })]),
+      rates,
+    });
+    const afford = insights.detectAffordViability({
+      ...emptyContext,
+      affordRechecks: [
+        { itemId: "plan_laptop", name: "Laptop", verdict: shortVerdict },
+        { itemId: "plan_phone", name: "Phone", verdict: fineVerdict },
+      ],
+    });
+    eq("only the plan that no longer fits becomes an insight, keyed by the item", afford.map((i) => i.id).join(","), "afford_viability:plan_laptop");
+    eq("critical, titled after the plan, linking to the From Afford section", `${afford[0].severity}|${afford[0].title}|${afford[0].actionHref}`, "critical|Laptop from Afford no longer fits|/recurring#from-afford");
+    eq("the evidence leads with the badge's own shortfall and period", JSON.stringify(afford[0].evidence.slice(0, 2)), JSON.stringify([{ kind: "money", label: "Short by", amount: 450, currency: "USD" }, { kind: "text", label: "In", value: "Oct 1-15" }]));
+    eq("... then the installment and the room it leaves, and which check failed", afford[0].evidence.slice(2).map((e) => (e.kind === "money" ? `${e.label}=${e.amount}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Installment due there=500;Room left after it=-450;Check that fails=Checking would end the period below its buffer");
+
+    console.log("-- looks recurring: the detector's suggestions --");
+    const suggestion: import("../src/lib/recurring-detection").RecurringSuggestion = {
+      accountId: "acc_1", merchantKey: "NETFLIX COM", name: "Netflix Com", amount: 15.99, currency: "USD", cadence: "MONTHLY", anchorDays: [12],
+      nextDates: [civilDate(2026, 10, 12)], categoryId: null, detectedFrom: "CSV", sampleNote: "NETFLIX.COM",
+      occurrences: [7, 8, 9].map((m) => ({ id: `t${m}`, date: civilDate(2026, m, 12), amount: 15.99, note: "NETFLIX.COM" })),
+      accountName: "Main Checking", categoryName: null, displayAmount: 15.99,
+    };
+    const suggested = insights.detectRecurringSuggestions({ ...emptyContext, recurringSuggestions: [suggestion] });
+    eq("keyed by account + merchant, the same identity the Recurring page's Dismiss uses", suggested[0].id, "recurring_suggestion:acc_1:NETFLIX COM");
+    eq("advisory: nothing is added until the user says so", `${suggested[0].severity}|${suggested[0].title}|${suggested[0].actionHref}`, "advisory|Netflix Com looks recurring|/recurring");
+    eq("the evidence is the last amount, the cadence in the card's words, the charge span, the account and the next date", suggested[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount} ${e.currency}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Last charged=15.99 USD;Cadence=Monthly, around the 12th;Charges=3, Jul 12, 2026 to Sep 12, 2026;Account=Main Checking;Next expected=2026-10-12");
+
+    console.log("-- goal behind: the goal page's roadmap status --");
+    const sepB = periodInfo({ year: 2026, month: 9, period: "B" });
+    const goalStatus = (over: Partial<import("../src/lib/data/payday").GoalRoadmapStatus>): import("../src/lib/data/payday").GoalRoadmapStatus => ({
+      goalId: "goal_1", name: "Emergency Fund", targetDate: civilDate(2027, 3, 31), period: sepB, roadmapAmount: 307.69, planned: { plannedAmount: 100, recommendedAmount: 100 }, ...over,
+    });
+    const behind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({})] });
+    eq("a dated goal planned under its roadmap is an advisory insight keyed by the goal", `${behind[0].id}|${behind[0].severity}|${behind[0].title}|${behind[0].actionHref}`, "goal_behind:goal_1|advisory|Emergency Fund is behind its roadmap|/goals/goal_1");
+    eq("behind by exactly the page's figure, beside the roadmap, the plan, the period and the target date", behind[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Behind by=207.69;Roadmap this period=307.69;Planned this period=100;Period=Sep 16-30;Target date=2027-03-31;Room couldn't cover=207.69");
+    eq("the room shortfall is left out when the accounts could have covered the pace", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: { plannedAmount: 100, recommendedAmount: 400 } })] })[0].evidence.length, 5);
+    eq("a plan on the roadmap (or ahead) is nothing to notice", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: { plannedAmount: 307.69, recommendedAmount: 307.69 } }), goalStatus({ goalId: "g2", planned: { plannedAmount: 400, recommendedAmount: 400 } })] }).length, 0);
+    eq("a difference within half a cent is on the roadmap - the page's own tolerance", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: { plannedAmount: 307.686, recommendedAmount: 307.686 } })] }).length, 0);
+    eq("an undated goal has no roadmap to be behind", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ targetDate: null })] }).length, 0);
+    eq("a goal with no confirmed plan this period, or no pace, is not behind anything", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: null }), goalStatus({ goalId: "g3", roadmapAmount: null })] }).length, 0);
+
+    console.log("-- the one central function: every detector, critical first --");
+    const all = insights.detectInsights({
+      ...emptyContext,
+      recurringPosting: posting,
+      affordRechecks: [{ itemId: "plan_laptop", name: "Laptop", verdict: shortVerdict }],
+      recurringSuggestions: [suggestion],
+      goalRoadmaps: [goalStatus({})],
+    });
+    eq("all four sources appear", [...new Set(all.map((i) => i.source))].sort().join(","), "afford_viability,goal_behind,not_posting,recurring_suggestion");
+    eq("critical insights lead, then advisory; registry order and each detector's own order within", all.map((i) => i.id).join(","), "not_posting:item_gym,not_posting:item_fund,afford_viability:plan_laptop,recurring_suggestion:acc_1:NETFLIX COM,goal_behind:goal_1");
+    eq("every id is unique across sources", new Set(all.map((i) => i.id)).size, all.length);
+    const kept = insights.withoutDismissed(all, [{ source: "not_posting", key: "item_gym" }, { source: "goal_behind", key: "goal_1" }]);
+    eq("a dismissal removes exactly the insight with that source and key", kept.map((i) => i.id).join(","), "not_posting:item_fund,afford_viability:plan_laptop,recurring_suggestion:acc_1:NETFLIX COM");
+    eq("a dismissal for a key under another source does not match", insights.withoutDismissed(all, [{ source: "afford_viability", key: "item_gym" }]).length, all.length);
+    const es = insights.detectInsights({ ...emptyContext, dictionary: getDictionary("es"), recurringPosting: posting, goalRoadmaps: [goalStatus({})] });
+    eq("titles and labels follow the dictionary", `${es[0].title}|${es[2].evidence[0].label}`, "Gym no se está registrando|Por detrás");
+  }
+
+  console.log("\n== insight engine (database) ==");
+  {
+    const { collectInsights, dismissInsight, listInsightDismissals, loadInsightContext } = await import("../src/lib/data/insights");
+    const { getGoalRoadmapStatuses, getGoalRoadmapAmount: roadmapForInsights, planPeriodRef: planRefForInsights } = await import("../src/lib/data/payday");
+    const { postDueRecurringItems: postForInsights } = await import("../src/lib/recurring-posting");
+    const tracking = await import("../src/lib/afford-tracking");
+    const insightToday = civilDate(2026, 9, 17);
+    const insightPlanRef = planRefForInsights({ displayCurrency: "USD", language: "en", rates, today: insightToday, currentPeriod: periodForDate(insightToday) });
+    eq("the fixtures plan for Sep 16-30 (today is before that period's payday)", periodKey(insightPlanRef), "2026-09-B");
+    eq("no confirmed check-in for the plan period is left over from earlier sections", await prisma.paydayCheckin.count({ where: { year: 2026, month: 9, period: "B" } }), 0);
+
+    const insightAccount = await prisma.account.create({ data: { name: "Verify Insight Account", currency: "USD", type: "CHECKING" } });
+    const insightCategory = await prisma.category.create({ data: { name: "Verify Insight Cat", kind: "EXPENSE" } });
+    // Income on every A payday from March to September, so Afford projects
+    // 1,000 for Oct 1-15 on this account (comparableHistory walks A periods).
+    await prisma.transaction.createMany({
+      data: [3, 4, 5, 6, 7, 8, 9].map((m) => ({ date: civilDate(2026, m, 2), amount: 1000, currency: "USD", type: "INCOME" as const, accountId: insightAccount.id, note: "Verify Insight Salary", source: "MANUAL" as const })),
+    });
+    // 1. Not posting: due on the 5th, no account to post from.
+    const gymItem = await prisma.recurringItem.create({ data: { name: "Verify Insight Gym", amount: 45, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 9, 5), anchorDay: 5, accountId: null } });
+    // 2. Afford: rent takes Oct 1-15's room (1,000 in, 850 owed, 100 kept
+    // back), so the laptop's 400 installment there fails the account check.
+    await prisma.recurringItem.create({ data: { name: "Verify Insight Rent", amount: 850, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 1), anchorDay: 1, accountId: insightAccount.id } });
+    const laptopItem = await prisma.recurringItem.create({ data: { name: "Verify Insight Laptop", amount: 400, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 1), anchorDay: 1, accountId: insightAccount.id, remainingOccurrences: 3, fromAfford: true } });
+    // 3. Looks recurring: three monthly charges from a CSV import.
+    await prisma.transaction.createMany({
+      data: [7, 8, 9].map((m) => ({ date: civilDate(2026, m, 12), amount: 15.99, currency: "USD", type: "EXPENSE" as const, accountId: insightAccount.id, categoryId: insightCategory.id, note: "VERIFY INSIGHT NETFLIX.COM", source: "CSV" as const })),
+    });
+    // 4. Goal behind: 4,000 still to go by March 2027, 100 planned this period.
+    const insightGoal = await prisma.goal.create({ data: { name: "Verify Insight Goal", targetAmount: 5000, currency: "USD", targetDate: civilDate(2027, 3, 31), savedAmount: 1000 } });
+    const insightCheckin = await prisma.paydayCheckin.create({
+      data: {
+        year: 2026, month: 9, period: "B", checkinDate: civilDate(2026, 9, 16), currency: "USD", totalIncome: 1000, protectedBuffer: 100, status: "CONFIRMED",
+        allocations: { create: [{ type: "GOAL", goalId: insightGoal.id, accountId: insightAccount.id, recommendedAmount: 100, plannedAmount: 100, currency: "USD" }] },
+      },
+    });
+
+    // The request path's context: this run's posting summary rides along
+    // exactly as getAppContext() attaches it, and the buffer settings the
+    // Afford re-check needs are the ones every other section uses.
+    const postingRun = await postForInsights(insightToday);
+    const insightContext = {
+      displayCurrency: "USD" as const, language: "en" as const, rates, today: insightToday, currentPeriod: periodForDate(insightToday),
+      recurringPosting: postingRun, bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP",
+    };
+    eq("the posting run skipped the account-less item", postingRun.skipped.map((i) => `${i.name}:${i.reason}`).join(","), "Verify Insight Gym:missing_account");
+
+    console.log("-- the goal page's status, shared with the detector --");
+    const statuses = await getGoalRoadmapStatuses(insightContext);
+    const goalStatus = statuses.find((s) => s.goalId === insightGoal.id);
+    const liveRoadmap = await roadmapForInsights(insightGoal.id, insightPlanRef, insightContext);
+    eq("the status carries the live roadmap figure the goal page measures against", goalStatus?.roadmapAmount, liveRoadmap);
+    eq("... which is the remaining 4,000 over the 13 periods to March 31", liveRoadmap, 307.69);
+    eq("and the confirmed plan's GOAL rows summed: planned and recommended", `${goalStatus?.planned?.plannedAmount}:${goalStatus?.planned?.recommendedAmount}`, "100:100");
+    eq("the plan period and the goal's own details ride along", `${goalStatus?.period.key}:${goalStatus?.name}:${goalStatus?.targetDate ? toISODate(goalStatus.targetDate) : null}`, "2026-09-B:Verify Insight Goal:2027-03-31");
+    eq("a goal with a pace but no confirmed plan rows has planned = null", statuses.filter((s) => s.goalId !== insightGoal.id).every((s) => s.planned === null), true);
+
+    console.log("-- every source at once, through the same inputs the pages use --");
+    const loaded = await loadInsightContext(insightContext);
+    eq("the loaded context holds this run's posting summary, the tracker's verdicts, the suggestions and the goal statuses", `${loaded.recurringPosting === postingRun}:${loaded.affordRechecks.some((t) => t.itemId === laptopItem.id)}:${loaded.recurringSuggestions.some((s) => s.merchantKey === "VERIFY INSIGHT NETFLIX COM")}:${loaded.goalRoadmaps.some((s) => s.goalId === insightGoal.id)}`, "true:true:true:true");
+    const collected = await collectInsights(insightContext);
+    const mine = collected.filter((i) => i.title.startsWith("Verify Insight"));
+    eq("all four fixtures surface as insights", mine.map((i) => i.source).sort().join(","), "afford_viability,goal_behind,not_posting,recurring_suggestion");
+    eq("critical first, advisory after - the order the Inbox lists them in", collected.map((i) => i.severity).join(",").replace(/(critical,)+/, "C").replace(/(advisory,?)+/, "A"), "CA");
+    const gymInsight = mine.find((i) => i.source === "not_posting");
+    const laptopInsight = mine.find((i) => i.source === "afford_viability");
+    const netflixInsight = mine.find((i) => i.source === "recurring_suggestion");
+    const goalInsight = mine.find((i) => i.source === "goal_behind");
+    eq("not posting: keyed by the item, with the reason and the still-due date", `${gymInsight?.key === gymItem.id}:${gymInsight?.evidence.map((e) => (e.kind === "text" ? e.value : e.kind === "date" ? e.date : e.amount)).slice(0, 2).join("|")}`, "true:no account set|2026-09-05");
+    eq("afford: keyed by the plan, short in Oct 1-15 on the account check", `${laptopInsight?.key === laptopItem.id}:${laptopInsight?.evidence[1].kind === "text" ? laptopInsight.evidence[1].value : "?"}:${laptopInsight?.evidence[4].kind === "text" ? laptopInsight.evidence[4].value : "?"}`, "true:Oct 1-15:Verify Insight Account would end the period below its buffer");
+    eq("... by the amount the tracker's own badge reports", laptopInsight?.evidence[0].kind === "money" ? laptopInsight.evidence[0].amount : -1, (() => { const t = loaded.affordRechecks.find((r) => r.itemId === laptopItem.id)!; const s = tracking.summarizeAffordViability(t.verdict); return s.status === "short" ? s.shortfall : -1; })());
+    eq("looks recurring: keyed by account + merchant key, three charges", `${netflixInsight?.key}:${netflixInsight?.evidence[2].kind === "text" ? netflixInsight.evidence[2].value : "?"}`, `${insightAccount.id}:VERIFY INSIGHT NETFLIX COM:3, Jul 12, 2026 to Sep 12, 2026`);
+    eq("goal: keyed by the goal, behind by the page's own figure", `${goalInsight?.key === insightGoal.id}:${goalInsight?.evidence[0].kind === "money" ? goalInsight.evidence[0].amount : -1}`, "true:207.69");
+    eq("every insight links somewhere", collected.every((i) => i.actionHref.startsWith("/")), true);
+
+    console.log("-- dismissing: permanent, idempotent, one row per insight --");
+    const dismissalsBefore = (await listInsightDismissals()).length;
+    await dismissInsight({ source: "recurring_suggestion", key: netflixInsight!.key });
+    const afterOne = await collectInsights(insightContext);
+    eq("a dismissed insight is gone from the list the badge counts", afterOne.some((i) => i.id === netflixInsight!.id), false);
+    eq("... and only that one", afterOne.length, collected.length - 1);
+    eq("the Recurring page's own suggestion is untouched - the signal is not changed, only the Inbox", (await loadInsightContext(insightContext)).recurringSuggestions.some((s) => s.merchantKey === "VERIFY INSIGHT NETFLIX COM"), true);
+    await prisma.transaction.create({ data: { date: civilDate(2026, 10, 12), amount: 15.99, currency: "USD", type: "EXPENSE", accountId: insightAccount.id, categoryId: insightCategory.id, note: "VERIFY INSIGHT NETFLIX.COM", source: "CSV" } });
+    eq("it stays gone as the condition persists", (await collectInsights(insightContext)).some((i) => i.id === netflixInsight!.id), false);
+    await dismissInsight({ source: "recurring_suggestion", key: netflixInsight!.key });
+    eq("dismissing twice keeps one row", (await listInsightDismissals()).length, dismissalsBefore + 1);
+    await dismissInsight({ source: "afford_viability", key: gymItem.id });
+    eq("a dismissal is keyed by source too: the gym item's key under another source leaves its not-posting insight in place", (await collectInsights(insightContext)).some((i) => i.id === gymInsight!.id), true);
+    await dismissInsight({ source: "goal_behind", key: insightGoal.id });
+    await dismissInsight({ source: "not_posting", key: gymItem.id });
+    await dismissInsight({ source: "afford_viability", key: laptopItem.id });
+    const afterAll = await collectInsights(insightContext);
+    eq("with all four dismissed none of the fixtures remain, whatever else is in the database", afterAll.some((i) => i.title.startsWith("Verify Insight")), false);
+
+    await prisma.insightDismissal.deleteMany({ where: { OR: [{ key: netflixInsight!.key }, { key: insightGoal.id }, { key: gymItem.id }, { key: laptopItem.id }] } });
+    eq("the fixture dismissals are removed", (await listInsightDismissals()).length, dismissalsBefore);
+    await prisma.paydayCheckin.delete({ where: { id: insightCheckin.id } });
+    await prisma.goal.delete({ where: { id: insightGoal.id } });
+    await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Insight" } } });
+    await prisma.transaction.deleteMany({ where: { accountId: insightAccount.id } });
+    await prisma.account.delete({ where: { id: insightAccount.id } });
+    await prisma.category.delete({ where: { id: insightCategory.id } });
+    console.log("  ok   insight fixtures removed");
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });
