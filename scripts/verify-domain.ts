@@ -6656,8 +6656,11 @@ async function main() {
     eq("a pattern an active item already tracks (name matches, amount within band) is skipped", detect(netflix3, tracked({})).length, 0);
     eq("... or one on the same account, category and amount when the name differs", detect(netflix3, tracked({ name: "Streaming", categoryId: "cat-sub" })).length, 0);
     eq("... but a paused item does not count as tracking it", detect(netflix3, tracked({ active: false })).length, 1);
-    eq("... nor an item at a different amount", detect(netflix3, tracked({ amount: 19.99 })).length, 1);
-    eq("... nor one in another currency", detect(netflix3, tracked({ currency: "DOP" })).length, 1);
+    eq("a strong name match is tracked even if the price has genuinely risen past the tolerance band (Claro)", detect(netflix3, tracked({ amount: 19.99 })).length, 0);
+    eq("a strong name match is tracked even in another currency (a EUR-tracked item's real charges land in the account's local currency - Whoop/Aplazame/AppleCare)", detect(netflix3, tracked({ currency: "DOP" })).length, 0);
+    eq("without a name match, an item on the same account+category still needs currency and amount to agree (shapeMatches stays strict)", detect(netflix3, tracked({ name: "Streaming", categoryId: "cat-sub", amount: 19.99 })).length, 1);
+    eq("... currency too", detect(netflix3, tracked({ name: "Streaming", categoryId: "cat-sub", currency: "DOP" })).length, 1);
+    eq("a genuinely unrelated pattern (different merchant name) is still suggested, not suppressed by the widened name check", detect(gym, tracked({ name: "Netflix" })).length, 1);
     const dismissedNetflix = { dismissed: [{ accountId: "acct-a", merchantKey: "NETFLIX COM" }] };
     eq("a dismissed merchant on that account is never suggested again", detect(netflix3, dismissedNetflix).length, 0);
     eq("... however many more charges arrive", detect([...netflix3, organic(civilDate(2026, 9, 13), 9.99, "NETFLIX.COM")], dismissedNetflix).length, 0);

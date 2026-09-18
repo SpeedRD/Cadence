@@ -555,11 +555,16 @@ function normalizeForMatch(value: string): string {
 
 /**
  * The same recognition rule the monthly pace uses for "this charge is that
- * item's" (matchRecurringToTransactions in src/lib/data/monthly.ts): same
- * currency, amount within the band, and either the item's name and the
- * merchant contain one another or the item sits on the same account under
- * the same category. Only an active item counts - a paused one is not
- * tracking anything, and the pattern is worth pointing out again.
+ * item's" (matchRecurringToTransactions in src/lib/data/monthly.ts), split
+ * across two paths. A strong merchant-name match (the item's name and the
+ * merchant contain one another) is sufficient on its own: a cross-currency
+ * subscription's real charges are legitimately recorded in the account's
+ * local currency, and a subscription's real price can legitimately drift
+ * without becoming a different subscription. Absent a name match, the item
+ * must sit on the same account and category, with currency equal and amount
+ * within the band - shapeMatches has no name signal to fall back on, so it
+ * needs both. Only an active item counts - a paused one is not tracking
+ * anything, and the pattern is worth pointing out again.
  */
 function isTracked(
   candidate: { accountId: string; merchantKey: string; amount: number; currency: string; categoryId: string | null },
@@ -568,16 +573,18 @@ function isTracked(
   const key = normalizeForMatch(candidate.merchantKey);
   const tolerance = amountTolerance(candidate.amount);
   return items.some((item) => {
-    if (!item.active || item.currency !== candidate.currency) return false;
-    if (Math.abs(item.amount - candidate.amount) > tolerance) return false;
+    if (!item.active) return false;
     const name = normalizeForMatch(item.name);
     const nameMatches =
       name.length >= 3 && key.length >= 3 && (name.includes(key) || key.includes(name));
+    if (nameMatches) return true;
+    if (item.currency !== candidate.currency) return false;
+    if (Math.abs(item.amount - candidate.amount) > tolerance) return false;
     const shapeMatches =
       item.accountId === candidate.accountId &&
       item.categoryId !== null &&
       item.categoryId === candidate.categoryId;
-    return nameMatches || shapeMatches;
+    return shapeMatches;
   });
 }
 
