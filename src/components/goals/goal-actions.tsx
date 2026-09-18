@@ -38,6 +38,7 @@ export function GoalActions({
     targetAmount: number;
     currency: string;
     targetDate: string | null;
+    isDebt: boolean;
   };
   redirectAfterDelete?: boolean;
   locale: Locale;
@@ -78,6 +79,7 @@ export function GoalActions({
             targetAmount: goal.targetAmount,
             currency: goal.currency,
             targetDate: goal.targetDate,
+            isDebt: goal.isDebt,
           }}
         />
       ) : null}

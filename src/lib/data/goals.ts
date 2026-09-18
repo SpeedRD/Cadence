@@ -70,6 +70,8 @@ export interface GoalSummary {
   progress: number;
   targetDate: Date | null;
   achievedAt: Date | null;
+  /** Marked as a debt on the goal form; what the Goals page's payoff comparator reads. */
+  isDebt: boolean;
   /** Contribution needed per pay period to land on the target date. */
   perPeriod: number | null;
   periodsLeft: number | null;
@@ -100,6 +102,7 @@ function summarize(
     targetDate: Date | null;
     achievedAt: Date | null;
     createdAt: Date;
+    isDebt: boolean;
   },
   contributions: { amount: unknown; date: Date }[],
   context: AppContext,
@@ -160,6 +163,7 @@ function summarize(
     progress,
     targetDate: goal.targetDate,
     achievedAt: goal.achievedAt,
+    isDebt: goal.isDebt,
     perPeriod,
     periodsLeft,
     pacePerPeriod,

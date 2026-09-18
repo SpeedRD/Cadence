@@ -929,6 +929,29 @@ export const en = {
     editManualContributionDescription:
       "Changing the account moves the expense it wrote in the ledger and converts the amount to that account's currency.",
     contributionNotManual: "Only a contribution logged by hand is corrected here",
+    isDebtLabel: "This goal is a debt",
+    isDebtHint: "Marks it for the debt payoff comparison on the Goals page. Nothing else about the goal changes.",
+    debtBadge: "Debt",
+    debtComparatorTitle: "Paying off the debts: two orders",
+    debtComparatorDescription:
+      "Each debt keeps receiving its own pace, the roadmap figure for this period. Whatever extra you add goes entirely to the next debt in each order, and once a debt is paid off its pace joins the extra from the following period on.",
+    extraPerPeriodLabel: (code: string) => `Extra per pay period (${code})`,
+    debtFlowPerPeriod: (amount: string) => `${amount} reaches these debts every pay period: their paces plus the extra.`,
+    debtFreeAfter: (n: number, date: string) =>
+      `Every debt paid off after ${n} pay period${n === 1 ? "" : "s"} under either order, by ${date}.`,
+    debtNothingFlowing:
+      "Nothing reaches these debts yet: none has a target date, so none has a pace of its own, and there is no extra.",
+    debtBeyondHorizon: (n: number) => `At this rate the debts are not paid off within ${n} pay periods.`,
+    debtSameTotalNote:
+      "The number of periods is the same under both orders: the same money reaches the debts every period, whichever debt it lands on first. What differs is which debt finishes when.",
+    avalancheTitle: "Largest balance first",
+    avalancheSubtitle: "Avalanche: the extra goes to the debt with the largest remaining balance.",
+    snowballTitle: "Smallest balance first",
+    snowballSubtitle: "Snowball: the extra goes to the debt with the smallest remaining balance.",
+    debtPace: (amount: string) => `${amount} per pay period on its own`,
+    debtNoPace: "No target date: no pace of its own",
+    debtPaidOffIn: (n: number, date: string) => `Paid off in period ${n} · ${date}`,
+    debtNotWithinHorizon: (n: number) => `Not paid off within ${n} pay periods`,
   },
   reports: {
     title: "Reports",

@@ -352,6 +352,19 @@ goal in that state is also an advisory item in the Inbox. Deleting a goal remove
 contribution history but leaves the expenses those contributions wrote in the ledger
 as ordinary, editable transactions.
 
+A goal can be marked as a **debt** on its form (a plain toggle, never inferred from
+the name). Once two or more open goals are marked, the Goals page adds a payoff
+comparison: type an extra amount per pay period and it shows, side by side, the order
+each debt is paid off in under **largest balance first** (avalanche) and **smallest
+balance first** (snowball), with the pay period each one finishes in. Every debt keeps
+receiving its own roadmap pace, the extra goes entirely to the next debt in each
+order, and a paid-off debt's pace folds into the extra from the following period on.
+Cadence holds no interest rates, so these are the balance-ordered forms of both
+strategies. The total number of periods is the same either way (the same money reaches
+the debts every period); what differs is which debt finishes when, and the page says
+so rather than calling either order better. Like Afford it is exploratory and
+read-only: nothing it shows feeds the check-in's goal funding.
+
 ### Reports
 
 ![Reports page: spending by category for the current period, the last six pay periods as bars, average monthly lifestyle spending by category, and the last four completed months](screenshots/reports.png)

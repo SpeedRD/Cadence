@@ -119,6 +119,7 @@ export default async function GoalDetailPage({
                 targetDate: summary.targetDate
                   ? toISODate(summary.targetDate)
                   : null,
+                isDebt: summary.isDebt,
               }}
             />
           </>

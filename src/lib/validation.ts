@@ -411,6 +411,12 @@ export const goalSchema = z.object({
   targetAmount: positiveAmount,
   currency,
   targetDate: optionalIsoDate,
+  /** Goal.isDebt - the form's toggle; absent means not a debt, like the recurring form's `active`. */
+  isDebt: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => value === "on" || value === "true"),
 });
 
 /**

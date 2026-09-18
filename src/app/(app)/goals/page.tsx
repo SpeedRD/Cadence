@@ -2,20 +2,25 @@ import { Plus } from "lucide-react";
 import Link from "next/link";
 
 import { ContributionDialog } from "@/components/goals/contribution-dialog";
+import { DebtPayoffComparator } from "@/components/goals/debt-payoff-comparator";
 import { GoalActions } from "@/components/goals/goal-actions";
 import { GoalAchievedNote, GoalMeter } from "@/components/goals/goal-achieved";
 import { GoalDialog } from "@/components/goals/goal-dialog";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/stat";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { convert, formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
+import { listDebtGoals } from "@/lib/data/debt-payoff";
 import { listGoals } from "@/lib/data/goals";
 import { planPeriodRef } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
+import { MIN_DEBTS_TO_COMPARE } from "@/lib/debt-payoff";
 import { getDictionary } from "@/lib/i18n";
 import { num, round2 } from "@/lib/money";
+import { periodKey } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Goals - Cadence" };
@@ -34,10 +39,15 @@ export default async function GoalsPage() {
   const t = getDictionary(context.language).goals;
   const common = getDictionary(context.language).common;
   const planRef = planPeriodRef(context);
-  const confirmedCheckin = await prisma.paydayCheckin.findFirst({
-    where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
-    include: { allocations: { where: { type: "GOAL" } } },
-  });
+  const [confirmedCheckin, debts] = await Promise.all([
+    prisma.paydayCheckin.findFirst({
+      where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
+      include: { allocations: { where: { type: "GOAL" } } },
+    }),
+    // The comparator's inputs; with fewer than two debts marked there is no
+    // order to compare and the page shows nothing for it.
+    goals.some((goal) => goal.isDebt) ? listDebtGoals(context) : [],
+  ]);
   // A goal's plan is one GOAL row per account it draws on, each in that
   // account's currency (a check-in confirmed before that: a single accountless
   // row in the check-in's currency). Either way the goal's figure is their sum.
@@ -97,12 +107,13 @@ export default async function GoalsPage() {
                     >
                       {goal.name}
                     </Link>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                       {goal.achievedAt
                         ? t.reached
                         : goal.targetDate
                           ? t.targetDate(formatDate(goal.targetDate))
                           : t.noTargetDate}
+                      {goal.isDebt ? <Badge variant="outline">{t.debtBadge}</Badge> : null}
                     </p>
                   </div>
                   <GoalActions
@@ -115,6 +126,7 @@ export default async function GoalsPage() {
                       targetDate: goal.targetDate
                         ? toISODate(goal.targetDate)
                         : null,
+                      isDebt: goal.isDebt,
                     }}
                   />
                 </div>
@@ -200,6 +212,21 @@ export default async function GoalsPage() {
           ))}
         </div>
       )}
+
+      {debts.length >= MIN_DEBTS_TO_COMPARE ? (
+        <DebtPayoffComparator
+          debts={debts.map((debt) => ({
+            goalId: debt.goalId,
+            name: debt.name,
+            balance: debt.balance,
+            minimum: debt.minimum,
+            targetDate: debt.targetDate ? toISODate(debt.targetDate) : null,
+          }))}
+          currency={context.displayCurrency}
+          planPeriod={periodKey(planRef)}
+          locale={context.language}
+        />
+      ) : null}
     </div>
   );
 }

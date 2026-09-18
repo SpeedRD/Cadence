@@ -77,6 +77,15 @@ import {
   type RowCategoryDecision,
 } from "../src/lib/import-grouping";
 import { num, round2 } from "../src/lib/money";
+import {
+  compareDebtStrategies,
+  MAX_DEBT_PERIODS,
+  MIN_DEBTS_TO_COMPARE,
+  orderDebts,
+  simulateDebtPayoff,
+  type DebtInput,
+  type DebtPayoffResult,
+} from "../src/lib/debt-payoff";
 import { gmailRedirectUri } from "../src/lib/oauth/google";
 import type { AffordInput } from "../src/lib/data/afford";
 import type { NextRequest } from "next/server";
@@ -7060,6 +7069,173 @@ async function main() {
     await prisma.account.delete({ where: { id: insightAccount.id } });
     await prisma.category.delete({ where: { id: insightCategory.id } });
     console.log("  ok   insight fixtures removed");
+  }
+
+  console.log("\n== debt payoff comparator (pure) ==");
+  {
+    const card: DebtInput = { goalId: "card", name: "Card", balance: 300, minimum: 100 };
+    const loan: DebtInput = { goalId: "loan", name: "Loan", balance: 1000, minimum: 100 };
+    const car: DebtInput = { goalId: "car", name: "Car", balance: 2000, minimum: 200 };
+    // Deliberately in neither strategy's order.
+    const debts: DebtInput[] = [loan, car, card];
+    const ids = (list: readonly { goalId: string }[]) => list.map((d) => d.goalId).join(",");
+    const finishes = (result: DebtPayoffResult) => result.payoffs.map((p) => `${p.goalId}@${p.period}`).join(",");
+
+    console.log("-- ordering --");
+    eq("avalanche puts the largest remaining balance first", ids(orderDebts(debts, "avalanche")), "car,loan,card");
+    eq("snowball puts the smallest remaining balance first", ids(orderDebts(debts, "snowball")), "card,loan,car");
+    const tied = [{ ...loan, goalId: "l1" }, { ...loan, goalId: "l2" }];
+    eq("a tie keeps the input order under avalanche", ids(orderDebts(tied, "avalanche")), "l1,l2");
+    eq("... and under snowball", ids(orderDebts(tied, "snowball")), "l1,l2");
+    eq("the input is not reordered in place", ids(debts), "loan,car,card");
+    eq("a debt with nothing left is left out of the order", ids(orderDebts([...debts, { goalId: "done", name: "Done", balance: 0, minimum: 50 }], "snowball")), "card,loan,car");
+
+    console.log("-- one simulation worked by hand: 450 a period (400 of minimums + 50 extra) --");
+    const snowball = simulateDebtPayoff(debts, "snowball", 50);
+    const avalanche = simulateDebtPayoff(debts, "avalanche", 50);
+    eq("snowball: the card takes the extra and finishes in period 2, the loan in 6, the car in 8", finishes(snowball), "card@2,loan@6,car@8");
+    eq("avalanche: the card still finishes in period 3 on its own minimum, the car in 7, the loan in 8", finishes(avalanche), "card@3,car@7,loan@8");
+    eq("both orders are debt-free after the same 8 periods", `${snowball.totalPeriods}:${avalanche.totalPeriods}`, "8:8");
+    eq("... the whole 3,300 over 450 a period, rounded up", Math.ceil(3300 / 450), 8);
+    eq("each result carries the order it directed the extra in", `${ids(snowball.order)}|${ids(avalanche.order)}`, "card,loan,car|car,loan,card");
+    eq("each result names its strategy", `${snowball.strategy}:${avalanche.strategy}`, "snowball:avalanche");
+    eq("the last payoff lands in the final period", `${snowball.payoffs.at(-1)?.period}:${avalanche.payoffs.at(-1)?.period}`, "8:8");
+
+    console.log("-- the rollover: a paid-off debt's minimum folds into the extra pool from the next period --");
+    // Under snowball the card is gone after period 2 and the loan has 800
+    // left. On its own 100 plus the 50 extra it would need ceil(800 / 150) =
+    // 6 more periods (period 8); with the card's freed 100 in the pool it
+    // needs ceil(800 / 250) = 4 (period 6). The single-debt runs below are
+    // those two counterfactuals, and the three-debt run above lands on the
+    // second one.
+    const loanAlone: DebtInput = { ...loan, balance: 800 };
+    eq("the loan alone on its minimum plus the extra takes 6 periods", simulateDebtPayoff([loanAlone], "snowball", 50).totalPeriods, 6);
+    eq("with the card's freed 100 added to the extra, 4", simulateDebtPayoff([loanAlone], "snowball", 150).totalPeriods, 4);
+    eq("and in the three-debt run the loan finishes in period 2 + 4, not 2 + 6", snowball.payoffs.find((p) => p.goalId === "loan")?.period, 6);
+    eq("under avalanche the car's 200 and the card's 100 both fold in before the loan is reached: 150 left after period 7 is cleared in one period", finishes(avalanche).endsWith("loan@8"), true);
+
+    console.log("-- the total is order-invariant; only each debt's timing moves --");
+    // A deterministic LCG sweep: whatever the balances, minimums and extra,
+    // the whole flow (extra + every minimum) reaches the debts every period
+    // under either order, so both finish in ceil(total / flow) periods.
+    let seed = 20260917;
+    const rand = (max: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % (max + 1);
+    };
+    let sweepFailures = 0;
+    let sweepDiffers = 0;
+    let sweepRuns = 0;
+    for (let run = 0; run < 300; run += 1) {
+      const count = 2 + rand(3);
+      const set: DebtInput[] = [];
+      for (let i = 0; i < count; i += 1) {
+        set.push({ goalId: `d${i}`, name: `D${i}`, balance: (1 + rand(499_999)) / 100, minimum: rand(30_000) / 100 });
+      }
+      const extra = rand(50_000) / 100;
+      const flow = round2(extra + set.reduce((sum, d) => sum + d.minimum, 0));
+      if (flow === 0) continue;
+      sweepRuns += 1;
+      const total = round2(set.reduce((sum, d) => sum + d.balance, 0));
+      const periods = Math.ceil(Math.round(total * 100) / Math.round(flow * 100));
+      // A set too slow for the horizon reports no total under either order.
+      const expected = periods <= MAX_DEBT_PERIODS ? periods : null;
+      const a = simulateDebtPayoff(set, "avalanche", extra);
+      const s = simulateDebtPayoff(set, "snowball", extra);
+      const everyDebtOnce = (r: DebtPayoffResult) =>
+        expected === null || (r.payoffs.length === count && new Set(r.payoffs.map((p) => p.goalId)).size === count);
+      if (a.totalPeriods !== expected || s.totalPeriods !== expected || !everyDebtOnce(a) || !everyDebtOnce(s)) {
+        sweepFailures += 1;
+        if (sweepFailures <= 3) console.log("     sweep mismatch", JSON.stringify({ set, extra, expected, a: a.totalPeriods, s: s.totalPeriods }));
+      }
+      if (finishes(a) !== finishes(s)) sweepDiffers += 1;
+    }
+    eq("300 random debt sets: both orders finish in ceil(total / flow) periods with every debt paid exactly once", `${sweepFailures}/${sweepRuns}`, `0/${sweepRuns}`);
+    check("... while the per-debt timing differs between the orders in most of them", sweepDiffers > sweepRuns / 2, `${sweepDiffers}/${sweepRuns}`);
+
+    console.log("-- edges --");
+    const noExtra = compareDebtStrategies(debts, 0);
+    eq("with no extra the minimums alone carry both orders: 3,300 over 400 is 9 periods", `${noExtra.avalanche.totalPeriods}:${noExtra.snowball.totalPeriods}`, "9:9");
+    eq("the comparison reports the per-period flow: the extra plus every minimum", `${noExtra.perPeriodFlow}:${compareDebtStrategies(debts, 50).perPeriodFlow}`, "400:450");
+    const spill = simulateDebtPayoff([{ goalId: "a", name: "A", balance: 50, minimum: 100 }, { goalId: "b", name: "B", balance: 150, minimum: 0 }], "snowball", 0);
+    eq("a minimum larger than its debt's balance spills the rest to the next debt in the same period: B gets A's 50 in period 1 and A's freed 100 in period 2", finishes(spill), "a@1,b@2");
+    eq("... so the total is still ceil(200 / 100)", spill.totalPeriods, 2);
+    const undatedFirst = simulateDebtPayoff([{ goalId: "a", name: "A", balance: 200, minimum: 0 }, { goalId: "b", name: "B", balance: 300, minimum: 100 }], "snowball", 50);
+    eq("a debt with no pace of its own is paid only by the extra and freed minimums: 50 a period until B's 100 frees up", finishes(undatedFirst), "b@3,a@4");
+    const undatedLast = simulateDebtPayoff([{ goalId: "a", name: "A", balance: 200, minimum: 0 }, { goalId: "b", name: "B", balance: 300, minimum: 100 }], "avalanche", 50);
+    eq("... and under the other order it waits for B entirely, finishing in the same period 4 here", finishes(undatedLast), "b@2,a@4");
+    const stalled = simulateDebtPayoff([{ goalId: "a", name: "A", balance: 100, minimum: 0 }], "snowball", 0);
+    eq("nothing flowing at all: no total and no payoffs, rather than a loop", `${stalled.totalPeriods}:${stalled.payoffs.length}`, "null:0");
+    eq("... and the comparison says the flow is zero", compareDebtStrategies([{ goalId: "a", name: "A", balance: 100, minimum: 0 }], 0).perPeriodFlow, 0);
+    const horizon = simulateDebtPayoff([{ goalId: "a", name: "A", balance: 100, minimum: 0 }, { goalId: "b", name: "B", balance: 1_000_000, minimum: 0 }], "snowball", 1);
+    eq("beyond the horizon: the debts that did finish are reported, the total is null", `${finishes(horizon)}:${horizon.totalPeriods}`, "a@100:null");
+    eq("the horizon is 600 pay periods (25 years)", MAX_DEBT_PERIODS, 600);
+    eq("a debt that takes exactly the horizon still finishes", simulateDebtPayoff([{ goalId: "a", name: "A", balance: 600, minimum: 1 }], "snowball", 0).totalPeriods, 600);
+    eq("... one more period does not", simulateDebtPayoff([{ goalId: "a", name: "A", balance: 601, minimum: 1 }], "snowball", 0).totalPeriods, null);
+    eq("cents are exact: 0.30 at 0.10 a period is 3 periods, not 4 from float drift", simulateDebtPayoff([{ goalId: "a", name: "A", balance: 0.3, minimum: 0.1 }], "snowball", 0).totalPeriods, 3);
+    const empty = simulateDebtPayoff([], "avalanche", 100);
+    eq("no debts: debt-free in 0 periods, nothing to list", `${empty.totalPeriods}:${empty.payoffs.length}:${empty.order.length}`, "0:0:0");
+    eq("a negative extra counts as none", simulateDebtPayoff(debts, "snowball", -50).totalPeriods, 9);
+    eq("a debt already at zero is neither ordered nor reported", finishes(simulateDebtPayoff([...debts, { goalId: "done", name: "Done", balance: 0, minimum: 50 }], "snowball", 50)), "card@2,loan@6,car@8");
+    eq("the page compares from two debts up", MIN_DEBTS_TO_COMPARE, 2);
+  }
+
+  console.log("\n== debt payoff comparator (database) ==");
+  {
+    const { listDebtGoals } = await import("../src/lib/data/debt-payoff");
+    const { getGoalRoadmapAmount: roadmapForDebts, planPeriodRef: planRefForDebts } = await import("../src/lib/data/payday");
+    const { listGoals: listGoalsForDebts } = await import("../src/lib/data/goals");
+    const { goalSchema } = await import("../src/lib/validation");
+    const debtToday = civilDate(2026, 9, 17);
+    const debtContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: debtToday, currentPeriod: periodForDate(debtToday) };
+    const debtPlanRef = planRefForDebts(debtContext);
+    eq("the fixtures plan for Sep 16-30", periodKey(debtPlanRef), "2026-09-B");
+
+    console.log("-- the goal form's marking --");
+    const form = { name: "Verify Debt Form", targetAmount: "100", currency: "USD", targetDate: "" };
+    eq("the form's toggle parses as a boolean", goalSchema.safeParse({ ...form, isDebt: "true" }).data?.isDebt, true);
+    eq("... off", goalSchema.safeParse({ ...form, isDebt: "false" }).data?.isDebt, false);
+    eq("... and absent (a form without the toggle) means not a debt", goalSchema.safeParse(form).data?.isDebt, false);
+
+    console.log("-- which goals the comparator reads --");
+    const card = await prisma.goal.create({ data: { name: "Verify Debt Card", targetAmount: 1000, currency: "USD", savedAmount: 300, targetDate: civilDate(2026, 12, 31), isDebt: true } });
+    const loan = await prisma.goal.create({ data: { name: "Verify Debt Loan", targetAmount: 3000, currency: "USD", savedAmount: 400, targetDate: civilDate(2027, 3, 31), isDebt: true } });
+    const family = await prisma.goal.create({ data: { name: "Verify Debt Family", targetAmount: 500, currency: "USD", savedAmount: 0, isDebt: true } });
+    await prisma.goal.create({ data: { name: "Verify Debt Savings", targetAmount: 800, currency: "USD", savedAmount: 0, targetDate: civilDate(2026, 12, 31) } });
+    await prisma.goal.create({ data: { name: "Verify Debt Settled", targetAmount: 100, currency: "USD", savedAmount: 100, achievedAt: debtToday, isDebt: true } });
+    const short = (name: string) => name.replace("Verify Debt ", "");
+
+    const summaries = await listGoalsForDebts(debtContext);
+    eq("the goal summary carries the marking", summaries.filter((g) => g.name.startsWith("Verify Debt")).map((g) => `${short(g.name)}:${g.isDebt}`).sort().join(","), "Card:true,Family:true,Loan:true,Savings:false,Settled:true");
+
+    const debts = await listDebtGoals(debtContext);
+    const mine = debts.filter((d) => d.name.startsWith("Verify Debt"));
+    eq("only the open goals marked as debts: not the unmarked one, not the settled one", mine.map((d) => short(d.name)).sort().join(","), "Card,Family,Loan");
+    eq("nothing else in the database is marked", debts.length, mine.length);
+    const byId = new Map(mine.map((d) => [d.goalId, d]));
+    eq("each debt's balance is what is still to go, in the display currency", `${byId.get(card.id)?.balance}:${byId.get(loan.id)?.balance}:${byId.get(family.id)?.balance}`, "700:2600:500");
+    eq("a dated debt's minimum is its roadmap pace for the plan period: 700 over the 7 periods to Dec 31, 2,600 over the 13 to Mar 31", `${byId.get(card.id)?.minimum}:${byId.get(loan.id)?.minimum}`, "100:200");
+    eq("... the very figure the goal page measures against", `${byId.get(card.id)?.minimum === await roadmapForDebts(card.id, debtPlanRef, debtContext)}:${byId.get(loan.id)?.minimum === await roadmapForDebts(loan.id, debtPlanRef, debtContext)}`, "true:true");
+    eq("a debt with no target date has no pace of its own: minimum 0", byId.get(family.id)?.minimum, 0);
+    eq("the target date rides along for the page", `${byId.get(card.id)?.targetDate ? toISODate(byId.get(card.id)!.targetDate!) : null}:${byId.get(family.id)?.targetDate}`, "2026-12-31:null");
+    eq("in the goal list's order (oldest first)", mine.map((d) => d.goalId).join(","), [card.id, loan.id, family.id].join(","));
+
+    console.log("-- end to end: the page's comparison on these inputs, 150 extra --");
+    const comparison = compareDebtStrategies(mine, 150);
+    eq("avalanche: loan, card, family", comparison.avalanche.order.map((d) => short(d.name)).join(","), "Loan,Card,Family");
+    eq("snowball: family, card, loan", comparison.snowball.order.map((d) => short(d.name)).join(","), "Family,Card,Loan");
+    eq("450 a period reaches the debts either way: 300 of minimums + 150 extra", comparison.perPeriodFlow, 450);
+    eq("both orders clear the 3,800 in the same 9 periods", `${comparison.avalanche.totalPeriods}:${comparison.snowball.totalPeriods}`, "9:9");
+    eq("snowball: the family loan in 4 on the extra alone, the card in 5, the loan in 9", comparison.snowball.payoffs.map((p) => `${short(p.name)}@${p.period}`).join(","), "Family@4,Card@5,Loan@9");
+    eq("avalanche: the card in 7 on its own pace, the loan in 8, the family loan in 9 once both freed paces reach it", comparison.avalanche.payoffs.map((p) => `${short(p.name)}@${p.period}`).join(","), "Card@7,Loan@8,Family@9");
+
+    console.log("-- fewer than two debts: nothing to compare --");
+    await prisma.goal.updateMany({ where: { id: { in: [loan.id, family.id] } }, data: { isDebt: false } });
+    const one = (await listDebtGoals(debtContext)).filter((d) => d.name.startsWith("Verify Debt"));
+    eq("unmarking two leaves one, below the page's threshold", `${one.length}:${one.length >= MIN_DEBTS_TO_COMPARE}`, "1:false");
+
+    await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Debt" } } });
+    console.log("  ok   debt fixtures removed");
   }
 
   console.log("\n== cleanup ==");

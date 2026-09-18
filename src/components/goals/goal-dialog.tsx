@@ -1,9 +1,12 @@
 "use client";
 
+import { useState } from "react";
+
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
 import { CurrencySelect } from "@/components/form/selects";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { saveGoalAction } from "@/server/actions/goals";
 
@@ -13,6 +16,7 @@ export interface GoalFormValues {
   targetAmount?: number;
   currency?: string;
   targetDate?: string | null;
+  isDebt?: boolean;
 }
 
 export function GoalDialog({
@@ -31,6 +35,9 @@ export function GoalDialog({
   const t = getDictionary(locale).goals;
   const common = getDictionary(locale).common;
   const editing = Boolean(values.id);
+  // Carried as a hidden field the way the planning preferences form carries
+  // its switch: the Radix switch is not a form control of its own.
+  const [isDebt, setIsDebt] = useState(values.isDebt ?? false);
 
   return (
     <FormDialog
@@ -45,6 +52,7 @@ export function GoalDialog({
       onOpenChange={onOpenChange}
     >
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
+      <input type="hidden" name="isDebt" value={isDebt ? "true" : "false"} />
 
       <Field label={common.name} htmlFor="goal-name">
         <Input
@@ -85,6 +93,14 @@ export function GoalDialog({
           defaultValue={values.targetDate ?? ""}
         />
       </Field>
+
+      <div className="grid gap-1.5">
+        <label className="flex items-center gap-2.5 text-sm">
+          <Switch checked={isDebt} onCheckedChange={setIsDebt} />
+          {t.isDebtLabel}
+        </label>
+        <p className="text-xs text-muted-foreground">{t.isDebtHint}</p>
+      </div>
     </FormDialog>
   );
 }

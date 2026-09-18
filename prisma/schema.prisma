@@ -376,6 +376,9 @@ model Goal {
   savedAmount  Decimal   @default(0) @db.Decimal(14, 2)
   createdAt    DateTime  @default(now())
   achievedAt   DateTime?
+  /// Marked by the user on the goal form, never inferred. The Goals page's
+  /// debt payoff comparator (src/lib/debt-payoff.ts) reads only these goals.
+  isDebt       Boolean   @default(false)
 
   contributions     GoalContribution[]
   paydayAllocations PaydayPlanAllocation[]

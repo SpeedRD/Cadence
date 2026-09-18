@@ -921,6 +921,29 @@ export const es = {
     editManualContributionDescription:
       "Cambiar la cuenta mueve el gasto que escribió en el libro y convierte el monto a la moneda de esa cuenta.",
     contributionNotManual: "Aquí solo se corrigen aportes registrados a mano",
+    isDebtLabel: "Esta meta es una deuda",
+    isDebtHint: "La marca para la comparación de pago de deudas en la página de Metas. Nada más cambia en la meta.",
+    debtBadge: "Deuda",
+    debtComparatorTitle: "Pagar las deudas: dos órdenes",
+    debtComparatorDescription:
+      "Cada deuda sigue recibiendo su propio ritmo, la cifra de la hoja de ruta de este periodo. Todo extra que agregues va íntegro a la siguiente deuda de cada orden, y cuando una deuda queda saldada su ritmo se suma al extra a partir del periodo siguiente.",
+    extraPerPeriodLabel: (code: string) => `Extra por periodo de pago (${code})`,
+    debtFlowPerPeriod: (amount: string) => `${amount} llega a estas deudas cada periodo de pago: sus ritmos más el extra.`,
+    debtFreeAfter: (n: number, date: string) =>
+      `Todas las deudas saldadas tras ${n} periodo${n === 1 ? "" : "s"} de pago en cualquiera de los dos órdenes, para el ${date}.`,
+    debtNothingFlowing:
+      "Todavía nada llega a estas deudas: ninguna tiene fecha límite, así que ninguna tiene ritmo propio, y no hay extra.",
+    debtBeyondHorizon: (n: number) => `A este ritmo las deudas no se saldan en ${n} periodos de pago.`,
+    debtSameTotalNote:
+      "La cantidad de periodos es la misma en ambos órdenes: el mismo dinero llega a las deudas cada periodo, caiga primero en la deuda que caiga. Lo que cambia es qué deuda termina cuándo.",
+    avalancheTitle: "Mayor saldo primero",
+    avalancheSubtitle: "Avalancha: el extra va a la deuda con mayor saldo restante.",
+    snowballTitle: "Menor saldo primero",
+    snowballSubtitle: "Bola de nieve: el extra va a la deuda con menor saldo restante.",
+    debtPace: (amount: string) => `${amount} por periodo de pago por sí sola`,
+    debtNoPace: "Sin fecha límite: sin ritmo propio",
+    debtPaidOffIn: (n: number, date: string) => `Saldada en el periodo ${n} · ${date}`,
+    debtNotWithinHorizon: (n: number) => `No se salda en ${n} periodos de pago`,
   },
   reports: {
     title: "Informes",
