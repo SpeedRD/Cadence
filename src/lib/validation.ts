@@ -8,6 +8,7 @@ import { INSIGHT_SOURCES } from "@/lib/insights";
 import { AMOUNT_MAX, parseAmountInput, round2, type ParsedAmount } from "@/lib/money";
 import {
   ACCOUNT_TYPES,
+  AFFORD_FREQUENCIES,
   CATEGORY_KINDS,
   RECURRING_FREQUENCIES,
   RECURRING_KINDS,
@@ -622,7 +623,12 @@ export const affordInputSchema = z
       .min(1, INSTALLMENT_COUNT_MESSAGE)
       .max(MAX_INSTALLMENTS, INSTALLMENT_COUNT_MESSAGE),
     currency,
-    frequency: z.enum(RECURRING_FREQUENCIES),
+    // AFFORD_FREQUENCIES, not the full RECURRING_FREQUENCIES: Afford's own
+    // picker never offers SEMI_MONTHLY (installmentDates/advanceDate here
+    // have no second-anchor concept - see AFFORD_FREQUENCIES in
+    // src/lib/labels.ts), so a request naming it is refused here rather than
+    // silently recording a plan with no second anchor.
+    frequency: z.enum(AFFORD_FREQUENCIES),
     firstDate: isoDate,
     accountId: z.string().trim().min(1, "Pick an account"),
     acknowledged: z.boolean().default(false),

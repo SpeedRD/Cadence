@@ -19,6 +19,14 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   is the only test harness. It writes rows and deletes them at the end, so
   point it at a scratch database, never one holding real data. Add checks as
   `check`/`eq` blocks; there is no Jest/Vitest.
+- Integrity audit: `DATABASE_URL="postgres://.../any_db" npx tsx scripts/verify-no-double-counting.ts`
+  checks real data for the three pairs of mechanisms that could count one
+  commitment twice or drop it (goal-contribution twins, SEMI_MONTHLY anchors,
+  Afford's goal estimate vs confirmed GOAL rows). Read-only at the database
+  level (`default_transaction_read_only=on` on its connection), so it is safe
+  against real data. Exit 1 is a finding to investigate, never something to
+  fix inside the script; it verifies the mechanisms and must not re-implement
+  them.
 - Migrations: `npm run db:migrate` (`prisma migrate deploy`) connects through
   `DIRECT_URL` (`prisma7.config.ts`), which must be session-capable. Local dev
   has only `DATABASE_URL` and falls back to it.

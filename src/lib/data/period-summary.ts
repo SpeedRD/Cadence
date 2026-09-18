@@ -4,6 +4,7 @@ import { num, round2 } from "@/lib/money";
 import { daysRemainingInPeriod, periodRange, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { owedOccurrences } from "@/lib/recurring";
+import { manualContributionIdFromTransaction } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
 import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
@@ -110,6 +111,7 @@ export async function getPeriodSummary(
         currency: true,
         type: true,
         source: true,
+        externalId: true,
         categoryId: true,
         isExtraordinary: true,
       },
@@ -190,20 +192,42 @@ export async function getPeriodSummary(
       continue;
     }
     totalSpent += amount;
+
+    // A manual goal contribution's paired expense (source MANUAL, externalId
+    // "goal-contribution:<id>" - see logManualContribution in src/lib/goals.ts)
+    // is never spending: the GoalContribution it moved money for already
+    // counts it as savings. Filing it under a savings/subscription category
+    // (isSavingsDefault/isSubscriptionDefault, below) is what keeps it out
+    // today, but that category assignment is an editable field, not an
+    // identity - a direct database edit could reassign it. Checking the row
+    // itself, the same way transactionEditBlock and hasLinkedGoalContribution
+    // already do, closes that gap: the row stays excluded from budget
+    // spending (and from leaking into a category's average, e.g.
+    // getCategorySuggestions) however its category ends up.
+    const inSavingsOrSubscriptionCategory =
+      transaction.categoryId !== null && outsideBudgetCategoryIds.has(transaction.categoryId);
+    const isManualContributionTwin = manualContributionIdFromTransaction(transaction) !== null;
+
     // The per-category breakdown stays complete whatever the budget covers -
-    // the Reports page and the budget rows both read it.
-    const key =
-      transaction.categoryId !== null && expenseCategoryIds.has(transaction.categoryId)
-        ? transaction.categoryId
-        : null;
-    spentByCategory.set(key, (spentByCategory.get(key) ?? 0) + amount);
-    if (transaction.isExtraordinary) {
-      extraordinaryByCategory.set(key, (extraordinaryByCategory.get(key) ?? 0) + amount);
+    // the Reports page and the budget rows both read it - so a manual
+    // contribution twin still appears under its own category exactly as
+    // before, as long as that is still a savings/subscription category. Only
+    // when it has been reassigned away from one (the state above) does it
+    // stop counting as spending in the new category too, rather than
+    // quietly inflating that category's total and any average built from it.
+    if (!isManualContributionTwin || inSavingsOrSubscriptionCategory) {
+      const key =
+        transaction.categoryId !== null && expenseCategoryIds.has(transaction.categoryId)
+          ? transaction.categoryId
+          : null;
+      spentByCategory.set(key, (spentByCategory.get(key) ?? 0) + amount);
+      if (transaction.isExtraordinary) {
+        extraordinaryByCategory.set(key, (extraordinaryByCategory.get(key) ?? 0) + amount);
+      }
     }
 
     const outsideBudget =
-      transaction.source === "RECURRING" ||
-      (transaction.categoryId !== null && outsideBudgetCategoryIds.has(transaction.categoryId));
+      transaction.source === "RECURRING" || inSavingsOrSubscriptionCategory || isManualContributionTwin;
     if (!outsideBudget) spent += amount;
   }
 

@@ -508,6 +508,7 @@ ready to use. Email automation (Gmail/Outlook) is optional — see
 | `npm run db:seed` | Seeds the default categories (idempotent) |
 | `npm run db:studio` | Prisma Studio |
 | `npx tsx scripts/verify-domain.ts` | Domain checks (pay periods, safe-to-spend, posting, payday, Afford, currency, CSV). Writes and then deletes rows, so run it with `DATABASE_URL` pointed at a scratch database |
+| `npx tsx scripts/verify-no-double-counting.ts` | Double-counting integrity audit over real data: goal-contribution twins, SEMI_MONTHLY anchors, Afford's goal estimate vs confirmed GOAL rows. Read-only (the connection is opened `default_transaction_read_only`), so it can be pointed at any database; exit 1 means it found something to investigate |
 
 ## Environment variables
 
