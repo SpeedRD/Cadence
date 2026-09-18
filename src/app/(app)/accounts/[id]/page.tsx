@@ -6,6 +6,11 @@ import { AccountDialog } from "@/components/accounts/account-dialog";
 import { PageHeader } from "@/components/page-header";
 import { SourceBadge } from "@/components/source-badge";
 import { EmptyState, Stat } from "@/components/stat";
+import {
+  ReimbursementBadge,
+  ReimbursementProgressLine,
+  SharedExpenseBadge,
+} from "@/components/transactions/shared-expense-badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -162,17 +167,39 @@ export default async function AccountDetailPage({
                                     ? t.openingBalanceAmountLabel
                                     : (row.categoryName ?? common.uncategorized))}
                           </span>
-                          {row.categoryName ? (
-                            <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
-                              <span
-                                className="size-1.5 rounded-full"
-                                style={{
-                                  backgroundColor:
-                                    row.categoryColor ?? "var(--muted-foreground)",
-                                }}
-                              />
-                              {row.categoryName}
+                          {row.categoryName || row.yourShare !== null || row.reimburses ? (
+                            <span className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+                              {row.categoryName ? (
+                                <>
+                                  <span
+                                    className="size-1.5 rounded-full"
+                                    style={{
+                                      backgroundColor:
+                                        row.categoryColor ?? "var(--muted-foreground)",
+                                    }}
+                                  />
+                                  {row.categoryName}
+                                </>
+                              ) : null}
+                              {/* The same shared-expense badges the Transactions table shows. */}
+                              {row.yourShare !== null ? (
+                                <SharedExpenseBadge
+                                  yourShare={row.yourShare}
+                                  currency={row.currency}
+                                  locale={context.language}
+                                />
+                              ) : null}
+                              {row.reimburses ? (
+                                <ReimbursementBadge reimburses={row.reimburses} locale={context.language} />
+                              ) : null}
                             </span>
+                          ) : null}
+                          {row.reimbursement ? (
+                            <ReimbursementProgressLine
+                              progress={row.reimbursement}
+                              currency={row.currency}
+                              locale={context.language}
+                            />
                           ) : null}
                         </div>
                       </TableCell>

@@ -116,6 +116,9 @@ export const en = {
       transferDirection: "Transfer direction",
       transferGroup: "Transfer group",
       externalId: "External ID",
+      isExtraordinary: "One-off",
+      yourShare: "Your share",
+      reimburses: "Reimburses",
       createdAt: "Created at",
       updatedAt: "Updated at",
       name: "Name",
@@ -395,6 +398,18 @@ export const en = {
     categoryColumnHint:
       "Optional. A row whose cell matches one of your categories by name is filed there; the others get the category picked below.",
     noColumn: "None",
+    // The three per-row flags a Cadence export carries (see src/lib/data/export.ts).
+    oneOffColumn: "One-off column",
+    oneOffColumnHint:
+      "Optional. A row whose cell says Yes is imported as a one-off, left out of typical-spending averages.",
+    yourShareColumn: "Your share column",
+    yourShareColumnHint:
+      "Optional. A spending row with an amount here is imported as a shared expense, with that much of it yours.",
+    reimbursesColumn: "Reimburses column",
+    reimbursesColumnHint:
+      "Optional. An income row naming a shared expense here (date · description · amount, as Cadence exports it) is linked to that expense as a payback.",
+    reimbursementsUnresolved: (n: number) =>
+      `${n} payback${n === 1 ? "" : "s"} could not be matched to a shared expense and ${n === 1 ? "was" : "were"} imported as ordinary income`,
     otherAccount: "other account",
     otherAccountSuffix: (n: number) =>
       `${n} belong${n === 1 ? "s" : ""} to another account and will not be imported`,
@@ -499,6 +514,29 @@ export const en = {
     keepAsNormal: "Keep as normal",
     appliedExtraordinary: "One-off",
     appliedNormal: "Normal spending",
+    // Shared expenses and their reimbursements - see src/lib/shared-expense.ts.
+    sharedExpenseLabel: "This was a shared expense",
+    sharedExpenseHint:
+      "You paid for other people too, and they will pay you back. The full amount still leaves the account; only your share feeds the averages behind payday suggestions and the monthly pace, and the one-off check.",
+    yourShareLabel: (code: string) => `Your share (${code})`,
+    sharedBadge: "Shared",
+    yourShareOf: (share: string) => `your share ${share}`,
+    recoveredSoFar: (recovered: string, owed: string, pending: string) =>
+      `Recovered so far: ${recovered} of ${owed} · ${pending} pending`,
+    fullyReimbursed: (owed: string) => `Fully reimbursed: ${owed}`,
+    reimbursesLabel: "This reimburses a shared expense",
+    reimbursesNone: "No - ordinary income",
+    reimbursesOption: (date: string, description: string, pending: string) =>
+      `${date} · ${description} · ${pending} pending`,
+    reimbursesHint:
+      "A linked deposit raises the account's balance like any income, but is never averaged as income.",
+    reimbursementOf: (description: string) => `Reimbursement: ${description}`,
+    sharedNotApplicable: "Only an expense you logged or imported can be a shared expense",
+    sharedKeptNotice: (share: string) =>
+      `Shared expense - your share ${share}. A posted recurring charge cannot be shared or unshared here, so the share is kept as it is.`,
+    sharedHasReimbursements:
+      "Deposits are still linked to this shared expense - unlink or delete those first",
+    reimbursedExpenseNotShared: "Pick a shared expense to reimburse",
     receivedAmountLabel: (code: string) => `Actual amount received (${code})`,
     receivedAmountHint:
       "Leave blank to record the same amount on both sides, converted at today's rate. Fill it in to record exactly what the bank credited.",

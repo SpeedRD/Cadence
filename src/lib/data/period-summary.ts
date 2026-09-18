@@ -22,6 +22,16 @@ export interface CategoryLine {
    * that already left such transactions out.
    */
   extraordinarySpent: number;
+  /**
+   * The part of `spent` that was other people's share of shared expenses
+   * (amount - Transaction.yourShare, see src/lib/shared-expense.ts). Like
+   * `extraordinarySpent`, still inside `spent` for every actual figure and
+   * subtracted only by the averages that estimate typical spending, so they
+   * read the user's own cost. A row that is also a confirmed one-off is
+   * already wholly in `extraordinarySpent` and adds nothing here. 0 on a
+   * line built from rows that already read the share in place of the amount.
+   */
+  othersShareSpent: number;
   budget: number | null;
 }
 
@@ -114,6 +124,7 @@ export async function getPeriodSummary(
         externalId: true,
         categoryId: true,
         isExtraordinary: true,
+        yourShare: true,
       },
     }),
     prisma.category.findMany({ orderBy: { name: "asc" } }),
@@ -181,6 +192,11 @@ export async function getPeriodSummary(
   // Confirmed one-offs, by the same key: reported beside each line's spending
   // (never subtracted from it) so an average can leave them out.
   const extraordinaryByCategory = new Map<string | null, number>();
+  // Other people's share of shared expenses, by the same key and on the same
+  // terms: reported beside the spending so an average can read the user's own
+  // cost. The full amount stays in every actual figure below - it is what
+  // left the account.
+  const othersShareByCategory = new Map<string | null, number>();
   let spent = 0;
   let totalSpent = 0;
   let income = 0;
@@ -223,6 +239,11 @@ export async function getPeriodSummary(
       spentByCategory.set(key, (spentByCategory.get(key) ?? 0) + amount);
       if (transaction.isExtraordinary) {
         extraordinaryByCategory.set(key, (extraordinaryByCategory.get(key) ?? 0) + amount);
+      } else if (transaction.yourShare !== null) {
+        // A one-off's whole amount is already set aside above; only an
+        // ordinary shared expense has a part to report here.
+        const othersShare = amount - toDisplay(num(transaction.yourShare), transaction.currency);
+        othersShareByCategory.set(key, (othersShareByCategory.get(key) ?? 0) + othersShare);
       }
     }
 
@@ -285,6 +306,7 @@ export async function getPeriodSummary(
       color: category.color,
       spent: round2(spentByCategory.get(category.id) ?? 0),
       extraordinarySpent: round2(extraordinaryByCategory.get(category.id) ?? 0),
+      othersShareSpent: round2(othersShareByCategory.get(category.id) ?? 0),
       budget: budgetByCategory.get(category.id) ?? null,
     }));
 
@@ -296,6 +318,7 @@ export async function getPeriodSummary(
       color: "#7a8590",
       spent: round2(uncategorized),
       extraordinarySpent: round2(extraordinaryByCategory.get(null) ?? 0),
+      othersShareSpent: round2(othersShareByCategory.get(null) ?? 0),
       budget: null,
     });
   }

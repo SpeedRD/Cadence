@@ -6480,6 +6480,367 @@ async function main() {
     console.log("  ok   extraordinary fixtures removed");
   }
 
+  console.log("\n== shared expenses and reimbursements ==");
+  {
+    const { ownShare, yourShareIssue, reimbursementProgress, isOpenSharedExpense } =
+      await import("../src/lib/shared-expense");
+    const { canBeSharedExpense, reimbursedExpenseIdFromTransaction } = await import("../src/lib/transactions");
+    const { findExtraordinaryCandidates } = await import("../src/lib/data/extraordinary");
+    const { getCategorySuggestions: suggestFor } = await import("../src/lib/data/payday");
+    const { classifyCompletedMonth: classifyMonth, getCurrentMonthPace: currentPace } =
+      await import("../src/lib/data/monthly");
+    const { getPeriodSummary: summaryFor } = await import("../src/lib/data/period-summary");
+    const { getAccountBalances: balancesFor } = await import("../src/lib/data/accounts");
+    const { listTransactions: listRows, listOpenSharedExpenses } = await import("../src/lib/data/transactions");
+    const { projectPeriods: projectFor } = await import("../src/lib/data/afford");
+    const { monthWindow: windowFor } = await import("../src/lib/month");
+
+    console.log("-- the share and the payback (pure) --");
+    eq("an ordinary row's own cost is its whole amount", ownShare({ amount: 2725, yourShare: null }), 2725);
+    eq("a shared row's own cost is its share", ownShare({ amount: 2725, yourShare: 545 }), 545);
+    eq("a share must be positive", yourShareIssue(2725, 0), "Enter an amount greater than 0");
+    eq("a share cannot exceed the amount", yourShareIssue(2725, 2725.01), "Your share cannot be more than the amount");
+    eq("a share equal to the amount is allowed - nothing is then owed back", yourShareIssue(2725, 2725), null);
+    eq("an ordinary share is fine", yourShareIssue(2725, 545), null);
+    eq(
+      "progress: owed is the rest, pending is what has not come back",
+      JSON.stringify(reimbursementProgress({ amount: 2725, yourShare: 545 }, 1000)),
+      JSON.stringify({ owed: 2180, recovered: 1000, pending: 1180, settled: false }),
+    );
+    eq(
+      "progress: settled once the deposits reach what was owed",
+      JSON.stringify(reimbursementProgress({ amount: 2725, yourShare: 545 }, 2180)),
+      JSON.stringify({ owed: 2180, recovered: 2180, pending: 0, settled: true }),
+    );
+    eq("progress: an over-generous payback never goes negative", reimbursementProgress({ amount: 2725, yourShare: 545 }, 2500).pending, 0);
+    check("a shared expense with something pending is open", isOpenSharedExpense({ amount: 2725, yourShare: 545 }, 1000));
+    check("a settled one is not", !isOpenSharedExpense({ amount: 2725, yourShare: 545 }, 2180));
+    check("an ordinary expense is never open", !isOpenSharedExpense({ amount: 2725, yourShare: null }, 0));
+
+    console.log("-- which rows may carry a share, and which rows are paybacks (pure) --");
+    check("a manual expense may be shared", canBeSharedExpense({ type: "EXPENSE", source: "MANUAL", externalId: null }));
+    check("a CSV expense may be shared", canBeSharedExpense({ type: "EXPENSE", source: "CSV", externalId: "csv:abc:1" }));
+    check("a RECURRING row never is - the same rule as the one-off flag", !canBeSharedExpense({ type: "EXPENSE", source: "RECURRING", externalId: "item:2026-08-01" }));
+    check("income never is", !canBeSharedExpense({ type: "INCOME", source: "MANUAL", externalId: null }));
+    check("the expense a goal contribution wrote never is", !canBeSharedExpense({ type: "EXPENSE", source: "MANUAL", externalId: "goal-contribution:abc" }));
+    eq("a linked deposit is known by its own identity", reimbursedExpenseIdFromTransaction({ type: "INCOME", reimbursesTransactionId: "exp1" }), "exp1");
+    eq("an unlinked deposit is ordinary income", reimbursedExpenseIdFromTransaction({ type: "INCOME", reimbursesTransactionId: null }), null);
+    eq("only an INCOME row can be a payback, whatever the column says", reimbursedExpenseIdFromTransaction({ type: "EXPENSE", reimbursesTransactionId: "exp1" }), null);
+
+    console.log("-- transactionSchema: the share and the link --");
+    {
+      const base = { date: "2026-08-20", currency: "DOP", accountId: "acct", note: "", categoryId: "" };
+      const plain = transactionSchema.safeParse({ ...base, amount: "2725", type: "EXPENSE" });
+      check("a form with none of the new fields still validates", plain.success);
+      eq(
+        "...with no switch at all, the share is left alone (undefined - untouched on an update, null on a create)",
+        plain.success ? String(plain.data.yourShare) : "n/a",
+        "undefined",
+      );
+      eq("...and no link", plain.success ? plain.data.reimbursesTransactionId : "n/a", null);
+      const switchedOff = transactionSchema.safeParse({ ...base, amount: "2725", type: "EXPENSE", isShared: "false", yourShare: "545" });
+      eq("with the switch off, a share left in the field is discarded", switchedOff.success ? switchedOff.data.yourShare : "n/a", null);
+      const noSwitchWithShare = transactionSchema.safeParse({ ...base, amount: "2725", type: "EXPENSE", yourShare: "545" });
+      eq("a share with no switch is neither kept nor cleared - the form never offered it", noSwitchWithShare.success ? String(noSwitchWithShare.data.yourShare) : "n/a", "undefined");
+      const shared = transactionSchema.safeParse({ ...base, amount: "2725", type: "EXPENSE", isShared: "true", yourShare: "545" });
+      eq("with the switch on, the share is kept", shared.success ? shared.data.yourShare : "n/a", 545);
+      eq("...and an expense never carries a link", shared.success ? shared.data.reimbursesTransactionId : "n/a", null);
+      const blankShare = transactionSchema.safeParse({ ...base, amount: "2725", type: "EXPENSE", isShared: "true", yourShare: "" });
+      eq("the switch on with a blank share is an error, not silently unshared", blankShare.success ? "accepted" : blankShare.error.issues[0]?.message, "Enter your share");
+      const tooBig = transactionSchema.safeParse({ ...base, amount: "2725", type: "EXPENSE", isShared: "true", yourShare: "2725.01" });
+      eq("a share above the amount is rejected", tooBig.success ? "accepted" : tooBig.error.issues[0]?.message, "Your share cannot be more than the amount");
+      const whole = transactionSchema.safeParse({ ...base, amount: "2725", type: "EXPENSE", isShared: "true", yourShare: "2725" });
+      eq("a share equal to the amount is accepted", whole.success ? whole.data.yourShare : "n/a", 2725);
+      const income = transactionSchema.safeParse({ ...base, amount: "1000", type: "INCOME", reimbursesTransactionId: "exp1", isShared: "true", yourShare: "545" });
+      eq("an INCOME row keeps its link", income.success ? income.data.reimbursesTransactionId : "n/a", "exp1");
+      eq("...and never a share, whatever a switched type left behind", income.success ? income.data.yourShare : "n/a", null);
+      const incomeNone = transactionSchema.safeParse({ ...base, amount: "1000", type: "INCOME", reimbursesTransactionId: "none" });
+      eq("the picker's 'none' is no link", incomeNone.success ? incomeNone.data.reimbursesTransactionId : "n/a", null);
+      const external = transactionSchema.safeParse({ ...base, amount: "1000", type: "EXTERNAL_TRANSFER", transferDirection: "OUT", isShared: "true", yourShare: "5", reimbursesTransactionId: "exp1" });
+      check("an external transfer carries neither", external.success && external.data.yourShare === null && external.data.reimbursesTransactionId === null);
+    }
+
+    console.log("-- the motivating case (database): DOP 2,725 of movie tickets, DOP 545 of it yours --");
+    const sharedAccount = await prisma.account.create({
+      data: { name: "Verify Shared Account", currency: "DOP", type: "CHECKING" },
+    });
+    const sharedCategory = await prisma.category.create({ data: { name: "Verify Shared Cat", kind: "EXPENSE" } });
+    // Everything in DOP, displayed in DOP, so every figure below is exact.
+    const augustToday = civilDate(2026, 8, 25);
+    const sharedContext = {
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates,
+      today: augustToday,
+      currentPeriod: periodForDate(augustToday),
+    };
+    const sharedRow = (
+      amount: number,
+      extra: Partial<{ date: Date; yourShare: number; type: "EXPENSE" | "INCOME"; currency: string; reimbursesTransactionId: string; note: string }> = {},
+    ) => ({
+      date: extra.date ?? civilDate(2026, 8, 20),
+      amount,
+      currency: extra.currency ?? "DOP",
+      type: extra.type ?? ("EXPENSE" as const),
+      accountId: sharedAccount.id,
+      categoryId: extra.type === "INCOME" ? null : sharedCategory.id,
+      source: "MANUAL" as const,
+      yourShare: extra.yourShare,
+      reimbursesTransactionId: extra.reimbursesTransactionId,
+      note: extra.note,
+    });
+    // July history for the category: median 500, so the one-off threshold is 1,500.
+    await prisma.transaction.createMany({
+      data: [500, 550, 450].map((amount) => sharedRow(amount, { date: civilDate(2026, 7, 20) })),
+    });
+    const periodBefore = await summaryFor(sharedContext.currentPeriod, sharedContext);
+    const balanceBefore = (await balancesFor(sharedContext)).find((a) => a.id === sharedAccount.id)!.balance;
+
+    const asFullAmount = await findExtraordinaryCandidates(
+      [{ key: "tickets", categoryId: sharedCategory.id, amount: 2725, currency: "DOP" }],
+      sharedContext,
+    );
+    check("measured at the full amount, the tickets would trip the one-off threshold (2,725 > 3 x 500)", asFullAmount.has("tickets"));
+    const asOwnShare = await findExtraordinaryCandidates(
+      [{ key: "tickets", categoryId: sharedCategory.id, amount: ownShare({ amount: 2725, yourShare: 545 }), currency: "DOP" }],
+      sharedContext,
+    );
+    check("measured at the share, as saveTransactionAction measures a shared expense, they do not", !asOwnShare.has("tickets"));
+
+    const tickets = await prisma.transaction.create({ data: sharedRow(2725, { yourShare: 545, note: "Verify Shared movie tickets" }) });
+    const ordinary = await prisma.transaction.create({ data: sharedRow(600, { note: "Verify Shared dinner" }) });
+    eq("the share is stored beside the amount, which is untouched", `${num(tickets.amount)}/${num(tickets.yourShare)}`, "2725/545");
+    eq("an ordinary row has no share", ordinary.yourShare, null);
+
+    const periodAfter = await summaryFor(sharedContext.currentPeriod, sharedContext);
+    eq("this period's Spent rises by the full 2,725 + 600: what left the account", round2(periodAfter.spent - periodBefore.spent), 3325);
+    eq("...and so does total spending", round2(periodAfter.totalSpent - periodBefore.totalSpent), 3325);
+    const ticketsLine = periodAfter.categories.find((line) => line.categoryId === sharedCategory.id)!;
+    eq("the category line's spent is the full amount too", ticketsLine.spent, 3325);
+    eq("...with other people's part reported beside it, the way one-offs are", ticketsLine.othersShareSpent, 2180);
+    eq("...and nothing extraordinary", ticketsLine.extraordinarySpent, 0);
+    const balanceAfter = (await balancesFor(sharedContext)).find((a) => a.id === sharedAccount.id)!.balance;
+    eq("the account balance drops by the full 2,725 + 600", round2(balanceBefore - balanceAfter), 3325);
+
+    console.log("-- the two averages read the share; the current month reads the fact --");
+    // Plan 2026-09-B: comparable periods are 2026-08-B (the tickets and the
+    // dinner) and 2026-07-B (the three history rows), averaged over the two.
+    const planRef = { year: 2026, month: 9, period: "B" as const };
+    const withShare = await suggestFor(planRef, [{ id: sharedCategory.id }], sharedContext);
+    eq(
+      "payday suggestion: (545 + 600 + 1,500) / 2 - the tickets count at your share, the dinner in full",
+      JSON.stringify(withShare.get(sharedCategory.id)),
+      JSON.stringify({ amount: 1322.5, basis: "average" }),
+    );
+    const augustWindow = windowFor({ year: 2026, month: 8 });
+    const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
+    const septemberContext = { ...sharedContext, today: civilDate(2026, 9, 17), currentPeriod: periodForDate(civilDate(2026, 9, 17)) };
+    const augustWithShare = await classifyMonth(augustWindow, septemberContext, [], categoryMeta);
+    const augustLineWithShare = augustWithShare.lifestyleByCategory.find((line) => line.categoryId === sharedCategory.id)!;
+    eq("completed month: the category's lifestyle figure is 545 + 600", augustLineWithShare.spent, 1145);
+    eq("...with nothing left to report as other people's part - it was already read at the share", augustLineWithShare.othersShareSpent, 0);
+    const paceWithShare = await currentPace(sharedContext);
+
+    // The same rows with the share taken off: the only thing that changes is
+    // what the averages read.
+    await prisma.transaction.update({ where: { id: tickets.id }, data: { yourShare: null } });
+    const withoutShare = await suggestFor(planRef, [{ id: sharedCategory.id }], sharedContext);
+    eq("without the share, the suggestion averages the full 2,725: a difference of exactly 2,180 / 2", round2(withoutShare.get(sharedCategory.id)!.amount - withShare.get(sharedCategory.id)!.amount), 1090);
+    const augustWithoutShare = await classifyMonth(augustWindow, septemberContext, [], categoryMeta);
+    eq("without the share, the completed month's lifestyle rises by exactly 2,180", round2(augustWithoutShare.lifestyle - augustWithShare.lifestyle), 2180);
+    const paceWithoutShare = await currentPace(sharedContext);
+    eq("the month in progress is the same either way - spent so far is what left the account", paceWithShare.lifestyleSpentSoFar, paceWithoutShare.lifestyleSpentSoFar);
+    const periodWithoutShare = await summaryFor(sharedContext.currentPeriod, sharedContext);
+    eq("and so is this period's Spent", periodWithoutShare.spent, periodAfter.spent);
+    eq("the ordinary dinner is 600 in the summary with or without the tickets' share", periodWithoutShare.categories.find((line) => line.categoryId === sharedCategory.id)!.spent - 2725, 600);
+    await prisma.transaction.update({ where: { id: tickets.id }, data: { yourShare: 545 } });
+
+    const laterCandidate = await findExtraordinaryCandidates(
+      // History is now 500, 550, 450, 545 (the tickets at the share) and 600:
+      // median 545, threshold 1,635. Read at the full 2,725 the median would be
+      // 550 and 1,640 would pass.
+      [{ key: "next", categoryId: sharedCategory.id, amount: 1640, currency: "DOP" }],
+      septemberContext,
+    );
+    check("in the history a later candidate is measured against, the tickets count at the share", laterCandidate.has("next"));
+
+    console.log("-- paying it back: linked deposits are real money in, never averaged income --");
+    // 20,000 of pay in the same period, plus 500 of ordinary side income, so
+    // the projection has something to average and something to leave alone.
+    await prisma.transaction.create({ data: sharedRow(20000, { type: "INCOME", note: "Verify Shared pay" }) });
+    await prisma.transaction.create({ data: sharedRow(500, { type: "INCOME", date: civilDate(2026, 8, 21), note: "Verify Shared side income" }) });
+    const firstPayback = await prisma.transaction.create({
+      data: sharedRow(1000, { type: "INCOME", date: civilDate(2026, 8, 21), reimbursesTransactionId: tickets.id, note: "Verify Shared payback 1" }),
+    });
+    const balanceAfterPayback = (await balancesFor(sharedContext)).find((a) => a.id === sharedAccount.id)!.balance;
+    eq("the deposit raises the balance like any income", round2(balanceAfterPayback - balanceAfter), 21500);
+    const periodWithPayback = await summaryFor(sharedContext.currentPeriod, sharedContext);
+    eq("and this period's income counts it - what arrived is a fact", round2(periodWithPayback.income - periodAfter.income), 21500);
+
+    const page = await listRows({ accountId: sharedAccount.id }, sharedContext);
+    const ticketsRow = page.rows.find((row) => row.id === tickets.id)!;
+    eq(
+      "the tickets row shows what has come back so far, re-summed from the linked deposits",
+      JSON.stringify(ticketsRow.reimbursement),
+      JSON.stringify({ owed: 2180, recovered: 1000, pending: 1180, settled: false }),
+    );
+    eq("the tickets row carries its share", ticketsRow.yourShare, 545);
+    eq("the ordinary row carries neither", JSON.stringify([page.rows.find((row) => row.id === ordinary.id)!.yourShare, page.rows.find((row) => row.id === ordinary.id)!.reimbursement]), "[null,null]");
+    eq("the deposit row points at the tickets", page.rows.find((row) => row.id === firstPayback.id)!.reimbursesTransactionId, tickets.id);
+    const openBefore = await listOpenSharedExpenses(sharedContext);
+    eq("the picker offers the tickets with what is still pending", JSON.stringify(openBefore.filter((e) => e.id === tickets.id).map((e) => e.reimbursement.pending)), "[1180]");
+    check("the ordinary dinner is not on offer", !openBefore.some((e) => e.id === ordinary.id));
+
+    // Afford projects 2026-10-B from B-period history walked from 2026-08-B
+    // (today is past its end): the account's income is the pay and the side
+    // income, never the payback.
+    const affordContext = { ...septemberContext, today: civilDate(2026, 9, 20), currentPeriod: periodForDate(civilDate(2026, 9, 20)), bufferPercent: 10, bufferFloorAmount: 0, bufferFloorCurrency: "DOP" };
+    const onlyThisAccount = [{ id: sharedAccount.id, name: sharedAccount.name, currency: "DOP" }];
+    const octoberB = [{ year: 2026, month: 10, period: "B" as const }];
+    const projectedLinked = (await projectFor(octoberB, onlyThisAccount[0], onlyThisAccount, affordContext)).get("2026-10-B")!;
+    eq("projected income is 20,000 + 500: the linked payback is left out by its identity", projectedLinked.account.income, 20500);
+    eq("basis is still an average - there is real income to average", projectedLinked.account.basis, "average");
+    await prisma.transaction.update({ where: { id: firstPayback.id }, data: { reimbursesTransactionId: null } });
+    const projectedUnlinked = (await projectFor(octoberB, onlyThisAccount[0], onlyThisAccount, affordContext)).get("2026-10-B")!;
+    eq("unlinked, the same deposit is ordinary income and is averaged in", projectedUnlinked.account.income, 21500);
+    await prisma.transaction.update({ where: { id: firstPayback.id }, data: { reimbursesTransactionId: tickets.id } });
+
+    // A second payback in another currency: 10 USD is 600 DOP at the fixture
+    // rate, summed into the expense's own currency.
+    const secondPayback = await prisma.transaction.create({
+      data: sharedRow(10, { type: "INCOME", currency: "USD", date: civilDate(2026, 8, 22), reimbursesTransactionId: tickets.id, note: "Verify Shared payback 2" }),
+    });
+    const afterSecond = (await listRows({ accountId: sharedAccount.id }, sharedContext)).rows.find((row) => row.id === tickets.id)!;
+    eq("a payback in another currency converts into the expense's currency: 1,000 + 600 recovered", JSON.stringify(afterSecond.reimbursement), JSON.stringify({ owed: 2180, recovered: 1600, pending: 580, settled: false }));
+    const settling = await prisma.transaction.create({
+      data: sharedRow(580, { type: "INCOME", date: civilDate(2026, 8, 23), reimbursesTransactionId: tickets.id, note: "Verify Shared payback 3" }),
+    });
+    const settled = (await listRows({ accountId: sharedAccount.id }, sharedContext)).rows.find((row) => row.id === tickets.id)!;
+    eq("three paybacks later the tickets are settled", JSON.stringify(settled.reimbursement), JSON.stringify({ owed: 2180, recovered: 2180, pending: 0, settled: true }));
+    check("a settled expense leaves the picker", !(await listOpenSharedExpenses(sharedContext)).some((e) => e.id === tickets.id));
+    check("...unless a deposit being edited already points at it", (await listOpenSharedExpenses(sharedContext, [tickets.id])).some((e) => e.id === tickets.id));
+    eq("no payback ever counts toward projected income, settled or not", (await projectFor(octoberB, onlyThisAccount[0], onlyThisAccount, affordContext)).get("2026-10-B")!.account.income, 20500);
+    await prisma.transaction.deleteMany({ where: { id: { in: [secondPayback.id, settling.id] } } });
+
+    console.log("-- the link survives the ledger, not the expense --");
+    const throwaway = await prisma.transaction.create({ data: sharedRow(300, { yourShare: 100, note: "Verify Shared throwaway" }) });
+    const throwawayPayback = await prisma.transaction.create({
+      data: sharedRow(50, { type: "INCOME", reimbursesTransactionId: throwaway.id, note: "Verify Shared throwaway payback" }),
+    });
+    await prisma.transaction.delete({ where: { id: throwaway.id } });
+    const orphaned = await prisma.transaction.findUnique({ where: { id: throwawayPayback.id } });
+    eq("deleting the expense underneath a deposit keeps the deposit and clears its link (ON DELETE SET NULL)", `${orphaned ? num(orphaned.amount) : "gone"}/${orphaned?.reimbursesTransactionId}`, "50/null");
+    await prisma.transaction.delete({ where: { id: throwawayPayback.id } });
+
+    console.log("-- a share the form never offered survives an unrelated edit --");
+    // A posted recurring charge with a share: only a direct database edit can
+    // produce it (the action refuses it), and the dialog then shows the share
+    // without a switch. Saved through the schema with no switch, the update
+    // leaves the share exactly as it is.
+    const postedShared = await prisma.transaction.create({
+      data: { ...sharedRow(900, { yourShare: 300, note: "Verify Shared posted charge" }), source: "RECURRING", externalId: "verify-shared-item:2026-08-20" },
+    });
+    const unrelatedEdit = transactionSchema.safeParse({
+      id: postedShared.id, date: "2026-08-21", amount: "900", currency: "DOP", type: "EXPENSE", accountId: sharedAccount.id, categoryId: sharedCategory.id, note: "Verify Shared posted charge, renamed",
+    });
+    check("the edit validates without a switch", unrelatedEdit.success);
+    if (unrelatedEdit.success) {
+      const { id: editedId, ...editedValues } = unrelatedEdit.data;
+      await prisma.transaction.update({ where: { id: editedId as string }, data: editedValues });
+    }
+    const afterEdit = await prisma.transaction.findUniqueOrThrow({ where: { id: postedShared.id } });
+    eq("the note changed", afterEdit.note, "Verify Shared posted charge, renamed");
+    eq("and the share is still there", num(afterEdit.yourShare), 300);
+    eq("the same edit with the switch off would clear it - that is the user's answer, not an omission", transactionSchema.safeParse({ date: "2026-08-21", amount: "900", currency: "DOP", type: "EXPENSE", accountId: "a", categoryId: "", note: "", isShared: "false" }).data?.yourShare, null);
+    await prisma.transaction.delete({ where: { id: postedShared.id } });
+
+    console.log("-- export -> import round trip keeps the one-off flag, the share and the payback link --");
+    {
+      const { buildExportFiles: exportFiles } = await import("../src/lib/data/export");
+      const { importCsvTransactions } = await import("../src/lib/data/import");
+      const { parseFlag } = await import("../src/lib/csv");
+      await prisma.transaction.update({ where: { id: ordinary.id }, data: { isExtraordinary: true } });
+      const table = parseCsv((await exportFiles("en")).find((file) => file.name === "transactions.csv")!.text);
+      const header = table[0];
+      const col = (name: string) => header.indexOf(name);
+      check("transactions.csv carries One-off, Your share and Reimburses columns", col("One-off") >= 0 && col("Your share") >= 0 && col("Reimburses") >= 0);
+      const idColumn = header.length - 1;
+      const exportedById = new Map(table.slice(1).map((cells) => [cells[idColumn], cells]));
+      eq("the tickets export their share", exportedById.get(tickets.id)![col("Your share")], "545.00");
+      eq("the one-off exports as Yes", exportedById.get(ordinary.id)![col("One-off")], "Yes");
+      eq(
+        "the payback names the tickets by their own date, description and signed amount - never by id",
+        exportedById.get(firstPayback.id)![col("Reimburses")],
+        "2026-08-20 · Verify Shared movie tickets · -2725.00 DOP",
+      );
+      eq("the tickets, a shared expense, are no one-off and pay nothing back", [exportedById.get(tickets.id)![col("One-off")], exportedById.get(tickets.id)![col("Reimburses")]].join("|"), "No|");
+      eq("an ordinary deposit carries blank flags", [exportedById.get(firstPayback.id)![col("Your share")], exportedById.get(firstPayback.id)![col("One-off")]].join("|"), "|No");
+
+      // Read the account's rows back the way the importer's pickers would
+      // map them: Date / Amount / Description by position, the three flag
+      // columns by name, the file's signed convention for the type.
+      const rowsFor = (predicate: (cells: string[]) => boolean) =>
+        table.slice(1).filter((cells) => cells[col("Account")] === "Verify Shared Account" && predicate(cells)).map((cells) => {
+          const signed = parseAmount(cells[1]) as number;
+          const type = signed < 0 ? ("EXPENSE" as const) : ("INCOME" as const);
+          const share = parseAmount(cells[col("Your share")]);
+          return {
+            date: cells[0],
+            amount: Math.abs(signed),
+            type,
+            transferDirection: null,
+            note: cells[2] || null,
+            categoryId: null,
+            importAnyway: false,
+            isExtraordinary: parseFlag(cells[col("One-off")]),
+            yourShare: type === "EXPENSE" && share !== null ? Math.abs(share) : null,
+            reimburses: type === "INCOME" && cells[col("Reimburses")] ? cells[col("Reimburses")] : null,
+          };
+        });
+      const isPayback = (cells: string[]) => cells[2] === "Verify Shared payback 1";
+
+      // 1. The payback alone, into an empty account: the batch has no expense
+      //    to name, and the ledger has exactly one - the original.
+      const ledgerAccount = await prisma.account.create({ data: { name: "Verify Shared Import Ledger", currency: "DOP", type: "CHECKING" } });
+      const viaLedger = await importCsvTransactions({ accountId: ledgerAccount.id, currency: "DOP", rows: rowsFor(isPayback) });
+      eq("a payback imported on its own links to the one shared expense the ledger has", JSON.stringify(viaLedger), JSON.stringify({ ok: true, count: 1, unresolvedReimbursements: 0 }));
+      eq("...the original tickets, in the other account", (await prisma.transaction.findFirstOrThrow({ where: { accountId: ledgerAccount.id } })).reimbursesTransactionId, tickets.id);
+
+      // 2. The whole account: the batch's own copy of the tickets wins over
+      //    the original still in the ledger.
+      const fullAccount = await prisma.account.create({ data: { name: "Verify Shared Import Full", currency: "DOP", type: "CHECKING" } });
+      const full = await importCsvTransactions({ accountId: fullAccount.id, currency: "DOP", rows: rowsFor(() => true) });
+      eq("every row of the account imports, no payback left unmatched", JSON.stringify(full), JSON.stringify({ ok: true, count: 8, unresolvedReimbursements: 0 }));
+      const importedRows = await prisma.transaction.findMany({ where: { accountId: fullAccount.id } });
+      const importedTickets = importedRows.find((row) => row.note === "Verify Shared movie tickets")!;
+      eq("the imported tickets keep their share", num(importedTickets.yourShare), 545);
+      eq("the imported one-off keeps its flag", importedRows.find((row) => row.note === "Verify Shared dinner")!.isExtraordinary, true);
+      eq("the imported payback links to the imported tickets - the batch's own copy, not the original", importedRows.find((row) => row.note === "Verify Shared payback 1")!.reimbursesTransactionId, importedTickets.id);
+      eq("nothing else was flagged, shared or linked", importedRows.filter((row) => row.isExtraordinary || row.yourShare !== null || row.reimbursesTransactionId !== null).length, 3);
+      eq("the imported tickets are read at their share by the picker, with the imported payback recovered", JSON.stringify((await listOpenSharedExpenses(sharedContext)).filter((e) => e.id === importedTickets.id).map((e) => e.reimbursement)), JSON.stringify([{ owed: 2180, recovered: 1000, pending: 1180, settled: false }]));
+
+      // 3. The payback alone once more: the ledger now holds two matching
+      //    shared expenses, and a reference that could mean either is not
+      //    guessed at. A cell that is not a reference at all is unresolved too.
+      const ambiguousAccount = await prisma.account.create({ data: { name: "Verify Shared Import Ambiguous", currency: "DOP", type: "CHECKING" } });
+      const ambiguous = await importCsvTransactions({
+        accountId: ambiguousAccount.id,
+        currency: "DOP",
+        rows: [...rowsFor(isPayback), { ...rowsFor(isPayback)[0], note: "Verify Shared payback garbled", reimburses: "not a reference" }],
+      });
+      eq("two matching expenses, or an unreadable cell: imported as ordinary income and counted", JSON.stringify(ambiguous), JSON.stringify({ ok: true, count: 2, unresolvedReimbursements: 2 }));
+      check("...with no link on either", (await prisma.transaction.findMany({ where: { accountId: ambiguousAccount.id } })).every((row) => row.reimbursesTransactionId === null));
+
+      await prisma.transaction.update({ where: { id: ordinary.id }, data: { isExtraordinary: false } });
+      await prisma.account.deleteMany({ where: { name: { startsWith: "Verify Shared Import" } } });
+    }
+
+    await prisma.transaction.deleteMany({ where: { accountId: sharedAccount.id } });
+    await prisma.account.delete({ where: { id: sharedAccount.id } });
+    await prisma.category.delete({ where: { id: sharedCategory.id } });
+    console.log("  ok   shared expense fixtures removed");
+  }
+
   console.log("\n== recurring pattern detection ==");
   {
     const {

@@ -3,6 +3,7 @@ import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { num } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { formatReimbursedExpenseReference } from "@/lib/shared-expense";
 import { balanceSign } from "@/lib/transactions";
 import { createZip } from "@/lib/zip";
 
@@ -16,7 +17,10 @@ import { createZip } from "@/lib/zip";
  * negative - exactly the importer's defaults (header on, YYYY-MM-DD, "signed"
  * convention), so it reads the file with no remapping. Account and Category
  * columns follow so the importer's optional column pickers can restore those
- * too. The other six files have no import path; they are complete, readable
+ * too, as do One-off, Your share and Reimburses (the per-row flags of
+ * src/lib/extraordinary.ts and src/lib/shared-expense.ts), so an export
+ * re-imported through those pickers loses none of them. The other six files
+ * have no import path; they are complete, readable
  * backups, so every column the row carries is included and foreign keys are
  * shown by name (with the internal id kept at the end for auditing).
  */
@@ -57,6 +61,15 @@ function optionalNumber(value: number | null): string {
   return value === null ? "" : String(value);
 }
 
+/** The Amount column's figure: signed the way the ledger balance applies it (balanceSign). */
+function signedAmount(row: {
+  amount: { toString(): string };
+  type: string;
+  transferDirection: string | null;
+}): number {
+  return balanceSign(row.type, row.transferDirection) * num(row.amount);
+}
+
 export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
   const t = getDictionary(locale);
   const h = t.dataExport.headers;
@@ -68,7 +81,16 @@ export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
   const [transactions, goals, contributions, recurringItems, budgets, accounts, categories] =
     await Promise.all([
       prisma.transaction.findMany({
-        include: { account: { select: { name: true } }, category: { select: { name: true } } },
+        include: {
+          account: { select: { name: true } },
+          category: { select: { name: true } },
+          // The shared expense a deposit pays back, named by its own date,
+          // description and amount (formatReimbursedExpenseReference) the
+          // way every other linked row here is named rather than numbered.
+          reimburses: {
+            select: { date: true, note: true, amount: true, currency: true, type: true, transferDirection: true },
+          },
+        },
         orderBy: [{ account: { name: "asc" } }, { date: "asc" }, { createdAt: "asc" }],
       }),
       prisma.goal.findMany({ orderBy: [{ createdAt: "asc" }] }),
@@ -109,6 +131,9 @@ export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
       h.transferDirection,
       h.transferGroup,
       h.externalId,
+      h.isExtraordinary,
+      h.yourShare,
+      h.reimburses,
       h.createdAt,
       h.id,
     ],
@@ -117,7 +142,7 @@ export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
       // Signed the way the importer's "signed" convention reads it: money
       // leaving the account negative, money arriving positive - the same sign
       // the ledger balance applies (balanceSign).
-      (balanceSign(row.type, row.transferDirection) * num(row.amount)).toFixed(2),
+      signedAmount(row).toFixed(2),
       text(row.note),
       row.account.name,
       row.currency,
@@ -127,6 +152,18 @@ export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
       label(t.dataExport.transferDirectionLabels, row.transferDirection),
       text(row.transferId),
       text(row.externalId),
+      // The three per-row flags the importer's optional column pickers can
+      // restore (One-off, Your share and Reimburses columns).
+      yesNo(row.isExtraordinary),
+      row.yourShare === null ? "" : money(row.yourShare),
+      row.reimburses
+        ? formatReimbursedExpenseReference({
+            date: day(row.reimburses.date),
+            note: row.reimburses.note,
+            signedAmount: signedAmount(row.reimburses),
+            currency: row.reimburses.currency,
+          })
+        : "",
       timestamp(row.createdAt),
       row.id,
     ]),

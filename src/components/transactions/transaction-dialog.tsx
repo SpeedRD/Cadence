@@ -13,10 +13,22 @@ import {
 } from "@/components/form/selects";
 import { ExtraordinaryPrompt } from "@/components/transactions/extraordinary-prompt";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { CURRENCIES, formatMoney } from "@/lib/currency";
+import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
+import { canBeSharedExpense } from "@/lib/transactions";
 import { saveTransactionAction } from "@/server/actions/transactions";
 
+import type { OpenSharedExpense } from "@/lib/data/transactions";
 import type { ActionState, ExtraordinarySuggestion } from "@/server/actions/utils";
 
 export interface TransactionFormValues {
@@ -29,11 +41,19 @@ export interface TransactionFormValues {
   categoryId?: string | null;
   note?: string | null;
   transferDirection?: string | null;
+  /** The user's own part of a shared expense (Transaction.yourShare), when editing one. */
+  yourShare?: number | null;
+  /** The shared expense an income row pays back (Transaction.reimbursesTransactionId), when editing one. */
+  reimbursesTransactionId?: string | null;
+  /** With externalId, lets canBeSharedExpense decide whether the share switch is offered; a new row is MANUAL. */
+  source?: string;
+  externalId?: string | null;
 }
 
 export function TransactionDialog({
   accounts,
   categories,
+  openSharedExpenses,
   values,
   trigger,
   open: controlledOpen,
@@ -42,6 +62,8 @@ export function TransactionDialog({
 }: {
   accounts: Option[];
   categories: Option[];
+  /** What an INCOME row can be linked to as a reimbursement - see listOpenSharedExpenses. */
+  openSharedExpenses: OpenSharedExpense[];
   values: TransactionFormValues;
   trigger?: React.ReactNode;
   open?: boolean;
@@ -54,6 +76,20 @@ export function TransactionDialog({
   const editing = Boolean(values.id);
   const [type, setType] = useState(values.type ?? "EXPENSE");
   const isExternalTransfer = type === "EXTERNAL_TRANSFER";
+
+  // The share switch, carried as a hidden field the way the goal form carries
+  // isDebt (the Radix switch is not a form control of its own), and the
+  // currency, tracked only to label the share input with its code. Both
+  // reset with `type` below.
+  const [isShared, setIsShared] = useState(values.yourShare != null);
+  const [currency, setCurrency] = useState(values.currency ?? CURRENCIES[0]);
+  // Same rows the one-off flag admits: an organic expense. A new row is MANUAL
+  // and always qualifies; an edit of a posted recurring charge does not.
+  const canShare = canBeSharedExpense({
+    type: "EXPENSE",
+    source: values.source ?? "MANUAL",
+    externalId: values.externalId ?? null,
+  });
 
   // Mirrors FormDialog's own controlled/uncontrolled resolution so this
   // component can see the effective open state even for the "New
@@ -74,12 +110,14 @@ export function TransactionDialog({
   // null on the next save. Reset `type` in lockstep with the same open
   // transition that resets the Select - adjusted during render (React's
   // documented pattern for this), not in an effect, to avoid an extra
-  // render pass.
+  // render pass. The share switch and currency follow the same rule.
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
     if (open) {
       setType(values.type ?? "EXPENSE");
+      setIsShared(values.yourShare != null);
+      setCurrency(values.currency ?? CURRENCIES[0]);
     }
   }
 
@@ -148,7 +186,12 @@ export function TransactionDialog({
           />
         </Field>
         <Field label={common.currency} htmlFor="transaction-currency">
-          <CurrencySelect id="transaction-currency" name="currency" defaultValue={values.currency} />
+          <CurrencySelect
+            id="transaction-currency"
+            name="currency"
+            defaultValue={values.currency}
+            onValueChange={setCurrency}
+          />
         </Field>
       </div>
 
@@ -190,6 +233,75 @@ export function TransactionDialog({
           for that type either way, but the field must still be present in
           the FormData or validation rejects the row as missing categoryId. */}
       {isExternalTransfer ? <input type="hidden" name="categoryId" value="none" /> : null}
+
+      {/* A shared expense (src/lib/shared-expense.ts): the amount stays what
+          left the account; the share is what the averages read instead. Off
+          - or absent, for a type that is not an expense - the row is an
+          ordinary expense exactly as before; transactionSchema discards a
+          stale share either way. */}
+      {type === "EXPENSE" && !canShare && values.yourShare != null ? (
+        // A share on a row the form cannot share (a posted recurring
+        // charge - only a direct database edit could have put it there).
+        // Shown so it is not invisible, and no switch is submitted, so
+        // transactionSchema leaves it exactly as it is - an edit to the
+        // note or the date never clears it (see isShared there).
+        <p className="text-xs text-muted-foreground">
+          {t.sharedKeptNotice(formatMoney(values.yourShare, currency))}
+        </p>
+      ) : null}
+      {type === "EXPENSE" && canShare ? (
+        <div className="grid gap-3">
+          <input type="hidden" name="isShared" value={isShared ? "true" : "false"} />
+          <div className="grid gap-1.5">
+            <label className="flex items-center gap-2.5 text-sm">
+              <Switch checked={isShared} onCheckedChange={setIsShared} />
+              {t.sharedExpenseLabel}
+            </label>
+            <p className="text-xs text-muted-foreground">{t.sharedExpenseHint}</p>
+          </div>
+          {isShared ? (
+            <Field label={t.yourShareLabel(currency)} htmlFor="transaction-your-share">
+              <Input
+                id="transaction-your-share"
+                name="yourShare"
+                inputMode="decimal"
+                placeholder="0.00"
+                className="font-mono"
+                defaultValue={values.yourShare ?? ""}
+                required
+              />
+            </Field>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* A deposit that pays back a shared expense. Offered only while there
+          is something to pay back; with nothing to offer the field is absent
+          and the row is ordinary income. */}
+      {type === "INCOME" && openSharedExpenses.length > 0 ? (
+        <Field label={t.reimbursesLabel} htmlFor="transaction-reimburses" hint={t.reimbursesHint}>
+          <Select
+            name="reimbursesTransactionId"
+            defaultValue={values.reimbursesTransactionId ?? "none"}
+          >
+            <SelectTrigger id="transaction-reimburses" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">{t.reimbursesNone}</SelectItem>
+              {openSharedExpenses.map((expense) => (
+                <SelectItem key={expense.id} value={expense.id}>
+                  {t.reimbursesOption(
+                    toISODate(expense.date),
+                    expense.note ?? expense.categoryName ?? t.uncategorized,
+                    formatMoney(expense.reimbursement.pending, expense.currency),
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      ) : null}
 
       <Field label={common.note} htmlFor="transaction-note">
         <Textarea

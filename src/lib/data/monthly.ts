@@ -14,8 +14,10 @@
  *   lifestyle          = EXPENSE transactions, not Savings/Investment category,
  *                        not matched to a subscription/contribution recurring item.
  *                        For a completed month, also not a one-off the user
- *                        confirmed extraordinary (Transaction.isExtraordinary):
- *                        the historical average is typical spending only.
+ *                        confirmed extraordinary (Transaction.isExtraordinary),
+ *                        and a shared expense counts only the user's own part
+ *                        (Transaction.yourShare): the historical average is
+ *                        typical spending only.
  *   committed          = SUBSCRIPTION charges - every RECURRING transaction the
  *                        posting job wrote for one, plus, only for a month with
  *                        no such charge, the item's scheduled monthly-equivalent
@@ -58,6 +60,7 @@ import { num, round2, sum } from "@/lib/money";
 import { daysElapsedInMonth, monthForDate, monthWindow, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
 import { monthlyEquivalent, owedOccurrences } from "@/lib/recurring";
+import { ownShare } from "@/lib/shared-expense";
 import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
@@ -107,9 +110,11 @@ interface MatchableTransaction {
   note: string | null;
 }
 
-/** MatchableTransaction plus the user's one-off flag, for the classification loop. */
+/** MatchableTransaction plus the user's one-off flag and share, for the classification loop. */
 interface ClassifiableTransaction extends MatchableTransaction {
   isExtraordinary: boolean;
+  /** The user's own part of a shared expense's amount, or null (see src/lib/shared-expense.ts). */
+  yourShare: number | null;
 }
 
 export interface RecurringMatchResult {
@@ -334,10 +339,13 @@ interface MonthActuals {
  * between "actual" and "scheduled" (see classifyCompletedMonth vs
  * getCurrentMonthPace).
  *
- * `excludeExtraordinary` leaves out transactions the user confirmed as
- * one-offs (Transaction.isExtraordinary, see src/lib/extraordinary.ts), so a
- * completed month feeds the historical average with typical spending only.
- * The month in progress keeps them: "spent so far" is a statement of fact.
+ * `typicalOnly` reads a completed month as what it usually costs, so it feeds
+ * the historical average with typical spending only: transactions the user
+ * confirmed as one-offs (Transaction.isExtraordinary, see
+ * src/lib/extraordinary.ts) are left out, and a shared expense counts the
+ * user's own part rather than the whole amount (Transaction.yourShare, see
+ * src/lib/shared-expense.ts). The month in progress keeps both as they are:
+ * "spent so far" is a statement of fact about what left the accounts.
  */
 async function computeMonthActuals(
   window: MonthWindow,
@@ -345,7 +353,7 @@ async function computeMonthActuals(
   context: AppContext,
   recurringItems: RecurringForMonth[],
   categories: CategoryMeta[],
-  excludeExtraordinary = false,
+  typicalOnly = false,
 ): Promise<MonthActuals> {
   const rangeEnd = minDate(window.end, throughDate);
   const [transactions, goalContributions] = await Promise.all([
@@ -360,6 +368,7 @@ async function computeMonthActuals(
         source: true,
         externalId: true,
         isExtraordinary: true,
+        yourShare: true,
       },
     }),
     // Every contribution in the window; which of them are already represented
@@ -381,6 +390,7 @@ async function computeMonthActuals(
     categoryId: tx.categoryId,
     note: tx.note,
     isExtraordinary: tx.isExtraordinary,
+    yourShare: tx.yourShare === null ? null : num(tx.yourShare),
   }));
   const itemById = new Map(recurringItems.map((item) => [item.id, item]));
 
@@ -479,7 +489,7 @@ async function computeMonthActuals(
   let savingsFromCategory = 0;
   const lifestyleByCategoryMap = new Map<
     string | null,
-    { name: string; color: string; total: number; extraordinary: number }
+    { name: string; color: string; total: number; extraordinary: number; othersShare: number }
   >();
 
   for (const tx of matchable) {
@@ -487,9 +497,15 @@ async function computeMonthActuals(
     // A confirmed one-off is real spending but not typical spending: excluded
     // here, alongside the rows a recurring item already accounts for, when
     // the caller is measuring what a month usually costs.
-    if (excludeExtraordinary && tx.isExtraordinary) continue;
+    if (typicalOnly && tx.isExtraordinary) continue;
     const category = tx.categoryId ? categoryById.get(tx.categoryId) : undefined;
-    const amount = toDisplay(tx.amount, tx.currency);
+    // On the same terms, a shared expense's typical cost is the user's own
+    // part; the whole amount matched the recurring items above and stays the
+    // fact "spent so far" reports. ownShare() is the amount itself for every
+    // row with no share, so an ordinary row is read exactly as before.
+    const fullAmount = toDisplay(tx.amount, tx.currency);
+    const ownCost = toDisplay(ownShare(tx), tx.currency);
+    const amount = typicalOnly ? ownCost : fullAmount;
     if (category?.isSavingsDefault) {
       savingsFromCategory += amount;
       continue;
@@ -501,9 +517,15 @@ async function computeMonthActuals(
       color: category?.color ?? "#7a8590",
       total: 0,
       extraordinary: 0,
+      othersShare: 0,
     };
     existing.total += amount;
     if (tx.isExtraordinary) existing.extraordinary += amount;
+    // Reported the way getPeriodSummary reports it: the part of the line's
+    // total that is other people's money - nothing once the share has already
+    // been read in the amount's place, and nothing for a one-off whose whole
+    // amount is already set aside.
+    else if (tx.yourShare !== null && !typicalOnly) existing.othersShare += fullAmount - ownCost;
     lifestyleByCategoryMap.set(key, existing);
   }
 
@@ -514,6 +536,7 @@ async function computeMonthActuals(
       color: value.color,
       spent: round2(value.total),
       extraordinarySpent: round2(value.extraordinary),
+      othersShareSpent: round2(value.othersShare),
       budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
@@ -563,8 +586,9 @@ export async function classifyCompletedMonth(
   recurringItems: RecurringForMonth[],
   categories: CategoryMeta[],
 ): Promise<MonthlyBreakdown> {
-  // Confirmed one-offs are left out: a completed month's figures exist to be
-  // averaged into what a month usually costs (getHistoricalMonthlyAverage).
+  // Typical spending only - confirmed one-offs left out, shared expenses at
+  // the user's own share: a completed month's figures exist to be averaged
+  // into what a month usually costs (getHistoricalMonthlyAverage).
   const actuals = await computeMonthActuals(window, window.end, context, recurringItems, categories, true);
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
@@ -665,8 +689,10 @@ export async function getHistoricalMonthlyAverage(context: AppContext): Promise<
       name: value.name,
       color: value.color,
       spent: round2(value.total / n),
-      // Completed months already leave confirmed one-offs out (classifyCompletedMonth).
+      // Completed months already leave confirmed one-offs out and read a
+      // shared expense at the user's own share (classifyCompletedMonth).
       extraordinarySpent: 0,
+      othersShareSpent: 0,
       budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);

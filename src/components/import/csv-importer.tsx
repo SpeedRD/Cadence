@@ -32,6 +32,7 @@ import {
   parseAmount,
   parseCsv,
   parseDateWithFormat,
+  parseFlag,
   type DateFormat,
 } from "@/lib/csv";
 import { EXPLICIT_NO_CATEGORY } from "@/lib/categorization-rules";
@@ -66,6 +67,12 @@ interface ParsedRow {
   otherAccount: boolean;
   /** The optional category column matched one of the user's categories by name. */
   columnCategoryId: string | null;
+  /** The optional One-off column says yes (src/lib/extraordinary.ts). */
+  columnExtraordinary: boolean;
+  /** The optional Your share column's amount, for a spending row (src/lib/shared-expense.ts). */
+  columnYourShare: number | null;
+  /** The optional Reimburses column's cell, for an income row: resolved to the expense it names on the server. */
+  columnReimburses: string | null;
 }
 
 /** How the optional Account and Category columns match names: trimmed, case-insensitive. */
@@ -112,6 +119,11 @@ export function CsvImporter({
   // row (Cadence's own transactions.csv export does). Null means unmapped.
   const [accountColumn, setAccountColumn] = useState<number | null>(null);
   const [categoryColumn, setCategoryColumn] = useState<number | null>(null);
+  // Likewise optional: the export's One-off, Your share and Reimburses
+  // columns, so a re-imported export keeps all three per-row flags.
+  const [oneOffColumn, setOneOffColumn] = useState<number | null>(null);
+  const [yourShareColumn, setYourShareColumn] = useState<number | null>(null);
+  const [reimbursesColumn, setReimbursesColumn] = useState<number | null>(null);
   const [dateFormat, setDateFormat] = useState<DateFormat>("YYYY-MM-DD");
   const [signMode, setSignMode] = useState<SignMode>("signed");
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
@@ -211,6 +223,13 @@ export function CsvImporter({
             : "INCOME";
       const amount =
         rawAmount === null ? null : Math.round(Math.abs(rawAmount) * 100) / 100;
+      // The share is read with the same parser as the amount, unsigned, and
+      // only means anything on a spending row; the payback reference only
+      // on an income row. Either is null when its column is unmapped.
+      const rawShare = yourShareColumn === null ? null : parseAmount(cells[yourShareColumn] ?? "");
+      const columnYourShare =
+        type === "EXPENSE" && rawShare !== null ? Math.round(Math.abs(rawShare) * 100) / 100 : null;
+      const reimbursesCell = reimbursesColumn === null ? "" : (cells[reimbursesColumn] ?? "").trim();
       return {
         date,
         amount,
@@ -219,6 +238,9 @@ export function CsvImporter({
         valid: Boolean(date) && amount !== null && amount > 0 && !otherAccount,
         otherAccount,
         columnCategoryId,
+        columnExtraordinary: oneOffColumn !== null && parseFlag(cells[oneOffColumn] ?? ""),
+        columnYourShare,
+        columnReimburses: type === "INCOME" && reimbursesCell !== "" ? reimbursesCell : null,
       };
     });
   }, [
@@ -228,6 +250,9 @@ export function CsvImporter({
     noteColumn,
     accountColumn,
     categoryColumn,
+    oneOffColumn,
+    yourShareColumn,
+    reimbursesColumn,
     selectedAccountName,
     categoryIdByName,
     dateFormat,
@@ -369,6 +394,11 @@ export function CsvImporter({
                 ? EXPLICIT_NO_CATEGORY
                 : null)),
       importAnyway: duplicateHits[index] !== undefined,
+      // The file's own flags. A one-off the file already marks needs no
+      // review-step question; a shared row is measured at its share below.
+      columnExtraordinary: row.columnExtraordinary,
+      yourShare: type === "EXPENSE" ? row.columnYourShare : null,
+      reimburses: type === "INCOME" ? row.columnReimburses : null,
     };
   });
 
@@ -379,8 +409,8 @@ export function CsvImporter({
   const extraordinaryKey = JSON.stringify({
     currency,
     rows: resolvedRows
-      .filter((row) => row.type === "EXPENSE")
-      .map((row) => [row.index, row.amount, row.note, row.categoryId]),
+      .filter((row) => row.type === "EXPENSE" && !row.columnExtraordinary)
+      .map((row) => [row.index, row.amount, row.note, row.categoryId, row.yourShare]),
   });
   const hasRowsToMeasure = !checkingDuplicates && resolvedRows.some((row) => row.type === "EXPENSE");
   const extraordinaryRequest = useRef(0);
@@ -390,16 +420,17 @@ export function CsvImporter({
     const timer = setTimeout(async () => {
       const payload = JSON.parse(extraordinaryKey) as {
         currency: string;
-        rows: [number, number, string | null, string | null][];
+        rows: [number, number, string | null, string | null, number | null][];
       };
       const result = await detectCsvExtraordinaryAction({
         currency: payload.currency,
-        rows: payload.rows.map(([index, amount, note, rowCategoryId]) => ({
+        rows: payload.rows.map(([index, amount, note, rowCategoryId, yourShare]) => ({
           index,
           amount,
           type: "EXPENSE",
           note,
           categoryId: rowCategoryId,
+          yourShare,
         })),
       });
       if (request !== extraordinaryRequest.current) return;
@@ -427,9 +458,9 @@ export function CsvImporter({
   const payload = JSON.stringify({
     accountId,
     currency,
-    rows: resolvedRows.map(({ index, ...row }) => ({
+    rows: resolvedRows.map(({ index, columnExtraordinary, ...row }) => ({
       ...row,
-      isExtraordinary: isMarkedExtraordinary(index),
+      isExtraordinary: columnExtraordinary || isMarkedExtraordinary(index),
     })),
   });
 
@@ -471,6 +502,9 @@ export function CsvImporter({
               setNoteColumn(Math.min(2, width - 1));
               setAccountColumn(null);
               setCategoryColumn(null);
+              setOneOffColumn(null);
+              setYourShareColumn(null);
+              setReimbursesColumn(null);
             }}
           />
           {fileName ? (
@@ -580,6 +614,33 @@ export function CsvImporter({
                     options={columnOptions}
                     value={categoryColumn}
                     onChange={setCategoryColumn}
+                    noneLabel={t.noColumn}
+                  />
+                </Field>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label={t.oneOffColumn} hint={t.oneOffColumnHint}>
+                  <OptionalColumnSelect
+                    options={columnOptions}
+                    value={oneOffColumn}
+                    onChange={setOneOffColumn}
+                    noneLabel={t.noColumn}
+                  />
+                </Field>
+                <Field label={t.yourShareColumn} hint={t.yourShareColumnHint}>
+                  <OptionalColumnSelect
+                    options={columnOptions}
+                    value={yourShareColumn}
+                    onChange={setYourShareColumn}
+                    noneLabel={t.noColumn}
+                  />
+                </Field>
+                <Field label={t.reimbursesColumn} hint={t.reimbursesColumnHint}>
+                  <OptionalColumnSelect
+                    options={columnOptions}
+                    value={reimbursesColumn}
+                    onChange={setReimbursesColumn}
                     noneLabel={t.noColumn}
                   />
                 </Field>

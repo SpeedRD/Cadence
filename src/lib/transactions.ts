@@ -123,6 +123,40 @@ export function canBeExtraordinary(row: {
   return manualContributionIdFromTransaction(row) === null;
 }
 
+/**
+ * Rows that may carry a share (Transaction.yourShare, see
+ * src/lib/shared-expense.ts): the same organic expenses canBeExtraordinary
+ * admits, for the same reasons - a scheduled charge's amount is the item's,
+ * not a purchase split with anyone, and a goal contribution's expense is
+ * savings. The averaging engines only ever substitute the share on the rows
+ * they read as organic spending, so offering it anywhere else would record a
+ * figure nothing reads.
+ */
+export function canBeSharedExpense(row: {
+  type: string;
+  source: string;
+  externalId: string | null;
+}): boolean {
+  return canBeExtraordinary(row);
+}
+
+/**
+ * The shared expense an INCOME row pays back (Transaction.reimbursesTransactionId),
+ * or null for any other row. The reimbursement-side twin of
+ * manualContributionIdFromTransaction: a real deposit that behaves normally in
+ * the ledger and the account balance, recognised by its own identity - never
+ * by its category or note - wherever income is averaged, so it can be left
+ * out there. Defined here, without a database import, so the transaction
+ * table can recognise these rows too.
+ */
+export function reimbursedExpenseIdFromTransaction(row: {
+  type: string;
+  reimbursesTransactionId: string | null;
+}): string | null {
+  if (row.type !== "INCOME") return null;
+  return row.reimbursesTransactionId;
+}
+
 export interface TransferLeg {
   amount: number;
   currency: string;

@@ -13,6 +13,7 @@ import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getDictionary } from "@/lib/i18n";
 import {
+  listOpenSharedExpenses,
   listTransactions,
   summarizeTransactions,
   PAGE_SIZE,
@@ -38,7 +39,6 @@ export default async function TransactionsPage({
   const params = await searchParams;
   const context = await getAppContext();
   const t = getDictionary(context.language).transactions;
-  const common = getDictionary(context.language).common;
 
   const filters: Filters = {
     accountId: single(params.account),
@@ -72,6 +72,14 @@ export default async function TransactionsPage({
     listTransactions(filters, context),
     summarizeTransactions(filters, context),
   ]);
+  // What a new deposit can be linked to, plus whatever this page's deposits
+  // already point at, so editing one of them keeps its link on offer.
+  const openSharedExpenses = await listOpenSharedExpenses(
+    context,
+    result.rows
+      .map((row) => row.reimbursesTransactionId)
+      .filter((id): id is string => id !== null),
+  );
 
   const buildPageHref = (page: number) => {
     const next = new URLSearchParams();
@@ -117,6 +125,7 @@ export default async function TransactionsPage({
               <TransactionDialog
                 accounts={accounts}
                 categories={categories}
+                openSharedExpenses={openSharedExpenses}
                 values={{ date: today, currency: context.displayCurrency }}
                 locale={context.language}
                 trigger={
@@ -168,6 +177,7 @@ export default async function TransactionsPage({
               rows={result.rows}
               accounts={accountsForEdit}
               categories={categories}
+              openSharedExpenses={openSharedExpenses}
               displayCurrency={context.displayCurrency}
               locale={context.language}
             />

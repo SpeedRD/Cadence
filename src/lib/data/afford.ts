@@ -12,7 +12,8 @@
  *               account received (the same attribution getPeriodSummary uses:
  *               ordinary INCOME rows by date, plus the confirmed check-in's
  *               per-account income for the period rather than the check-in
- *               day's transaction)
+ *               day's transaction - minus deposits that pay back a shared
+ *               expense, which are not earnings; see loadPeriodIncome)
  *   committed   known exactly, not estimated: every active RecurringItem has a
  *               schedule, so its occurrences in the period are enumerated with
  *               owedOccurrences() - the walk getPeriodSummary's committed
@@ -78,6 +79,7 @@ import {
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { owedOccurrences } from "@/lib/recurring";
+import { reimbursedExpenseIdFromTransaction } from "@/lib/transactions";
 import type { affordInputSchema } from "@/lib/validation";
 import type { z } from "zod";
 
@@ -183,6 +185,15 @@ async function loadConfirmedOpenPeriodKeys(today: Date): Promise<Set<string>> {
 /** One historical period's income per account, in the account's own currency. */
 type PeriodIncome = Map<string, number>;
 
+/**
+ * The income this walk averages over. A deposit that pays back a shared
+ * expense (Transaction.reimbursesTransactionId, see src/lib/shared-expense.ts)
+ * is left out here by its own identity - the same device
+ * manualContributionIdFromTransaction gives getPeriodSummary for a
+ * contribution's expense - never by category or note: it raised the account's
+ * balance like any income, but it is the user's own money coming back, and
+ * averaging it in would project earnings that were never earned.
+ */
 async function loadPeriodIncome(
   period: PeriodInfo,
   accounts: ActiveAccount[],
@@ -201,7 +212,7 @@ async function loadPeriodIncome(
         // check-in day.
         source: { not: "PAYDAY_CHECKIN" },
       },
-      select: { accountId: true, amount: true, currency: true },
+      select: { accountId: true, amount: true, currency: true, type: true, reimbursesTransactionId: true },
     }),
     prisma.paydayCheckin.findFirst({
       where: { year: period.year, month: period.month, period: period.period, status: "CONFIRMED" },
@@ -216,6 +227,7 @@ async function loadPeriodIncome(
     income.set(accountId, (income.get(accountId) ?? 0) + convert(amount, currency, accountCurrency, context.rates));
   };
   for (const transaction of transactions) {
+    if (reimbursedExpenseIdFromTransaction(transaction) !== null) continue;
     add(transaction.accountId, num(transaction.amount), transaction.currency);
   }
   for (const snapshot of checkin?.snapshots ?? []) {

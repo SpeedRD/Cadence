@@ -7,9 +7,12 @@ import { backfillUncategorizedTransactions } from "@/lib/categorization";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { recomputeGoalSaved, removeContribution } from "@/lib/goals";
+import { num } from "@/lib/money";
 import { checkReferences } from "@/lib/references";
+import { ownShare, yourShareIssue } from "@/lib/shared-expense";
 import {
   canBeExtraordinary,
+  canBeSharedExpense,
   manualContributionIdFromTransaction,
   recurringContributionKeyFromTransaction,
   transactionEditBlock,
@@ -18,6 +21,7 @@ import {
 import {
   firstError,
   formObject,
+  localizeValidationMessage,
   transactionSchema,
   transferSchema,
 } from "@/lib/validation";
@@ -43,6 +47,21 @@ export async function saveTransactionAction(
   const referenceError = await checkReferences(t, [values.accountId], values.categoryId, !id);
   if (referenceError) return fail(referenceError);
 
+  // A deposit may only pay back a real shared expense (src/lib/shared-expense.ts):
+  // the picker offers exactly those, but the form is not trusted to have
+  // picked one. Whether it is already settled is not checked - a late or
+  // over-generous payback is still money coming back, and the row's own
+  // display simply stops counting a pending figure.
+  if (values.reimbursesTransactionId !== null) {
+    const reimbursed = await prisma.transaction.findUnique({
+      where: { id: values.reimbursesTransactionId },
+      select: { type: true, yourShare: true },
+    });
+    if (!reimbursed || reimbursed.type !== "EXPENSE" || reimbursed.yourShare === null) {
+      return fail(t.reimbursedExpenseNotShared);
+    }
+  }
+
   if (id) {
     const existing = await prisma.transaction.findUnique({ where: { id } });
     if (!existing) return fail(t.transactionNoLongerExists);
@@ -64,15 +83,42 @@ export async function saveTransactionAction(
       });
       if (paired) return fail(t.editContributionFromGoal);
     }
+    // A share belongs on an organic expense only (canBeSharedExpense, the
+    // same rows the one-off flag admits); a subscription's posted row is
+    // scheduled, not split with anyone.
+    if (values.yourShare != null && !canBeSharedExpense({ ...existing, type: values.type })) {
+      return fail(t.sharedNotApplicable);
+    }
+    // A share the form did not offer to change (yourShare undefined - see
+    // transactionSchema) stays as it is, but the amount it sits inside may
+    // be the very thing being edited: the same bound the form applies to a
+    // share it does set.
+    if (values.yourShare === undefined && existing.yourShare !== null) {
+      const kept = num(existing.yourShare);
+      const shareIssue = yourShareIssue(values.amount, kept);
+      if (shareIssue) return fail(localizeValidationMessage(shareIssue, locale));
+    }
+    // Taking the share off an expense (or turning it into something other
+    // than an expense) while deposits still point at it would leave those
+    // deposits paying back nothing in particular - and still excluded from
+    // income averages by their link. The deposits are unlinked or removed
+    // first, from their own rows.
+    if (existing.yourShare !== null && values.yourShare === null) {
+      const linked = await prisma.transaction.count({ where: { reimbursesTransactionId: id } });
+      if (linked > 0) return fail(t.sharedHasReimbursements);
+    }
     await prisma.transaction.update({ where: { id }, data: values });
   } else {
     // Measured before the row lands so it is not its own history. The row is
     // saved unflagged whatever the verdict; a hit only asks the form to put
-    // the question to the user (see src/lib/extraordinary.ts).
+    // the question to the user (see src/lib/extraordinary.ts). A shared
+    // expense is measured at the user's own share: that is the figure the
+    // averages the flag protects would read for it.
+    const measured = ownShare({ amount: values.amount, yourShare: values.yourShare ?? null });
     const suggestion =
       values.type === "EXPENSE" && values.categoryId
         ? await findExtraordinaryCandidates(
-            [{ key: "new", categoryId: values.categoryId, amount: values.amount, currency: values.currency }],
+            [{ key: "new", categoryId: values.categoryId, amount: measured, currency: values.currency }],
             await getAppContext(),
           )
         : null;
@@ -81,7 +127,7 @@ export async function saveTransactionAction(
     if (hit) {
       const extraordinarySuggestion: ExtraordinarySuggestion = {
         transactionId: created.id,
-        amount: values.amount,
+        amount: measured,
         currency: values.currency,
         categoryName: hit.categoryName,
         median: hit.median,
@@ -145,6 +191,16 @@ export async function deleteTransactionAction(
   // that no longer exists, and a re-confirm would recreate it anyway.
   if (transactionEditBlock(existing) === "payday_income") {
     return fail(t.deletePaycheckFromCheckin);
+  }
+
+  // A shared expense with deposits still linked to it stays until they are
+  // unlinked or removed from their own rows: the deposits are real money in
+  // and must not go with it, and left behind pointing at nothing they would
+  // still be excluded from income averages by a link to an expense that no
+  // longer exists.
+  if (existing.yourShare !== null) {
+    const linked = await prisma.transaction.count({ where: { reimbursesTransactionId: id } });
+    if (linked > 0) return fail(t.sharedHasReimbursements);
   }
 
   // Deleting one leg of a transfer removes both, so balances stay consistent.

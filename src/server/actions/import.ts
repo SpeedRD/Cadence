@@ -2,18 +2,18 @@
 
 import { z } from "zod";
 
-import { Prisma } from "@/generated/prisma/client";
 import { getSettings, requireAuth } from "@/lib/auth";
 import { resolveImportCategoryId } from "@/lib/categorization";
 import { CURRENCIES } from "@/lib/currency";
-import { csvExternalId } from "@/lib/csv-fingerprint";
-import { fromISODate, toISODate } from "@/lib/date";
+import { toISODate } from "@/lib/date";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
+import { ownShare, yourShareIssue } from "@/lib/shared-expense";
 import { firstError } from "@/lib/validation";
 
 import { getAppContext } from "@/lib/data/context";
 import { findExtraordinaryCandidates, type ExtraordinaryCandidate } from "@/lib/data/extraordinary";
+import { importCsvTransactions } from "@/lib/data/import";
 import { findCsvDuplicates } from "@/lib/data/import-duplicates";
 import { findRecurringSuggestions } from "@/lib/data/recurring-suggestions";
 
@@ -38,13 +38,22 @@ const importPayloadSchema = z.object({
           categoryId: z.string().nullable(),
           /** The user reviewed this row as a possible duplicate and chose to import it anyway. */
           importAnyway: z.boolean().optional().default(false),
-          /** The user reviewed this row as unusually large and marked it a one-off (see src/lib/extraordinary.ts). */
+          /** The user reviewed this row as unusually large and marked it a one-off (see src/lib/extraordinary.ts), or the file's One-off column says so. */
           isExtraordinary: z.boolean().optional().default(false),
+          /** The file's Your share column, for an EXPENSE (see src/lib/shared-expense.ts). */
+          yourShare: z.number().positive("Enter an amount greater than 0").nullable().optional().default(null),
+          /** The file's Reimburses column, for an INCOME row: the shared expense it pays back, by reference. */
+          reimburses: z.string().max(700).nullable().optional().default(null),
         })
         .refine((row) => (row.type === "EXTERNAL_TRANSFER") === (row.transferDirection !== null), {
           message: "External transfer rows need a direction",
           path: ["transferDirection"],
-        }),
+        })
+        .refine(
+          (row) =>
+            row.type !== "EXPENSE" || row.yourShare === null || yourShareIssue(row.amount, row.yourShare) === null,
+          { message: "Your share cannot be more than the amount", path: ["yourShare"] },
+        ),
     )
     .min(1, "Nothing to import")
     .max(MAX_ROWS, `Import at most ${MAX_ROWS} rows at a time`),
@@ -117,6 +126,8 @@ const extraordinaryCheckSchema = z.object({
         type: z.enum(["EXPENSE", "INCOME", "EXTERNAL_TRANSFER"]),
         note: z.string().max(500).nullable(),
         categoryId: z.string().nullable(),
+        /** The file's Your share column: a shared row is measured at the share, as the transaction form measures one. */
+        yourShare: z.number().positive().nullable().optional().default(null),
       }),
     )
     .max(MAX_ROWS),
@@ -170,7 +181,12 @@ export async function detectCsvExtraordinaryAction(payload: unknown): Promise<Cs
       categoryIdByName,
     });
     if (!categoryId) continue;
-    candidates.push({ key: row.index, categoryId, amount: row.amount, currency: parsed.data.currency });
+    candidates.push({
+      key: row.index,
+      categoryId,
+      amount: ownShare({ amount: row.amount, yourShare: row.yourShare }),
+      currency: parsed.data.currency,
+    });
   }
 
   const found = await findExtraordinaryCandidates(candidates, await getAppContext());
@@ -185,17 +201,12 @@ export async function detectCsvExtraordinaryAction(payload: unknown): Promise<Cs
   return { ok: true, hits };
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
-}
-
 /**
  * Bulk-insert reviewed CSV rows. Rows arrive already parsed and previewed by
- * the import UI; everything is re-validated here before it reaches the
- * database, including the duplicate check: a row that matches a CSV row
- * already in the ledger is refused unless the client says the user reviewed
- * it and chose to import it anyway. Every row written carries its
- * fingerprint as externalId, so the next overlapping import finds it.
+ * the import UI; everything is re-validated before it reaches the database
+ * (importCsvTransactions in src/lib/data/import.ts owns the write and the
+ * duplicate check). A Reimburses cell that names no single shared expense
+ * leaves its deposit as ordinary income, and the toast says how many did.
  */
 export async function importTransactionsAction(
   _previous: ActionState,
@@ -216,71 +227,12 @@ export async function importTransactionsAction(
   const parsed = importPayloadSchema.safeParse(payload);
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
-  const account = await prisma.account.findUnique({
-    where: { id: parsed.data.accountId },
-    select: { id: true },
-  });
-  if (!account) return fail(t.accountNoLongerExists);
-
-  const report = await findCsvDuplicates({
-    accountId: account.id,
-    currency: parsed.data.currency,
-    rows: parsed.data.rows.map((row) => ({ date: row.date, amount: row.amount, note: row.note })),
-  });
-  const unreviewed = parsed.data.rows.filter((row, index) => report.matches.has(index) && !row.importAnyway);
-  if (unreviewed.length > 0) return fail(t.duplicatesNeedReview(unreviewed.length));
-
-  const categories = await prisma.category.findMany({ select: { id: true, name: true } });
-  const knownCategoryIds = new Set(categories.map((category) => category.id));
-  const categoryIdByName = new Map(
-    categories.map((category) => [category.name.toLowerCase(), category.id]),
-  );
-
-  // The ordinal continues after the rows already stored with the same
-  // fingerprint, and after earlier rows in this batch that share it, so two
-  // identical lines in one statement (or a deliberate re-import) each get
-  // their own externalId under the (source, externalId) unique index.
-  const ordinalByFingerprint = new Map(report.existingCountByFingerprint);
-  const data = parsed.data.rows.map((row, index) => {
-    const fingerprint = report.fingerprints[index];
-    const ordinal = (ordinalByFingerprint.get(fingerprint) ?? 0) + 1;
-    ordinalByFingerprint.set(fingerprint, ordinal);
-    return {
-      date: fromISODate(row.date) as Date,
-      amount: row.amount,
-      currency: parsed.data.currency,
-      type: row.type,
-      transferDirection: row.transferDirection,
-      accountId: account.id,
-      categoryId:
-        row.type === "EXTERNAL_TRANSFER"
-          ? null
-          : resolveImportCategoryId({
-              explicitCategoryId: row.categoryId,
-              note: row.note,
-              type: row.type,
-              knownCategoryIds,
-              categoryIdByName,
-            }),
-      note: row.note,
-      source: "CSV" as const,
-      externalId: csvExternalId(fingerprint, ordinal),
-      // Only the user's own review-step verdict ever sets this, and only on
-      // spending: the flag means nothing on income or a transfer.
-      isExtraordinary: row.type === "EXPENSE" && row.isExtraordinary,
-    };
-  });
-
-  if (data.some((row) => !row.date)) return fail(t.invalidDateRow);
-
-  let count: number;
-  try {
-    count = (await prisma.transaction.createMany({ data })).count;
-  } catch (error) {
-    // Only another import of the same rows landing in between can collide;
-    // the user re-runs the check rather than getting half a statement.
-    if (isUniqueViolation(error)) return fail(t.importCollision);
-    throw error;
+  const result = await importCsvTransactions(parsed.data);
+  if (!result.ok) {
+    if (result.reason === "account_missing") return fail(t.accountNoLongerExists);
+    if (result.reason === "duplicates_need_review") return fail(t.duplicatesNeedReview(result.count));
+    if (result.reason === "invalid_date") return fail(t.invalidDateRow);
+    return fail(t.importCollision);
   }
 
   // The rows are in, so the import has succeeded whatever happens next. The
@@ -294,5 +246,8 @@ export async function importTransactionsAction(
   }
 
   revalidateApp();
-  return done(t.imported(count), { recurringSuggestions });
+  const message = result.unresolvedReimbursements
+    ? `${t.imported(result.count)} · ${t.reimbursementsUnresolved(result.unresolvedReimbursements)}`
+    : t.imported(result.count);
+  return done(message, { recurringSuggestions });
 }

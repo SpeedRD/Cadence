@@ -7,6 +7,7 @@ import {
 } from "@/lib/extraordinary";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { ownShare } from "@/lib/shared-expense";
 
 import type { AppContext } from "@/lib/data/context";
 
@@ -15,6 +16,12 @@ export interface ExtraordinaryCandidate<K> {
   /** Whatever the caller uses to find the row again - a CSV row index, say. */
   key: K;
   categoryId: string;
+  /**
+   * The figure to measure: the user's own cost. For a shared expense that is
+   * its share, not the whole amount (ownShare in src/lib/shared-expense.ts) -
+   * the caller resolves this, as saveTransactionAction does, since the
+   * candidate is not a row yet.
+   */
   amount: number;
   currency: string;
 }
@@ -33,8 +40,10 @@ export interface ExtraordinaryHit extends ExtraordinaryClassification {
  * same rows the category-suggestion average reads - EXPENSE transactions
  * filed under the category - minus the two kinds it cannot speak for:
  * RECURRING rows (scheduled amounts, not organic spending) and one-offs
- * already confirmed extraordinary. Amounts are compared in the display
- * currency so a category paid in two currencies still has one median.
+ * already confirmed extraordinary. A shared expense in the history counts at
+ * the user's own share, the same figure the averages read for it. Amounts are
+ * compared in the display currency so a category paid in two currencies
+ * still has one median.
  *
  * Only candidates that trip the threshold come back; a category with too
  * little history yields nothing (see classifyExtraordinary). The map is keyed
@@ -57,7 +66,7 @@ export async function findExtraordinaryCandidates<K>(
         categoryId: { in: categoryIds },
         date: { gte: addMonths(context.today, -EXTRAORDINARY_LOOKBACK_MONTHS) },
       },
-      select: { categoryId: true, amount: true, currency: true },
+      select: { categoryId: true, amount: true, yourShare: true, currency: true },
     }),
     prisma.category.findMany({
       where: { id: { in: categoryIds } },
@@ -70,7 +79,11 @@ export async function findExtraordinaryCandidates<K>(
   const priorByCategory = new Map<string, number[]>();
   for (const row of history) {
     const list = priorByCategory.get(row.categoryId as string) ?? [];
-    list.push(toDisplay(num(row.amount), row.currency));
+    const own = ownShare({
+      amount: num(row.amount),
+      yourShare: row.yourShare === null ? null : num(row.yourShare),
+    });
+    list.push(toDisplay(own, row.currency));
     priorByCategory.set(row.categoryId as string, list);
   }
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));

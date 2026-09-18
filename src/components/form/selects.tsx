@@ -44,7 +44,7 @@ export function AccountSelect({
           <SelectItem key={account.id} value={account.id}>
             {account.name}
             {account.currency ? (
-              <span className="text-muted-foreground">{account.currency}</span>
+              <span className="ml-1.5 text-muted-foreground">{account.currency}</span>
             ) : null}
           </SelectItem>
         ))}
@@ -76,7 +76,7 @@ export function GoalSelect({
           <SelectItem key={goal.id} value={goal.id}>
             {goal.name}
             {goal.currency ? (
-              <span className="text-muted-foreground">{goal.currency}</span>
+              <span className="ml-1.5 text-muted-foreground">{goal.currency}</span>
             ) : null}
           </SelectItem>
         ))}
@@ -109,8 +109,10 @@ export function CategorySelect({
         {includeNone ? <SelectItem value="none">{common.noCategory}</SelectItem> : null}
         {categories.map((category) => (
           <SelectItem key={category.id} value={category.id}>
+            {/* Inline-block with its own margin: the select's value and item
+                text are inline content (they truncate), not a flex row. */}
             <span
-              className="size-2 rounded-full"
+              className="mr-1.5 inline-block size-2 rounded-full align-[-1px]"
               style={{ backgroundColor: category.color ?? "var(--muted-foreground)" }}
             />
             {category.name}

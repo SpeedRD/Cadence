@@ -182,12 +182,16 @@ deterministic merchant-name categorization rules and a review step that can grou
 repeated rows into a recurring item or record a pair as a transfer. Rows that match
 a CSV row already in the ledger (same account, date, amount, currency and
 description) are shown as possible duplicates and skipped unless you import them
-anyway, so re-importing an overlapping statement adds nothing twice. Two optional
-column mappings cover a file that already names the account and category per row,
+anyway, so re-importing an overlapping statement adds nothing twice. Optional
+column mappings cover a file that already carries more than a bank statement does,
 such as Cadence's own `transactions.csv` export: with an Account column set, only
 the rows naming the account you picked are imported (one pass per account brings
-a multi-account file back), and a Category column files each row under the
-category whose name it carries. Every row shows where it came from: manual, CSV,
+a multi-account file back), a Category column files each row under the category
+whose name it carries, and One-off, Your share and Reimburses columns restore the
+per-row flags described below - a payback names its shared expense by date,
+description and amount, and is linked to it when exactly one such expense exists
+(in the same file first, then in the ledger); otherwise it lands as ordinary
+income and the import says so. Every row shows where it came from: manual, CSV,
 Gmail, Outlook, a payday check-in, an opening balance, or automatic recurring
 posting.
 
@@ -202,6 +206,20 @@ counts as spending everywhere - balances, period totals, budgets - but is left o
 of the two averages that estimate typical spending: the payday check-in's category
 suggestions and Reports' calendar-month average. Automatically posted recurring
 charges are never classified; their amounts are scheduled, not organic.
+
+An expense paid on behalf of several people can be marked as a **shared expense**
+with your own share of it. The transaction keeps the full amount - it is what left
+the account, so the account balance, the period's totals and the budgets all
+count it in full - while the one-off check and the two typical-spending averages
+read your share in its place, so a DOP 2,725 round of movie tickets neither trips
+the one-off prompt nor drags future suggestions up by money that was never yours.
+As people pay you back, log each deposit as income and pick the expense it
+reimburses: a linked deposit raises the balance like any income but is never
+averaged as income by Afford's projections, and the expense's row shows how much
+has come back so far and what is still pending. Nothing is projected for money
+not yet received; a share is recovered only when its deposit is a real, logged
+row. A shared expense with deposits linked to it cannot be deleted or unshared
+until they are unlinked.
 
 ### Review queue
 

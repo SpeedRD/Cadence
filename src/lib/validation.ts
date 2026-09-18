@@ -6,6 +6,7 @@ import { fromISODate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
 import { INSIGHT_SOURCES } from "@/lib/insights";
 import { AMOUNT_MAX, parseAmountInput, round2, type ParsedAmount } from "@/lib/money";
+import { yourShareIssue } from "@/lib/shared-expense";
 import {
   ACCOUNT_TYPES,
   AFFORD_FREQUENCIES,
@@ -214,10 +215,38 @@ export const transactionSchema = z
       .trim()
       .optional()
       .transform((value) => (value === "OUT" || value === "IN" ? value : null)),
+    /**
+     * The "This was a shared expense" switch, carried as a hidden field the
+     * way the goal form carries isDebt. Only read for an EXPENSE: "true" or
+     * "false" is the user's answer, and decides whether a blank `yourShare`
+     * is "not shared" or "forgot to fill it in". Absent means the form never
+     * offered the switch (canBeSharedExpense said no for the row being
+     * edited), and the row's share - which only a direct database edit could
+     * have put there - is left exactly as it is rather than cleared by an
+     * edit that had nothing to do with it.
+     */
+    isShared: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (value === undefined ? undefined : value === "true")),
+    /**
+     * EXPENSE only - the user's own part of the amount (see
+     * src/lib/shared-expense.ts). Null everywhere else; undefined when the
+     * switch was absent, which Prisma reads as "leave the column untouched".
+     */
+    yourShare: positiveAmountOrEmpty,
+    /** INCOME only - the shared expense this deposit pays back. Null everywhere else. */
+    reimbursesTransactionId: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (!value || value === "none" ? null : value)),
   })
   .transform((value, ctx) => {
-    if (value.type === "EXTERNAL_TRANSFER") {
-      if (value.transferDirection === null) {
+    const { isShared, ...row } = value;
+    if (row.type === "EXTERNAL_TRANSFER") {
+      if (row.transferDirection === null) {
         ctx.addIssue({
           code: "custom",
           message: "Pick a direction",
@@ -225,9 +254,32 @@ export const transactionSchema = z
         });
         return z.NEVER;
       }
-      return { ...value, categoryId: null };
+      return { ...row, categoryId: null, yourShare: null, reimbursesTransactionId: null };
     }
-    return { ...value, transferDirection: null };
+    if (row.type === "INCOME") {
+      return { ...row, transferDirection: null, yourShare: null };
+    }
+    // EXPENSE. With the switch off, whatever is left in the share field is
+    // discarded so the row is an ordinary expense; with it on, the share must
+    // be there and fit inside the amount; with no switch at all, the share is
+    // not this form's to change. A stale reimbursement pick from a type
+    // switched back from INCOME never survives either.
+    if (isShared === undefined) {
+      return { ...row, transferDirection: null, yourShare: undefined, reimbursesTransactionId: null };
+    }
+    if (!isShared) {
+      return { ...row, transferDirection: null, yourShare: null, reimbursesTransactionId: null };
+    }
+    if (row.yourShare === null) {
+      ctx.addIssue({ code: "custom", message: "Enter your share", path: ["yourShare"] });
+      return z.NEVER;
+    }
+    const shareIssue = yourShareIssue(row.amount, row.yourShare);
+    if (shareIssue) {
+      ctx.addIssue({ code: "custom", message: shareIssue, path: ["yourShare"] });
+      return z.NEVER;
+    }
+    return { ...row, transferDirection: null, reimbursesTransactionId: null };
   });
 
 export const transferSchema = z
@@ -736,10 +788,16 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Pick two different days": "Elige dos días diferentes",
   "That price is too small to split into that many installments":
     "Ese precio es demasiado pequeño para dividirlo en tantas cuotas",
+  "Enter your share": "Ingresa tu parte",
+  "Your share cannot be more than the amount": "Tu parte no puede ser mayor que el monto",
 };
 
-export function firstError(error: z.ZodError, locale: Locale = "en"): string {
-  const message = error.issues[0]?.message ?? "Check the form and try again";
+/** One of the schemas' messages in the UI's language - for a check an action runs outside a schema. */
+export function localizeValidationMessage(message: string, locale: Locale = "en"): string {
   if (locale === "es") return VALIDATION_MESSAGES_ES[message] ?? message;
   return message;
+}
+
+export function firstError(error: z.ZodError, locale: Locale = "en"): string {
+  return localizeValidationMessage(error.issues[0]?.message ?? "Check the form and try again", locale);
 }

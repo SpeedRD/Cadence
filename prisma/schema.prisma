@@ -184,10 +184,26 @@ model Transaction {
   /// planner's category suggestions and Reports' monthly pace - while still
   /// counting as real spending everywhere else. Only ever set by the user.
   isExtraordinary   Boolean            @default(false)
+  /// EXPENSE only: the part of `amount` that was the user's own cost, when the
+  /// purchase covered other people who will pay their part back (see
+  /// src/lib/shared-expense.ts). Null - every ordinary row - means the whole
+  /// amount is the user's. `amount` stays what actually left the account, so
+  /// balances, period totals and budgets are untouched; only the averages
+  /// that estimate typical spending, and the one-off threshold, read this
+  /// figure in its place. Positive and never above `amount`.
+  yourShare         Decimal?           @db.Decimal(14, 2)
+  /// INCOME only: the shared expense this deposit pays back. A linked deposit
+  /// still raises the account's balance like any income, but is left out of
+  /// every income average (Afford's projections) - it is money coming back,
+  /// not earnings. One shared expense may be reimbursed by many deposits over
+  /// time. Set to null if the expense is deleted underneath it.
+  reimbursesTransactionId String?
   createdAt         DateTime           @default(now())
 
   account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  reimburses     Transaction?  @relation("Reimbursement", fields: [reimbursesTransactionId], references: [id], onDelete: SetNull)
+  reimbursements Transaction[] @relation("Reimbursement")
 
   @@unique([source, externalId])
   @@index([date])
@@ -195,6 +211,7 @@ model Transaction {
   @@index([categoryId])
   @@index([transferId])
   @@index([type, date])
+  @@index([reimbursesTransactionId])
 }
 
 /// Written by the Phase 2A email ingestion pipeline; reviewed on /review before

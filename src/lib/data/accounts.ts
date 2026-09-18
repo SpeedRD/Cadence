@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { balanceSign } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
+import { loadReimbursementDetails, type SharedExpenseDetails } from "@/lib/data/transactions";
 import { Prisma } from "@/generated/prisma/client";
 import type { AccountStatus, AccountType } from "@/generated/prisma/enums";
 
@@ -248,7 +249,8 @@ export async function deleteAccountIfSafe(accountId: string): Promise<DeleteAcco
   return { ok: true };
 }
 
-export interface AccountLedgerRow {
+/** Carries the same shared-expense facts as a Transactions row (SharedExpenseDetails), so the ledger shows the same badges. */
+export interface AccountLedgerRow extends SharedExpenseDetails {
   id: string;
   date: Date;
   amount: number;
@@ -288,6 +290,7 @@ export async function getAccountLedger(accountId: string, context: AppContext) {
   const counterpartByTransfer = new Map(
     counterparts.map((row) => [row.transferId, row.account.name]),
   );
+  const sharedDetails = await loadReimbursementDetails(transactions, context);
 
   let running = 0;
   const rows: AccountLedgerRow[] = transactions.map((transaction) => {
@@ -302,6 +305,7 @@ export async function getAccountLedger(accountId: string, context: AppContext) {
       amountInAccountCurrency;
     running += effect;
     return {
+      ...(sharedDetails.get(transaction.id) as SharedExpenseDetails),
       id: transaction.id,
       date: transaction.date,
       amount: num(transaction.amount),

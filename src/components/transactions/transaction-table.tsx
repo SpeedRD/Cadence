@@ -7,6 +7,11 @@ import { toast } from "sonner";
 import { ConfirmDelete } from "@/components/form/confirm-delete";
 import type { Option } from "@/components/form/selects";
 import { SourceBadge } from "@/components/source-badge";
+import {
+  ReimbursementBadge,
+  ReimbursementProgressLine,
+  SharedExpenseBadge,
+} from "@/components/transactions/shared-expense-badges";
 import { TransactionDialog } from "@/components/transactions/transaction-dialog";
 import { TransferDialog } from "@/components/transactions/transfer-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -32,7 +37,7 @@ import { canBeExtraordinary, transactionEditBlock } from "@/lib/transactions";
 import { deleteTransactionAction, setExtraordinaryAction } from "@/server/actions/transactions";
 import { cn } from "@/lib/utils";
 
-import type { TransactionRow } from "@/lib/data/transactions";
+import type { OpenSharedExpense, TransactionRow } from "@/lib/data/transactions";
 
 function AmountCell({
   row,
@@ -103,12 +108,15 @@ export function TransactionTable({
   rows,
   accounts,
   categories,
+  openSharedExpenses,
   displayCurrency,
   locale,
 }: {
   rows: TransactionRow[];
   accounts: Option[];
   categories: Option[];
+  /** For the edit dialog's reimbursement picker - see TransactionDialog. */
+  openSharedExpenses: OpenSharedExpense[];
   displayCurrency: string;
   locale: Locale;
 }) {
@@ -172,8 +180,11 @@ export function TransactionTable({
                               ? t.openingBalance
                               : (row.categoryName ?? t.uncategorized))}
                     </span>
-                    {row.categoryName || row.isExtraordinary ? (
-                      <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+                    {row.categoryName ||
+                    row.isExtraordinary ||
+                    row.yourShare !== null ||
+                    row.reimbursesTransactionId ? (
+                      <span className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
                         {row.categoryName ? (
                           <>
                             <span
@@ -192,7 +203,20 @@ export function TransactionTable({
                             {t.extraordinaryBadge}
                           </Badge>
                         ) : null}
+                        {row.yourShare !== null ? (
+                          <SharedExpenseBadge yourShare={row.yourShare} currency={row.currency} locale={locale} />
+                        ) : null}
+                        {row.reimburses ? (
+                          <ReimbursementBadge reimburses={row.reimburses} locale={locale} />
+                        ) : null}
                       </span>
+                    ) : null}
+                    {row.reimbursement ? (
+                      <ReimbursementProgressLine
+                        progress={row.reimbursement}
+                        currency={row.currency}
+                        locale={locale}
+                      />
                     ) : null}
                   </div>
                 </TableCell>
@@ -289,6 +313,7 @@ export function TransactionTable({
         <TransactionDialog
           accounts={accounts}
           categories={categories}
+          openSharedExpenses={openSharedExpenses}
           locale={locale}
           open
           onOpenChange={(next) => !next && setEditing(null)}
@@ -302,6 +327,10 @@ export function TransactionTable({
             categoryId: editingPlain.categoryId ?? "none",
             note: editingPlain.note,
             transferDirection: editingPlain.transferDirection,
+            yourShare: editingPlain.yourShare,
+            reimbursesTransactionId: editingPlain.reimbursesTransactionId,
+            source: editingPlain.source,
+            externalId: editingPlain.externalId,
           }}
         />
       ) : null}

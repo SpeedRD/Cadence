@@ -105,6 +105,15 @@ export function parseDateWithFormat(
 }
 
 /**
+ * A yes/no cell, as Cadence's own export writes it in either language ("Yes"
+ * / "Sí") and as a spreadsheet might: trimmed, case-insensitive. Anything
+ * else - "No", blank, a stray value - is no.
+ */
+export function parseFlag(value: string): boolean {
+  return ["yes", "sí", "si", "true", "1"].includes(value.trim().toLowerCase());
+}
+
+/**
  * Amounts as banks export them: "1,234.56", "-$45.00", "(45.00)", "45,00 EUR".
  * Returns a signed number, or null when nothing numeric is present.
  */

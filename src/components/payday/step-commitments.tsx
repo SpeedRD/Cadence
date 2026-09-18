@@ -112,7 +112,7 @@ function SubscriptionRow({
             {accounts.map((account) => (
               <SelectItem key={account.accountId} value={account.accountId}>
                 {account.name}
-                <span className="text-muted-foreground">{account.currency}</span>
+                <span className="ml-1.5 text-muted-foreground">{account.currency}</span>
               </SelectItem>
             ))}
           </SelectContent>

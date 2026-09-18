@@ -109,6 +109,9 @@ export const es = {
       transferDirection: "Dirección de transferencia",
       transferGroup: "Grupo de transferencia",
       externalId: "ID externo",
+      isExtraordinary: "Gasto único",
+      yourShare: "Tu parte",
+      reimburses: "Reembolsa",
       createdAt: "Creado el",
       updatedAt: "Actualizado el",
       name: "Nombre",
@@ -388,6 +391,18 @@ export const es = {
     categoryColumnHint:
       "Opcional. Una fila cuya celda coincide por nombre con una de tus categorías se archiva ahí; las demás reciben la categoría elegida abajo.",
     noColumn: "Ninguna",
+    // Las tres marcas por fila que lleva una exportación de Cadence (ver src/lib/data/export.ts).
+    oneOffColumn: "Columna de gasto único",
+    oneOffColumnHint:
+      "Opcional. Una fila cuya celda dice Sí se importa como gasto único, fuera de los promedios de gasto habitual.",
+    yourShareColumn: "Columna de tu parte",
+    yourShareColumnHint:
+      "Opcional. Una fila de gasto con un monto aquí se importa como gasto compartido, con esa parte como tuya.",
+    reimbursesColumn: "Columna de reembolso",
+    reimbursesColumnHint:
+      "Opcional. Una fila de ingreso que nombra aquí un gasto compartido (fecha · descripción · monto, como lo exporta Cadence) se vincula a ese gasto como devolución.",
+    reimbursementsUnresolved: (n: number) =>
+      `${n} ${n === 1 ? "devolución no pudo" : "devoluciones no pudieron"} vincularse a un gasto compartido y se ${n === 1 ? "importó" : "importaron"} como ingreso ordinario`,
     otherAccount: "otra cuenta",
     otherAccountSuffix: (n: number) =>
       `${n} pertenece${n === 1 ? "" : "n"} a otra cuenta y no se importará${n === 1 ? "" : "n"}`,
@@ -492,6 +507,29 @@ export const es = {
     keepAsNormal: "Dejar como normal",
     appliedExtraordinary: "Gasto único",
     appliedNormal: "Gasto normal",
+    // Gastos compartidos y sus reembolsos - ver src/lib/shared-expense.ts.
+    sharedExpenseLabel: "Fue un gasto compartido",
+    sharedExpenseHint:
+      "Pagaste también por otras personas, que te devolverán su parte. El monto completo sigue saliendo de la cuenta; solo tu parte alimenta los promedios detrás de las sugerencias del día de pago y del ritmo mensual, y la revisión de gasto único.",
+    yourShareLabel: (code: string) => `Tu parte (${code})`,
+    sharedBadge: "Compartido",
+    yourShareOf: (share: string) => `tu parte ${share}`,
+    recoveredSoFar: (recovered: string, owed: string, pending: string) =>
+      `Recuperado hasta ahora: ${recovered} de ${owed} · ${pending} pendiente`,
+    fullyReimbursed: (owed: string) => `Reembolsado por completo: ${owed}`,
+    reimbursesLabel: "Reembolsa un gasto compartido",
+    reimbursesNone: "No: ingreso ordinario",
+    reimbursesOption: (date: string, description: string, pending: string) =>
+      `${date} · ${description} · ${pending} pendiente`,
+    reimbursesHint:
+      "Un depósito vinculado aumenta el saldo de la cuenta como cualquier ingreso, pero nunca se promedia como ingreso.",
+    reimbursementOf: (description: string) => `Reembolso: ${description}`,
+    sharedNotApplicable: "Solo un gasto que registraste o importaste puede ser un gasto compartido",
+    sharedKeptNotice: (share: string) =>
+      `Gasto compartido: tu parte ${share}. Un cargo recurrente publicado no puede compartirse ni dejar de compartirse aquí, así que la parte se mantiene tal cual.`,
+    sharedHasReimbursements:
+      "Todavía hay depósitos vinculados a este gasto compartido: desvincúlalos o elimínalos primero",
+    reimbursedExpenseNotShared: "Elige un gasto compartido para reembolsar",
     receivedAmountLabel: (code: string) => `Monto realmente recibido (${code})`,
     receivedAmountHint:
       "Déjalo en blanco para registrar el mismo monto en ambos lados, convertido a la tasa de hoy. Escríbelo para registrar exactamente lo que acreditó el banco.",
