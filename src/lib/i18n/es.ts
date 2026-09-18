@@ -39,6 +39,8 @@ export const es = {
     yesterday: "ayer",
     inDays: (n: number) => `en ${n} días`,
     daysAgo: (n: number) => `hace ${n} días`,
+    exploratoryNote: (subject: string) =>
+      `Esta ${subject} es exploratoria: nada aquí se aplica ni se guarda hasta que hagas una acción explícita y aparte.`,
     accountTypeLabels: {
       CHECKING: "Corriente",
       SAVINGS: "Ahorros",
@@ -752,8 +754,8 @@ export const es = {
   },
   afford: {
     title: "¿Me alcanza?",
-    description:
-      "Comprueba si una compra pagada en cuotas cabe en los períodos de pago en los que cae. No se registra nada hasta que digas que la compraste.",
+    description: "Comprueba si una compra pagada en cuotas cabe en los períodos de pago en los que cae.",
+    exploratorySubject: "compra",
     purchaseHeading: "La compra",
     purchaseName: "¿Qué vas a comprar?",
     purchaseNamePlaceholder: "Laptop nueva",
@@ -925,6 +927,7 @@ export const es = {
     isDebtHint: "La marca para la comparación de pago de deudas en la página de Metas. Nada más cambia en la meta.",
     debtBadge: "Deuda",
     debtComparatorTitle: "Pagar las deudas: dos órdenes",
+    debtComparatorSubject: "comparación de pago de deudas",
     debtComparatorDescription:
       "Cada deuda sigue recibiendo su propio ritmo, la cifra de la hoja de ruta de este periodo. Todo extra que agregues va íntegro a la siguiente deuda de cada orden, y cuando una deuda queda saldada su ritmo se suma al extra a partir del periodo siguiente.",
     extraPerPeriodLabel: (code: string) => `Extra por periodo de pago (${code})`,

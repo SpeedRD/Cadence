@@ -45,6 +45,8 @@ export const en = {
     yesterday: "yesterday",
     inDays: (n: number) => `in ${n} days`,
     daysAgo: (n: number) => `${n} days ago`,
+    exploratoryNote: (subject: string) =>
+      `This ${subject} is exploratory: nothing here is applied or saved until you take a separate, explicit action.`,
     accountTypeLabels: {
       CHECKING: "Checking",
       SAVINGS: "Savings",
@@ -760,8 +762,8 @@ export const en = {
   },
   afford: {
     title: "Afford",
-    description:
-      "Check whether a purchase paid in installments fits the pay periods it lands in. Nothing is recorded until you say you bought it.",
+    description: "Check whether a purchase paid in installments fits the pay periods it lands in.",
+    exploratorySubject: "purchase",
     purchaseHeading: "The purchase",
     purchaseName: "What are you buying?",
     purchaseNamePlaceholder: "New laptop",
@@ -933,6 +935,7 @@ export const en = {
     isDebtHint: "Marks it for the debt payoff comparison on the Goals page. Nothing else about the goal changes.",
     debtBadge: "Debt",
     debtComparatorTitle: "Paying off the debts: two orders",
+    debtComparatorSubject: "debt payoff comparison",
     debtComparatorDescription:
       "Each debt keeps receiving its own pace, the roadmap figure for this period. Whatever extra you add goes entirely to the next debt in each order, and once a debt is paid off its pace joins the extra from the following period on.",
     extraPerPeriodLabel: (code: string) => `Extra per pay period (${code})`,

@@ -1,4 +1,5 @@
 import { AffordCalculator } from "@/components/afford/afford-calculator";
+import { ExploratoryBadge } from "@/components/exploratory-badge";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/stat";
 import { getAppContext } from "@/lib/data/context";
@@ -16,7 +17,8 @@ export const metadata = { title: "Afford - Cadence" };
  */
 export default async function AffordPage() {
   const context = await getAppContext();
-  const t = getDictionary(context.language).afford;
+  const dictionary = getDictionary(context.language);
+  const t = dictionary.afford;
   const accounts = await prisma.account.findMany({
     where: { status: "ACTIVE" },
     orderBy: { name: "asc" },
@@ -26,6 +28,7 @@ export default async function AffordPage() {
   return (
     <div className="space-y-5">
       <PageHeader title={t.title} description={t.description} />
+      <ExploratoryBadge note={dictionary.common.exploratoryNote(t.exploratorySubject)} />
       {accounts.length === 0 ? (
         <EmptyState title={t.noAccountsTitle} description={t.noAccountsDescription} />
       ) : (

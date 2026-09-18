@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { ExploratoryBadge } from "@/components/exploratory-badge";
 import { Field } from "@/components/form/field";
 import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,7 +44,8 @@ export function DebtPayoffComparator({
   planPeriod: string;
   locale: Locale;
 }) {
-  const t = getDictionary(locale).goals;
+  const dictionary = getDictionary(locale);
+  const t = dictionary.goals;
   const [extra, setExtra] = useState(0);
   const comparison = compareDebtStrategies(debts, extra);
   const planRef = parsePeriodKey(planPeriod);
@@ -67,6 +69,7 @@ export function DebtPayoffComparator({
         <CardDescription>{t.debtComparatorDescription}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
+        <ExploratoryBadge note={dictionary.common.exploratoryNote(t.debtComparatorSubject)} />
         <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)] sm:items-end">
           <Field label={t.extraPerPeriodLabel(currency)} htmlFor="debt-extra">
             <PaydayAmountInput
