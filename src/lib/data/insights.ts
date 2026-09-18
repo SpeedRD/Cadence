@@ -24,6 +24,7 @@ import { prisma } from "@/lib/prisma";
 
 import { getAffordRechecks, recheckAffordItems, type AffordContext } from "@/lib/data/afford";
 import { getAppContext } from "@/lib/data/context";
+import { forecastGoalFunding } from "@/lib/data/goal-forecast";
 import { getGoalRoadmapStatuses } from "@/lib/data/payday";
 import { findRecurringSuggestions } from "@/lib/data/recurring-suggestions";
 
@@ -46,10 +47,11 @@ export async function loadInsightContext(
   context: AffordContext,
   affordRechecks?: AffordTrackedItem[],
 ): Promise<InsightContext> {
-  const [tracked, recurringSuggestions, goalRoadmaps] = await Promise.all([
+  const [tracked, recurringSuggestions, goalRoadmaps, goalForecasts] = await Promise.all([
     affordRechecks ?? recheckAffordItems(context),
     findRecurringSuggestions(context),
     getGoalRoadmapStatuses(context),
+    forecastGoalFunding(context),
   ]);
   return {
     dictionary: getDictionary(context.language),
@@ -58,6 +60,7 @@ export async function loadInsightContext(
     affordRechecks: tracked,
     recurringSuggestions,
     goalRoadmaps,
+    goalForecasts,
   };
 }
 

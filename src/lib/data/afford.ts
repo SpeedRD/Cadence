@@ -59,6 +59,7 @@ import {
   type AffordVerdict,
   type EstimatedGoalFunding,
   type PeriodProjection,
+  type ProjectedGoalPlan,
 } from "@/lib/afford";
 import { remainingInstallments, type AffordTrackedItem } from "@/lib/afford-tracking";
 import { getSettings } from "@/lib/auth";
@@ -434,6 +435,7 @@ export async function projectPeriods(
     // and no estimate.
     const estimatedByAccount = new Map<string, number>();
     const estimatedGoals: EstimatedGoalFunding[] = [];
+    const goalPlans: ProjectedGoalPlan[] = [];
     if (!commitments?.confirmed && goalPaces.length > 0) {
       const plans = planGoalFunding(
         goalPaces.map((pace) => ({ goalId: pace.goalId, amount: pace.amount })),
@@ -456,6 +458,17 @@ export async function projectPeriods(
         if (plan.recommendedTotal > 0) {
           estimatedGoals.push({ goalId: plan.goalId, name: goalPaces[index].name, amount: plan.recommendedTotal });
         }
+        // The whole plan, kept for the goal-forecast detector: the same
+        // figures the estimate above was reduced from, whether or not the
+        // room gave the goal anything.
+        goalPlans.push({
+          goalId: plan.goalId,
+          name: goalPaces[index].name,
+          pace: plan.amount,
+          recommended: plan.recommendedTotal,
+          shortfall: plan.shortfall,
+          draws: plan.draws,
+        });
       });
     }
     const periodEstimated = round2(estimatedGoals.reduce((sum, goal) => sum + goal.amount, 0));
@@ -500,6 +513,7 @@ export async function projectPeriods(
         estimatedGoalFunding: periodEstimated,
       },
       estimatedGoals,
+      goalPlans,
       // The comparable periods actually walked for this projection - `incomes`
       // is built by mapping over the (possibly boundary-filtered) `history`
       // array above, so this is HISTORY_PERIODS unless "count income history

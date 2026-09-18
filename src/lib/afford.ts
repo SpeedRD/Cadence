@@ -28,7 +28,7 @@
 import { convert, type RateTable } from "@/lib/currency";
 import { startOfDay } from "@/lib/date";
 import { round2 } from "@/lib/money";
-import { availableForFlexibleCategories } from "@/lib/payday";
+import { availableForFlexibleCategories, type GoalFundingDraw } from "@/lib/payday";
 import { periodForDate, type PeriodInfo } from "@/lib/period";
 import { advanceDate } from "@/lib/recurring";
 
@@ -106,6 +106,28 @@ export interface EstimatedGoalFunding {
   amount: number;
 }
 
+/**
+ * The plan one dated goal's estimate came from, kept whole: planGoalFunding's
+ * recommendation for the goal in a period with no confirmed check-in, against
+ * the room each account has left there after its scheduled commitments, its
+ * buffer and the goals ahead of this one. `pace` is what the goal's roadmap
+ * asks of the period; `recommended` what the room could give (the
+ * `estimatedGoals` figure when positive); `shortfall` the rest - what Step 3
+ * would report as "room couldn't cover", here for a period that has not
+ * happened yet. Display currency throughout; each draw in its account's own.
+ * Afford's two checks never read it. The Insight Engine's goal-forecast
+ * detector (src/lib/goal-forecast.ts) does, to see whether the periods up to a
+ * goal's target date can carry its pace at all.
+ */
+export interface ProjectedGoalPlan {
+  goalId: string;
+  name: string;
+  pace: number;
+  recommended: number;
+  shortfall: number;
+  draws: GoalFundingDraw[];
+}
+
 /** Everything a period's two checks need, as projected by src/lib/data/afford.ts. */
 export interface PeriodProjection {
   period: PeriodInfo;
@@ -158,6 +180,15 @@ export interface PeriodProjection {
    * commitments is not yet confirmed.
    */
   estimatedGoals: EstimatedGoalFunding[];
+  /**
+   * The plan behind `estimatedGoals`, one entry per dated goal in funding
+   * order whether or not the room gave it anything - so a goal the room
+   * could not fund at all, absent from `estimatedGoals`, is here with its
+   * whole pace as shortfall. Empty exactly when `estimatedGoals` is empty for
+   * want of anything to estimate: a period with a confirmed check-in, or no
+   * dated goal to save for. Not read by the checks or the results page.
+   */
+  goalPlans: ProjectedGoalPlan[];
   /**
    * How many comparable periods were actually averaged - up to HISTORY_PERIODS,
    * fewer when Settings' "count income history from" date drops some of them

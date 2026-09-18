@@ -21,14 +21,16 @@ const OPEN_LABEL: Record<InsightSource, (t: InboxDictionary) => string> = {
   afford_viability: (t) => t.openFromAfford,
   recurring_suggestion: (t) => t.openSuggestion,
   goal_behind: (t) => t.openGoal,
+  goal_forecast_risk: (t) => t.openGoal,
 };
 
-/** Where the insight came from - the surface it still appears on. */
+/** Where the insight came from - the surface it still appears on (the goal forecast has no other: Afford's projection computes it for the Inbox alone). */
 const SOURCE_LABEL: Record<InsightSource, (t: InboxDictionary) => string> = {
   not_posting: (t) => t.sourceNotPosting,
   afford_viability: (t) => t.sourceAffordViability,
   recurring_suggestion: (t) => t.sourceRecurringSuggestion,
   goal_behind: (t) => t.sourceGoalBehind,
+  goal_forecast_risk: (t) => t.sourceGoalForecast,
 };
 
 function formatEvidence(evidence: InsightEvidence): string {

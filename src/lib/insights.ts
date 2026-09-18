@@ -5,12 +5,15 @@
  * An insight is a *standing* signal: something the app has already noticed
  * that stays true until the user resolves it (a recurring item that cannot
  * post, an Afford plan that no longer fits, a charge pattern that looks like
- * an untracked bill, a goal whose confirmed plan is behind its roadmap). The
- * Inbox page lists every current one and the nav badge counts them; each also
- * keeps appearing where it always did (the Dashboard alerts, the Recurring
- * page's badges and "Looks recurring" card, the goal page's roadmap note).
- * Point-in-time prompts - the check-in's reconciliation warning, the
- * one-off-expense question - are not insights and never pass through here.
+ * an untracked bill, a goal whose confirmed plan is behind its roadmap, a
+ * goal whose pace outruns the accounts' projected room before its target
+ * date). The Inbox page lists every current one and the nav badge counts
+ * them; each also keeps appearing where it always did (the Dashboard alerts,
+ * the Recurring page's badges and "Looks recurring" card, the goal page's
+ * roadmap note) - except the goal forecast, which Afford's projection
+ * computes and only the Inbox shows. Point-in-time prompts - the check-in's
+ * reconciliation warning, the one-off-expense question - are not insights
+ * and never pass through here.
  *
  * Nothing here detects anything. Each detector re-presents a signal the app
  * already computes (see InsightContext for where each input comes from) as
@@ -32,6 +35,7 @@ import {
   type AffordTrackedItem,
 } from "@/lib/afford-tracking";
 import { formatDate, toISODate } from "@/lib/date";
+import { summarizeGoalForecast, type GoalForecast } from "@/lib/goal-forecast";
 import type { Dictionary } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
 import type { RecurringSuggestion } from "@/lib/recurring-detection";
@@ -48,6 +52,7 @@ export const INSIGHT_SOURCES = [
   "afford_viability",
   "recurring_suggestion",
   "goal_behind",
+  "goal_forecast_risk",
 ] as const;
 export type InsightSource = (typeof INSIGHT_SOURCES)[number];
 
@@ -99,6 +104,7 @@ export function insightId(ref: InsightRef): string {
  *   affordRechecks       the Afford tracker's re-check of every recorded plan (recheckAffordItems)
  *   recurringSuggestions the pattern detector's current suggestions (findRecurringSuggestions)
  *   goalRoadmaps         every goal's roadmap pace beside its confirmed plan (getGoalRoadmapStatuses)
+ *   goalForecasts        every dated goal's walk to its target date through Afford's projection (forecastGoalFunding)
  * plus the dictionary the titles and labels are written in and the display
  * currency the roadmap figures are in.
  */
@@ -110,6 +116,7 @@ export interface InsightContext {
   affordRechecks: AffordTrackedItem[];
   recurringSuggestions: RecurringSuggestion[];
   goalRoadmaps: GoalRoadmapStatus[];
+  goalForecasts: GoalForecast[];
 }
 
 export type InsightDetector = (context: InsightContext) => Insight[];
@@ -314,6 +321,61 @@ export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency
 };
 
 /**
+ * Afford's projection walked to each dated goal's target date: the first
+ * period ahead in which the accounts' projected room - income less scheduled
+ * commitments less buffer, after the goals funded before it - could not give
+ * the goal its pace, and by how much (planGoalFunding's own shortfall, the
+ * figure Step 3 reports as "room couldn't cover", here for a period that has
+ * not happened yet), reduced exactly as summarizeGoalForecast reduces it.
+ * The evidence is Afford's kind: the shortfall and the period first, then
+ * the pace asked, what the room could give, each account with room there and
+ * the target date. Not the goal page's "behind the roadmap" note, which
+ * measures what the plan period's confirmed check-in set aside
+ * (detectGoalsBehind): this asks whether the periods ahead can keep the pace
+ * up at all. A confirmed period is never in the walk, and an undated goal
+ * has no target date to walk to (forecastGoalFunding leaves both out).
+ * Advisory: nothing here is committed - the estimate is the discretionary
+ * funding the user adjusts check-in to check-in.
+ */
+export const detectGoalForecastRisk: InsightDetector = ({ dictionary, goalForecasts }) => {
+  const t = dictionary.inbox;
+  return goalForecasts.flatMap((forecast) => {
+    const summary = summarizeGoalForecast(forecast);
+    if (summary.status !== "short") return [];
+    const { period } = summary;
+    const withRoom = period.draws.filter((draw) => draw.headroom > 0);
+    return [
+      {
+        id: insightId({ source: "goal_forecast_risk", key: forecast.goalId }),
+        source: "goal_forecast_risk",
+        key: forecast.goalId,
+        severity: "advisory",
+        title: t.forecastTitle(forecast.name),
+        evidence: [
+          { kind: "money", label: t.forecastShortfall, amount: period.shortfall, currency: forecast.currency },
+          { kind: "text", label: t.forecastPeriod, value: period.period.label },
+          { kind: "money", label: t.forecastPace, amount: period.pace, currency: forecast.currency },
+          { kind: "money", label: t.forecastRoom, amount: period.recommended, currency: forecast.currency },
+          ...(withRoom.length > 0
+            ? withRoom.map(
+                (draw): InsightEvidence => ({
+                  kind: "money",
+                  label: t.forecastRoomOn(draw.name),
+                  amount: draw.headroom,
+                  currency: draw.currency,
+                }),
+              )
+            : [{ kind: "text", label: t.forecastAccounts, value: t.forecastNoRoom } satisfies InsightEvidence]),
+          { kind: "date", label: t.forecastTarget, date: toISODate(forecast.targetDate) },
+        ],
+        actionHref: `/goals/${forecast.goalId}`,
+        dismissible: true,
+      } satisfies Insight,
+    ];
+  });
+};
+
+/**
  * The registry. Order matters only within a severity: the Inbox lists
  * critical insights first, then advisory, each group in this order and then
  * in each detector's own order.
@@ -323,6 +385,7 @@ export const INSIGHT_DETECTORS: readonly InsightDetector[] = [
   detectAffordViability,
   detectRecurringSuggestions,
   detectGoalsBehind,
+  detectGoalForecastRisk,
 ];
 
 const SEVERITY_RANK: Record<InsightSeverity, number> = { critical: 0, advisory: 1 };

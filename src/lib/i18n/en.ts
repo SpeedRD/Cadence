@@ -1181,7 +1181,7 @@ export const en = {
       count === 1 ? "1 item needs attention" : `${count} items need attention`,
     emptyTitle: "Nothing needs attention",
     emptyDescription:
-      "Recurring items are posting, your Afford plans still fit, no untracked patterns turned up, and every goal plan is on its roadmap.",
+      "Recurring items are posting, your Afford plans still fit, no untracked patterns turned up, every goal plan is on its roadmap, and every goal has room ahead to reach its target date.",
     /** Severity headings. "Needs attention" is the nav badge's own phrase; "Advisory" is how Afford describes a check that blocks nothing. */
     severityCritical: "Needs attention",
     severityAdvisory: "Advisory",
@@ -1191,6 +1191,7 @@ export const en = {
     sourceAffordViability: "Afford",
     sourceRecurringSuggestion: "Looks recurring",
     sourceGoalBehind: "Goals",
+    sourceGoalForecast: "Goal forecast",
     dismiss: "Dismiss",
     dismissHint: "Remove from the Inbox for good. Where it came from is unchanged.",
     dismissed: "Dismissed. It won't come back to the Inbox.",
@@ -1231,6 +1232,15 @@ export const en = {
     goalPeriod: "Period",
     goalTarget: "Target date",
     goalRoomShortfall: "Room couldn't cover",
+    forecastTitle: (name: string) => `${name} is at risk before its target date`,
+    forecastShortfall: "Short by",
+    forecastPeriod: "In",
+    forecastPace: "Roadmap pace",
+    forecastRoom: "Room could give",
+    forecastRoomOn: (account: string) => `Room on ${account}`,
+    forecastAccounts: "Accounts with room",
+    forecastNoRoom: "none",
+    forecastTarget: "Target date",
   },
   payday: {
     bannerTitle: "Payday check-in ready",

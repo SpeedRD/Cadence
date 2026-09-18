@@ -4543,6 +4543,7 @@ async function main() {
         account: { accountId: "acc", name: "Checking", currency: account.currency ?? "USD", income: account.income, committed: account.committed, buffer: account.buffer, basis: "average" as const, estimatedGoalFunding: 0 },
         flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0 },
         estimatedGoals: [] as import("../src/lib/afford").EstimatedGoalFunding[],
+        goalPlans: [] as import("../src/lib/afford").ProjectedGoalPlan[],
         historyPeriods: 6,
       }] as const;
     };
@@ -6860,6 +6861,7 @@ async function main() {
       affordRechecks: [],
       recurringSuggestions: [],
       goalRoadmaps: [],
+      goalForecasts: [],
     };
     eq("the registry holds one detector per source, in source order", insights.INSIGHT_DETECTORS.length, insights.INSIGHT_SOURCES.length);
     eq("nothing to notice is an empty list, not an error", insights.detectInsights(emptyContext).length, 0);
@@ -6894,6 +6896,7 @@ async function main() {
         account: { accountId: "acc", name: "Checking", currency: "USD", income: account.income, committed: account.committed, buffer: account.buffer, basis: "average" as const, estimatedGoalFunding: 0 },
         flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0 },
         estimatedGoals: [] as import("../src/lib/afford").EstimatedGoalFunding[],
+        goalPlans: [] as import("../src/lib/afford").ProjectedGoalPlan[],
         historyPeriods: 6,
       }] as const;
     };
@@ -6948,6 +6951,35 @@ async function main() {
     eq("an undated goal has no roadmap to be behind", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ targetDate: null })] }).length, 0);
     eq("a goal with no confirmed plan this period, or no pace, is not behind anything", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: null }), goalStatus({ goalId: "g3", roadmapAmount: null })] }).length, 0);
 
+    console.log("-- goal forecast risk: Afford's projection walked to the target date --");
+    const forecastLib = await import("../src/lib/goal-forecast");
+    const roomDraw = (headroom: number, recommendedAmount: number): import("../src/lib/payday").GoalFundingDraw => ({ accountId: "acc", name: "Checking", currency: "USD", headroom, share: 1, recommendedAmount });
+    const forecastPeriod = (key: string, over: Partial<import("../src/lib/goal-forecast").GoalForecastPeriod> = {}): import("../src/lib/goal-forecast").GoalForecastPeriod => ({
+      period: periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" }),
+      pace: 307.69, recommended: 307.69, shortfall: 0, draws: [roomDraw(1500, 307.69)], ...over,
+    });
+    const forecast = (over: Partial<import("../src/lib/goal-forecast").GoalForecast> = {}): import("../src/lib/goal-forecast").GoalForecast => ({
+      goalId: "goal_1", name: "Emergency Fund", targetDate: civilDate(2027, 3, 31), currency: "USD",
+      periods: [
+        forecastPeriod("2026-10-A"),
+        forecastPeriod("2026-10-B"),
+        forecastPeriod("2026-11-A", { recommended: 100, shortfall: 207.69, draws: [roomDraw(100, 100)] }),
+        forecastPeriod("2026-11-B", { recommended: 0, shortfall: 307.69, draws: [] }),
+      ],
+      ...over,
+    });
+    const shortSummary = forecastLib.summarizeGoalForecast(forecast());
+    eq("the summary names the first period the room falls short in, with its figures", shortSummary.status === "short" ? `${shortSummary.period.period.key}:${shortSummary.period.recommended}:${shortSummary.period.shortfall}` : "on_track", "2026-11-A:100:207.69");
+    eq("a goal whose every projected period covers its pace is on track", forecastLib.summarizeGoalForecast(forecast({ periods: [forecastPeriod("2026-10-A"), forecastPeriod("2026-10-B")] })).status, "on_track");
+    eq("... as is one with no projected period at all (every period to its target already confirmed)", forecastLib.summarizeGoalForecast(forecast({ periods: [] })).status, "on_track");
+    eq("a shortfall within half a cent is covered - the same tolerance as the goal page", forecastLib.summarizeGoalForecast(forecast({ periods: [forecastPeriod("2026-10-A", { recommended: 307.686, shortfall: 0.004 })] })).status, "on_track");
+    const atRisk = insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast()] });
+    eq("a goal short in a projected period is an advisory insight keyed by the goal, linking to it", `${atRisk[0].id}|${atRisk[0].severity}|${atRisk[0].title}|${atRisk[0].actionHref}|${atRisk[0].dismissible}`, "goal_forecast_risk:goal_1|advisory|Emergency Fund is at risk before its target date|/goals/goal_1|true");
+    eq("the evidence leads with the shortfall and the first short period, then the pace, what the room could give, the account with room and the target date", atRisk[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount} ${e.currency}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Short by=207.69 USD;In=Nov 1-15;Roadmap pace=307.69 USD;Room could give=100 USD;Room on Checking=100 USD;Target date=2027-03-31");
+    eq("when no account has any room in that period, the evidence says so instead of listing accounts", insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast({ periods: [forecastPeriod("2026-11-B", { recommended: 0, shortfall: 307.69, draws: [] })] })] })[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Short by=307.69;In=Nov 16-30;Roadmap pace=307.69;Room could give=0;Accounts with room=none;Target date=2027-03-31");
+    eq("an account the earlier goals used up (room 0) is not listed as having room", insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast({ periods: [forecastPeriod("2026-11-A", { recommended: 50, shortfall: 257.69, draws: [roomDraw(0, 0), { ...roomDraw(50, 50), accountId: "acc2", name: "Savings" }] })] })] })[0].evidence.filter((e) => e.label.startsWith("Room on")).map((e) => e.label).join(","), "Room on Savings");
+    eq("a goal with room the whole way is nothing to notice, and one insight per goal at most", insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast({ periods: [forecastPeriod("2026-10-A")] }), forecast({ goalId: "goal_2" }), forecast({ goalId: "goal_3", periods: [] })] }).map((i) => i.id).join(","), "goal_forecast_risk:goal_2");
+
     console.log("-- the one central function: every detector, critical first --");
     const all = insights.detectInsights({
       ...emptyContext,
@@ -6955,15 +6987,16 @@ async function main() {
       affordRechecks: [{ itemId: "plan_laptop", name: "Laptop", verdict: shortVerdict }],
       recurringSuggestions: [suggestion],
       goalRoadmaps: [goalStatus({})],
+      goalForecasts: [forecast()],
     });
-    eq("all four sources appear", [...new Set(all.map((i) => i.source))].sort().join(","), "afford_viability,goal_behind,not_posting,recurring_suggestion");
-    eq("critical insights lead, then advisory; registry order and each detector's own order within", all.map((i) => i.id).join(","), "not_posting:item_gym,not_posting:item_fund,afford_viability:plan_laptop,recurring_suggestion:acc_1:NETFLIX COM,goal_behind:goal_1");
+    eq("all five sources appear", [...new Set(all.map((i) => i.source))].sort().join(","), "afford_viability,goal_behind,goal_forecast_risk,not_posting,recurring_suggestion");
+    eq("critical insights lead, then advisory; registry order and each detector's own order within", all.map((i) => i.id).join(","), "not_posting:item_gym,not_posting:item_fund,afford_viability:plan_laptop,recurring_suggestion:acc_1:NETFLIX COM,goal_behind:goal_1,goal_forecast_risk:goal_1");
     eq("every id is unique across sources", new Set(all.map((i) => i.id)).size, all.length);
     const kept = insights.withoutDismissed(all, [{ source: "not_posting", key: "item_gym" }, { source: "goal_behind", key: "goal_1" }]);
-    eq("a dismissal removes exactly the insight with that source and key", kept.map((i) => i.id).join(","), "not_posting:item_fund,afford_viability:plan_laptop,recurring_suggestion:acc_1:NETFLIX COM");
+    eq("a dismissal removes exactly the insight with that source and key - the same goal's forecast insight, under its own source, stays", kept.map((i) => i.id).join(","), "not_posting:item_fund,afford_viability:plan_laptop,recurring_suggestion:acc_1:NETFLIX COM,goal_forecast_risk:goal_1");
     eq("a dismissal for a key under another source does not match", insights.withoutDismissed(all, [{ source: "afford_viability", key: "item_gym" }]).length, all.length);
-    const es = insights.detectInsights({ ...emptyContext, dictionary: getDictionary("es"), recurringPosting: posting, goalRoadmaps: [goalStatus({})] });
-    eq("titles and labels follow the dictionary", `${es[0].title}|${es[2].evidence[0].label}`, "Gym no se está registrando|Por detrás");
+    const es = insights.detectInsights({ ...emptyContext, dictionary: getDictionary("es"), recurringPosting: posting, goalRoadmaps: [goalStatus({})], goalForecasts: [forecast()] });
+    eq("titles and labels follow the dictionary", `${es[0].title}|${es[2].evidence[0].label}|${es[3].title}|${es[3].evidence[0].label}`, "Gym no se está registrando|Por detrás|Emergency Fund corre riesgo antes de su fecha objetivo|Faltan");
   }
 
   console.log("\n== insight engine (database) ==");
@@ -7028,7 +7061,11 @@ async function main() {
     eq("the loaded context holds this run's posting summary, the tracker's verdicts, the suggestions and the goal statuses", `${loaded.recurringPosting === postingRun}:${loaded.affordRechecks.some((t) => t.itemId === laptopItem.id)}:${loaded.recurringSuggestions.some((s) => s.merchantKey === "VERIFY INSIGHT NETFLIX COM")}:${loaded.goalRoadmaps.some((s) => s.goalId === insightGoal.id)}`, "true:true:true:true");
     const collected = await collectInsights(insightContext);
     const mine = collected.filter((i) => i.title.startsWith("Verify Insight"));
-    eq("all four fixtures surface as insights", mine.map((i) => i.source).sort().join(","), "afford_viability,goal_behind,not_posting,recurring_suggestion");
+    // The goal also trips the forecast detector: its account has no room
+    // above its buffer in Oct 1-15 (rent and the laptop take all of it), so
+    // nothing can be put toward the goal there - the goal forecast section
+    // below works that signal through on its own fixtures.
+    eq("all four fixtures surface as insights - the goal twice, once per goal signal", mine.map((i) => i.source).sort().join(","), "afford_viability,goal_behind,goal_forecast_risk,not_posting,recurring_suggestion");
     eq("critical first, advisory after - the order the Inbox lists them in", collected.map((i) => i.severity).join(",").replace(/(critical,)+/, "C").replace(/(advisory,?)+/, "A"), "CA");
     const gymInsight = mine.find((i) => i.source === "not_posting");
     const laptopInsight = mine.find((i) => i.source === "afford_viability");
@@ -7057,8 +7094,10 @@ async function main() {
     await dismissInsight({ source: "goal_behind", key: insightGoal.id });
     await dismissInsight({ source: "not_posting", key: gymItem.id });
     await dismissInsight({ source: "afford_viability", key: laptopItem.id });
+    eq("dismissing the goal's behind-roadmap insight leaves its forecast insight - a different source under the same key", (await collectInsights(insightContext)).filter((i) => i.key === insightGoal.id).map((i) => i.source).join(","), "goal_forecast_risk");
+    await dismissInsight({ source: "goal_forecast_risk", key: insightGoal.id });
     const afterAll = await collectInsights(insightContext);
-    eq("with all four dismissed none of the fixtures remain, whatever else is in the database", afterAll.some((i) => i.title.startsWith("Verify Insight")), false);
+    eq("with all five dismissed none of the fixtures remain, whatever else is in the database", afterAll.some((i) => i.title.startsWith("Verify Insight")), false);
 
     await prisma.insightDismissal.deleteMany({ where: { OR: [{ key: netflixInsight!.key }, { key: insightGoal.id }, { key: gymItem.id }, { key: laptopItem.id }] } });
     eq("the fixture dismissals are removed", (await listInsightDismissals()).length, dismissalsBefore);
@@ -7069,6 +7108,121 @@ async function main() {
     await prisma.account.delete({ where: { id: insightAccount.id } });
     await prisma.category.delete({ where: { id: insightCategory.id } });
     console.log("  ok   insight fixtures removed");
+  }
+
+  console.log("\n== goal forecast risk (database) ==");
+  {
+    const { forecastGoalFunding } = await import("../src/lib/data/goal-forecast");
+    const { summarizeGoalForecast } = await import("../src/lib/goal-forecast");
+    const { collectInsights: collectForForecast, dismissInsight: dismissForForecast, listInsightDismissals: listForForecast } = await import("../src/lib/data/insights");
+    const { getGoalRoadmapStatuses: statusesForForecast, planPeriodRef: planRefForForecast } = await import("../src/lib/data/payday");
+    const affordForForecast = await import("../src/lib/data/afford");
+    const forecastToday = civilDate(2026, 9, 17);
+    // A 10% buffer under a 500 USD floor: the floor is what every account
+    // keeps back here, so an account another section left behind with a
+    // little income history has no room to lend the goal, and the figures
+    // below are this section's own.
+    const forecastContext = {
+      displayCurrency: "USD" as const, language: "en" as const, rates, today: forecastToday, currentPeriod: periodForDate(forecastToday),
+      recurringPosting: null, bufferPercent: 10, bufferFloorAmount: 500, bufferFloorCurrency: "USD",
+    };
+    eq("the fixtures plan for Sep 16-30", periodKey(planRefForForecast(forecastContext)), "2026-09-B");
+    eq("no confirmed check-in for the plan period is left over from earlier sections", await prisma.paydayCheckin.count({ where: { year: 2026, month: 9, period: "B" } }), 0);
+
+    // 2,000 on the 2nd and the 17th of every month from March, so every
+    // projected period - A or B - averages 2,000 on this account and keeps
+    // 500 of it back.
+    const forecastAccount = await prisma.account.create({ data: { name: "Verify Forecast Account", currency: "USD", type: "CHECKING" } });
+    await prisma.transaction.createMany({
+      data: [3, 4, 5, 6, 7, 8, 9].flatMap((m) => [2, 17].map((d) => ({ date: civilDate(2026, m, d), amount: 2000, currency: "USD", type: "INCOME" as const, accountId: forecastAccount.id, note: "Verify Forecast Salary", source: "MANUAL" as const }))),
+    });
+    // 4,000 still to go by March 31, 2027: 307.69 a period over the 13
+    // periods from Sep 16-30. Dated far back so the check-in's funding order
+    // (oldest goal first) places it ahead of any goal another section leaves
+    // behind - its room is then never spent on another goal first.
+    const forecastGoal = await prisma.goal.create({
+      data: { name: "Verify Forecast Goal", targetAmount: 5000, currency: "USD", targetDate: civilDate(2027, 3, 31), savedAmount: 1000, createdAt: civilDate(2000, 1, 1) },
+    });
+    // The plan period's confirmed check-in sets 310 aside for it: on the
+    // roadmap, so the goal is not behind it.
+    const forecastCheckin = await prisma.paydayCheckin.create({
+      data: {
+        year: 2026, month: 9, period: "B", checkinDate: civilDate(2026, 9, 16), currency: "USD", totalIncome: 2000, protectedBuffer: 500, status: "CONFIRMED",
+        allocations: { create: [{ type: "GOAL", goalId: forecastGoal.id, accountId: forecastAccount.id, recommendedAmount: 310, plannedAmount: 310, currency: "USD" }] },
+      },
+    });
+    // A 1,300 premium every December 1st. Dec 1-15 then keeps only 200 above
+    // the buffer (2,000 in, 1,300 owed, 500 kept back) - less than the pace;
+    // every other period keeps 1,500.
+    const premium = await prisma.recurringItem.create({
+      data: { name: "Verify Forecast Premium", amount: 1300, currency: "USD", frequency: "YEARLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 12, 1), anchorDay: 1, accountId: forecastAccount.id },
+    });
+    const activeForForecast = await prisma.account.findMany({ where: { status: "ACTIVE" }, orderBy: { name: "asc" }, select: { id: true, name: true, currency: true } });
+    const evidenceOf = (insight: import("../src/lib/insights").Insight | undefined) =>
+      insight?.evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount} ${e.currency}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";");
+
+    console.log("-- the walk: Afford's projection from the plan period to the target date --");
+    const forecast = (await forecastGoalFunding(forecastContext)).find((f) => f.goalId === forecastGoal.id);
+    check("the dated goal has a forecast", forecast !== undefined);
+    eq("it carries the goal's name, target date and the display currency", `${forecast?.name}:${forecast?.targetDate ? toISODate(forecast.targetDate) : null}:${forecast?.currency}`, "Verify Forecast Goal:2027-03-31:USD");
+    eq("it walks the 12 projected periods from Oct 1-15 to Mar 16-31 - the periods the pace is spread over, less the confirmed one", forecast?.periods.map((p) => p.period.key).join(","), "2026-10-A,2026-10-B,2026-11-A,2026-11-B,2026-12-A,2026-12-B,2027-01-A,2027-01-B,2027-02-A,2027-02-B,2027-03-A,2027-03-B");
+    eq("the plan period, confirmed, is not in the walk: its GOAL rows are the real plan and the goal page's own signal", forecast?.periods.some((p) => p.period.key === "2026-09-B"), false);
+    eq("every period asks the goal's pace as of today", [...new Set(forecast?.periods.map((p) => p.pace))].join(","), "307.69");
+    const decA = forecast?.periods.find((p) => p.period.key === "2026-12-A");
+    eq("Dec 1-15: the room gives 200 of the 307.69 and is short by 107.69 - planGoalFunding's own figures for that period", `${decA?.recommended}:${decA?.shortfall}`, "200:107.69");
+    eq("... drawn from the one account with room there, at all the room it has", decA?.draws.filter((d) => d.headroom > 0).map((d) => `${d.name}:${d.headroom}:${d.recommendedAmount}`).join(","), "Verify Forecast Account:200:200");
+    eq("every other period covers the pace in full", forecast?.periods.filter((p) => p.period.key !== "2026-12-A").map((p) => `${p.recommended}:${p.shortfall}`).join(","), Array(11).fill("307.69:0").join(","));
+    const decProjection = (await affordForForecast.projectPeriods([{ year: 2026, month: 12, period: "A" }], { id: forecastAccount.id, name: forecastAccount.name, currency: "USD" }, activeForForecast, forecastContext)).get("2026-12-A")!;
+    eq("the figures are the projection's own goal plan for the period, not a second computation", JSON.stringify({ pace: decA?.pace, recommended: decA?.recommended, shortfall: decA?.shortfall, draws: decA?.draws }), JSON.stringify((({ pace, recommended, shortfall, draws }) => ({ pace, recommended, shortfall, draws }))(decProjection.goalPlans.find((g) => g.goalId === forecastGoal.id)!)));
+    eq("... whose account figures put the room at exactly 200: 2,000 in, 1,300 owed, 500 kept back", `${decProjection.account.income}:${round2(decProjection.account.committed - decProjection.account.estimatedGoalFunding)}:${decProjection.account.buffer}`, "2000:1300:500");
+    eq("and the estimate Afford itself carries for the goal there is the same 200", decProjection.estimatedGoals.find((g) => g.goalId === forecastGoal.id)?.amount, 200);
+    const summary = summarizeGoalForecast(forecast!);
+    eq("the summary names the first short period", summary.status === "short" ? `${summary.period.period.label}:${summary.period.shortfall}` : "on_track", "Dec 1-15:107.69");
+
+    console.log("-- the two goal signals are independent: at risk ahead, on the roadmap now --");
+    const roadmapStatus = (await statusesForForecast(forecastContext)).find((s) => s.goalId === forecastGoal.id);
+    eq("the goal page's status: 310 planned against a 307.69 roadmap", `${roadmapStatus?.roadmapAmount}:${roadmapStatus?.planned?.plannedAmount}`, "307.69:310");
+    let current = await collectForForecast(forecastContext);
+    const riskInsight = current.find((i) => i.source === "goal_forecast_risk" && i.key === forecastGoal.id);
+    eq("the forecast detector fires for the goal: advisory, titled after it, linking to it", `${riskInsight?.severity}|${riskInsight?.title}|${riskInsight?.actionHref}`, `advisory|Verify Forecast Goal is at risk before its target date|/goals/${forecastGoal.id}`);
+    eq("naming Dec 1-15 and the 107.69, beside the pace, the room, the account with room and the target date", evidenceOf(riskInsight), "Short by=107.69 USD;In=Dec 1-15;Roadmap pace=307.69 USD;Room could give=200 USD;Room on Verify Forecast Account=200 USD;Target date=2027-03-31");
+    eq("while the behind-roadmap detector does not fire for it: the confirmed plan is on the roadmap", current.some((i) => i.source === "goal_behind" && i.key === forecastGoal.id), false);
+    eq("it is in the one list the Inbox shows and the nav badge counts, among the advisory insights after every critical one", current.findIndex((i) => i.id === riskInsight?.id) >= current.filter((i) => i.severity === "critical").length, true);
+
+    console.log("-- dismissing it is like dismissing any other insight --");
+    const forecastDismissalsBefore = (await listForForecast()).length;
+    await dismissForForecast({ source: "goal_forecast_risk", key: forecastGoal.id });
+    const afterDismiss = await collectForForecast(forecastContext);
+    eq("gone from the list, and only it", `${afterDismiss.some((i) => i.id === riskInsight?.id)}:${afterDismiss.length}`, `false:${current.length - 1}`);
+    eq("the forecast itself is untouched: the signal is not changed, only the Inbox", summarizeGoalForecast((await forecastGoalFunding(forecastContext)).find((f) => f.goalId === forecastGoal.id)!).status, "short");
+    await prisma.insightDismissal.deleteMany({ where: { source: "goal_forecast_risk", key: forecastGoal.id } });
+    eq("the fixture dismissal is removed", (await listForForecast()).length, forecastDismissalsBefore);
+
+    console.log("-- the reverse: behind the roadmap now, room the whole way ahead --");
+    await prisma.recurringItem.delete({ where: { id: premium.id } });
+    await prisma.paydayPlanAllocation.updateMany({ where: { paydayCheckinId: forecastCheckin.id, type: "GOAL", goalId: forecastGoal.id }, data: { plannedAmount: 100 } });
+    const roomy = (await forecastGoalFunding(forecastContext)).find((f) => f.goalId === forecastGoal.id);
+    eq("with the premium gone every projected period covers the pace", roomy?.periods.map((p) => p.shortfall).join(","), Array(12).fill("0").join(","));
+    eq("so the forecast is on track", summarizeGoalForecast(roomy!).status, "on_track");
+    current = await collectForForecast(forecastContext);
+    const behindInsight = current.find((i) => i.source === "goal_behind" && i.key === forecastGoal.id);
+    eq("the behind-roadmap detector fires: 100 planned against 307.69", behindInsight?.evidence[0].kind === "money" ? behindInsight.evidence[0].amount : -1, 207.69);
+    eq("and the forecast detector does not", current.some((i) => i.source === "goal_forecast_risk" && i.key === forecastGoal.id), false);
+
+    console.log("-- an undated goal is never walked --");
+    await prisma.goal.update({ where: { id: forecastGoal.id }, data: { targetDate: null } });
+    eq("no forecast for it: there is no target date to walk to", (await forecastGoalFunding(forecastContext)).some((f) => f.goalId === forecastGoal.id), false);
+    const octProjection = (await affordForForecast.projectPeriods([{ year: 2026, month: 10, period: "A" }], { id: forecastAccount.id, name: forecastAccount.name, currency: "USD" }, activeForForecast, forecastContext)).get("2026-10-A")!;
+    eq("nor a goal plan in the projection: Afford estimates nothing for an undated goal", octProjection.goalPlans.some((g) => g.goalId === forecastGoal.id), false);
+    current = await collectForForecast(forecastContext);
+    eq("neither goal detector fires for it", current.filter((i) => i.key === forecastGoal.id).map((i) => i.source).join(","), "");
+
+    await prisma.paydayCheckin.delete({ where: { id: forecastCheckin.id } });
+    await prisma.goal.delete({ where: { id: forecastGoal.id } });
+    await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Forecast" } } });
+    await prisma.transaction.deleteMany({ where: { accountId: forecastAccount.id } });
+    await prisma.account.delete({ where: { id: forecastAccount.id } });
+    console.log("  ok   goal forecast fixtures removed");
   }
 
   console.log("\n== debt payoff comparator (pure) ==");

@@ -54,11 +54,18 @@ goals, and everything due in the next seven days. If a recurring item cannot pos
 Every standing signal the app has noticed, in one place: a recurring item that
 cannot post, an Afford plan whose remaining payments no longer fit, a charge pattern
 that looks like an untracked bill, a goal whose confirmed plan for the period is
-behind its roadmap. Each one keeps appearing where it always did (the Dashboard
-alerts, the Recurring page's badges and "Looks recurring" card, the goal page's
-roadmap note) - the Inbox is a second place for the same signals, not a
-replacement, and it re-presents each signal's own result rather than detecting
-anything on its own. Items are grouped by severity in the app's own two terms:
+behind its roadmap, a dated goal whose pace the accounts' projected room cannot
+carry somewhere before its target date. Each one keeps appearing where it always
+did (the Dashboard alerts, the Recurring page's badges and "Looks recurring" card,
+the goal page's roadmap note) - the Inbox is a second place for the same signals,
+not a replacement, and it re-presents each signal's own result rather than
+detecting anything on its own. The goal forecast is the one exception with no
+other surface: it is Afford's projection (income, scheduled commitments, buffer,
+and the goals ahead in funding order) walked period by period from the plan
+period to the goal's target date, naming the first period the room falls short
+in and by how much - a different question from "behind its roadmap", which reads
+what this period's confirmed check-in set aside.
+Items are grouped by severity in the app's own two terms:
 **Needs attention** (red, like the nav badge: money already committed is not where
 the plan says it is) first, **Advisory** (amber, like Afford's checks: nothing is
 blocked or changed) after. Each carries the figures that triggered it, a link to
