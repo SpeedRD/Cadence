@@ -31,11 +31,16 @@
  *
  *   DATABASE_URL="postgres://.../any_db" npx tsx scripts/verify-no-double-counting.ts
  *
- * Read-only, enforced by the database rather than by convention: the
- * connection is opened with default_transaction_read_only=on, so Postgres
+ * Read-only, enforced by the database rather than by convention: after
+ * connecting, the script issues `SET default_transaction_read_only = on`
+ * over the live connection (a real statement, not a connection-string
+ * parameter - Supabase's session pooler does not forward the `options` query
+ * param a DSN-based version of this guard once relied on) and then opens the
+ * work in an explicit `BEGIN READ ONLY` transaction, confirming
+ * transaction_read_only is "on" before anything is read. Postgres therefore
  * refuses every INSERT/UPDATE/DELETE the script (or any app module it calls)
- * could attempt, and the script checks that setting before reading anything.
- * It is therefore safe to point at a database holding real data. Exchange
+ * could attempt. It is therefore safe to point at a database holding real
+ * data. Exchange
  * rates are read from the stored ExchangeRate rows (never fetched, never
  * written); every comparison here holds under any consistent rate table.
  *
@@ -56,6 +61,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { PrismaPg } from "@prisma/adapter-pg";
+import { Pool } from "pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { CURRENCIES, convert, toCurrency, type RateTable } from "../src/lib/currency";
 import {
@@ -91,25 +97,39 @@ import type { AffordContext } from "../src/lib/data/afford";
 import type { AppContext } from "../src/lib/data/context";
 
 // ---------------------------------------------------------------------------
-// Read-only connection. src/lib/prisma.ts reuses globalThis.prisma when one is
-// already there, and reads DATABASE_URL at import time, so both are set before
-// any app module is imported (they are all imported dynamically in main()).
+// Read-only connection. Pooler-agnostic: this issues `SET
+// default_transaction_read_only = on` and `BEGIN READ ONLY` as real
+// statements over the connection, rather than relying on a connection-string
+// parameter a pooler might not forward. `max: 1` pins the pg Pool to exactly
+// one physical connection, so every later query - Prisma's own, and every
+// app module's, since src/lib/prisma.ts reuses globalThis.prisma when one is
+// already there - runs on the same session and stays inside this one
+// transaction. Returns null (never throws) when read-only cannot be
+// confirmed, so the caller can fail closed.
 // ---------------------------------------------------------------------------
 
-function readOnlyUrl(url: string): string {
-  const option = encodeURIComponent("-c default_transaction_read_only=on");
-  return `${url}${url.includes("?") ? "&" : "?"}options=${option}`;
+async function connectReadOnly(connectionString: string): Promise<{ prisma: PrismaClient; pool: Pool } | null> {
+  const pool = new Pool({ connectionString, max: 1 });
+  const client = await pool.connect();
+  let confirmed = false;
+  try {
+    await client.query("SET default_transaction_read_only = on");
+    await client.query("BEGIN READ ONLY");
+    const { rows } = await client.query<{ ro: string }>("SELECT current_setting('transaction_read_only') AS ro");
+    confirmed = rows[0]?.ro === "on";
+    if (!confirmed) await client.query("ROLLBACK");
+  } finally {
+    client.release();
+  }
+  if (!confirmed) {
+    await pool.end();
+    return null;
+  }
+  const adapter = new PrismaPg(pool, { disposeExternalPool: true });
+  return { prisma: new PrismaClient({ adapter }), pool };
 }
 
-const rawUrl = process.env.DATABASE_URL;
-if (!rawUrl) {
-  console.error("DATABASE_URL is not set");
-  process.exit(2);
-}
-const connectionString = readOnlyUrl(rawUrl);
-process.env.DATABASE_URL = connectionString;
-const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
-(globalThis as { prisma?: unknown }).prisma = prisma;
+let prisma!: PrismaClient;
 
 // ---------------------------------------------------------------------------
 // Reporting
@@ -325,14 +345,6 @@ async function loadStoredRates(): Promise<{ table: RateTable; fallback: string[]
 }
 
 async function main(): Promise<number> {
-  const [{ default_transaction_read_only: readOnly }] = await prisma.$queryRaw<
-    { default_transaction_read_only: string }[]
-  >`SELECT current_setting('default_transaction_read_only') AS default_transaction_read_only`;
-  if (readOnly !== "on") {
-    console.error(`refusing to run: default_transaction_read_only is "${readOnly}", not "on"`);
-    return 2;
-  }
-
   const settings = await prisma.settings.findUnique({ where: { id: "singleton" } });
   if (!settings) {
     console.error("no Settings row: this does not look like a seeded Cadence database");
@@ -1038,7 +1050,23 @@ async function main(): Promise<number> {
   return 1;
 }
 
-main()
+async function run(): Promise<number> {
+  const rawUrl = process.env.DATABASE_URL;
+  if (!rawUrl) {
+    console.error("DATABASE_URL is not set");
+    return 2;
+  }
+  const established = await connectReadOnly(rawUrl);
+  if (!established) {
+    console.error(`refusing to run: could not confirm a read-only transaction on this connection`);
+    return 2;
+  }
+  prisma = established.prisma;
+  (globalThis as { prisma?: unknown }).prisma = prisma;
+  return main();
+}
+
+run()
   .then((code) => {
     process.exitCode = code;
   })
@@ -1047,5 +1075,5 @@ main()
     process.exitCode = 2;
   })
   .finally(async () => {
-    await prisma.$disconnect();
+    if (prisma) await prisma.$disconnect();
   });
