@@ -456,7 +456,12 @@ Every account, transaction, recurring item, and goal is recorded in DOP, USD, or
 EUR. Changing the display currency only changes how figures are presented
 everywhere; it never converts or mutates what was recorded. Conversions use cached,
 periodically refreshed USD-based rates, and a stale rate table is flagged on every
-page. The interface is available in English and Spanish, switchable from the top
+page. For DOP and EUR, Banco Popular Dominicano's own published sell rate is
+preferred over the market rate whenever one less than a week old is stored; Settings
+shows which source is in use. The bank's feed blocks server-side clients, so that
+rate arrives through a daily GitHub Actions job that reads it with a real browser
+and posts it to the app (`.github/workflows/scrape-bpd-rate.yml`, set up in
+[DEPLOY.md](./DEPLOY.md)). The interface is available in English and Spanish, switchable from the top
 bar, alongside a dark/light theme toggle. Access is a single PIN-protected session;
 every route except login is protected server-side. The PIN can be changed from
 Settings (current PIN required), and a forgotten one can be replaced from the unlock
@@ -527,6 +532,7 @@ ready to use. Email automation (Gmail/Outlook) is optional — see
 | `npm run db:studio` | Prisma Studio |
 | `npx tsx scripts/verify-domain.ts` | Domain checks (pay periods, safe-to-spend, posting, payday, Afford, currency, CSV). Writes and then deletes rows, so run it with `DATABASE_URL` pointed at a scratch database |
 | `npx tsx scripts/verify-no-double-counting.ts` | Double-counting integrity audit over real data: goal-contribution twins, SEMI_MONTHLY anchors, Afford's goal estimate vs confirmed GOAL rows. Read-only (the connection is opened `default_transaction_read_only`), so it can be pointed at any database; exit 1 means it found something to investigate |
+| `npx tsx scripts/scrape-bpd-rate.ts` | Captures Banco Popular's published exchange rate with a real (headed) Chromium and posts it to `/api/cron/bpd-rate/ingest` on `CADENCE_APP_URL` with `BPD_SCRAPE_INGEST_SECRET`. `--dry-run` scrapes and prints without posting. Needs `npx playwright install chromium` once; run daily by the GitHub Actions workflow |
 
 ## Environment variables
 
@@ -542,6 +548,7 @@ the authoritative source for "today" and pay-period boundaries.
 | `RECOVERY_SECRET` | Core app (optional) | Enables "Forgot your PIN?" on the unlock screen; entering it sets a new PIN without the old one. Unset hides the recovery path |
 | `APP_TIMEZONE` | Core app | IANA timezone for resolving pay periods; defaults to `America/Santo_Domingo` |
 | `CRON_SECRET` | Core app / Email automation | Bearer token required by both cron routes (`/api/cron/recurring` posts due recurring items; `/api/cron/ingest` syncs email) |
+| `BPD_SCRAPE_INGEST_SECRET` | Banco Popular rate scraper | Bearer token required by `/api/cron/bpd-rate/ingest`, where the GitHub Actions scraper posts the bank's published rate. The same value goes in the repository's Actions secrets (see [DEPLOY.md](./DEPLOY.md)) |
 | `OAUTH_ENCRYPTION_KEY` | Email automation | Encrypts stored OAuth tokens at rest |
 | `APP_URL` | Email automation (production) | Canonical production origin used to build the stable Gmail OAuth redirect URI |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Email automation | Gmail OAuth |

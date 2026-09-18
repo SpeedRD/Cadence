@@ -37,6 +37,16 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - New `/api/cron/*` routes must be added to `BEARER_AUTH_PATHS` in
   `src/proxy.ts`, or the proxy redirects them to `/login` before the
   handler's bearer check ever runs.
+- Banco Popular (`source: "bpd"`) ExchangeRate rows are validated and written
+  in exactly one place, `storeBpdRates()` in `src/lib/bpd-rates.ts`, used by
+  both the on-demand fetch and the scraper's `/api/cron/bpd-rate/ingest`
+  route. The bank's feed blocks every server-side client (Incapsula), so
+  the rows in practice come from `scripts/scrape-bpd-rate.ts` run by
+  `.github/workflows/scrape-bpd-rate.yml` in a real headed browser; never
+  add headers, proxies or fingerprint tweaks to that script - if a genuine
+  browser is refused, report it. The pure bounds/parsing live in
+  `src/lib/bpd-rate-payload.ts` (database-free, so the script can import
+  it).
 - Standing signals ("insights") go through one registry,
   `INSIGHT_DETECTORS` in `src/lib/insights.ts`: a detector is a pure
   `(InsightContext) => Insight[]` that re-presents a result the app already

@@ -7,13 +7,14 @@ const PUBLIC_PATHS = new Set(["/login"]);
 
 /**
  * Routes with their own non-session auth (a bearer secret checked inside the
- * route handler) instead of the PIN session - Vercel Cron never carries our
- * session cookie.
+ * route handler) instead of the PIN session - Vercel Cron and the GitHub
+ * Actions scraper never carry our session cookie.
  */
 const BEARER_AUTH_PATHS = new Set([
   "/api/cron/ingest",
   "/api/cron/recurring",
   "/api/cron/bpd-rate",
+  "/api/cron/bpd-rate/ingest",
 ]);
 
 /**

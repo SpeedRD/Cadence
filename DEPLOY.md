@@ -92,7 +92,8 @@ In the Vercel project → Settings → Environment Variables (Production), set:
 - `DIRECT_URL` — the Supabase session pooler string (port `5432`)
 - `APP_TIMEZONE` — `America/Santo_Domingo`
 - `RECOVERY_SECRET` — optional; enables "Forgot your PIN?" on the unlock screen (`openssl rand -hex 32`, kept in a password manager). Without it a forgotten PIN can only be reset by nulling `Settings.pinHash` in the database.
-- `SESSION_SECRET`, `OAUTH_ENCRYPTION_KEY`, `CRON_SECRET` — existing values, or generate new ones (see [PHASE2.md](./PHASE2.md)). `CRON_SECRET` gates both cron routes in `vercel.json`: `/api/cron/ingest` (email sync, daily 04:00 UTC) and `/api/cron/recurring` (posts due recurring items, daily 04:15 UTC). Without it neither cron does anything.
+- `SESSION_SECRET`, `OAUTH_ENCRYPTION_KEY`, `CRON_SECRET` — existing values, or generate new ones (see [PHASE2.md](./PHASE2.md)). `CRON_SECRET` gates the cron routes in `vercel.json`: `/api/cron/ingest` (email sync, daily 04:00 UTC), `/api/cron/recurring` (posts due recurring items, daily 04:15 UTC) and `/api/cron/bpd-rate` (Banco Popular rate cache warm, daily 01:00 UTC). Without it none of the crons does anything.
+- `BPD_SCRAPE_INGEST_SECRET` — `openssl rand -hex 32`. Gates `/api/cron/bpd-rate/ingest`, where the GitHub Actions scraper posts Banco Popular's rate (section 9). Deliberately not `CRON_SECRET`: this value also lives on GitHub, and on its own it can only write a rate row that passes the server's plausibility checks.
 - `APP_URL` — the canonical production origin, e.g. `https://cadence.vercel.app` or your custom domain (no trailing slash). Required for Gmail OAuth to work in production — see [PHASE2.md](./PHASE2.md).
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`
@@ -116,6 +117,35 @@ or push a commit, or use **Deployments → Redeploy** in the dashboard.
 Open the production URL's `/login` page and confirm it loads (no more Prisma
 `P1001`), then sign in / set a PIN to confirm reads and writes both work
 against Supabase.
+
+## 9. Banco Popular rate scraper (GitHub Actions)
+
+Banco Popular's rates feed sits behind bot protection that refuses every
+server-side HTTP client, so the app's own fetch and the Vercel cron never get
+a rate from it and fall back to open.er-api.com. A real browser is served
+normally, so `.github/workflows/scrape-bpd-rate.yml` runs
+`scripts/scrape-bpd-rate.ts` once a day (22:00 UTC, 18:00 in Santo Domingo)
+in headed Chromium on a GitHub runner and posts the captured rate to
+`/api/cron/bpd-rate/ingest`, which re-validates it and stores it exactly as
+the on-demand path would have.
+
+In the GitHub repository → Settings → Secrets and variables → Actions:
+
+- **Secret** `BPD_SCRAPE_INGEST_SECRET` — the same value set on Vercel in
+  section 6. If they differ every run fails with `HTTP 401`.
+- **Variable** `CADENCE_APP_URL` — the production origin, e.g.
+  `https://cadence.vercel.app`, no trailing slash.
+
+Nothing else is needed: the job has no database access and never needs one.
+Trigger it once by hand from the Actions tab (**Scrape Banco Popular rate →
+Run workflow**) rather than waiting for the schedule. A green run logs the
+captured rate and the endpoint's `stored: true` reply; Settings then shows
+"from Banco Popular (<date>)" as the rate source instead of open.er-api.com.
+A red run means nothing was written - read its log: `feed not ready` /
+`never answered with JSON` is the bank's site not serving the browser,
+`failed validation` is a payload outside the 55-75 DOP band or missing
+fields, `HTTP 401` is a secret mismatch, and `outside the 7-day freshness
+window` means the bank has not published for over a week.
 
 ## Applying a new migration later
 

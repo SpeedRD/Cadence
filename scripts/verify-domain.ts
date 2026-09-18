@@ -6200,6 +6200,193 @@ async function main() {
     console.log("  ok   test ExchangeRate rows removed");
   }
 
+  console.log("\n== BPD rate ingestion: the browser scraper's endpoint and the shared persistence it writes through ==");
+  {
+    const { NextRequest } = await import("next/server");
+    const { POST: ingestPost } = await import("../src/app/api/cron/bpd-rate/ingest/route");
+    const { storeBpdRates } = await import("../src/lib/bpd-rates");
+    const {
+      isPlausibleDopRate,
+      isWithinFreshnessWindow,
+      MAX_PLAUSIBLE_DOP_RATE,
+      MIN_PLAUSIBLE_DOP_RATE,
+      parseBpdPayload: parseScraped,
+    } = await import("../src/lib/bpd-rate-payload");
+    const { proxy } = await import("../src/proxy");
+
+    await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+    // A fresh open.er-api.com table so getRateTable() resolves from the DB
+    // with no network call - the BPD rows are the only variable here.
+    const seededAt = new Date();
+    for (const [targetCurrency, rate] of Object.entries({ USD: 1, DOP: 59, EUR: 0.9 })) {
+      await prisma.exchangeRate.upsert({
+        where: { baseCurrency_targetCurrency_source: { baseCurrency: "USD", targetCurrency, source: "open-er-api" } },
+        update: { rate, fetchedAt: seededAt },
+        create: { baseCurrency: "USD", targetCurrency, source: "open-er-api", rate, fetchedAt: seededAt },
+      });
+    }
+    const bpdRows = () =>
+      prisma.exchangeRate.findMany({ where: { baseCurrency: "USD", source: BPD_SOURCE }, orderBy: { targetCurrency: "asc" } });
+    const bpdSnapshot = async () =>
+      (await bpdRows()).map((r) => `${r.targetCurrency}=${Number(r.rate)}@${r.asOf?.toISOString() ?? "null"}`).join(",");
+    // ExchangeRate.rate is Decimal(20,10): the derived cross-rate comes back
+    // rounded to ten places.
+    const stored10 = (value: number) => Number(value.toFixed(10));
+
+    console.log("-- the bounds the scraper applies are the server's own, one definition --");
+    eq("the plausible band is the documented 55-75 DOP", `${MIN_PLAUSIBLE_DOP_RATE}-${MAX_PLAUSIBLE_DOP_RATE}`, "55-75");
+    eq("the band's edges are inclusive", `${isPlausibleDopRate(55)}:${isPlausibleDopRate(75)}`, "true:true");
+    eq(
+      "just outside either edge, NaN, Infinity and a numeric string are all refused",
+      [54.99, 75.01, NaN, Infinity, "60"].map((v) => isPlausibleDopRate(v)).join(":"),
+      "false:false:false:false:false",
+    );
+    const now = new Date();
+    const daysAgo = (n: number) => new Date(now.getTime() - n * 24 * 60 * 60 * 1000);
+    eq(
+      "the freshness window accepts today through 7 days ago and refuses 8 days ago or the future",
+      [0, 7, 8, -1].map((n) => isWithinFreshnessWindow(daysAgo(n), now)).join(":"),
+      "true:true:false:false",
+    );
+    // The scraper parses exactly what the browser captured - the bank's
+    // SharePoint payload carries many more fields than the three used here.
+    const realShapedPayload = {
+      d: {
+        results: [
+          {
+            __metadata: { id: "7b4a943d", type: "SP.Data.RatesListItem" },
+            ItemID: "1",
+            DollarBuyRate: 61.3,
+            DollarSellRate: 62.55,
+            EuroBuyRate: 70.1,
+            EuroSellRate: 73.9,
+            BuySellRatesAsOf: `${toISODate(civilDateInZone(now, "UTC"))}T00:00:00Z`,
+          },
+        ],
+      },
+    };
+    const scraped = parseScraped(realShapedPayload);
+    eq(
+      "a real-shaped payload parses to the three fields the endpoint takes",
+      scraped ? `${scraped.dollarSellRate}:${scraped.euroSellRate}:${scraped.asOf.toISOString()}` : "null",
+      `62.55:73.9:${toISODate(civilDateInZone(now, "UTC"))}T00:00:00.000Z`,
+    );
+
+    console.log("-- storeBpdRates(): refuses before writing, writes only when every check passes --");
+    const today = new Date();
+    eq(
+      "an out-of-range dollar sell rate is refused by reason",
+      JSON.stringify(await storeBpdRates({ dollarSellRate: 5, euroSellRate: 70, asOf: today })),
+      JSON.stringify({ ok: false, reason: "out_of_range" }),
+    );
+    eq(
+      "an out-of-range euro sell rate is refused by reason",
+      JSON.stringify(await storeBpdRates({ dollarSellRate: 60, euroSellRate: 999, asOf: today })),
+      JSON.stringify({ ok: false, reason: "out_of_range" }),
+    );
+    eq(
+      "an invalid asOf is refused by reason",
+      JSON.stringify(await storeBpdRates({ dollarSellRate: 60, euroSellRate: 70, asOf: new Date("nope") })),
+      JSON.stringify({ ok: false, reason: "invalid_as_of" }),
+    );
+    eq(
+      "an asOf 8 days old is refused by reason",
+      JSON.stringify(await storeBpdRates({ dollarSellRate: 60, euroSellRate: 70, asOf: daysAgo(8) })),
+      JSON.stringify({ ok: false, reason: "outside_freshness_window" }),
+    );
+    eq(
+      "an asOf in the future is refused by reason",
+      JSON.stringify(await storeBpdRates({ dollarSellRate: 60, euroSellRate: 70, asOf: daysAgo(-1) })),
+      JSON.stringify({ ok: false, reason: "outside_freshness_window" }),
+    );
+    eq("none of the refusals wrote a bpd row", await bpdSnapshot(), "");
+    const storedAsOf = daysAgo(2);
+    eq(
+      "a valid rate within the window is stored",
+      JSON.stringify(await storeBpdRates({ dollarSellRate: 62.5, euroSellRate: 71.25, asOf: storedAsOf })),
+      JSON.stringify({ ok: true }),
+    );
+    eq(
+      "...as the DOP sell rate and the derived EUR cross-rate, both carrying the bank's asOf",
+      await bpdSnapshot(),
+      `DOP=62.5@${storedAsOf.toISOString()},EUR=${stored10(62.5 / 71.25)}@${storedAsOf.toISOString()}`,
+    );
+    const storedTable = await getRateTable();
+    eq("getRateTable() prefers what storeBpdRates() wrote, exactly as it does the on-demand path's rows", storedTable.source, "bpd");
+    eq("...for DOP", storedTable.rates.DOP, 62.5);
+
+    console.log("-- the ingestion endpoint: bearer secret, then shape, then bounds, then the shared persistence --");
+    const previousIngestSecret = process.env.BPD_SCRAPE_INGEST_SECRET;
+    process.env.BPD_SCRAPE_INGEST_SECRET = "verify-ingest-secret";
+    const ingest = (body: unknown, auth: string | null = "Bearer verify-ingest-secret") =>
+      ingestPost(
+        new NextRequest("http://localhost/api/cron/bpd-rate/ingest", {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(auth ? { authorization: auth } : {}) },
+          body: typeof body === "string" ? body : JSON.stringify(body),
+        }),
+      );
+    const validBody = { dollarSellRate: 61.1, euroSellRate: 71.9, asOf: today.toISOString() };
+    const before = await bpdSnapshot();
+
+    eq("a wrong bearer secret is rejected", (await ingest(validBody, "Bearer wrong-secret")).status, 401);
+    eq("a missing Authorization header is rejected", (await ingest(validBody, null)).status, 401);
+    eq("the CRON_SECRET does not open this route", (await ingest(validBody, `Bearer ${process.env.CRON_SECRET ?? "cron"}`)).status, 401);
+    delete process.env.BPD_SCRAPE_INGEST_SECRET;
+    eq("an unconfigured secret refuses everything with 500 rather than matching an empty bearer", (await ingest(validBody, "Bearer ")).status, 500);
+    process.env.BPD_SCRAPE_INGEST_SECRET = "verify-ingest-secret";
+    eq("a valid body behind a bad secret wrote nothing", await bpdSnapshot(), before);
+
+    async function refused(name: string, body: unknown, reason: string) {
+      const response = await ingest(body);
+      const json = await response.json();
+      eq(`${name} is refused with 400 and reason ${reason}`, `${response.status}:${json.stored}:${json.reason}`, `400:false:${reason}`);
+    }
+    await refused("a body that is not JSON", "{not json", "malformed");
+    await refused("a body missing euroSellRate", { dollarSellRate: 61.1, asOf: today.toISOString() }, "malformed");
+    await refused("rates sent as strings", { dollarSellRate: "61.1", euroSellRate: "71.9", asOf: today.toISOString() }, "malformed");
+    await refused("a dollar sell rate below the band", { ...validBody, dollarSellRate: 5 }, "out_of_range");
+    await refused("a euro sell rate above the band", { ...validBody, euroSellRate: 999 }, "out_of_range");
+    await refused("an asOf that is not a date", { ...validBody, asOf: "yesterday-ish" }, "invalid_as_of");
+    await refused("an asOf 8 days old", { ...validBody, asOf: daysAgo(8).toISOString() }, "outside_freshness_window");
+    await refused("an asOf in the future", { ...validBody, asOf: daysAgo(-1).toISOString() }, "outside_freshness_window");
+    eq("none of the refused payloads changed the stored bpd rows", await bpdSnapshot(), before);
+
+    const accepted = await ingest(validBody);
+    const acceptedJson = await accepted.json();
+    eq("a valid payload is accepted with 200", accepted.status, 200);
+    eq(
+      "...and echoes what it stored",
+      `${acceptedJson.stored}:${acceptedJson.dollarSellRate}:${acceptedJson.euroSellRate}:${acceptedJson.asOf}`,
+      `true:61.1:71.9:${today.toISOString()}`,
+    );
+    eq(
+      "the accepted payload replaced the stored bpd rows through the shared persistence",
+      await bpdSnapshot(),
+      `DOP=61.1@${today.toISOString()},EUR=${stored10(61.1 / 71.9)}@${today.toISOString()}`,
+    );
+    const ingestedTable = await getRateTable();
+    eq("getRateTable() now prefers the ingested rate for DOP", ingestedTable.rates.DOP, 61.1);
+    eq("...and for EUR, as the derived cross-rate", round2(ingestedTable.rates.EUR), round2(61.1 / 71.9));
+    eq("...reporting bpd as its source", ingestedTable.source, "bpd");
+    eq("...with the bank's own asOf", ingestedTable.asOf?.toISOString() ?? null, today.toISOString());
+
+    console.log("-- the proxy lets the bearer-authenticated path through instead of redirecting it to /login --");
+    const passed = proxy(new NextRequest("http://localhost/api/cron/bpd-rate/ingest", { method: "POST" }));
+    eq("an unauthenticated POST to the ingestion path is not redirected", passed.headers.get("location"), null);
+    const redirected = proxy(new NextRequest("http://localhost/api/cron/bpd-rate/other", { method: "POST" }));
+    eq(
+      "...while a neighbouring, unlisted path still is",
+      redirected.headers.get("location"),
+      "http://localhost/login",
+    );
+
+    await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+    if (previousIngestSecret === undefined) delete process.env.BPD_SCRAPE_INGEST_SECRET;
+    else process.env.BPD_SCRAPE_INGEST_SECRET = previousIngestSecret;
+    console.log("  ok   test ExchangeRate rows removed");
+  }
+
   console.log("\n== data export (Settings > Export all) ==");
   {
     const { formatCsv } = await import("../src/lib/csv");

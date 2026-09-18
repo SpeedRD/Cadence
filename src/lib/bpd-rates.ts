@@ -1,16 +1,26 @@
+import {
+  BPD_RATES_API_URL,
+  BPD_SOURCE,
+  type BpdRates,
+  isPlausibleDopRate,
+  isWithinFreshnessWindow,
+  parseBpdPayload,
+  toRateTableEntries,
+} from "@/lib/bpd-rate-payload";
 import { BASE_CURRENCY } from "@/lib/currency";
 import { prisma } from "@/lib/prisma";
 
-/**
- * Banco Popular Dominicano's public rates feed, confirmed by manual
- * investigation (2026-09-16) to return the bank's real daily buy/sell rates
- * as plain JSON - no auth, no CAPTCHA - but only when hit with a browser-like
- * fetch; a bare HTTP client can have its request go unanswered indefinitely
- * after a completed TLS handshake. Preferred over open.er-api.com for DOP and
- * EUR because it's the bank's own published rate, not a market aggregator's.
- */
-const BPD_RATES_API_URL =
-  "https://popularenlinea.com/_api/web/lists/getbytitle('Rates')/items?$filter=ItemID%20eq%20'1'";
+// The pure half (bounds, freshness window, payload parsing) lives in
+// src/lib/bpd-rate-payload.ts so a database-free script can share it;
+// re-exported here so existing importers keep one entry point.
+export {
+  BPD_RATE_MAX_AGE_DAYS,
+  BPD_SOURCE,
+  type BpdRates,
+  isSameUtcDay,
+  parseBpdPayload,
+  toRateTableEntries,
+} from "@/lib/bpd-rate-payload";
 
 /**
  * The one property that matters most here: a hung response must never
@@ -24,112 +34,18 @@ const BPD_FETCH_TIMEOUT_MS = 4000;
 /** After a failed fetch, don't retry on every render. */
 const FAILURE_BACKOFF_MS = 10 * 60 * 1000;
 
-/**
- * How many calendar days old a stored or freshly-fetched BPD rate may be and
- * still be preferred over open.er-api.com's. The bank doesn't publish every
- * business day (confirmed 2026-09-16: still showing Sep 15's rate on Sep
- * 17), so "today only" rejected rates that were still far more accurate than
- * the market-mid fallback; this bounds the staleness instead of requiring an
- * exact match, so a silently ancient rate still gets rejected eventually.
- */
-export const BPD_RATE_MAX_AGE_DAYS = 7;
-
-export const BPD_SOURCE = "bpd";
-
-/**
- * Banco Popular's published DOP/USD and DOP/EUR sell rates are both
- * historically in this band; a value outside it is treated as a malformed or
- * unpublished payload rather than trusted. Mirrors the DOP: 60 midpoint
- * FALLBACK_RATES already uses in src/lib/rates.ts - there's no narrower
- * existing bound in this codebase to reuse instead.
- */
-const MIN_PLAUSIBLE_DOP_RATE = 55;
-const MAX_PLAUSIBLE_DOP_RATE = 75;
-
 let lastFailureAt = 0;
 
-export interface BpdRates {
-  /** DOP paid per 1 USD sold to a customer ("Vendemos"). */
-  dollarSellRate: number;
-  /** DOP paid per 1 EUR sold to a customer ("Vendemos"). */
-  euroSellRate: number;
-  /** The calendar day BPD says these rates are published for. */
-  asOf: Date;
-}
-
-function isPlausibleDopRate(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= MIN_PLAUSIBLE_DOP_RATE &&
-    value <= MAX_PLAUSIBLE_DOP_RATE
-  );
-}
-
-/** Same calendar day in UTC - BuySellRatesAsOf and "today" are both compared this way throughout this module. */
-export function isSameUtcDay(a: Date, b: Date): boolean {
-  return (
-    a.getUTCFullYear() === b.getUTCFullYear() &&
-    a.getUTCMonth() === b.getUTCMonth() &&
-    a.getUTCDate() === b.getUTCDate()
-  );
-}
-
-/** Whole UTC calendar days between `asOf` and `now` (0 = same UTC day). */
-function utcDaysBetween(asOf: Date, now: Date): number {
-  const asOfUtcMidnight = Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate());
-  const nowUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  return Math.round((nowUtcMidnight - asOfUtcMidnight) / (24 * 60 * 60 * 1000));
-}
-
 /**
- * `asOf` is today or up to BPD_RATE_MAX_AGE_DAYS calendar days in the past -
- * never in the future, and never older than the bounded window.
+ * Exported so a hard-timeout test can call this directly without depending
+ * on ExchangeRate table state. Note that from a server this currently never
+ * succeeds - the feed sits behind bot protection that 403s every bare HTTP
+ * client (see BPD_RATES_API_URL) - so in practice the rows getBpdRates()
+ * reads come from the browser-driven scraper (scripts/scrape-bpd-rate.ts)
+ * posting to /api/cron/bpd-rate/ingest. The on-demand path is kept as-is:
+ * it costs one bounded, backed-off request and would start working again
+ * the day the protection is lifted.
  */
-function isWithinFreshnessWindow(asOf: Date, now: Date): boolean {
-  const ageDays = utcDaysBetween(asOf, now);
-  return ageDays >= 0 && ageDays <= BPD_RATE_MAX_AGE_DAYS;
-}
-
-/**
- * Validates and extracts the fields this app uses from BPD's SharePoint list
- * response. Pure and network-free so it can be exercised directly against a
- * fabricated payload; the network fetch itself lives in `fetchBpdRates`.
- */
-export function parseBpdPayload(payload: unknown): BpdRates | null {
-  if (typeof payload !== "object" || payload === null) return null;
-  const d = (payload as { d?: unknown }).d;
-  if (typeof d !== "object" || d === null) return null;
-  const results = (d as { results?: unknown }).results;
-  if (!Array.isArray(results) || results.length === 0) return null;
-  const item = results[0] as Record<string, unknown>;
-
-  const dollarSellRate = item.DollarSellRate;
-  const euroSellRate = item.EuroSellRate;
-  const asOfRaw = item.BuySellRatesAsOf;
-  if (!isPlausibleDopRate(dollarSellRate) || !isPlausibleDopRate(euroSellRate)) {
-    return null;
-  }
-  if (typeof asOfRaw !== "string") return null;
-  const asOf = new Date(asOfRaw);
-  if (Number.isNaN(asOf.getTime())) return null;
-
-  return { dollarSellRate, euroSellRate, asOf };
-}
-
-/**
- * The two USD-based RateTable entries BPD's rates translate to: DOP is the
- * published USD sell rate directly; EUR is a derived cross-rate, since BPD
- * publishes it as DOP-per-EUR rather than EUR-per-USD (RateTable's unit).
- */
-export function toRateTableEntries(rates: BpdRates): { DOP: number; EUR: number } {
-  return {
-    DOP: rates.dollarSellRate,
-    EUR: rates.dollarSellRate / rates.euroSellRate,
-  };
-}
-
-/** Exported so a hard-timeout test can call this directly without depending on ExchangeRate table state. */
 export async function fetchBpdRates(): Promise<BpdRates | null> {
   if (Date.now() - lastFailureAt < FAILURE_BACKOFF_MS) return null;
   try {
@@ -147,6 +63,61 @@ export async function fetchBpdRates(): Promise<BpdRates | null> {
     lastFailureAt = Date.now();
     return null;
   }
+}
+
+export type StoreBpdRatesResult =
+  | { ok: true }
+  | { ok: false; reason: "out_of_range" | "invalid_as_of" | "outside_freshness_window" };
+
+/**
+ * The single place a source="bpd" ExchangeRate row is validated and written.
+ * Both the on-demand fetch path (getBpdRates) and the scraper's ingestion
+ * endpoint (/api/cron/bpd-rate/ingest) go through here, so the plausibility
+ * bounds and the freshness window are enforced once, identically, no matter
+ * where the rate came from. It re-checks the bounds itself even though every
+ * caller already parsed the payload: a caller that trusted its own input is
+ * exactly the drift this function exists to make impossible.
+ *
+ * Writes nothing unless every check passes - a rejection leaves the table
+ * exactly as it was.
+ */
+export async function storeBpdRates(
+  rates: BpdRates,
+  now: Date = new Date(),
+): Promise<StoreBpdRatesResult> {
+  if (!isPlausibleDopRate(rates.dollarSellRate) || !isPlausibleDopRate(rates.euroSellRate)) {
+    return { ok: false, reason: "out_of_range" };
+  }
+  if (!(rates.asOf instanceof Date) || Number.isNaN(rates.asOf.getTime())) {
+    return { ok: false, reason: "invalid_as_of" };
+  }
+  if (!isWithinFreshnessWindow(rates.asOf, now)) {
+    return { ok: false, reason: "outside_freshness_window" };
+  }
+
+  const entries = toRateTableEntries(rates);
+  const fetchedAt = new Date();
+  for (const [targetCurrency, rate] of Object.entries(entries)) {
+    await prisma.exchangeRate.upsert({
+      where: {
+        baseCurrency_targetCurrency_source: {
+          baseCurrency: BASE_CURRENCY,
+          targetCurrency,
+          source: BPD_SOURCE,
+        },
+      },
+      update: { rate, fetchedAt, asOf: rates.asOf },
+      create: {
+        baseCurrency: BASE_CURRENCY,
+        targetCurrency,
+        source: BPD_SOURCE,
+        rate,
+        fetchedAt,
+        asOf: rates.asOf,
+      },
+    });
+  }
+  return { ok: true };
 }
 
 /**
@@ -189,30 +160,8 @@ export async function getBpdRates(): Promise<BpdRates | null> {
 
   const fetched = await fetchBpdRates();
   if (!fetched) return null;
-  if (!isWithinFreshnessWindow(fetched.asOf, now)) return null;
-
-  const entries = toRateTableEntries(fetched);
-  const fetchedAt = new Date();
-  for (const [targetCurrency, rate] of Object.entries(entries)) {
-    await prisma.exchangeRate.upsert({
-      where: {
-        baseCurrency_targetCurrency_source: {
-          baseCurrency: BASE_CURRENCY,
-          targetCurrency,
-          source: BPD_SOURCE,
-        },
-      },
-      update: { rate, fetchedAt, asOf: fetched.asOf },
-      create: {
-        baseCurrency: BASE_CURRENCY,
-        targetCurrency,
-        source: BPD_SOURCE,
-        rate,
-        fetchedAt,
-        asOf: fetched.asOf,
-      },
-    });
-  }
+  const persisted = await storeBpdRates(fetched, now);
+  if (!persisted.ok) return null;
 
   return fetched;
 }

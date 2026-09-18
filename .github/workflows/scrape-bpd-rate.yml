@@ -1,0 +1,57 @@
+# Scrapes Banco Popular Dominicano's published exchange rate with a real
+# browser and posts it to Cadence's ingestion endpoint
+# (/api/cron/bpd-rate/ingest). See scripts/scrape-bpd-rate.ts for why a
+# browser is needed and what the script refuses to post.
+#
+# Needs, in this repository's Settings -> Secrets and variables -> Actions:
+#   secret   BPD_SCRAPE_INGEST_SECRET  the same value set on Vercel
+#   variable CADENCE_APP_URL           the production origin, e.g. https://cadence.vercel.app
+#
+# A failed scrape fails the run; GitHub's own failed-workflow notification is
+# the alert. Nothing is retried or written on failure.
+name: Scrape Banco Popular rate
+
+on:
+  schedule:
+    # 22:00 UTC = 18:00 in Santo Domingo, well past the bank's morning
+    # publish time. Precision doesn't matter: the app prefers any Banco
+    # Popular rate up to 7 days old (BPD_RATE_MAX_AGE_DAYS), and the bank
+    # itself sometimes publishes a day late, so one run a day is enough.
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scrape-bpd-rate
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` runs the repo's postinstall (prisma generate), which needs no
+      # database; the script itself never touches one.
+      - run: npm ci
+
+      - name: Install Playwright's Chromium and a virtual display
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y xvfb
+
+      - name: Scrape and ingest
+        # Headed Chromium on a runner with no display: xvfb-run provides the
+        # virtual display (see the "Why headed" note in the script).
+        run: xvfb-run --auto-servernum -- npx tsx scripts/scrape-bpd-rate.ts
+        env:
+          CADENCE_APP_URL: ${{ vars.CADENCE_APP_URL }}
+          BPD_SCRAPE_INGEST_SECRET: ${{ secrets.BPD_SCRAPE_INGEST_SECRET }}
