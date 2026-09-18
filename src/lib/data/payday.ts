@@ -295,16 +295,20 @@ export async function getCategorySuggestions(
         if (!line.categoryId || !remaining.includes(line.categoryId)) continue;
         // A one-off the user confirmed as extraordinary is not typical
         // spending, so it is left out of the sum (Transaction.isExtraordinary,
-        // see src/lib/extraordinary.ts), and a shared expense counts only the
+        // see src/lib/extraordinary.ts), a shared expense counts only the
         // user's own part (Transaction.yourShare, see
         // src/lib/shared-expense.ts) - the rest was other people's money
-        // passing through. The period still counts as one the category was
-        // active in - the money was really spent - so the divisor below is
+        // passing through - and spentExcludingRecurring leaves out anything
+        // already committed at payday-planning time (an auto-posted
+        // subscription or contribution charge, whatever category it happens
+        // to be filed under - see CategoryLine.spentExcludingRecurring). The
+        // period still counts as one the category was active in - the money
+        // was really spent - so the divisor below reads the real `spent`,
         // unchanged.
         historicalTotals.set(
           line.categoryId,
           (historicalTotals.get(line.categoryId) ?? 0) +
-            line.spent -
+            line.spentExcludingRecurring -
             line.extraordinarySpent -
             line.othersShareSpent,
         );

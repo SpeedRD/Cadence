@@ -32,6 +32,18 @@ export interface CategoryLine {
    * line built from rows that already read the share in place of the amount.
    */
   othersShareSpent: number;
+  /**
+   * `spent` minus any RECURRING-sourced rows (an auto-posted subscription or
+   * contribution charge, already committed at payday-planning time - see
+   * outsideBudget in getPeriodSummary). `spent` itself stays the complete,
+   * factual figure Reports reads as what was really spent, source included;
+   * this one exists only for callers averaging what a category usually
+   * costs organically, e.g. getCategorySuggestions, so a subscription filed
+   * under a flexible category never leaks into recommending more of it.
+   * Equal to `spent` on a line already built from non-RECURRING rows only
+   * (e.g. monthly.ts's lifestyleByCategory, which excludes them earlier).
+   */
+  spentExcludingRecurring: number;
   budget: number | null;
 }
 
@@ -197,6 +209,19 @@ export async function getPeriodSummary(
   // cost. The full amount stays in every actual figure below - it is what
   // left the account.
   const othersShareByCategory = new Map<string | null, number>();
+  // spentByCategory minus RECURRING-sourced rows: a RECURRING posting was
+  // already committed at payday-planning time (like `spent` below excludes it
+  // via outsideBudget), so it must not also inflate getCategorySuggestions'
+  // average for whatever category it happens to be filed under - a
+  // subscription filed under a flexible category (e.g. "Entertainment"
+  // instead of "Subscriptions") would otherwise leak its full amount into
+  // that category's suggested budget every period. `spentByCategory` itself
+  // stays the complete, factual figure Reports reads as what was really
+  // spent; this parallel map exists only to feed CategoryLine.spentExcludingRecurring,
+  // getCategorySuggestions' own averaging input. Mirrors, rather than reuses,
+  // computeMonthActuals in monthly.ts, which already skips every RECURRING
+  // row before building its own category map.
+  const spentByCategoryExcludingRecurring = new Map<string | null, number>();
   let spent = 0;
   let totalSpent = 0;
   let income = 0;
@@ -223,6 +248,7 @@ export async function getPeriodSummary(
     const inSavingsOrSubscriptionCategory =
       transaction.categoryId !== null && outsideBudgetCategoryIds.has(transaction.categoryId);
     const isManualContributionTwin = manualContributionIdFromTransaction(transaction) !== null;
+    const isRecurringPosting = transaction.source === "RECURRING";
 
     // The per-category breakdown stays complete whatever the budget covers -
     // the Reports page and the budget rows both read it - so a manual
@@ -231,12 +257,19 @@ export async function getPeriodSummary(
     // when it has been reassigned away from one (the state above) does it
     // stop counting as spending in the new category too, rather than
     // quietly inflating that category's total and any average built from it.
+    // A RECURRING posting stays in this figure too, on the same principle
+    // `totalSpent` already follows: this is the real, factual record of what
+    // was spent, source included. See spentByCategoryExcludingRecurring above
+    // for the figure that leaves RECURRING rows out.
     if (!isManualContributionTwin || inSavingsOrSubscriptionCategory) {
       const key =
         transaction.categoryId !== null && expenseCategoryIds.has(transaction.categoryId)
           ? transaction.categoryId
           : null;
       spentByCategory.set(key, (spentByCategory.get(key) ?? 0) + amount);
+      if (!isRecurringPosting) {
+        spentByCategoryExcludingRecurring.set(key, (spentByCategoryExcludingRecurring.get(key) ?? 0) + amount);
+      }
       if (transaction.isExtraordinary) {
         extraordinaryByCategory.set(key, (extraordinaryByCategory.get(key) ?? 0) + amount);
       } else if (transaction.yourShare !== null) {
@@ -247,8 +280,7 @@ export async function getPeriodSummary(
       }
     }
 
-    const outsideBudget =
-      transaction.source === "RECURRING" || inSavingsOrSubscriptionCategory || isManualContributionTwin;
+    const outsideBudget = isRecurringPosting || inSavingsOrSubscriptionCategory || isManualContributionTwin;
     if (!outsideBudget) spent += amount;
   }
 
@@ -307,6 +339,7 @@ export async function getPeriodSummary(
       spent: round2(spentByCategory.get(category.id) ?? 0),
       extraordinarySpent: round2(extraordinaryByCategory.get(category.id) ?? 0),
       othersShareSpent: round2(othersShareByCategory.get(category.id) ?? 0),
+      spentExcludingRecurring: round2(spentByCategoryExcludingRecurring.get(category.id) ?? 0),
       budget: budgetByCategory.get(category.id) ?? null,
     }));
 
@@ -319,6 +352,7 @@ export async function getPeriodSummary(
       spent: round2(uncategorized),
       extraordinarySpent: round2(extraordinaryByCategory.get(null) ?? 0),
       othersShareSpent: round2(othersShareByCategory.get(null) ?? 0),
+      spentExcludingRecurring: round2(spentByCategoryExcludingRecurring.get(null) ?? 0),
       budget: null,
     });
   }

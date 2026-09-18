@@ -537,6 +537,10 @@ async function computeMonthActuals(
       spent: round2(value.total),
       extraordinarySpent: round2(value.extraordinary),
       othersShareSpent: round2(value.othersShare),
+      // RECURRING rows never reach lifestyleByCategoryMap - accountedForIds
+      // (built above) skips them before this map is built - so there is
+      // nothing left to exclude here.
+      spentExcludingRecurring: round2(value.total),
       budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
@@ -693,6 +697,9 @@ export async function getHistoricalMonthlyAverage(context: AppContext): Promise<
       // shared expense at the user's own share (classifyCompletedMonth).
       extraordinarySpent: 0,
       othersShareSpent: 0,
+      // Same as lifestyleByCategory above: RECURRING rows never reach this
+      // total in the first place.
+      spentExcludingRecurring: round2(value.total / n),
       budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
