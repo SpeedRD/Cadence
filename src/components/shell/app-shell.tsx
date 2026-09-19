@@ -5,6 +5,8 @@ import { NavLinks, type NavBadges } from "@/components/shell/nav-links";
 import { CurrencySwitcher } from "@/components/shell/currency-switcher";
 import { LanguageSwitcher } from "@/components/shell/language-switcher";
 import { LogoutButton } from "@/components/shell/logout-button";
+import { MobileTabBar } from "@/components/shell/mobile-tab-bar";
+import { PlanSegments } from "@/components/shell/plan-segments";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { PeriodRail } from "@/components/period-rail";
 import { formatDateTimeInAppZone } from "@/lib/date";
@@ -44,7 +46,7 @@ export function AppShell({
           <PeriodRail totalDays={10} elapsed={5} compact className="mb-2.5 w-16" />
           <span className="text-lg font-semibold tracking-tight">Cadence</span>
         </Link>
-        <NavLinks variant="sidebar" locale={context.language} badges={navBadges} />
+        <NavLinks locale={context.language} badges={navBadges} />
         <div className="mt-auto px-5.5 pt-6">
           <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
             {t.shell.paidTwiceAMonth(currentPeriod.period === "A" ? "1-15" : "16-end")}
@@ -53,13 +55,14 @@ export function AppShell({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* The app's only floating material: content scrolls under it, so the
-            blur is what keeps the strip readable rather than decoration. The
+        {/* The app's one class of floating material, shared with the phone's
+            tab bar at the other edge: content scrolls under it, so the blur
+            is what keeps the strip readable rather than decoration. The
             supports- guard matches DialogOverlay's - without backdrop-filter
             the 85% fill alone would let rows ghost through unblurred. The
-            app-header hook is what globals.css's prefers-reduced-transparency
+            app-chrome hook is what globals.css's prefers-reduced-transparency
             block turns solid. */}
-        <header className="app-header sticky top-0 z-30 border-b border-border/70 bg-background/85 supports-backdrop-filter:backdrop-blur">
+        <header className="app-chrome sticky top-0 z-30 border-b border-border/70 bg-background/85 supports-backdrop-filter:backdrop-blur">
           <div className="flex h-14 items-center gap-4 px-4 sm:px-6">
             <div className="flex min-w-0 items-center gap-3">
               <div className="hidden w-24 sm:block">
@@ -86,9 +89,6 @@ export function AppShell({
               <LogoutButton ariaLabel={t.shell.lockCadenceAria} />
             </div>
           </div>
-          <div className="border-t border-border/70 md:hidden">
-            <NavLinks variant="bar" locale={context.language} badges={navBadges} />
-          </div>
         </header>
 
         <main className="mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 sm:px-6 sm:py-8">
@@ -99,8 +99,12 @@ export function AppShell({
               <AlertDescription>{staleRatesNote}</AlertDescription>
             </Alert>
           ) : null}
+          <PlanSegments locale={context.language} />
           {children}
         </main>
+
+        {/* Below md the sidebar is gone and this is the navigation. */}
+        <MobileTabBar locale={context.language} badges={navBadges} />
       </div>
     </div>
   );

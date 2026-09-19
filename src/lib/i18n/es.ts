@@ -154,8 +154,15 @@ export const es = {
     reports: "Informes",
     settings: "Ajustes",
     inbox: "Bandeja",
+    plan: "Plan",
+    more: "Más",
+    tabBarLabel: "Navegación principal",
     badgeLabel: (count: number) =>
       count === 1 ? "1 requiere atención" : `${count} requieren atención`,
+  },
+  more: {
+    title: "Más",
+    description: "Mantén el libro, mira atrás y configura Cadence.",
   },
   shell: {
     paidTwiceAMonth: (range: string) => `Pago dos veces al mes. Los presupuestos van del ${range}.`,

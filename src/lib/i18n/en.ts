@@ -161,9 +161,19 @@ export const en = {
     reports: "Reports",
     settings: "Settings",
     inbox: "Inbox",
+    /** Phone tab bar only: the hub tab over Budgets, Recurring, Goals and Afford. */
+    plan: "Plan",
+    /** Phone tab bar only: the list tab over Accounts, Reports, Review and Settings. */
+    more: "More",
+    /** aria-label of the phone tab bar, which sits apart from the page's own navs. */
+    tabBarLabel: "Main navigation",
     /** Read out with the link's label when it carries a count badge. */
     badgeLabel: (count: number) =>
       count === 1 ? "1 needs attention" : `${count} need attention`,
+  },
+  more: {
+    title: "More",
+    description: "Maintain the ledger, look back, and configure Cadence.",
   },
   shell: {
     paidTwiceAMonth: (range: string) => `Paid twice a month. Budgets run ${range}.`,

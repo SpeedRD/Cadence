@@ -357,16 +357,17 @@
 }
 
 /*
-  Reduced transparency. The app has exactly two translucent layers - the
-  sticky header and the dialog scrim - and both go solid here rather than
-  losing the job they do. The header becomes opaque background, so dense rows
-  stop showing through the one strip of chrome. The overlay drops its blur and
-  compensates with a heavier scrim: "dim to focus" has to survive without the
-  blur doing half the separating. Unlayered on purpose, so it wins over the
-  Tailwind utilities that set these on the elements themselves.
+  Reduced transparency. The app has exactly two classes of translucent layer -
+  the sticky chrome (the header, and on a phone the tab bar at the opposite
+  edge, one material between them) and the dialog scrim - and both go solid
+  here rather than losing the job they do. The chrome becomes opaque
+  background, so dense rows stop showing through it. The overlay drops its
+  blur and compensates with a heavier scrim: "dim to focus" has to survive
+  without the blur doing half the separating. Unlayered on purpose, so it
+  wins over the Tailwind utilities that set these on the elements themselves.
 */
 @media (prefers-reduced-transparency: reduce) {
-  .app-header {
+  .app-chrome {
     background: var(--background);
     backdrop-filter: none;
   }
