@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Archivo, IBM_Plex_Mono, Instrument_Sans } from "next/font/google";
 
+import { ICON_COLORS } from "@/components/app-icon-mark";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -26,6 +27,29 @@ const plexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "Cadence",
   description: "Personal finance on your pay rhythm.",
+};
+
+/**
+ * `theme-color` is `--background` per scheme, so the browser's own chrome
+ * (Safari's bars, the standalone status bar) takes the page's ground instead
+ * of a white bar over a near-black app. The media query follows the OS
+ * scheme, which is what browsers evaluate; the in-app toggle
+ * (theme-provider.tsx) matches it whenever the two agree.
+ *
+ * `viewportFit: "cover"` is what makes `env(safe-area-inset-*)` non-zero on
+ * a notched phone. Without it the bottom tab bar (mobile-tab-bar.tsx) is
+ * laid out to the screen's true edge, under the home indicator and the
+ * rounded corners; with it the bar's own inset padding lifts its content
+ * above them.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: ICON_COLORS.lightBackground },
+    { media: "(prefers-color-scheme: dark)", color: ICON_COLORS.background },
+  ],
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

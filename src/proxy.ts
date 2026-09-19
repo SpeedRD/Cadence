@@ -49,7 +49,10 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except Next internals and static files.
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt)$).*)",
+    // Everything except Next internals, static files, and the installability
+    // routes (src/app/manifest.ts, icon.tsx, apple-icon.tsx): a browser
+    // installing the app fetches those without a session, and a redirect to
+    // /login would leave it with no manifest and a screenshot for an icon.
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon/|apple-icon|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt)$).*)",
   ],
 };
