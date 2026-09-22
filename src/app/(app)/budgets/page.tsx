@@ -35,6 +35,11 @@ import { copyPreviousBudgetsAction } from "@/server/actions/budgets";
 
 export const metadata = { title: "Budgets - Cadence" };
 
+/** How much of a category's budget is spent, as a whole percentage. */
+function usedPercent(spent: number, budget: number) {
+  return Math.round((spent / Math.max(budget, 0.01)) * 100);
+}
+
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 export default async function BudgetsPage({
@@ -231,74 +236,134 @@ export default async function BudgetsPage({
 
       <Card className="py-0">
         <CardContent className="px-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t.colCategory}</TableHead>
-                <TableHead className="hidden sm:table-cell">{t.colProgress}</TableHead>
-                <TableHead className="text-right">{t.colSpent}</TableHead>
-                <TableHead className="text-right">{t.colBudget}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map(({ category, budget: budgetDisplay, spent }) => {
-                return (
-                  <TableRow key={category.id}>
-                    <TableCell>
-                      <span className="flex items-center gap-2 text-sm">
-                        <span
-                          className="size-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: category.color }}
-                        />
-                        {category.name}
-                      </span>
-                    </TableCell>
-                    <TableCell className="hidden w-56 sm:table-cell">
-                      {budgetDisplay ? (
-                        <div className="space-y-1">
-                          <Meter value={spent} max={budgetDisplay} />
-                          <p className="text-[0.6875rem] text-muted-foreground tnum">
-                            {Math.round((spent / Math.max(budgetDisplay, 0.01)) * 100)}%
-                          </p>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">
-                          {t.noBudget}
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="figure text-right text-sm">
-                      {formatMoney(spent, summary.currency)}
-                    </TableCell>
-                    <TableCell>
-                      <BudgetAmountForm
-                        year={period.year}
-                        month={period.month}
-                        period={period.period}
-                        categoryId={category.id}
-                        amount={budgetDisplay}
-                        currency={summary.currency}
-                        label={t.categoryBudgetAria(category.name)}
-                        locale={context.language}
-                      />
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {uncategorized ? (
+          <div className="hidden sm:block">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {t.uncategorized}
-                  </TableCell>
-                  <TableCell className="hidden sm:table-cell" />
-                  <TableCell className="figure text-right text-sm">
-                    {formatMoney(uncategorized.spent, summary.currency)}
-                  </TableCell>
-                  <TableCell />
+                  <TableHead>{t.colCategory}</TableHead>
+                  <TableHead className="hidden sm:table-cell">{t.colProgress}</TableHead>
+                  <TableHead className="text-right">{t.colSpent}</TableHead>
+                  <TableHead className="text-right">{t.colBudget}</TableHead>
                 </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map(({ category, budget: budgetDisplay, spent }) => {
+                  return (
+                    <TableRow key={category.id}>
+                      <TableCell>
+                        <span className="flex items-center gap-2 text-sm">
+                          <span
+                            className="size-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: category.color }}
+                          />
+                          {category.name}
+                        </span>
+                      </TableCell>
+                      <TableCell className="hidden w-56 sm:table-cell">
+                        {budgetDisplay ? (
+                          <div className="space-y-1">
+                            <Meter value={spent} max={budgetDisplay} />
+                            <p className="text-[0.6875rem] text-muted-foreground tnum">
+                              {usedPercent(spent, budgetDisplay)}%
+                            </p>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {t.noBudget}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="figure text-right text-sm">
+                        {formatMoney(spent, summary.currency)}
+                      </TableCell>
+                      <TableCell>
+                        <BudgetAmountForm
+                          year={period.year}
+                          month={period.month}
+                          period={period.period}
+                          categoryId={category.id}
+                          amount={budgetDisplay}
+                          currency={summary.currency}
+                          label={t.categoryBudgetAria(category.name)}
+                          locale={context.language}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {uncategorized ? (
+                  <TableRow>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {t.uncategorized}
+                    </TableCell>
+                    <TableCell className="hidden sm:table-cell" />
+                    <TableCell className="figure text-right text-sm">
+                      {formatMoney(uncategorized.spent, summary.currency)}
+                    </TableCell>
+                    <TableCell />
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* The phone list (below `sm`): category and spent on line 1,
+              the meter the table hides on a phone on line 2, and the budget
+              field at full width on line 3. */}
+          <div className="sm:hidden">
+            <div className="flex h-10 items-center justify-between gap-3 border-b px-4 font-medium">
+              <span>{t.colCategory}</span>
+              <span>{t.colSpent}</span>
+            </div>
+            <ul className="divide-y">
+              {rows.map(({ category, budget: budgetDisplay, spent }) => (
+                <li key={category.id} className="space-y-2.5 px-4 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="flex min-w-0 items-center gap-2 text-sm">
+                      <span
+                        className="size-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: category.color }}
+                      />
+                      <span className="break-words">{category.name}</span>
+                    </span>
+                    <span className="figure text-sm">{formatMoney(spent, summary.currency)}</span>
+                  </div>
+                  {budgetDisplay ? (
+                    <div className="flex items-center gap-3">
+                      <Meter value={spent} max={budgetDisplay} />
+                      <span className="shrink-0 text-[0.6875rem] text-muted-foreground tnum">
+                        {usedPercent(spent, budgetDisplay)}%
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">{t.noBudget}</p>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <span className="shrink-0 text-xs text-muted-foreground">{t.colBudget}</span>
+                    <BudgetAmountForm
+                      year={period.year}
+                      month={period.month}
+                      period={period.period}
+                      categoryId={category.id}
+                      amount={budgetDisplay}
+                      currency={summary.currency}
+                      label={t.categoryBudgetAria(category.name)}
+                      locale={context.language}
+                      size="block"
+                    />
+                  </div>
+                </li>
+              ))}
+              {uncategorized ? (
+                <li className="flex items-start justify-between gap-3 px-4 py-3">
+                  <span className="text-sm text-muted-foreground">{t.uncategorized}</span>
+                  <span className="figure text-sm">
+                    {formatMoney(uncategorized.spent, summary.currency)}
+                  </span>
+                </li>
               ) : null}
-            </TableBody>
-          </Table>
+            </ul>
+          </div>
         </CardContent>
       </Card>
     </div>

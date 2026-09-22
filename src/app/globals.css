@@ -338,6 +338,27 @@
       transition-delay: 0ms !important;
     }
   }
+
+  /*
+    A table that scrolls sideways says so: whichever edge has more table
+    beyond it fades out. ScrollFade sets the two attributes from the
+    scroller's own position, so a table that fits is left untouched.
+  */
+  .scroll-fade[data-fade-end] > [data-slot="table-container"] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  }
+  .scroll-fade[data-fade-start] > [data-slot="table-container"] {
+    mask-image: linear-gradient(to left, #000 calc(100% - 2rem), transparent);
+  }
+  .scroll-fade[data-fade-start][data-fade-end] > [data-slot="table-container"] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 2rem,
+      #000 calc(100% - 2rem),
+      transparent
+    );
+  }
 }
 
 /*

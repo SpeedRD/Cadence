@@ -13,7 +13,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * One inline form per budget cell. Clearing the field deletes that budget.
- * The overall budget passes an empty categoryId.
+ * The overall budget passes an empty categoryId. "block" is the phone list's
+ * full-width field with a 44px field and save target.
  */
 export function BudgetAmountForm({
   year,
@@ -34,7 +35,7 @@ export function BudgetAmountForm({
   currency: string;
   label: string;
   locale: Locale;
-  size?: "sm" | "lg";
+  size?: "sm" | "lg" | "block";
 }) {
   const t = getDictionary(locale).budgets;
   const [state, formAction, pending] = useActionState(saveBudgetAction, null);
@@ -55,6 +56,7 @@ export function BudgetAmountForm({
       className={cn(
         "flex items-center gap-1",
         size === "lg" ? "justify-start" : "justify-end",
+        size === "block" && "w-full",
       )}
     >
       <input type="hidden" name="year" value={year} />
@@ -62,11 +64,11 @@ export function BudgetAmountForm({
       <input type="hidden" name="period" value={period} />
       <input type="hidden" name="categoryId" value={categoryId ?? ""} />
       <input type="hidden" name="currency" value={currency} />
-      <div className="relative">
+      <div className={cn("relative", size === "block" && "min-w-0 flex-1")}>
         <span
           className={cn(
             "pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 font-mono text-muted-foreground",
-            size === "lg" ? "text-sm" : "text-xs",
+            size === "sm" ? "text-xs" : "text-sm",
           )}
         >
           {currency}
@@ -79,14 +81,19 @@ export function BudgetAmountForm({
           placeholder="0.00"
           className={cn(
             "pl-11 text-right font-mono",
-            size === "lg" ? "h-9 w-40 text-base" : "h-9 w-32 text-sm sm:h-7",
+            size === "lg"
+              ? "h-9 w-40 text-base"
+              : size === "block"
+                ? "h-11 w-full text-base"
+                : "h-9 w-32 text-sm sm:h-7",
           )}
         />
       </div>
       <Button
         type="submit"
         variant="ghost"
-        size={size === "lg" ? "icon-sm" : "icon-xs"}
+        size={size === "lg" ? "icon-sm" : size === "block" ? "icon-lg" : "icon-xs"}
+        className={size === "block" ? "size-11" : undefined}
         disabled={pending}
         aria-label={t.saveAria(label)}
       >

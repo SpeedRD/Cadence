@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +55,50 @@ function VerdictBadge({ passes, t }: { passes: boolean; t: ReturnType<typeof get
     </Badge>
   ) : (
     <Badge variant="destructive">{t.fails}</Badge>
+  );
+}
+
+/**
+ * Wraps a Table whose content may be wider than its box and fades whichever
+ * edge has more table beyond it (the .scroll-fade rule in globals.css), so a
+ * sideways scroll is visible instead of silent. Nothing changes while the
+ * table fits.
+ */
+function ScrollFade({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ start: false, end: false });
+
+  useEffect(() => {
+    const scroller = ref.current?.querySelector<HTMLElement>('[data-slot="table-container"]');
+    if (!scroller) return;
+    const update = () => {
+      const overflow = scroller.scrollWidth - scroller.clientWidth;
+      const start = overflow > 1 && scroller.scrollLeft > 1;
+      const end = overflow > 1 && scroller.scrollLeft < overflow - 1;
+      setEdges((current) =>
+        current.start === start && current.end === end ? current : { start, end },
+      );
+    };
+    update();
+    scroller.addEventListener("scroll", update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(scroller);
+    if (scroller.firstElementChild) observer.observe(scroller.firstElementChild);
+    return () => {
+      scroller.removeEventListener("scroll", update);
+      observer.disconnect();
+    };
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      className="scroll-fade"
+      data-fade-start={edges.start || undefined}
+      data-fade-end={edges.end || undefined}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -126,87 +170,159 @@ export function AffordResults({
 
       <Card>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t.columnPayment}</TableHead>
-                <TableHead>{t.columnDate}</TableHead>
-                <TableHead>{t.columnPeriod}</TableHead>
-                <TableHead className="text-right">{t.columnAmount}</TableHead>
-                {/* These two headings are sentences; letting them wrap keeps
-                    the verdict column on screen at desktop widths instead of
-                    pushing it into the horizontal scroll. */}
-                <TableHead className="min-w-40 text-right whitespace-normal">
-                  {t.columnAccountCheck(accountName)}
-                  <span className="block text-[0.625rem] font-normal text-muted-foreground">
-                    {t.columnBeforeAfter} · {accountCurrency}
-                  </span>
-                </TableHead>
-                <TableHead className="min-w-40 text-right whitespace-normal">
-                  {t.columnFlexibleCheck}
-                  <span className="block text-[0.625rem] font-normal text-muted-foreground">
-                    {t.columnBeforeAfter} · {displayCurrency}
-                  </span>
-                </TableHead>
-                <TableHead>{t.columnVerdict}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {verdict.periods.map((period) => (
-                <Fragment key={period.key}>
-                  {period.installments.map((installment, index) => (
-                    <TableRow key={installment.index}>
-                      <TableCell className="text-muted-foreground">
-                        {t.paymentLabel(installment.index)}
-                      </TableCell>
-                      <TableCell>{formatDate(installment.date)}</TableCell>
-                      <TableCell>
-                        {period.period.label}
-                        {index === 0 && period.installments.length > 1 ? (
-                          <span className="block text-[0.625rem] text-muted-foreground">
-                            {t.checkedTogether(period.installments.length)}
-                          </span>
+          <div className="hidden sm:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t.columnPayment}</TableHead>
+                  <TableHead>{t.columnDate}</TableHead>
+                  <TableHead>{t.columnPeriod}</TableHead>
+                  <TableHead className="text-right">{t.columnAmount}</TableHead>
+                  {/* These two headings are sentences; letting them wrap keeps
+                      the verdict column on screen at desktop widths instead of
+                      pushing it into the horizontal scroll. */}
+                  <TableHead className="min-w-40 text-right whitespace-normal">
+                    {t.columnAccountCheck(accountName)}
+                    <span className="block text-[0.625rem] font-normal text-muted-foreground">
+                      {t.columnBeforeAfter} · {accountCurrency}
+                    </span>
+                  </TableHead>
+                  <TableHead className="min-w-40 text-right whitespace-normal">
+                    {t.columnFlexibleCheck}
+                    <span className="block text-[0.625rem] font-normal text-muted-foreground">
+                      {t.columnBeforeAfter} · {displayCurrency}
+                    </span>
+                  </TableHead>
+                  <TableHead>{t.columnVerdict}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {verdict.periods.map((period) => (
+                  <Fragment key={period.key}>
+                    {period.installments.map((installment, index) => (
+                      <TableRow key={installment.index}>
+                        <TableCell className="text-muted-foreground">
+                          {t.paymentLabel(installment.index)}
+                        </TableCell>
+                        <TableCell>{formatDate(installment.date)}</TableCell>
+                        <TableCell>
+                          {period.period.label}
+                          {index === 0 && period.installments.length > 1 ? (
+                            <span className="block text-[0.625rem] text-muted-foreground">
+                              {t.checkedTogether(period.installments.length)}
+                            </span>
+                          ) : null}
+                          {index === 0 && period.estimatedGoals.length > 0 ? (
+                            <span className="block text-[0.625rem] text-muted-foreground">
+                              {t.estimatedInCommitments}
+                            </span>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span className="figure">{formatMoney(installment.amount, verdict.currency)}</span>
+                        </TableCell>
+                        {/* The checks are per period, so a period owed several
+                            installments shows them once, spanning its rows. */}
+                        {index === 0 ? (
+                          <>
+                            <TableCell rowSpan={period.installments.length} className="text-right align-middle">
+                              <BeforeAfter
+                                before={period.account.headroomBefore}
+                                after={period.account.headroomAfter}
+                                currency={period.account.currency}
+                                passes={period.account.passes}
+                              />
+                            </TableCell>
+                            <TableCell rowSpan={period.installments.length} className="text-right align-middle">
+                              <BeforeAfter
+                                before={period.flexible.availableBefore}
+                                after={period.flexible.availableAfter}
+                                currency={period.flexible.currency}
+                                passes={period.flexible.passes}
+                              />
+                            </TableCell>
+                            <TableCell rowSpan={period.installments.length} className="align-middle">
+                              <VerdictBadge passes={period.passes} t={t} />
+                            </TableCell>
+                          </>
                         ) : null}
-                        {index === 0 && period.estimatedGoals.length > 0 ? (
-                          <span className="block text-[0.625rem] text-muted-foreground">
-                            {t.estimatedInCommitments}
-                          </span>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span className="figure">{formatMoney(installment.amount, verdict.currency)}</span>
-                      </TableCell>
-                      {/* The checks are per period, so a period owed several
-                          installments shows them once, spanning its rows. */}
-                      {index === 0 ? (
-                        <>
-                          <TableCell rowSpan={period.installments.length} className="text-right align-middle">
-                            <BeforeAfter
-                              before={period.account.headroomBefore}
-                              after={period.account.headroomAfter}
-                              currency={period.account.currency}
-                              passes={period.account.passes}
-                            />
-                          </TableCell>
-                          <TableCell rowSpan={period.installments.length} className="text-right align-middle">
-                            <BeforeAfter
-                              before={period.flexible.availableBefore}
-                              after={period.flexible.availableAfter}
-                              currency={period.flexible.currency}
-                              passes={period.flexible.passes}
-                            />
-                          </TableCell>
-                          <TableCell rowSpan={period.installments.length} className="align-middle">
-                            <VerdictBadge passes={period.passes} t={t} />
-                          </TableCell>
-                        </>
-                      ) : null}
-                    </TableRow>
+                      </TableRow>
+                    ))}
+                  </Fragment>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* On a phone (below `sm`) one card per pay period: the period and
+              its verdict, the installments it owes, then the two checks as
+              labelled before/after lines. */}
+          <ul className="divide-y sm:hidden">
+            {verdict.periods.map((period) => (
+              <li key={period.key} className="space-y-3 py-4 first:pt-0 last:pb-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{period.period.label}</p>
+                    {period.installments.length > 1 ? (
+                      <p className="text-[0.625rem] text-muted-foreground">
+                        {t.checkedTogether(period.installments.length)}
+                      </p>
+                    ) : null}
+                    {period.estimatedGoals.length > 0 ? (
+                      <p className="text-[0.625rem] text-muted-foreground">{t.estimatedInCommitments}</p>
+                    ) : null}
+                  </div>
+                  <VerdictBadge passes={period.passes} t={t} />
+                </div>
+                <ul className="space-y-1">
+                  {period.installments.map((installment) => (
+                    <li key={installment.index} className="flex items-baseline justify-between gap-3 text-sm">
+                      <span className="min-w-0">
+                        <span className="text-muted-foreground">{t.paymentLabel(installment.index)}</span>
+                        {" · "}
+                        {formatDate(installment.date)}
+                      </span>
+                      <span className="figure">{formatMoney(installment.amount, verdict.currency)}</span>
+                    </li>
                   ))}
-                </Fragment>
-              ))}
-            </TableBody>
-          </Table>
+                </ul>
+                <dl className="space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="min-w-0 text-sm">
+                      {t.columnAccountCheck(accountName)}
+                      <span className="block text-[0.625rem] text-muted-foreground">
+                        {t.columnBeforeAfter} · {period.account.currency}
+                      </span>
+                    </dt>
+                    <dd>
+                      <BeforeAfter
+                        before={period.account.headroomBefore}
+                        after={period.account.headroomAfter}
+                        currency={period.account.currency}
+                        passes={period.account.passes}
+                      />
+                    </dd>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="min-w-0 text-sm">
+                      {t.columnFlexibleCheck}
+                      <span className="block text-[0.625rem] text-muted-foreground">
+                        {t.columnBeforeAfter} · {period.flexible.currency}
+                      </span>
+                    </dt>
+                    <dd>
+                      <BeforeAfter
+                        before={period.flexible.availableBefore}
+                        after={period.flexible.availableAfter}
+                        currency={period.flexible.currency}
+                        passes={period.flexible.passes}
+                      />
+                    </dd>
+                  </div>
+                </dl>
+              </li>
+            ))}
+          </ul>
         </CardContent>
       </Card>
 
@@ -253,67 +369,69 @@ export function AffordResults({
           <CardDescription>{t.projectionDescription(historyPeriods, accountName)}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t.columnPeriod}</TableHead>
-                <TableHead colSpan={3} className="text-right">
-                  {t.projectionAccountColumns(accountName)} · {accountCurrency}
-                </TableHead>
-                <TableHead colSpan={3} className="text-right">
-                  {t.projectionPeriodColumns} · {displayCurrency}
-                </TableHead>
-              </TableRow>
-              <TableRow>
-                <TableHead />
-                <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
-                  {t.projectionIncome}
-                </TableHead>
-                <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
-                  {t.projectionCommitted}
-                </TableHead>
-                <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
-                  {t.projectionBuffer}
-                </TableHead>
-                <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
-                  {t.projectionIncome}
-                </TableHead>
-                <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
-                  {t.projectionCommitted}
-                </TableHead>
-                <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
-                  {t.projectionBuffer}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {verdict.periods.map((period) => (
-                <TableRow key={period.key}>
-                  <TableCell>{period.period.label}</TableCell>
-                  <TableCell className="figure text-right">
-                    {formatMoney(period.account.income, period.account.currency)}
-                  </TableCell>
-                  <TableCell className="figure text-right">
-                    {formatMoney(period.account.committed, period.account.currency)}
-                    {period.estimatedGoals.length > 0 ? <span className="text-muted-foreground"> *</span> : null}
-                  </TableCell>
-                  <TableCell className="figure text-right">
-                    {formatMoney(period.account.buffer, period.account.currency)}
-                  </TableCell>
-                  <TableCell className="figure text-right">
-                    {formatMoney(period.flexible.income, period.flexible.currency)}
-                  </TableCell>
-                  <TableCell className="figure text-right">
-                    {formatMoney(period.flexible.committed, period.flexible.currency)}
-                    {period.estimatedGoals.length > 0 ? <span className="text-muted-foreground"> *</span> : null}
-                  </TableCell>
-                  <TableCell className="figure text-right">
-                    {formatMoney(period.flexible.buffer, period.flexible.currency)}
-                  </TableCell>
+          <ScrollFade>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t.columnPeriod}</TableHead>
+                  <TableHead colSpan={3} className="text-right">
+                    {t.projectionAccountColumns(accountName)} · {accountCurrency}
+                  </TableHead>
+                  <TableHead colSpan={3} className="text-right">
+                    {t.projectionPeriodColumns} · {displayCurrency}
+                  </TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                <TableRow>
+                  <TableHead />
+                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                    {t.projectionIncome}
+                  </TableHead>
+                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                    {t.projectionCommitted}
+                  </TableHead>
+                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                    {t.projectionBuffer}
+                  </TableHead>
+                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                    {t.projectionIncome}
+                  </TableHead>
+                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                    {t.projectionCommitted}
+                  </TableHead>
+                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                    {t.projectionBuffer}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {verdict.periods.map((period) => (
+                  <TableRow key={period.key}>
+                    <TableCell>{period.period.label}</TableCell>
+                    <TableCell className="figure text-right">
+                      {formatMoney(period.account.income, period.account.currency)}
+                    </TableCell>
+                    <TableCell className="figure text-right">
+                      {formatMoney(period.account.committed, period.account.currency)}
+                      {period.estimatedGoals.length > 0 ? <span className="text-muted-foreground"> *</span> : null}
+                    </TableCell>
+                    <TableCell className="figure text-right">
+                      {formatMoney(period.account.buffer, period.account.currency)}
+                    </TableCell>
+                    <TableCell className="figure text-right">
+                      {formatMoney(period.flexible.income, period.flexible.currency)}
+                    </TableCell>
+                    <TableCell className="figure text-right">
+                      {formatMoney(period.flexible.committed, period.flexible.currency)}
+                      {period.estimatedGoals.length > 0 ? <span className="text-muted-foreground"> *</span> : null}
+                    </TableCell>
+                    <TableCell className="figure text-right">
+                      {formatMoney(period.flexible.buffer, period.flexible.currency)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </ScrollFade>
           {periodsWithEstimate.length > 0 ? (
             <ul className="space-y-1 text-xs text-muted-foreground">
               {periodsWithEstimate.map((period) => (
