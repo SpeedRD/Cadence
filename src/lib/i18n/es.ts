@@ -312,7 +312,10 @@ export const es = {
     needAccountDescription: "Las transacciones pertenecen a una cuenta, así que empieza por ahí.",
     goToAccounts: "Ir a cuentas",
     nothingHereTitle: "Todavía no hay nada aquí",
+    noTransactionsDescription: "Las transacciones que agregues o importes aparecerán aquí.",
     noMatchFilters: "Ninguna transacción coincide con estos filtros.",
+    noMatchesTitle: "Sin coincidencias",
+    clearFilters: "Limpiar filtros",
     pageOf: (page: number, count: number, size: number) =>
       `Página ${page} de ${count} · ${size} por página`,
     previous: "Anterior",

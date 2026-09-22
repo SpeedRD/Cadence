@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 
 import { CountBadge } from "@/components/shell/nav-links";
@@ -70,20 +70,43 @@ export function MobileTabBar({
                     active ? "opacity-100" : "opacity-0",
                   )}
                 />
-                <span className="relative">
-                  <tab.icon className="size-5" />
-                  {count > 0 ? (
-                    <span className="absolute -top-1.5 -right-2.5">
-                      <CountBadge count={count} label={t.badgeLabel(count)} />
-                    </span>
-                  ) : null}
-                </span>
-                <span className="max-w-full truncate leading-none">{tab.label}</span>
+                <PendingDip>
+                  <span className="relative">
+                    <tab.icon className="size-5" />
+                    {count > 0 ? (
+                      <span className="absolute -top-1.5 -right-2.5">
+                        <CountBadge count={count} label={t.badgeLabel(count)} />
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="max-w-full truncate leading-none">{tab.label}</span>
+                </PendingDip>
               </Link>
             </li>
           );
         })}
       </ul>
     </nav>
+  );
+}
+
+/**
+ * The tapped tab's acknowledgement: while its destination is still being
+ * rendered on the server (every route is force-dynamic), the icon and label
+ * dip in opacity, so the tap visibly landed before the page frame arrives.
+ * Opacity only, on a wrapper that takes the Link's own column layout, so
+ * nothing shifts. Must render inside the Link - useLinkStatus reads it.
+ */
+function PendingDip({ children }: { children: React.ReactNode }) {
+  const { pending } = useLinkStatus();
+  return (
+    <span
+      className={cn(
+        "flex max-w-full min-w-0 flex-col items-center gap-1 transition-opacity duration-150",
+        pending && "opacity-50",
+      )}
+    >
+      {children}
+    </span>
   );
 }

@@ -94,6 +94,10 @@ export default async function TransactionsPage({
 
   const today = toISODate(context.today);
   const hasAccounts = accounts.length > 0;
+  // Same test as TransactionFilters' Clear button: any parameter but the page.
+  const hasFilters = Object.entries(params).some(
+    ([key, value]) => key !== "page" && single(value) !== undefined,
+  );
 
   return (
     <div className="space-y-5">
@@ -158,6 +162,9 @@ export default async function TransactionsPage({
       />
 
       <TransactionFilters
+        // The search box keeps its own draft; remount when q changes from
+        // outside it (the empty state's Clear filters link) so it empties too.
+        key={single(params.q) ?? ""}
         accounts={accounts}
         categories={categories}
         locale={context.language}
@@ -182,10 +189,22 @@ export default async function TransactionsPage({
             </Button>
           }
         />
+      ) : result.rows.length === 0 && hasFilters ? (
+        // A filter miss, not an empty ledger: no "yet", and the way out sits
+        // with the message rather than only in the filter block above.
+        <EmptyState
+          title={t.noMatchesTitle}
+          description={t.noMatchFilters}
+          action={
+            <Button asChild size="sm">
+              <Link href="/transactions">{t.clearFilters}</Link>
+            </Button>
+          }
+        />
       ) : result.rows.length === 0 ? (
         <EmptyState
           title={t.nothingHereTitle}
-          description={t.noMatchFilters}
+          description={t.noTransactionsDescription}
         />
       ) : (
         <Card className="py-0">
