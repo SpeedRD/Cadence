@@ -73,7 +73,19 @@ export default async function GoalsPage() {
             values={{ currency: context.displayCurrency }}
             locale={context.language}
             trigger={
-              <Button size="sm">
+              <Button size="sm" className="max-sm:hidden">
+                <Plus className="size-3.5" />
+                {t.newGoal}
+              </Button>
+            }
+          />
+        }
+        dock={
+          <GoalDialog
+            values={{ currency: context.displayCurrency }}
+            locale={context.language}
+            trigger={
+              <Button>
                 <Plus className="size-3.5" />
                 {t.newGoal}
               </Button>

@@ -45,7 +45,7 @@ export function LanguageSwitcher({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" disabled={pending} className="font-mono">
+        <Button variant="ghost" size="sm" disabled={pending} className="h-10 font-mono">
           {value.toUpperCase()}
           <ChevronsUpDown className="size-3 opacity-60" />
         </Button>

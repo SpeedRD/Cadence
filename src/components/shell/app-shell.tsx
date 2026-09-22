@@ -82,6 +82,9 @@ export function AppShell({
               </div>
             </div>
 
+            {/* 40px tall below sm (the switchers pass h-10 over their sm
+                buttons' 44; the two icon-sm buttons are 40 square), which
+                fits the 56px bar; desktop keeps its compact sizes. */}
             <div className="ml-auto flex items-center gap-1">
               <CurrencySwitcher value={context.displayCurrency} switcherLabel={t.shell.displayCurrencyLabel} />
               <LanguageSwitcher value={context.language} switcherLabel={t.shell.languageLabel} />
@@ -91,7 +94,9 @@ export function AppShell({
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 sm:px-6 sm:py-8">
+        {/* Below sm, room for a page's docked action row (globals.css,
+            --action-dock-offset) on top of the usual padding. */}
+        <main className="mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 max-sm:pb-[calc(1.5rem+var(--action-dock-offset))] sm:px-6 sm:py-8">
           {staleRatesNote ? (
             <Alert className="mb-5 border-[var(--warning)]/40 text-[var(--warning)]">
               <TriangleAlert />

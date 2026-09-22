@@ -127,6 +127,7 @@ export default async function BudgetsPage({
               rates={context.rates}
               locale={context.language}
               label={planButtonLabel}
+              className="max-sm:hidden"
             />
             <ActionButton
               action={copyPreviousBudgetsAction}
@@ -141,6 +142,16 @@ export default async function BudgetsPage({
               {t.copyLastPeriod}
             </ActionButton>
           </>
+        }
+        dock={
+          <PlanThisPeriodButton
+            draft={paydayDraft}
+            rates={context.rates}
+            locale={context.language}
+            label={planButtonLabel}
+            variant="default"
+            size="default"
+          />
         }
       />
 

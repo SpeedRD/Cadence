@@ -82,7 +82,7 @@ export function BudgetAmountForm({
           className={cn(
             "pl-11 text-right font-mono",
             size === "lg"
-              ? "h-9 w-40 text-base"
+              ? "h-11 w-40 text-base"
               : size === "block"
                 ? "h-11 w-full text-base"
                 : "h-9 w-32 text-sm sm:h-7",

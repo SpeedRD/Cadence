@@ -69,10 +69,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           {/* Below sonner's own 600px breakpoint a toast is full-width at
               the bottom edge, where the app's tab bar (49px plus the
               home-indicator inset, mobile-tab-bar.tsx) sits; the offset is
-              sonner's 16px default plus that bar. */}
+              sonner's 16px default plus that bar, plus a page's docked
+              action row when it has one (--action-dock-offset, globals.css). */}
           <Toaster
             position="bottom-right"
-            mobileOffset={{ bottom: "calc(16px + 49px + env(safe-area-inset-bottom))" }}
+            mobileOffset={{ bottom: "calc(16px + 49px + var(--action-dock-offset) + env(safe-area-inset-bottom))" }}
           />
         </ThemeProvider>
       </body>

@@ -77,7 +77,22 @@ export default async function RecurringPage() {
             values={{ nextDate: today, currency }}
             locale={context.language}
             trigger={
-              <Button size="sm">
+              <Button size="sm" className="max-sm:hidden">
+                <Plus className="size-3.5" />
+                {t.newItem}
+              </Button>
+            }
+          />
+        }
+        dock={
+          <RecurringDialog
+            categories={categories}
+            accounts={accounts}
+            goals={goals}
+            values={{ nextDate: today, currency }}
+            locale={context.language}
+            trigger={
+              <Button>
                 <Plus className="size-3.5" />
                 {t.newItem}
               </Button>

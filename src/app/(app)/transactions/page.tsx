@@ -129,7 +129,7 @@ export default async function TransactionsPage({
                 values={{ date: today, currency: context.displayCurrency }}
                 locale={context.language}
                 trigger={
-                  <Button size="sm">
+                  <Button size="sm" className="max-sm:hidden">
                     <Plus className="size-3.5" />
                     {t.new}
                   </Button>
@@ -137,6 +137,23 @@ export default async function TransactionsPage({
               />
             ) : null}
           </>
+        }
+        dock={
+          hasAccounts ? (
+            <TransactionDialog
+              accounts={accounts}
+              categories={categories}
+              openSharedExpenses={openSharedExpenses}
+              values={{ date: today, currency: context.displayCurrency }}
+              locale={context.language}
+              trigger={
+                <Button>
+                  <Plus className="size-3.5" />
+                  {t.new}
+                </Button>
+              }
+            />
+          ) : null
         }
       />
 

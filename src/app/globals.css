@@ -162,6 +162,32 @@
   --sidebar-ring: var(--ring);
 }
 
+/*
+  The phone's docked action row (MobileActionDock): its height, and an offset
+  that is that height only while a dock is on the page. The shell's main adds
+  the offset to its phone bottom padding and the toaster to its phone offset,
+  so neither content nor a toast ends up under the dock; everywhere else it is
+  0. The dock is sm:hidden, and both consumers apply only below sm.
+*/
+:root {
+  --action-dock-height: 3.75rem;
+  --action-dock-offset: 0px;
+}
+:root:has([data-slot="action-dock"]) {
+  --action-dock-offset: var(--action-dock-height);
+}
+/*
+  A page header whose every action is docked below sm (its header copies
+  carry max-sm:hidden) drops the emptied actions row, which would otherwise
+  still wrap onto a line of its own and take the header's 16px gap.
+  Unlayered, so it wins over the row's flex utility.
+*/
+@media (width < 40rem) {
+  [data-slot="page-header-actions"]:not(:has(> :not(.max-sm\:hidden))) {
+    display: none;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

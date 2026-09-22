@@ -40,7 +40,7 @@ export function CurrencySwitcher({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" disabled={pending} className="font-mono">
+        <Button variant="ghost" size="sm" disabled={pending} className="h-10 font-mono">
           {value}
           <ChevronsUpDown className="size-3 opacity-60" />
         </Button>
