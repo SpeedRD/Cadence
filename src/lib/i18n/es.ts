@@ -1287,6 +1287,7 @@ export const es = {
     checkInForPeriod: "Hacer el check-in de este periodo",
     dismissForToday: "Ahora no",
     reviewConfirmedPlan: "Revisar el plan de este periodo",
+    wizardName: "Chequeo de pago",
     wizardTitle: (periodLabel: string) => `Chequeo de pago - ${periodLabel}`,
     stepOf: (step: number, total: number) => `Paso ${step} de ${total}`,
     back: "Atrás",
@@ -1298,6 +1299,7 @@ export const es = {
       "Esto es solo una verificación de conciliación - nunca crea ingresos ni gastos.",
     step1BalanceMeaning:
       "El “saldo reportado” es lo que la cuenta tenía antes de que llegara el ingreso de este periodo - no lo que tiene ahora si el pago ya entró y parte ya se gastó. El saldo según el libro que se muestra en cada cuenta es esa cifra (deja fuera el ingreso de este mismo chequeo): parte de él y cámbialo solo si sabes que el libro está mal.",
+    balanceMeaningDisclosure: "¿Qué cuenta como saldo reportado?",
     ledgerBalance: "Saldo según el libro",
     reportedBalance: "Saldo reportado",
     matchesLedger: "Coincide con el libro",

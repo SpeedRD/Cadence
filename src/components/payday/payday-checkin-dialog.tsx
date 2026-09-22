@@ -9,6 +9,7 @@ import { StepCommitments } from "@/components/payday/step-commitments";
 import { StepConfirm } from "@/components/payday/step-confirm";
 import { StepFlexible } from "@/components/payday/step-flexible";
 import { StepIncome } from "@/components/payday/step-income";
+import { PeriodRail } from "@/components/period-rail";
 import { TransferDialog } from "@/components/transactions/transfer-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { convert, type RateTable } from "@/lib/currency";
+import { convert, formatMoney, type RateTable } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -330,11 +331,29 @@ export function PaydayCheckinDialog({
           tailwind-merge drops the base class rather than stacking a second
           scroll region on it), leaving the step-content div below as the only
           scroller so this dialog's header and footer stay put. */}
-      <DialogContent className="flex flex-col overflow-hidden sm:max-w-2xl">
+      {/* Below sm the wizard is not the bottom sheet every other dialog is
+          but the whole screen: pinned to all four edges, so the step window
+          takes everything the header and footer leave and the footer sits at
+          the same place on every step. It keeps the sheet's slide from and
+          to the bottom edge, at the steps' own 200ms --ease-out (.step-enter)
+          rather than the sheet's 100ms. A full-screen surface has no edge to
+          outline, and in standalone mode the status bar overlaps its top, so
+          the ring goes and the header and close button clear the inset. */}
+      <DialogContent className="flex flex-col overflow-hidden sm:max-w-2xl max-sm:inset-0 max-sm:h-dvh max-sm:max-h-none max-sm:rounded-none max-sm:pt-[calc(1rem+env(safe-area-inset-top))] max-sm:ring-0 max-sm:duration-200 max-sm:ease-(--ease-out) max-sm:[&>[data-slot=dialog-close]]:top-[calc(0.5rem+env(safe-area-inset-top))]">
         <DialogHeader>
-          <DialogTitle>{t.wizardTitle(plan.periodLabel)}</DialogTitle>
+          {/* On a phone the period leaves the title, which is what used to
+              wrap it under the close button, and becomes the description's
+              first line; progress is the PeriodRail, one block per step,
+              with the step count kept for screen readers. */}
+          <DialogTitle>
+            <span className="max-sm:hidden">{t.wizardTitle(plan.periodLabel)}</span>
+            <span className="sm:hidden">{t.wizardName}</span>
+          </DialogTitle>
+          <PeriodRail totalDays={STEP_COUNT} elapsed={step - 1} compact className="w-24 sm:hidden" />
           <DialogDescription>
-            {t.stepOf(step, STEP_COUNT)} · {stepTitles[step - 1]}
+            <span className="block sm:hidden">{plan.periodLabel}</span>
+            <span className="max-sm:sr-only">{t.stepOf(step, STEP_COUNT)} · </span>
+            <span className="max-sm:block">{stepTitles[step - 1]}</span>
           </DialogDescription>
         </DialogHeader>
 
@@ -352,11 +371,17 @@ export function PaydayCheckinDialog({
           {/* Keyed on `step` so each step mounts fresh: that is what lets
               @starting-style animate the entrance, and it also resets this
               scroller to the top - without the key, advancing from a
-              scrolled-down step 3 opened step 4 part-way down. */}
+              scrolled-down step 3 opened step 4 part-way down. On a phone it
+              is also the containing block for the hidden native inputs Radix
+              renders beside each Select and Switch (position: absolute):
+              positioned against DialogContent instead, they gave the
+              full-screen sheet a scroll range of its own under
+              overflow-hidden, and focusing a field near the end of a step
+              could slide the header and footer up out of place. */}
           <div
             key={step}
             className={cn(
-              "step-enter min-h-0 flex-1 overflow-y-auto pr-1",
+              "step-enter min-h-0 flex-1 overflow-y-auto pr-1 max-sm:relative",
               stepDir > 0 ? "step-enter-forward" : "step-enter-back",
             )}
           >
@@ -438,6 +463,20 @@ export function PaydayCheckinDialog({
               />
             ) : null}
           </div>
+
+          {/* The figure every edit in steps 3 and 4 moves, kept in view on a
+              phone while the step scrolls - Step 3's own summary is several
+              screens below its first input there. The same `available` the
+              summary card shows, not a second computation; -mb-4 cancels the
+              form's gap so it sits directly on the footer. */}
+          {step === 3 || step === 4 ? (
+            <div className="-mx-4 -mb-4 flex justify-between gap-3 border-t px-4 py-2.5 text-sm font-medium sm:hidden">
+              <span>{t.summaryAvailable}</span>
+              <span className={available < 0 ? "figure text-[var(--critical)]" : "figure"}>
+                {formatMoney(available, plan.displayCurrency)}
+              </span>
+            </div>
+          ) : null}
 
           <DialogFooter className="items-center sm:justify-between">
             <div className="flex gap-2">

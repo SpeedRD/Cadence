@@ -1299,6 +1299,8 @@ export const en = {
     checkInForPeriod: "Check in for this period",
     dismissForToday: "Not now",
     reviewConfirmedPlan: "Review this period's plan",
+    /** The wizard's title on a phone, where the period moves into the description. */
+    wizardName: "Payday check-in",
     wizardTitle: (periodLabel: string) => `Payday check-in - ${periodLabel}`,
     stepOf: (step: number, total: number) => `Step ${step} of ${total}`,
     back: "Back",
@@ -1310,6 +1312,7 @@ export const en = {
       "This is a reconciliation check only - it never creates income or expenses.",
     step1BalanceMeaning:
       "“Reported balance” is what the account held before this period's income landed - not what it holds now if the pay has already arrived and some of it is spent. The ledger balance shown for each account is that figure (this check-in's own income is left out of it), so start from it and change it only if you know the ledger is wrong.",
+    balanceMeaningDisclosure: "What counts as the reported balance?",
     ledgerBalance: "Ledger balance",
     reportedBalance: "Reported balance",
     matchesLedger: "Matches ledger",

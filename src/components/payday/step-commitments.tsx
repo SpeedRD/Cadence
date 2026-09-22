@@ -1,5 +1,8 @@
 "use client";
 
+import { ChevronDown, ChevronUp } from "lucide-react";
+import { useState } from "react";
+
 import { Field } from "@/components/form/field";
 import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -17,6 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { formatMoney } from "@/lib/currency";
 import { formatDayMonth } from "@/lib/date";
 import { round2 } from "@/lib/money";
+import { cn } from "@/lib/utils";
 import type { Dictionary } from "@/lib/i18n";
 import type {
   AccountBufferBreakdown,
@@ -70,6 +74,7 @@ function SubscriptionRow({
   pending,
   onReassign,
   pickAnAccountLabel,
+  className,
   t,
 }: {
   item: PaydayCommittedDraft;
@@ -77,10 +82,11 @@ function SubscriptionRow({
   pending: boolean;
   onReassign: (recurringItemId: string, accountId: string) => void;
   pickAnAccountLabel: string;
+  className?: string;
   t: Dictionary["payday"];
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+    <div className={cn("flex flex-wrap items-center justify-between gap-2 text-sm", className)}>
       <span className="min-w-0 flex-1">
         {item.name}{" "}
         <span className="text-xs text-muted-foreground">
@@ -133,6 +139,7 @@ function GoalFundingRowView({
   row,
   headroomBeforeGoals,
   onChange,
+  className,
   t,
 }: {
   goalName: string;
@@ -140,6 +147,7 @@ function GoalFundingRowView({
   /** The account's headroom before any goal drew on it (the buffer view's figure). */
   headroomBeforeGoals: number;
   onChange: (value: number) => void;
+  className?: string;
   t: Dictionary["payday"];
 }) {
   const sharePercent = Math.round(row.share * 100);
@@ -150,7 +158,7 @@ function GoalFundingRowView({
         ? t.goalFundingRoomAfterEarlierGoals(formatMoney(row.headroom, row.currency), sharePercent)
         : t.goalFundingRoom(formatMoney(row.headroom, row.currency), sharePercent);
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+    <div className={cn("flex flex-wrap items-center justify-between gap-2 text-sm", className)}>
       <span className="min-w-0 flex-1">
         {row.name}
         <span className="block text-xs text-muted-foreground">{reason}</span>
@@ -171,6 +179,46 @@ function GoalFundingRowView({
         />
       </Field>
     </div>
+  );
+}
+
+/**
+ * Below sm each account and goal block folds to its header and its verdict
+ * (the buffer status, a goal's pace, any warning) and opens on a tap to the
+ * rows and inputs that change them - the trade M3 names against "don't hide
+ * content behind taps", because unfolded Step 3 runs to seven phone screens.
+ * The header row is the toggle: a transparent button laid over it and out
+ * over the block's padding by the same 12px, so a one-line header is a 44px
+ * target without restyling it. The chevron at its right edge is what says
+ * the header opens at all, swapped down/up with the state the way the
+ * Recurring page's "Show charges" toggle does, in the Select trigger's size
+ * and colour; the header keeps clear of it with its own right padding.
+ * Above sm nothing folds and the button is display:none.
+ */
+function BlockToggle({
+  label,
+  expanded,
+  onToggle,
+}: {
+  label: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-checkin-disclosure
+      aria-label={label}
+      aria-expanded={expanded}
+      onClick={onToggle}
+      className="absolute -inset-3 flex items-center justify-end rounded-lg px-3 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:hidden"
+    >
+      {expanded ? (
+        <ChevronUp className="size-4 text-muted-foreground" aria-hidden />
+      ) : (
+        <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
+      )}
+    </button>
   );
 }
 
@@ -243,6 +291,17 @@ export function StepCommitments({
   const unfundedSubscriptions = bufferPlan.unassignedRecurringItemIds
     .map((id) => subscriptionById.get(id))
     .filter((item) => item !== undefined);
+  // Which blocks the user has opened on a phone (see BlockToggle). Display
+  // only: every row stays mounted either way, so nothing here feeds a figure.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const folded = (key: string) => (expanded.has(key) ? undefined : "max-sm:hidden");
 
   return (
     <div className="space-y-4">
@@ -259,16 +318,18 @@ export function StepCommitments({
               const items = plan.recurringItemIds
                 .map((id) => subscriptionById.get(id))
                 .filter((item) => item !== undefined);
+              const key = `account:${plan.accountId}`;
               return (
                 <div key={plan.accountId} className="space-y-2 rounded-lg border border-border/70 p-3">
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div className="relative flex flex-wrap items-baseline justify-between gap-2 max-sm:pr-5">
                     <p className="text-sm font-medium">{plan.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {t.accountSuggestedBuffer}:{" "}
                       <span className="figure">{formatMoney(plan.suggestedBuffer, plan.currency)}</span>
                     </p>
+                    <BlockToggle label={plan.name} expanded={expanded.has(key)} onToggle={() => toggle(key)} />
                   </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <div className={cn("flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground", folded(key))}>
                     <span>
                       {t.accountIncomeReceived}:{" "}
                       <span className="figure">{formatMoney(plan.income, plan.currency)}</span>
@@ -322,7 +383,9 @@ export function StepCommitments({
                     </div>
                   ) : null}
                   {items.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">{t.accountNoSubscriptionsDue}</p>
+                    <p className={cn("text-xs text-muted-foreground", folded(key))}>
+                      {t.accountNoSubscriptionsDue}
+                    </p>
                   ) : (
                     items.map((item) => (
                       <SubscriptionRow
@@ -332,6 +395,7 @@ export function StepCommitments({
                         pending={reassigningItemId === item.recurringItemId}
                         onReassign={onReassignSubscription}
                         pickAnAccountLabel={pickAnAccountLabel}
+                        className={folded(key)}
                         t={t}
                       />
                     ))
@@ -435,25 +499,27 @@ export function StepCommitments({
               // The account taking the larger share, when the goal is split at all.
               const sharing = rows.filter((row) => row.share > 0).sort((a, b) => b.share - a.share);
               const lead = sharing.length > 1 && sharing[0].share > sharing[1].share ? sharing[0] : null;
+              const key = `goal:${goal.goalId}`;
               return (
                 <div key={goal.goalId} className="space-y-2 rounded-lg border border-border/70 p-3">
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div className="relative flex flex-wrap items-baseline justify-between gap-2 max-sm:pr-5">
                     <p className="text-sm font-medium">{goal.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {t.goalPlannedTotal}:{" "}
                       <span className="figure">{formatMoney(total, displayCurrency)}</span>
                     </p>
+                    <BlockToggle label={goal.name} expanded={expanded.has(key)} onToggle={() => toggle(key)} />
                   </div>
                   {/* A dated goal shows its pace; an undated one has none, so
                       its figure is the whole remaining balance, recommended in
                       full as far as the accounts' room allows. */}
                   {goal.targetDate ? (
-                    <p className="text-xs text-muted-foreground">
+                    <p className={cn("text-xs text-muted-foreground", folded(key))}>
                       {t.roadmapAmount}:{" "}
                       <span className="figure">{formatMoney(goal.recommendedAmount, displayCurrency)}</span>
                     </p>
                   ) : (
-                    <p className="text-xs text-muted-foreground">
+                    <p className={cn("text-xs text-muted-foreground", folded(key))}>
                       {t.remainingBalanceNoDate}:{" "}
                       <span className="figure">{formatMoney(goal.recommendedAmount, displayCurrency)}</span>
                       {" · "}
@@ -461,7 +527,7 @@ export function StepCommitments({
                     </p>
                   )}
                   {rows.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">{t.goalFundingNoRoom}</p>
+                    <p className={cn("text-xs text-muted-foreground", folded(key))}>{t.goalFundingNoRoom}</p>
                   ) : (
                     rows.map((row) => (
                       <GoalFundingRowView
@@ -470,12 +536,15 @@ export function StepCommitments({
                         row={row}
                         headroomBeforeGoals={headroomByAccount.get(row.accountId) ?? row.headroom}
                         onChange={(value) => onGoalFundingChange(goal.goalId, row.accountId, value)}
+                        className={folded(key)}
                         t={t}
                       />
                     ))
                   )}
                   {lead ? (
-                    <p className="text-xs text-muted-foreground">{t.goalFundingLeadAccount(lead.name)}</p>
+                    <p className={cn("text-xs text-muted-foreground", folded(key))}>
+                      {t.goalFundingLeadAccount(lead.name)}
+                    </p>
                   ) : null}
                   {funding && funding.shortfall > 0 ? (
                     <div className="reveal-block">
