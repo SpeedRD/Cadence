@@ -62,6 +62,12 @@ function DialogContent({
         data-slot="dialog-content"
         className={cn(
           "fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // Below sm every dialog is a bottom sheet: anchored to the bottom
+          // edge, entering from and leaving to it (the slide replaces the
+          // zoom, same 100ms). Only max-sm: variants, so nothing above sm
+          // changes. The scroll padding keeps a field focused by keyboard
+          // navigation clear of DialogFooter, which is sticky over the body.
+          "max-sm:top-auto max-sm:bottom-0 max-sm:left-0 max-sm:max-h-[92dvh] max-sm:max-w-none max-sm:translate-none max-sm:scroll-pb-[calc(5rem+env(safe-area-inset-bottom))] max-sm:rounded-b-none max-sm:data-open:slide-in-from-bottom max-sm:data-open:zoom-in-100 max-sm:data-closed:slide-out-to-bottom max-sm:data-closed:zoom-out-100",
           className
         )}
         {...props}
@@ -114,6 +120,17 @@ function DialogFooter({
       data-slot="dialog-footer"
       className={cn(
         "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        // Below sm the footer stays pinned to the bottom of the sheet while
+        // the form above it scrolls: sticky inside DialogContent's own
+        // scroller, so every form gets it without restructuring (-bottom-4
+        // for the same reason as -mb-4: sticky insets are measured inside
+        // that scroller's p-4, which would leave a strip of body showing
+        // below the footer). Its band is bg-muted/50 pre-composited over the
+        // popover (sRGB, as alpha compositing is) - the same colour, but
+        // opaque, since the body now scrolls underneath it. One row of 44px
+        // buttons, the last (the primary) taking the remaining width,
+        // cleared of the home indicator.
+        "max-sm:sticky max-sm:-bottom-4 max-sm:flex-row max-sm:rounded-b-none max-sm:bg-[color-mix(in_srgb,var(--color-muted)_50%,var(--color-popover))] max-sm:pb-[calc(1rem+env(safe-area-inset-bottom))] max-sm:*:last:flex-1 max-sm:[&_[data-slot=button]]:h-11",
         className
       )}
       {...props}
@@ -137,6 +154,9 @@ function DialogTitle({
       data-slot="dialog-title"
       className={cn(
         "font-heading text-base leading-none font-medium",
+        // The sheet is full-width below sm, so a long title that used to
+        // wrap early now reaches the absolute close button; stop it 8px short.
+        "max-sm:pr-8",
         className
       )}
       {...props}
