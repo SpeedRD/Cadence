@@ -56,3 +56,20 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   (source + key), not in per-source tables.
 - Screenshots in `screenshots/` are captured from a throwaway database seeded
   with fictional data. Never commit a screenshot taken against real data.
+- Verify mobile UX changes in the iOS Simulator's Safari, not only in
+  Chromium/Playwright. iOS WebKit's form-control theme overrides author CSS
+  in ways Chromium never shows: it forces date inputs to
+  `box-sizing: content-box` unless their width is a fixed length. Against a
+  scratch-DB dev server on port 3100:
+  `xcrun simctl boot 61EA45F3-2C16-4BEB-B403-EE1E183E9D51` (iPhone 17 Pro Max)
+  and `xcrun simctl boot E6C81B96-8727-49C8-8580-EDDABA0E349F` (iPad Air 11",
+  which is above `sm` and must keep the desktop presentation), then
+  `xcrun simctl bootstatus <udid> -b`. Drive Safari through `safaridriver -p 4444`
+  with WebDriver capabilities `{"browserName":"Safari","platformName":"iOS",
+  "safari:useSimulator":true,"safari:deviceUDID":"<udid>"}`. Add the minted
+  `cadence_session` cookie on `http://localhost:3100/login`, navigate, and
+  measure with `getBoundingClientRect`/`getComputedStyle` through
+  `/execute/sync`. Capture evidence with
+  `xcrun simctl io <udid> screenshot <file>.png` and end each WebDriver
+  session (DELETE), because a new one is refused while the old one is paired.
+  `xcrun simctl shutdown <udid>` when done.

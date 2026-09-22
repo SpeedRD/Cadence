@@ -147,7 +147,7 @@ export function TransactionFilters({
         <Input
           type="date"
           aria-label={t.fromDateAria}
-          className="w-full min-w-0 flex-1 sm:h-8 sm:w-[9.5rem] sm:flex-none"
+          className="min-w-0 flex-1 sm:h-8 sm:w-[9.5rem] sm:flex-none"
           value={values.from ?? ""}
           onChange={(event) => apply({ from: event.target.value })}
         />
@@ -155,7 +155,7 @@ export function TransactionFilters({
         <Input
           type="date"
           aria-label={t.toDateAria}
-          className="w-full min-w-0 flex-1 sm:h-8 sm:w-[9.5rem] sm:flex-none"
+          className="min-w-0 flex-1 sm:h-8 sm:w-[9.5rem] sm:flex-none"
           value={values.to ?? ""}
           onChange={(event) => apply({ to: event.target.value })}
         />

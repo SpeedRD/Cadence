@@ -91,7 +91,7 @@ export function PlanningPreferencesForm({
           id="income-history-start"
           name="incomeHistoryStartDate"
           type="date"
-          className="sm:max-w-[50%]"
+          className="sm:min-w-[50%]"
           defaultValue={incomeHistoryStartDate ?? ""}
         />
       </Field>
