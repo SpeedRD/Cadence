@@ -80,8 +80,14 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
             key={insight.id}
             data-insight-id={insight.id}
             data-severity={insight.severity}
-            className="flex flex-wrap items-start gap-x-4 gap-y-2 py-3 first:pt-0 last:pb-0"
+            className="flex flex-col gap-x-4 gap-y-2 py-3 first:pt-0 last:pb-0 max-sm:relative sm:flex-row sm:flex-wrap sm:items-start"
           >
+            {/* On a phone the whole row opens the insight's surface: this
+                link covers the row and only the two buttons sit above it, so
+                Dismiss (even while disabled) stays its own control. Open
+                remains the named link for assistive tech, so this one is
+                hidden from it. */}
+            <Link href={insight.actionHref} aria-hidden tabIndex={-1} className="absolute inset-0 sm:hidden" />
             <div className="min-w-0 flex-1 space-y-1">
               <p className="flex items-center gap-2 text-sm font-medium">
                 <span
@@ -93,9 +99,9 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
                 />
                 <span className="truncate">{insight.title}</span>
               </p>
-              <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-[0.6875rem] text-muted-foreground">
+              <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-[0.6875rem] text-muted-foreground max-sm:grid max-sm:grid-cols-[auto_1fr] max-sm:gap-x-2">
                 {insight.evidence.map((evidence, index) => (
-                  <div key={`${evidence.label}-${index}`} className="flex gap-1">
+                  <div key={`${evidence.label}-${index}`} className="flex gap-1 max-sm:contents">
                     <dt>{evidence.label}:</dt>
                     <dd className={evidence.kind === "money" ? "figure text-foreground" : "text-foreground"}>
                       {formatEvidence(evidence)}
@@ -105,8 +111,8 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
               </dl>
               <p className="text-[0.6875rem] text-muted-foreground">{SOURCE_LABEL[insight.source](t)}</p>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button asChild variant="outline" size="xs">
+            <div className="flex shrink-0 items-center gap-1 max-sm:flex-wrap">
+              <Button asChild variant="outline" size="xs" className="max-sm:relative max-sm:h-11">
                 <Link href={insight.actionHref}>
                   {OPEN_LABEL[insight.source](t)}
                   <ArrowUpRight />
@@ -117,6 +123,7 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
                   type="button"
                   variant="ghost"
                   size="xs"
+                  className="max-sm:relative max-sm:h-11 max-sm:disabled:pointer-events-auto"
                   disabled={busy}
                   title={t.dismissHint}
                   onClick={() => dismiss(insight)}
