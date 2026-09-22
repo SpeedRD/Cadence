@@ -84,7 +84,7 @@ export default async function RecurringPage() {
             }
           />
         }
-        dock={
+        titleAction={
           <RecurringDialog
             categories={categories}
             accounts={accounts}
@@ -92,7 +92,7 @@ export default async function RecurringPage() {
             values={{ nextDate: today, currency }}
             locale={context.language}
             trigger={
-              <Button>
+              <Button size="sm">
                 <Plus className="size-3.5" />
                 {t.newItem}
               </Button>

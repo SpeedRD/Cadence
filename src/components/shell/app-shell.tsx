@@ -94,9 +94,7 @@ export function AppShell({
           </div>
         </header>
 
-        {/* Below sm, room for a page's docked action row (globals.css,
-            --action-dock-offset) on top of the usual padding. */}
-        <main className="mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 max-sm:pb-[calc(1.5rem+var(--action-dock-offset))] sm:px-6 sm:py-8">
+        <main className="mx-auto w-full max-w-[1180px] flex-1 px-4 py-6 sm:px-6 sm:py-8">
           {staleRatesNote ? (
             <Alert className="mb-5 border-[var(--warning)]/40 text-[var(--warning)]">
               <TriangleAlert />

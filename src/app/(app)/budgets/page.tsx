@@ -129,6 +129,18 @@ export default async function BudgetsPage({
               label={planButtonLabel}
               className="max-sm:hidden"
             />
+            {/* On a phone the same action, filled as the page's primary.
+                Its labels ("Check in for this period", "Hacer el check-in
+                de este periodo") are too long to trail the title, so it leads
+                this row instead. */}
+            <PlanThisPeriodButton
+              draft={paydayDraft}
+              rates={context.rates}
+              locale={context.language}
+              label={planButtonLabel}
+              variant="default"
+              className="sm:hidden"
+            />
             <ActionButton
               action={copyPreviousBudgetsAction}
               fields={{
@@ -142,16 +154,6 @@ export default async function BudgetsPage({
               {t.copyLastPeriod}
             </ActionButton>
           </>
-        }
-        dock={
-          <PlanThisPeriodButton
-            draft={paydayDraft}
-            rates={context.rates}
-            locale={context.language}
-            label={planButtonLabel}
-            variant="default"
-            size="default"
-          />
         }
       />
 

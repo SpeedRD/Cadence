@@ -14,7 +14,6 @@ export function PlanThisPeriodButton({
   locale,
   label,
   variant = "outline",
-  size = "sm",
   className,
 }: {
   draft: PaydayCheckinDraft;
@@ -22,9 +21,8 @@ export function PlanThisPeriodButton({
   locale: Locale;
   /** Defaults to "Plan this period"; the Budgets page passes the wording for a past or already confirmed period. */
   label?: string;
-  /** The Budgets page docks a primary, full-width copy on a phone (MobileActionDock). */
+  /** The Budgets page shows a primary (filled) copy on a phone. */
   variant?: React.ComponentProps<typeof Button>["variant"];
-  size?: React.ComponentProps<typeof Button>["size"];
   className?: string;
 }) {
   const t = getDictionary(locale).payday;
@@ -32,7 +30,7 @@ export function PlanThisPeriodButton({
 
   return (
     <>
-      <Button variant={variant} size={size} className={className} onClick={() => setOpen(true)}>
+      <Button variant={variant} size="sm" className={className} onClick={() => setOpen(true)}>
         {label ?? t.planThisPeriod}
       </Button>
       <PaydayCheckinDialog draft={draft} rates={rates} locale={locale} open={open} onOpenChange={setOpen} />

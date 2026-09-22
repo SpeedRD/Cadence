@@ -138,7 +138,7 @@ export default async function TransactionsPage({
             ) : null}
           </>
         }
-        dock={
+        titleAction={
           hasAccounts ? (
             <TransactionDialog
               accounts={accounts}
@@ -147,7 +147,7 @@ export default async function TransactionsPage({
               values={{ date: today, currency: context.displayCurrency }}
               locale={context.language}
               trigger={
-                <Button>
+                <Button size="sm">
                   <Plus className="size-3.5" />
                   {t.new}
                 </Button>

@@ -13,6 +13,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -49,19 +50,9 @@ export default async function AccountsPage() {
             values={{ currency: context.displayCurrency }}
             locale={context.language}
             trigger={
-              <Button size="sm" className="max-sm:hidden">
-                <Plus className="size-3.5" />
-                {t.newAccount}
-              </Button>
-            }
-          />
-        }
-        dock={
-          <AccountDialog
-            values={{ currency: context.displayCurrency }}
-            locale={context.language}
-            trigger={
-              <Button>
+              // Below sm, while there is an active list, this lives as the
+              // list's last row instead (AccountsTable's addRow).
+              <Button size="sm" className={active.length > 0 ? "max-sm:hidden" : undefined}>
                 <Plus className="size-3.5" />
                 {t.newAccount}
               </Button>
@@ -99,6 +90,18 @@ export default async function AccountsPage() {
                 t={t}
                 common={common}
                 today={context.today}
+                addRow={
+                  <AccountDialog
+                    values={{ currency: context.displayCurrency }}
+                    locale={context.language}
+                    trigger={
+                      <Button variant="ghost" className="w-full justify-start rounded-none px-2">
+                        <Plus className="size-3.5" />
+                        {t.newAccount}
+                      </Button>
+                    }
+                  />
+                }
               />
             )}
           </TabsContent>
@@ -132,6 +135,7 @@ function AccountsTable({
   t,
   common,
   today,
+  addRow,
 }: {
   accounts: AccountBalance[];
   displayCurrency: string;
@@ -139,6 +143,13 @@ function AccountsTable({
   t: Dictionary["accounts"];
   common: Dictionary["common"];
   today: Date;
+  /**
+   * Below sm, the page's "New account" as the list's last row: the list is
+   * short and fits the screen, so its end is mid-screen, in thumb reach, the
+   * way iOS Settings ends an accounts list with "Add Account". In the
+   * table's own footer band; hidden from sm up, where the header has it.
+   */
+  addRow?: React.ReactNode;
 }) {
   return (
     <Card className="py-0">
@@ -194,6 +205,15 @@ function AccountsTable({
               </TableRow>
             ))}
           </TableBody>
+          {addRow ? (
+            <TableFooter className="sm:hidden">
+              <TableRow>
+                <TableCell colSpan={3} className="p-0">
+                  {addRow}
+                </TableCell>
+              </TableRow>
+            </TableFooter>
+          ) : null}
         </Table>
       </CardContent>
     </Card>

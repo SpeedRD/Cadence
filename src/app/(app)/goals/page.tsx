@@ -80,12 +80,12 @@ export default async function GoalsPage() {
             }
           />
         }
-        dock={
+        titleAction={
           <GoalDialog
             values={{ currency: context.displayCurrency }}
             locale={context.language}
             trigger={
-              <Button>
+              <Button size="sm">
                 <Plus className="size-3.5" />
                 {t.newGoal}
               </Button>
