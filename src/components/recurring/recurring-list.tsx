@@ -129,7 +129,7 @@ export function RecurringList({
                   </span>
                 ) : null}
                 {row.active && row.remainingOccurrences !== null ? (
-                  <span className="rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary">
+                  <span className="shrink-0 whitespace-nowrap rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary">
                     {t.paymentsLeft(row.remainingOccurrences)}
                   </span>
                 ) : null}
