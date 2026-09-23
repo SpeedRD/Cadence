@@ -157,7 +157,7 @@ export default async function BudgetsPage({
         }
       />
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="hidden flex-wrap items-center gap-2 sm:flex">
         <Button asChild variant="outline" size="sm">
           <Link href={`/budgets?period=${periodKey(previousPeriod(period))}`}>
             <ChevronLeft className="size-3.5" />
@@ -176,6 +176,39 @@ export default async function BudgetsPage({
             <Link href="/budgets">{t.backToNow}</Link>
           </Button>
         ) : null}
+      </div>
+
+      {/* On a phone the labelled buttons don't fit beside the long label, so
+          the stepper becomes chevrons at opposite ends of the period they
+          change; the neighbouring period's name moves to the aria-label and
+          tooltip. */}
+      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2 sm:hidden">
+        <Button asChild variant="outline" size="icon-lg">
+          <Link
+            href={`/budgets?period=${periodKey(previousPeriod(period))}`}
+            aria-label={periodInfo(previousPeriod(period)).longLabel}
+            title={periodInfo(previousPeriod(period)).longLabel}
+          >
+            <ChevronLeft />
+          </Link>
+        </Button>
+        <div className="flex flex-col items-center text-center">
+          <span className="text-sm font-medium">{period.longLabel}</span>
+          {!isCurrent ? (
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/budgets">{t.backToNow}</Link>
+            </Button>
+          ) : null}
+        </div>
+        <Button asChild variant="outline" size="icon-lg">
+          <Link
+            href={`/budgets?period=${periodKey(nextPeriod(period))}`}
+            aria-label={periodInfo(nextPeriod(period)).longLabel}
+            title={periodInfo(nextPeriod(period)).longLabel}
+          >
+            <ChevronRight />
+          </Link>
+        </Button>
       </div>
 
       <Card>
