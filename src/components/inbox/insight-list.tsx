@@ -89,15 +89,18 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
                 hidden from it. */}
             <Link href={insight.actionHref} aria-hidden tabIndex={-1} className="absolute inset-0 sm:hidden" />
             <div className="min-w-0 flex-1 space-y-1">
-              <p className="flex items-center gap-2 text-sm font-medium">
+              {/* Below sm the title wraps in full rather than truncating, and
+                  the dot sits on its first line (1.75 = half of text-sm's 20px
+                  line box less half the 6px dot). */}
+              <p className="flex items-center gap-2 text-sm font-medium max-sm:items-start">
                 <span
                   aria-hidden
                   className={cn(
-                    "size-1.5 shrink-0 rounded-full",
+                    "size-1.5 shrink-0 rounded-full max-sm:mt-1.75",
                     insight.severity === "critical" ? "bg-[var(--critical)]" : "bg-[var(--warning)]",
                   )}
                 />
-                <span className="truncate">{insight.title}</span>
+                <span className="truncate max-sm:break-words max-sm:whitespace-normal">{insight.title}</span>
               </p>
               <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-[0.6875rem] text-muted-foreground max-sm:grid max-sm:grid-cols-[auto_1fr] max-sm:gap-x-2">
                 {insight.evidence.map((evidence, index) => (

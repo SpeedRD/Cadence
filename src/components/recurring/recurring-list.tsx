@@ -47,7 +47,7 @@ function ViabilityBadge({
   if (viability.status === "on_track") {
     return (
       <span
-        className="rounded-full bg-[var(--good)]/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--good)]"
+        className="rounded-full bg-[var(--good)]/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--good)] max-sm:whitespace-nowrap"
         title={t.stillOnTrackHint}
       >
         {t.stillOnTrack}
@@ -56,7 +56,7 @@ function ViabilityBadge({
   }
   return (
     <span
-      className="rounded-full bg-[var(--critical)]/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--critical)]"
+      className="rounded-full bg-[var(--critical)]/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-[var(--critical)] max-sm:whitespace-nowrap"
       title={
         viability.check === "account"
           ? t.shortByAccountHint(accountName ?? "")
@@ -120,43 +120,52 @@ export function RecurringList({
               !row.active && "opacity-55",
             )}
           >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">{row.name}</span>
-                {!row.active ? (
-                  <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
-                    {isFinishedPlan(row) ? t.finished : t.paused}
-                  </span>
-                ) : null}
-                {row.active && row.remainingOccurrences !== null ? (
-                  <span className="shrink-0 whitespace-nowrap rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary">
-                    {t.paymentsLeft(row.remainingOccurrences)}
-                  </span>
-                ) : null}
-                {viability?.[row.id] ? (
-                  <ViabilityBadge
-                    viability={viability[row.id]}
-                    accountName={row.accountName}
-                    t={t}
-                  />
-                ) : null}
-                {row.active && row.needs === "goal_achieved" ? (
-                  <span
-                    className="rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary"
-                    title={t.goalReachedHint}
-                  >
-                    {t.goalReached}
-                  </span>
-                ) : row.active && row.needs ? (
-                  <span
-                    className="rounded-full bg-destructive/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-destructive"
-                    title={t.needsHint}
-                  >
-                    {row.needs === "account" ? t.needsAccount : t.needsGoal}
-                  </span>
-                ) : null}
+            {/* Below sm the name takes line 1 in full and the pills lead the
+                meta line as one nowrap group: the title row and the meta
+                paragraph dissolve (display: contents) so the pill group and
+                the meta text share one inline flow. From sm up the pill
+                group dissolves instead and the row is its desktop self. */}
+            <div className="min-w-0 flex-1 max-sm:text-[0.6875rem]">
+              <div className="flex items-center gap-2 max-sm:contents">
+                <span className="truncate text-sm font-medium max-sm:block max-sm:break-words max-sm:whitespace-normal">
+                  {row.name}
+                </span>
+                <span className="contents max-sm:me-1.5 max-sm:inline-flex max-sm:flex-wrap max-sm:gap-1 max-sm:empty:hidden">
+                  {!row.active ? (
+                    <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground max-sm:whitespace-nowrap">
+                      {isFinishedPlan(row) ? t.finished : t.paused}
+                    </span>
+                  ) : null}
+                  {row.active && row.remainingOccurrences !== null ? (
+                    <span className="shrink-0 whitespace-nowrap rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary">
+                      {t.paymentsLeft(row.remainingOccurrences)}
+                    </span>
+                  ) : null}
+                  {viability?.[row.id] ? (
+                    <ViabilityBadge
+                      viability={viability[row.id]}
+                      accountName={row.accountName}
+                      t={t}
+                    />
+                  ) : null}
+                  {row.active && row.needs === "goal_achieved" ? (
+                    <span
+                      className="rounded-full bg-primary/12 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary max-sm:whitespace-nowrap"
+                      title={t.goalReachedHint}
+                    >
+                      {t.goalReached}
+                    </span>
+                  ) : row.active && row.needs ? (
+                    <span
+                      className="rounded-full bg-destructive/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-destructive max-sm:whitespace-nowrap"
+                      title={t.needsHint}
+                    >
+                      {row.needs === "account" ? t.needsAccount : t.needsGoal}
+                    </span>
+                  ) : null}
+                </span>
               </div>
-              <p className="text-[0.6875rem] text-muted-foreground">
+              <p className="text-[0.6875rem] text-muted-foreground max-sm:contents">
                 {labelFor(common.frequencyLabels, row.frequency)} · {t.nextLabel}{" "}
                 {formatDate(row.nextDate)}
                 {row.active ? ` (${formatRelativeDays(today, row.nextDate, common)})` : ""}
