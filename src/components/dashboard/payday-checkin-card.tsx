@@ -1,5 +1,6 @@
 "use client";
 
+import { XIcon } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -65,25 +66,35 @@ export function PaydayCheckinCard({
     );
   }
 
+  const dismissForToday = async () => {
+    const result = await dismissPaydayPromptAction(null);
+    if (result?.error) toast.error(result.error);
+  };
+
+  // Below sm the prompt is one row - title, Start, and Not now as an x - so it
+  // costs the phone Dashboard one row instead of pushing the hero figure toward
+  // the fold. The description goes there: Step 1 of the wizard says the same.
   return (
-    <Card size="sm">
-      <CardHeader>
+    <Card size="sm" className="max-sm:flex-row max-sm:items-center">
+      <CardHeader className="max-sm:min-w-0 max-sm:flex-1 max-sm:gap-0 max-sm:pe-0">
         <CardTitle>{t.bannerTitle}</CardTitle>
-        <CardDescription>{t.bannerDescription}</CardDescription>
+        <CardDescription className="max-sm:hidden">{t.bannerDescription}</CardDescription>
       </CardHeader>
-      <CardContent className="flex gap-2">
+      <CardContent className="flex gap-2 max-sm:ps-0">
         <Button size="sm" onClick={() => setOpen(true)}>
           {t.startCheckin}
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={async () => {
-            const result = await dismissPaydayPromptAction(null);
-            if (result?.error) toast.error(result.error);
-          }}
-        >
+        <Button size="sm" variant="ghost" className="max-sm:hidden" onClick={dismissForToday}>
           {t.dismissForToday}
+        </Button>
+        <Button
+          size="icon-lg"
+          variant="ghost"
+          className="sm:hidden"
+          aria-label={t.dismissForToday}
+          onClick={dismissForToday}
+        >
+          <XIcon />
         </Button>
       </CardContent>
       <PaydayCheckinDialog draft={draft} rates={rates} locale={locale} open={open} onOpenChange={setOpen} />

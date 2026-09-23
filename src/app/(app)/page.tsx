@@ -74,6 +74,33 @@ export default async function DashboardPage() {
   );
   const checkinLeads = !paydayDraft.isEditingConfirmed;
 
+  // Rendered twice: beside Goals from sm up, and on a phone directly after the
+  // hero, because there the daily question is what is about to leave the
+  // account before how the goals are doing. A second copy rather than CSS
+  // order, so VoiceOver and focus follow the order the phone shows.
+  const upcomingCard = (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>{t.nextDays(UPCOMING_WINDOW_DAYS)}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {upcoming.length === 0 ? (
+          <p className="py-2 text-sm text-muted-foreground">
+            {t.nothingDue}
+          </p>
+        ) : (
+          <UpcomingList
+            items={upcoming}
+            today={context.today}
+            displayCurrency={context.displayCurrency}
+            t={t}
+            common={getDictionary(context.language).common}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+
   return (
     <div className="space-y-6">
       {context.recurringPosting ? (
@@ -82,6 +109,7 @@ export default async function DashboardPage() {
       <AffordViabilityAlert tracked={affordRechecks} t={t} />
       {checkinLeads ? checkinCard : null}
       <PeriodHero summary={summary} elapsed={elapsed} suggestedBudget={suggestedBudget} t={t} />
+      <section className="sm:hidden">{upcomingCard}</section>
       {checkinLeads ? null : checkinCard}
 
       <MonthlyPaceCard
@@ -122,28 +150,7 @@ export default async function DashboardPage() {
           )}
         </section>
 
-        <section>
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle>{t.nextDays(UPCOMING_WINDOW_DAYS)}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {upcoming.length === 0 ? (
-                <p className="py-2 text-sm text-muted-foreground">
-                  {t.nothingDue}
-                </p>
-              ) : (
-                <UpcomingList
-                  items={upcoming}
-                  today={context.today}
-                  displayCurrency={context.displayCurrency}
-                  t={t}
-                  common={getDictionary(context.language).common}
-                />
-              )}
-            </CardContent>
-          </Card>
-        </section>
+        <section className="max-sm:hidden">{upcomingCard}</section>
       </div>
     </div>
   );
