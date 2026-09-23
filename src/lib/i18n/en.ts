@@ -373,6 +373,12 @@ export const en = {
     toDateAria: "To date",
     toSeparator: "to",
     clear: "Clear",
+    filters: "Filters",
+    filtersActive: (count: number) => `Filters, ${count} active`,
+    applyFilters: "Apply",
+    removeFilter: (label: string) => `Remove filter: ${label}`,
+    dateRangeChip: (from: string | undefined, to: string | undefined) =>
+      from && to ? `${from} – ${to}` : from ? `From ${from}` : `Until ${to}`,
     backToTransactions: "Transactions",
     importCsvTitle: "Import CSV",
     importCsvDescription:
