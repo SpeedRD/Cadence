@@ -7,6 +7,8 @@ import { ChangePinForm } from "@/components/settings/change-pin-form";
 import { DisplayCurrencyForm } from "@/components/settings/display-currency-form";
 import { EssentialCategoryToggle } from "@/components/settings/essential-category-toggle";
 import { PlanningPreferencesForm } from "@/components/settings/planning-preferences-form";
+import { LanguageSwitcher } from "@/components/shell/language-switcher";
+import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -31,7 +33,8 @@ export const metadata = { title: "Settings - Cadence" };
 export default async function SettingsPage() {
   const context = await getAppContext();
   const timezone = appTimeZone();
-  const t = getDictionary(context.language).settingsPage;
+  const dictionary = getDictionary(context.language);
+  const t = dictionary.settingsPage;
   const settings = await getSettings();
   const eligibleCategories = await prisma.category.findMany({
     where: { kind: "EXPENSE", isSubscriptionDefault: false, isSavingsDefault: false },
@@ -55,6 +58,33 @@ export default async function SettingsPage() {
           </CardHeader>
           <CardContent>
             <DisplayCurrencyForm value={context.displayCurrency} locale={context.language} />
+          </CardContent>
+        </Card>
+
+        {/* The header's own two controls, moved here below md where the
+            header keeps only the currency switcher and Lock. Same
+            components, so the same server action and next-themes state;
+            44px here, with no 56px bar to fit. */}
+        <Card className="md:hidden">
+          <CardHeader>
+            <CardTitle>{t.languageThemeTitle}</CardTitle>
+            <CardDescription>{t.languageThemeDescription}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y divide-border/70">
+              <li className="flex items-center justify-between gap-3 py-2 first:pt-0">
+                <span className="text-sm">{dictionary.shell.languageLabel}</span>
+                <LanguageSwitcher
+                  value={context.language}
+                  switcherLabel={dictionary.shell.languageLabel}
+                  className="h-11"
+                />
+              </li>
+              <li className="flex items-center justify-between gap-3 py-2 first:pt-0">
+                <span className="text-sm">{t.themeLabel}</span>
+                <ThemeToggle ariaLabel={dictionary.shell.toggleThemeAria} className="size-11" />
+              </li>
+            </ul>
           </CardContent>
         </Card>
 

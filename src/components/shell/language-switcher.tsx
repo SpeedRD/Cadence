@@ -25,9 +25,11 @@ const LANGUAGES: { code: Locale; label: string }[] = [
 export function LanguageSwitcher({
   value,
   switcherLabel,
+  className,
 }: {
   value: Locale;
   switcherLabel: string;
+  className?: string;
 }) {
   const [pending, startTransition] = useTransition();
 
@@ -45,7 +47,7 @@ export function LanguageSwitcher({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" disabled={pending} className="h-10 font-mono">
+        <Button variant="ghost" size="sm" disabled={pending} className={cn("h-10 font-mono", className)}>
           {value.toUpperCase()}
           <ChevronsUpDown className="size-3 opacity-60" />
         </Button>

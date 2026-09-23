@@ -9,7 +9,13 @@ import { Button } from "@/components/ui/button";
  * Both icons render and CSS picks one from the `dark` class on <html>, so the
  * button is correct on the server too - no mounted flag, no hydration flash.
  */
-export function ThemeToggle({ ariaLabel }: { ariaLabel: string }) {
+export function ThemeToggle({
+  ariaLabel,
+  className,
+}: {
+  ariaLabel: string;
+  className?: string;
+}) {
   const { resolvedTheme, setTheme } = useTheme();
 
   return (
@@ -17,6 +23,7 @@ export function ThemeToggle({ ariaLabel }: { ariaLabel: string }) {
       variant="ghost"
       size="icon-sm"
       aria-label={ariaLabel}
+      className={className}
       onClick={() => setTheme(resolvedTheme === "light" ? "dark" : "light")}
     >
       <Moon className="hidden size-4 dark:block" />

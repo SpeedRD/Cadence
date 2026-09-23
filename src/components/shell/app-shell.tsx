@@ -65,7 +65,9 @@ export function AppShell({
         <header className="app-chrome sticky top-0 z-30 border-b border-border/70 bg-background/85 supports-backdrop-filter:backdrop-blur">
           <div className="flex h-14 items-center gap-4 px-4 sm:px-6">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="hidden w-24 sm:block">
+              {/* Below sm the compact rail at the sidebar mark's 64px, in the
+                  room language and theme leave; from sm its wider 96px. */}
+              <div className="w-16 sm:w-24">
                 <PeriodRail
                   totalDays={currentPeriod.totalDays}
                   elapsed={elapsed}
@@ -84,11 +86,13 @@ export function AppShell({
 
             {/* 40px tall below sm (the switchers pass h-10 over their sm
                 buttons' 44; the two icon-sm buttons are 40 square), which
-                fits the 56px bar; desktop keeps its compact sizes. */}
+                fits the 56px bar; desktop keeps its compact sizes. Below md
+                language and theme, set once and rarely touched, are rows in
+                Settings instead, leaving the currency switcher and Lock. */}
             <div className="ml-auto flex items-center gap-1">
               <CurrencySwitcher value={context.displayCurrency} switcherLabel={t.shell.displayCurrencyLabel} />
-              <LanguageSwitcher value={context.language} switcherLabel={t.shell.languageLabel} />
-              <ThemeToggle ariaLabel={t.shell.toggleThemeAria} />
+              <LanguageSwitcher value={context.language} switcherLabel={t.shell.languageLabel} className="max-md:hidden" />
+              <ThemeToggle ariaLabel={t.shell.toggleThemeAria} className="max-md:hidden" />
               <LogoutButton ariaLabel={t.shell.lockCadenceAria} />
             </div>
           </div>
