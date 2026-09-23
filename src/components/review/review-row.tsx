@@ -265,7 +265,7 @@ export function ReviewCard({
       <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5">
         <p className="text-sm break-words">{row.rawDescription}</p>
         <span className="figure text-right text-sm">{formatMoney(row.amount, row.currency)}</span>
-        <p className="col-span-2 text-[0.6875rem] text-muted-foreground">
+        <p className="col-span-2 text-hint text-muted-foreground">
           <span className="figure figure-sm">{toISODate(row.date)}</span>
           {" · "}
           {labelFor(common.sourceLabels, row.source)}

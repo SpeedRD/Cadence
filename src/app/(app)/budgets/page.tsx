@@ -309,7 +309,7 @@ export default async function BudgetsPage({
                         {budgetDisplay ? (
                           <div className="space-y-1">
                             <Meter value={spent} max={budgetDisplay} />
-                            <p className="text-[0.6875rem] text-muted-foreground tnum">
+                            <p className="text-hint text-muted-foreground tnum">
                               {usedPercent(spent, budgetDisplay)}%
                             </p>
                           </div>
@@ -377,7 +377,7 @@ export default async function BudgetsPage({
                   {budgetDisplay ? (
                     <div className="flex items-center gap-3">
                       <Meter value={spent} max={budgetDisplay} />
-                      <span className="shrink-0 text-[0.6875rem] text-muted-foreground tnum">
+                      <span className="shrink-0 text-hint text-muted-foreground tnum">
                         {usedPercent(spent, budgetDisplay)}%
                       </span>
                     </div>

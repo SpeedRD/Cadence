@@ -13,7 +13,7 @@ export function CountBadge({ count, label }: { count: number; label: string }) {
   return (
     <span
       aria-label={label}
-      className="figure ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--critical)] px-1 text-[0.625rem] leading-none font-semibold text-white"
+      className="figure ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--critical)] px-1 text-badge leading-none font-semibold text-white"
     >
       {count}
     </span>

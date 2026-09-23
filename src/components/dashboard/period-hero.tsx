@@ -58,7 +58,7 @@ export function PeriodHero({
               </p>
             </div>
             <PeriodRail totalDays={period.totalDays} elapsed={elapsed} />
-            <div className="flex justify-between text-[0.6875rem] text-muted-foreground">
+            <div className="flex justify-between text-hint text-muted-foreground">
               <span>{formatDayMonth(period.start)}</span>
               <span>{formatDayMonth(period.end)}</span>
             </div>
@@ -128,7 +128,7 @@ export function PeriodHero({
               {formatMoney(summary.spent, currency)}
             </p>
             {summary.totalSpent > summary.spent ? (
-              <p className="text-[0.6875rem] text-muted-foreground">
+              <p className="text-hint text-muted-foreground">
                 {t.plusOutsideBudget(
                   formatMoney(summary.totalSpent - summary.spent, currency),
                 )}
@@ -154,7 +154,7 @@ export function PeriodHero({
               <dd className="figure text-base">
                 {formatMoney(summary.committed, currency)}
               </dd>
-              <p className="text-[0.6875rem] text-muted-foreground">
+              <p className="text-hint text-muted-foreground">
                 {t.itemsDueBefore(summary.committedItems.length, formatDayMonth(period.end))}
               </p>
             </div>
@@ -163,7 +163,7 @@ export function PeriodHero({
               <dd className="figure text-base">
                 {formatMoney(summary.income, currency)}
               </dd>
-              <p className="text-[0.6875rem] text-muted-foreground">
+              <p className="text-hint text-muted-foreground">
                 {t.loggedThisPeriod}
               </p>
             </div>

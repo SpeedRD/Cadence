@@ -157,7 +157,7 @@ export default async function GoalsPage() {
                   </div>
                   <GoalMeter goalId={goal.id} value={goal.progress} size="lg" />
                   {goal.currency !== goal.displayCurrency ? (
-                    <p className="figure figure-sm text-[0.6875rem] text-muted-foreground">
+                    <p className="figure figure-sm text-hint text-muted-foreground">
                       {formatMoney(goal.savedAmount, goal.currency)}{" "}
                       {t.ofAmount(formatMoney(goal.targetAmount, goal.currency))}
                     </p>

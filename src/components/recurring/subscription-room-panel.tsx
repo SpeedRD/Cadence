@@ -69,7 +69,7 @@ export function SubscriptionRoomPanel({
             <TableHead>{t.roomColumnAccount}</TableHead>
             <TableHead className="text-right whitespace-normal">
               {t.roomColumnHeadroom}
-              <span className="block text-[0.625rem] font-normal text-muted-foreground">
+              <span className="block text-badge font-normal text-muted-foreground">
                 {t.roomBeforeAfter}
               </span>
             </TableHead>
@@ -85,7 +85,7 @@ export function SubscriptionRoomPanel({
               <TableCell>
                 {account.name}
                 {account.accountId === selectedAccountId ? (
-                  <span className="ml-1.5 text-[0.625rem] text-muted-foreground">{t.roomSelected}</span>
+                  <span className="ml-1.5 text-badge text-muted-foreground">{t.roomSelected}</span>
                 ) : null}
               </TableCell>
               <TableCell className="text-right">

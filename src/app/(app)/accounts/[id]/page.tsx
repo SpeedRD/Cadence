@@ -168,7 +168,7 @@ export default async function AccountDetailPage({
                                     : (row.categoryName ?? common.uncategorized))}
                           </span>
                           {row.categoryName || row.yourShare !== null || row.reimburses ? (
-                            <span className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+                            <span className="flex flex-wrap items-center gap-1.5 text-hint text-muted-foreground">
                               {row.categoryName ? (
                                 <>
                                   <span

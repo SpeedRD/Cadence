@@ -375,6 +375,30 @@
 }
 
 /*
+  A phone floor for the two smallest informational sizes, and nothing else:
+  at arm's length an 11px hint sentence is the smallest text a user has to
+  read, and a 10px badge label the smallest word. Below sm they step up one
+  (hint 11 -> 12, badge 10 -> 11); from sm up each is exactly the size it
+  was, font-size only, so line-height stays inherited there as before.
+  .eyebrow and the figure tracking steps are the designed scale and do not
+  move. Utilities rather than components so they sort with the other text
+  sizes; cn() knows both as font sizes (src/lib/utils.ts).
+*/
+@utility text-hint {
+  font-size: 0.6875rem;
+  @variant max-sm {
+    @apply text-xs;
+  }
+}
+
+@utility text-badge {
+  font-size: 0.625rem;
+  @variant max-sm {
+    font-size: 0.6875rem;
+  }
+}
+
+/*
   Reduced motion means gentler, not none. Transform-, size- and position-based
   motion is dropped (nothing vestibular survives), but the opacity cross-fade
   that tells the user *something changed* is kept - removing it too would leave

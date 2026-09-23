@@ -56,7 +56,7 @@ export function ProviderConnections({
                   <p className="truncate text-sm font-medium">
                     {connection.emailAddress}
                   </p>
-                  <p className="text-[0.6875rem] text-muted-foreground">
+                  <p className="text-hint text-muted-foreground">
                     {formatSyncedAt(connection.lastSyncedAt, t)}
                   </p>
                 </div>

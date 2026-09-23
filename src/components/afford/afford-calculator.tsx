@@ -269,7 +269,7 @@ export function AffordCalculator({
                     >
                       <div className="min-w-0">
                         <p className="text-sm">{t.paymentLabel(installment.index)}</p>
-                        <p className="text-[0.6875rem] text-muted-foreground">
+                        <p className="text-hint text-muted-foreground">
                           {formatDate(installment.date)} · {period.label}
                         </p>
                       </div>
@@ -291,7 +291,7 @@ export function AffordCalculator({
                 <span className="text-right">
                   <span className="figure">{formatMoney(installmentsTotal, currency)}</span>
                   {roundingDifference !== 0 ? (
-                    <span className="block text-[0.6875rem] text-muted-foreground">
+                    <span className="block text-hint text-muted-foreground">
                       {roundingDifference < 0
                         ? t.scheduleRoundedUnder(formatMoney(-roundingDifference, currency))
                         : t.scheduleRoundedOver(formatMoney(roundingDifference, currency))}

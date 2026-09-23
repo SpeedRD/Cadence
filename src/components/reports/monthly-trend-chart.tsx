@@ -61,7 +61,7 @@ export function MonthlyTrendChart({
 
       <div className="flex gap-2">
         {months.map((month) => (
-          <div key={month.window.key} className="flex-1 text-center text-[0.6875rem] text-muted-foreground">
+          <div key={month.window.key} className="flex-1 text-center text-hint text-muted-foreground">
             {month.window.label}
           </div>
         ))}

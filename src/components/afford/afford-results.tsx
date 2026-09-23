@@ -38,7 +38,7 @@ export function BeforeAfter({
 }) {
   return (
     <span className="flex flex-col items-end leading-tight">
-      <span className="figure figure-sm text-[0.6875rem] text-muted-foreground">
+      <span className="figure figure-sm text-hint text-muted-foreground">
         {formatMoney(before, currency)}
       </span>
       <span className={cn("figure", passes ? "text-[var(--good)]" : "text-[var(--critical)]")}>
@@ -325,13 +325,13 @@ export function AffordResults({
                       pushing it into the horizontal scroll. */}
                   <TableHead className="min-w-40 text-right whitespace-normal">
                     {t.columnAccountCheck(accountName)}
-                    <span className="block text-[0.625rem] font-normal text-muted-foreground">
+                    <span className="block text-badge font-normal text-muted-foreground">
                       {t.columnBeforeAfter} · {accountCurrency}
                     </span>
                   </TableHead>
                   <TableHead className="min-w-40 text-right whitespace-normal">
                     {t.columnFlexibleCheck}
-                    <span className="block text-[0.625rem] font-normal text-muted-foreground">
+                    <span className="block text-badge font-normal text-muted-foreground">
                       {t.columnBeforeAfter} · {displayCurrency}
                     </span>
                   </TableHead>
@@ -350,12 +350,12 @@ export function AffordResults({
                         <TableCell>
                           {period.period.label}
                           {index === 0 && period.installments.length > 1 ? (
-                            <span className="block text-[0.625rem] text-muted-foreground">
+                            <span className="block text-badge text-muted-foreground">
                               {t.checkedTogether(period.installments.length)}
                             </span>
                           ) : null}
                           {index === 0 && period.estimatedGoals.length > 0 ? (
-                            <span className="block text-[0.625rem] text-muted-foreground">
+                            <span className="block text-badge text-muted-foreground">
                               {t.estimatedInCommitments}
                             </span>
                           ) : null}
@@ -406,12 +406,12 @@ export function AffordResults({
                   <div className="min-w-0">
                     <p className="text-sm font-medium">{period.period.label}</p>
                     {period.installments.length > 1 ? (
-                      <p className="text-[0.625rem] text-muted-foreground">
+                      <p className="text-badge text-muted-foreground">
                         {t.checkedTogether(period.installments.length)}
                       </p>
                     ) : null}
                     {period.estimatedGoals.length > 0 ? (
-                      <p className="text-[0.625rem] text-muted-foreground">{t.estimatedInCommitments}</p>
+                      <p className="text-badge text-muted-foreground">{t.estimatedInCommitments}</p>
                     ) : null}
                   </div>
                   <VerdictBadge passes={period.passes} t={t} />
@@ -432,7 +432,7 @@ export function AffordResults({
                   <div className="flex items-start justify-between gap-3">
                     <dt className="min-w-0 text-sm">
                       {t.columnAccountCheck(accountName)}
-                      <span className="block text-[0.625rem] text-muted-foreground">
+                      <span className="block text-badge text-muted-foreground">
                         {t.columnBeforeAfter} · {period.account.currency}
                       </span>
                     </dt>
@@ -448,7 +448,7 @@ export function AffordResults({
                   <div className="flex items-start justify-between gap-3">
                     <dt className="min-w-0 text-sm">
                       {t.columnFlexibleCheck}
-                      <span className="block text-[0.625rem] text-muted-foreground">
+                      <span className="block text-badge text-muted-foreground">
                         {t.columnBeforeAfter} · {period.flexible.currency}
                       </span>
                     </dt>
@@ -527,22 +527,22 @@ export function AffordResults({
                 </TableRow>
                 <TableRow>
                   <TableHead />
-                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                  <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionIncome}
                   </TableHead>
-                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                  <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionCommitted}
                   </TableHead>
-                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                  <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionBuffer}
                   </TableHead>
-                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                  <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionIncome}
                   </TableHead>
-                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                  <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionCommitted}
                   </TableHead>
-                  <TableHead className="text-right text-[0.625rem] font-normal text-muted-foreground">
+                  <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionBuffer}
                   </TableHead>
                 </TableRow>

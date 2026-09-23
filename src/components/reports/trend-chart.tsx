@@ -1,4 +1,5 @@
-import { formatMoney } from "@/lib/currency";
+import { formatMoney, formatMoneyCompact } from "@/lib/currency";
+import { formatDayMonth } from "@/lib/date";
 import { cn } from "@/lib/utils";
 
 import type { TrendPoint } from "@/lib/data/reports";
@@ -7,6 +8,10 @@ import type { Dictionary } from "@/lib/i18n";
 /**
  * Spending across the last six pay periods. One series, so no legend; the
  * exact figures live in the hover/focus tooltip and the axis maximum.
+ *
+ * A phone has no hover, so there each bar also prints its whole-unit figure
+ * above itself, and the axis names each period by its start day ("Aug 16")
+ * because "Aug 16-31" wraps in a 45px column.
  */
 export function TrendChart({
   points,
@@ -21,6 +26,10 @@ export function TrendChart({
 }) {
   const max = points.reduce((highest, point) => Math.max(highest, point.spent), 0);
   const scale = max > 0 ? max : 1;
+  // A currency code comes back as "DOP 121,329" - the no-break space is where
+  // it goes onto its own line, since the whole string is twice a column wide.
+  const barFigures = points.map((point) => formatMoneyCompact(point.spent, currency).split("\u00a0"));
+  const figureLines = Math.max(1, ...barFigures.map((parts) => parts.length));
 
   return (
     <div className="space-y-3">
@@ -29,8 +38,17 @@ export function TrendChart({
         <span>{t.peakPeriod}</span>
       </div>
 
-      <div className="flex h-44 items-end gap-2 border-b border-border/70 pb-0">
-        {points.map((point) => {
+      {/* The margin, not padding, clears the tallest bar's figure (a 12px
+          line and mb-1 per line, plus 4px): padding would come out of h-44
+          and shorten every bar. It collapses with space-y-3, so it is the
+          whole gap, not an addition to it. */}
+      <div
+        className={cn(
+          "flex h-44 items-end gap-2 border-b border-border/70 pb-0",
+          figureLines > 1 ? "max-sm:mt-8" : "max-sm:mt-5",
+        )}
+      >
+        {points.map((point, index) => {
           const height = (point.spent / scale) * 100;
           const isCurrent = point.period.key === currentKey;
           return (
@@ -60,13 +78,27 @@ export function TrendChart({
               </div>
               <div
                 className={cn(
-                  "w-full rounded-t-[4px] transition-colors",
+                  "relative w-full rounded-t-[4px] transition-colors",
                   isCurrent
                     ? "bg-primary"
                     : "bg-foreground/25 group-hover:bg-foreground/40",
                 )}
                 style={{ height: `${Math.max(height, point.spent > 0 ? 1.5 : 0)}%` }}
-              />
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "figure figure-sm absolute bottom-full left-1/2 mb-1 -translate-x-1/2 text-center text-xs leading-none whitespace-nowrap sm:hidden",
+                    isCurrent ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {barFigures[index].map((part) => (
+                    <span key={part} className="block">
+                      {part}
+                    </span>
+                  ))}
+                </span>
+              </div>
             </div>
           );
         })}
@@ -77,13 +109,14 @@ export function TrendChart({
           <div
             key={point.period.key}
             className={cn(
-              "flex-1 text-center text-[0.6875rem]",
+              "flex-1 text-center text-hint",
               point.period.key === currentKey
                 ? "text-foreground"
                 : "text-muted-foreground",
             )}
           >
-            {point.period.label}
+            <span className="sm:hidden">{formatDayMonth(point.period.start)}</span>
+            <span className="max-sm:hidden">{point.period.label}</span>
           </div>
         ))}
       </div>

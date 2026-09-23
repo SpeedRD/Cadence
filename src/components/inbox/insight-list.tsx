@@ -102,7 +102,7 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
                 />
                 <span className="truncate max-sm:break-words max-sm:whitespace-normal">{insight.title}</span>
               </p>
-              <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-[0.6875rem] text-muted-foreground max-sm:grid max-sm:grid-cols-[auto_1fr] max-sm:gap-x-2">
+              <dl className="flex flex-wrap gap-x-4 gap-y-0.5 text-hint text-muted-foreground max-sm:grid max-sm:grid-cols-[auto_1fr] max-sm:gap-x-2">
                 {insight.evidence.map((evidence, index) => (
                   <div key={`${evidence.label}-${index}`} className="flex gap-1 max-sm:contents">
                     <dt>{evidence.label}:</dt>
@@ -112,7 +112,7 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
                   </div>
                 ))}
               </dl>
-              <p className="text-[0.6875rem] text-muted-foreground">{SOURCE_LABEL[insight.source](t)}</p>
+              <p className="text-hint text-muted-foreground">{SOURCE_LABEL[insight.source](t)}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1 max-sm:flex-wrap">
               <Button asChild variant="outline" size="xs" className="max-sm:relative max-sm:h-11">

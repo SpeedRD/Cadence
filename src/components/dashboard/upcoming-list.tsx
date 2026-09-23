@@ -46,7 +46,7 @@ export function UpcomingList({
               <p className="truncate text-sm">{item.name}</p>
               <p
                 className={cn(
-                  "text-[0.6875rem]",
+                  "text-hint",
                   item.overdue ? "text-[var(--warning)]" : "text-muted-foreground",
                 )}
               >
@@ -60,7 +60,7 @@ export function UpcomingList({
                 {formatMoney(item.amount, displayCurrency)}
               </p>
               {item.currency !== displayCurrency ? (
-                <p className="text-[0.6875rem] text-muted-foreground">
+                <p className="text-hint text-muted-foreground">
                   {formatMoney(item.nativeAmount, item.currency)}
                 </p>
               ) : null}

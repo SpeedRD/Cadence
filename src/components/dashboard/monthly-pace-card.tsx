@@ -73,7 +73,7 @@ export function MonthlyPaceCard({
               </div>
             </dl>
 
-            <p className="text-[0.6875rem] text-muted-foreground">
+            <p className="text-hint text-muted-foreground">
               {t.basedOnMonths(history.monthsUsed)} · {t.totalOutflow} {money(totalOutflow)}
             </p>
           </>

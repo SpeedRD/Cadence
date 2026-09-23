@@ -14,7 +14,7 @@ import type { ReimbursedExpenseRef, ReimbursementProgress } from "@/lib/shared-e
  * src/lib/shared-expense.ts and loadReimbursementDetails).
  */
 
-const BADGE_CLASS = "h-4 px-1.5 text-[0.625rem]";
+const BADGE_CLASS = "h-4 px-1.5 text-badge";
 
 /** A shared expense: the amount shown is what left the account; this names the part that was the user's own. */
 export function SharedExpenseBadge({
@@ -64,7 +64,7 @@ export function ReimbursementProgressLine({
 }) {
   const t = getDictionary(locale).transactions;
   return (
-    <span className="text-[0.6875rem] text-muted-foreground">
+    <span className="text-hint text-muted-foreground">
       {progress.settled
         ? t.fullyReimbursed(formatMoney(progress.owed, currency))
         : t.recoveredSoFar(

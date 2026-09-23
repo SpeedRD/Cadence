@@ -48,7 +48,7 @@ export function AppShell({
         </Link>
         <NavLinks locale={context.language} badges={navBadges} />
         <div className="mt-auto px-5.5 pt-6">
-          <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+          <p className="text-hint leading-relaxed text-muted-foreground">
             {t.shell.paidTwiceAMonth(currentPeriod.period === "A" ? "1-15" : "16-end")}
           </p>
         </div>
@@ -78,7 +78,7 @@ export function AppShell({
                 <p className="truncate text-sm font-medium">
                   {currentPeriod.label}
                 </p>
-                <p className="text-[0.6875rem] text-muted-foreground">
+                <p className="text-hint text-muted-foreground">
                   {remaining === 0 ? t.shell.periodClosed : t.shell.daysLeft(remaining)}
                 </p>
               </div>

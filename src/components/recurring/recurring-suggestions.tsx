@@ -86,12 +86,12 @@ export function RecurringSuggestions({
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{suggestion.name}</p>
-                <p className="text-[0.6875rem] text-muted-foreground">
+                <p className="text-hint text-muted-foreground">
                   {t.suggestionCadence(suggestion.cadence, suggestion.anchorDays)}
                   {` · ${suggestion.accountName}`}
                   {suggestion.categoryName ? ` · ${suggestion.categoryName}` : ""}
                 </p>
-                <p className="text-[0.6875rem] text-muted-foreground">
+                <p className="text-hint text-muted-foreground">
                   {t.suggestionEvidence(
                     suggestion.occurrences.length,
                     formatDate(first.date),
@@ -103,7 +103,7 @@ export function RecurringSuggestions({
               <div className="text-right">
                 <p className="figure text-sm">{formatMoney(suggestion.displayAmount, displayCurrency)}</p>
                 {suggestion.currency !== displayCurrency ? (
-                  <p className="figure figure-sm text-[0.6875rem] text-muted-foreground">
+                  <p className="figure figure-sm text-hint text-muted-foreground">
                     {formatMoney(suggestion.amount, suggestion.currency)}
                   </p>
                 ) : null}

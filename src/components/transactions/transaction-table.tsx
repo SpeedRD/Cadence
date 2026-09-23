@@ -76,7 +76,7 @@ function AmountCell({
         {formatMoney(row.displayAmount, displayCurrency)}
       </span>
       {row.currency !== displayCurrency ? (
-        <p className="figure figure-sm text-[0.6875rem] text-muted-foreground">
+        <p className="figure figure-sm text-hint text-muted-foreground">
           {formatMoney(row.amount, row.currency)}
         </p>
       ) : null}
@@ -217,7 +217,7 @@ function RowBadges({ row, locale, t }: { row: TransactionRow; locale: Locale; t:
   return (
     <>
       {row.isExtraordinary ? (
-        <Badge variant="outline" className="h-4 px-1.5 text-[0.625rem]">
+        <Badge variant="outline" className="h-4 px-1.5 text-badge">
           <Sparkles className="size-2.5" />
           {t.extraordinaryBadge}
         </Badge>
@@ -286,7 +286,7 @@ function MobileLedger({
                   </span>
                   <span
                     className={cn(
-                      "flex min-w-0 items-start gap-1.5 text-[0.6875rem] text-muted-foreground",
+                      "flex min-w-0 items-start gap-1.5 text-hint text-muted-foreground",
                       !native && "col-span-2",
                     )}
                   >
@@ -317,12 +317,12 @@ function MobileLedger({
                     />
                   </span>
                   {native ? (
-                    <span className="figure figure-sm pt-0.5 text-right text-[0.6875rem] text-muted-foreground">
+                    <span className="figure figure-sm pt-0.5 text-right text-hint text-muted-foreground">
                       {formatMoney(row.amount, row.currency)}
                     </span>
                   ) : null}
                   {row.isExtraordinary || row.yourShare !== null || row.reimburses ? (
-                    <span className="col-span-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+                    <span className="col-span-2 flex flex-wrap items-center gap-1.5 text-hint text-muted-foreground">
                       <RowBadges row={row} locale={locale} t={t} />
                     </span>
                   ) : null}
@@ -454,7 +454,7 @@ export function TransactionTable({
                     row.isExtraordinary ||
                     row.yourShare !== null ||
                     row.reimbursesTransactionId ? (
-                      <span className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+                      <span className="flex flex-wrap items-center gap-1.5 text-hint text-muted-foreground">
                         {row.categoryName ? (
                           <>
                             <span
