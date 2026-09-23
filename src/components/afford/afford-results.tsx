@@ -102,6 +102,111 @@ function ScrollFade({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * "Record it": the acknowledgement a failing verdict needs and the two
+ * decisions. Rendered twice, one copy per presentation: at the foot of the
+ * results from `sm`, and on a phone directly under the verdict (in flow, not
+ * docked), so the verdict and what to do about it share one screen. Both
+ * copies drive the same state, so a resize never loses a tick.
+ */
+function RecordCard({
+  variant,
+  className,
+  verdict,
+  recorded,
+  stale,
+  acknowledged,
+  onAcknowledgedChange,
+  onConfirm,
+  onDiscard,
+  confirming,
+  canConfirm,
+  error,
+  t,
+}: {
+  variant: "desktop" | "phone";
+  className?: string;
+  verdict: AffordVerdict;
+  recorded: AffordRecordedPlan;
+  stale: boolean;
+  acknowledged: boolean;
+  onAcknowledgedChange: (value: boolean) => void;
+  onConfirm: () => void;
+  onDiscard: () => void;
+  confirming: boolean;
+  canConfirm: boolean;
+  error: string | null;
+  t: ReturnType<typeof getDictionary>["afford"];
+}) {
+  const phone = variant === "phone";
+  const checkboxId = phone ? "afford-acknowledge-phone" : "afford-acknowledge";
+  const acknowledgement = (
+    <div className="flex items-start gap-2.5">
+      <Checkbox
+        id={checkboxId}
+        // On a phone the hit area grows to 44 x 44 around the 16px box. The
+        // insets are measured from the 14px padding box inside its 1px
+        // border. The left side stops at the card's edge (12px of padding,
+        // and the card clips), so the extra width goes right, onto this
+        // checkbox's own label.
+        className={cn(
+          "mt-0.5",
+          phone && "after:-top-3.75 after:-right-4.25 after:-bottom-3.75 after:-left-3.25",
+        )}
+        checked={acknowledged}
+        disabled={stale}
+        onCheckedChange={(checked) => onAcknowledgedChange(checked === true)}
+      />
+      <Label htmlFor={checkboxId} className="block text-sm leading-snug font-normal">
+        {t.acknowledgeLabel}
+      </Label>
+    </div>
+  );
+
+  return (
+    <Card size="sm" className={className}>
+      <CardHeader>
+        <CardTitle>{t.recordHeading}</CardTitle>
+        <CardDescription>
+          {t.recordedNote(
+            formatMoney(recorded.amount, recorded.currency),
+            t.frequencyAdverb[recorded.frequency] ?? recorded.frequency,
+            recorded.count,
+            formatDate(recorded.firstDate),
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {/* Same control and sibling Checkbox + Label arrangement as the
+            payday check-in's zero-buffer acknowledgement: a statement being
+            made, which unlocks the button below. On a phone it arrives with
+            the scroll that brings the verdict into view, so it is not also
+            revealed (the reveal would change the group's height after the
+            scroll has measured it, and its clipping would cut the hit
+            area). */}
+        {!verdict.viable ? (
+          phone ? acknowledgement : <div className="reveal-block">{acknowledgement}</div>
+        ) : null}
+
+        {error ? (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onDiscard} disabled={confirming}>
+            {t.addLater}
+          </Button>
+          <Button type="button" onClick={onConfirm} disabled={!canConfirm || confirming}>
+            {t.bought}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AffordResults({
   verdict,
   recorded,
@@ -140,33 +245,70 @@ export function AffordResults({
   const periodsWithEstimate = verdict.periods.filter((period) => period.estimatedGoals.length > 0);
   const accountCurrency = verdict.periods[0]?.account.currency ?? recorded.currency;
   const displayCurrency = verdict.periods[0]?.flexible.currency ?? recorded.currency;
+  const recordProps = {
+    verdict,
+    recorded,
+    stale,
+    acknowledged,
+    onAcknowledgedChange,
+    onConfirm,
+    onDiscard,
+    confirming,
+    canConfirm,
+    error,
+    t,
+  };
+
+  // On a phone the verdict lands below a long form, so each new one (a new
+  // object per evaluation) is brought into view with its decision.
+  // "nearest" moves the least: the group's foot just clears the tab bar, or,
+  // if it is taller than the screen, its head sits under the header.
+  const verdictRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!window.matchMedia("(width < 40rem)").matches) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    verdictRef.current?.scrollIntoView({ block: "nearest", behavior: reduceMotion ? "auto" : "smooth" });
+  }, [verdict]);
 
   return (
     <div className="space-y-5">
-      <Alert
-        className={cn(
-          verdict.viable ? "border-[var(--good)]/40" : "border-[var(--critical)]/40",
-        )}
+      {/* The verdict and, on a phone, the decision it asks for: one group,
+          scrolled into view together when a verdict arrives. The scroll
+          margins keep it clear of the sticky chrome with a 1rem gap: the
+          header is h-14 plus its 1px border-b, the tab bar 49px of tabs plus
+          its 1px border-t plus the home-indicator inset. */}
+      <div
+        ref={verdictRef}
+        className="max-sm:scroll-mt-[calc(3.5rem+1px+1rem)] max-sm:scroll-mb-[calc(50px+env(safe-area-inset-bottom)+1rem)]"
       >
-        <AlertTitle className="flex items-center gap-2">
-          <span
-            className={cn(
-              "figure text-base",
-              verdict.viable ? "text-[var(--good)]" : "text-[var(--critical)]",
-            )}
-          >
-            {verdict.viable ? t.verdictViable : t.verdictNotViable}
-          </span>
-        </AlertTitle>
-        <AlertDescription>
-          <p>
-            {verdict.viable
-              ? t.viableSummary(verdict.periods.length)
-              : t.notViableSummary(verdict.failing.length)}
-          </p>
-          {stale ? <p className="text-[var(--warning)]">{t.resultsStale}</p> : null}
-        </AlertDescription>
-      </Alert>
+        <Alert
+          aria-live="polite"
+          className={cn(
+            verdict.viable ? "border-[var(--good)]/40" : "border-[var(--critical)]/40",
+          )}
+        >
+          <AlertTitle className="flex items-center gap-2">
+            <span
+              className={cn(
+                "figure text-base",
+                verdict.viable ? "text-[var(--good)]" : "text-[var(--critical)]",
+              )}
+            >
+              {verdict.viable ? t.verdictViable : t.verdictNotViable}
+            </span>
+          </AlertTitle>
+          <AlertDescription>
+            <p>
+              {verdict.viable
+                ? t.viableSummary(verdict.periods.length)
+                : t.notViableSummary(verdict.failing.length)}
+            </p>
+            {stale ? <p className="text-[var(--warning)]">{t.resultsStale}</p> : null}
+          </AlertDescription>
+        </Alert>
+
+        <RecordCard {...recordProps} variant="phone" className="mt-5 sm:hidden" />
+      </div>
 
       <Card>
         <CardContent>
@@ -363,7 +505,9 @@ export function AffordResults({
         </Card>
       ) : null}
 
-      <Card size="sm">
+      {/* The last card on a phone: the desktop Record card after it is only
+          hidden there, so space-y would still give this one its gap. */}
+      <Card size="sm" className="max-sm:mb-0">
         <CardHeader>
           <CardTitle>{t.projectionHeading}</CardTitle>
           <CardDescription>{t.projectionDescription(historyPeriods, accountName)}</CardDescription>
@@ -454,55 +598,7 @@ export function AffordResults({
         </CardContent>
       </Card>
 
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>{t.recordHeading}</CardTitle>
-          <CardDescription>
-            {t.recordedNote(
-              formatMoney(recorded.amount, recorded.currency),
-              t.frequencyAdverb[recorded.frequency] ?? recorded.frequency,
-              recorded.count,
-              formatDate(recorded.firstDate),
-            )}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {/* Same control and sibling Checkbox + Label arrangement as the
-              payday check-in's zero-buffer acknowledgement: a statement being
-              made, which unlocks the button below. */}
-          {!verdict.viable ? (
-            <div className="reveal-block">
-              <div className="flex items-start gap-2.5">
-                <Checkbox
-                  id="afford-acknowledge"
-                  className="mt-0.5"
-                  checked={acknowledged}
-                  disabled={stale}
-                  onCheckedChange={(checked) => onAcknowledgedChange(checked === true)}
-                />
-                <Label htmlFor="afford-acknowledge" className="block text-sm leading-snug font-normal">
-                  {t.acknowledgeLabel}
-                </Label>
-              </div>
-            </div>
-          ) : null}
-
-          {error ? (
-            <p className="text-sm text-destructive" role="alert">
-              {error}
-            </p>
-          ) : null}
-
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onDiscard} disabled={confirming}>
-              {t.addLater}
-            </Button>
-            <Button type="button" onClick={onConfirm} disabled={!canConfirm || confirming}>
-              {t.bought}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      <RecordCard {...recordProps} variant="desktop" className="max-sm:hidden" />
     </div>
   );
 }

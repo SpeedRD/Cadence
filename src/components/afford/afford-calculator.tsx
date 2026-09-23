@@ -98,6 +98,11 @@ export function AffordCalculator({
   };
   const signature = JSON.stringify(payload);
   const stale = evaluated !== null && evaluated.signature !== signature;
+  // On a phone the per-period verdict cards list every installment - number,
+  // date, period and amount - so once a verdict for exactly these inputs
+  // exists the schedule card keeps only its total. A stale verdict lists the
+  // old schedule, so an edit brings the full one back.
+  const scheduleCollapsed = evaluated !== null && !stale;
 
   function resetAll() {
     setName("");
@@ -242,15 +247,19 @@ export function AffordCalculator({
         </Card>
 
         <Card>
-          <CardHeader>
+          {/* Collapsed, the header's gap-0 also drops the 4px row CardHeader
+              keeps for a description it only hides. */}
+          <CardHeader className={cn(scheduleCollapsed && "max-sm:gap-0")}>
             <CardTitle>{t.scheduleHeading}</CardTitle>
-            <CardDescription>{t.scheduleDescription}</CardDescription>
+            <CardDescription className={cn(scheduleCollapsed && "max-sm:hidden")}>
+              {t.scheduleDescription}
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {installments.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t.noScheduleYet}</p>
             ) : (
-              <ul className="divide-y divide-border/70">
+              <ul className={cn("divide-y divide-border/70", scheduleCollapsed && "max-sm:hidden")}>
                 {installments.map((installment) => {
                   const period = periodForDate(installment.date);
                   return (
@@ -272,7 +281,12 @@ export function AffordCalculator({
             )}
 
             {installments.length > 0 ? (
-              <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-border/70 pt-3 text-sm">
+              <div
+                className={cn(
+                  "flex flex-wrap items-baseline justify-between gap-2 border-t border-border/70 pt-3 text-sm",
+                  scheduleCollapsed && "max-sm:border-t-0 max-sm:pt-0",
+                )}
+              >
                 <span className="text-muted-foreground">{t.scheduleTotal}</span>
                 <span className="text-right">
                   <span className="figure">{formatMoney(installmentsTotal, currency)}</span>
