@@ -47,6 +47,8 @@ import {
   periodInfo,
   periodKey,
   periodRange,
+  goalPeriodsLeft,
+  goalWindow,
   periodsRemaining,
   periodSeries,
   previousComparablePeriod,
@@ -5091,6 +5093,62 @@ async function main() {
       const draftOnly = await affordData.evaluateAffordRequest(septemberInput, affordContext);
       if (!draftOnly.ok) throw new Error("draft evaluation refused");
       eq("a draft check-in commits nothing", `${round2(scheduledOf(draftOnly.verdict.periods[0].account) - scheduledOf(sepBefore.account))}:${round2(scheduledOf(draftOnly.verdict.periods[0].flexible) - scheduledOf(sepBefore.flexible))}`, "0:0");
+
+      console.log("\n-- a goal's estimate stops at the end of its roadmap window --");
+      // The roadmap spreads a dated goal's pace over the periods that end on
+      // or before its target date, counted from the plan period (Sep 1-15).
+      // Past that the pace has no meaning, so no later period is estimated
+      // anything for the goal: the estimate follows goalWindow exactly.
+      const windowKeys = (target: Date) => goalWindow(civilDate(2026, 9, 1), target).map((period) => period.key).join(",");
+      eq("a target date in the middle of Nov 16-30 leaves that period out: the window ends with Nov 1-15", windowKeys(civilDate(2026, 11, 20)), "2026-09-A,2026-09-B,2026-10-A,2026-10-B,2026-11-A");
+      eq("a target date on a period's last day keeps that period in", windowKeys(civilDate(2026, 10, 31)), "2026-09-A,2026-09-B,2026-10-A,2026-10-B");
+      eq("a target date already behind the plan period still has the plan period", windowKeys(civilDate(2026, 8, 20)), "2026-09-A");
+      eq("the window is as long as the roadmap's own period count", `${goalWindow(civilDate(2026, 9, 1), civilDate(2026, 11, 20)).length}:${goalPeriodsLeft(civilDate(2026, 9, 1), civilDate(2026, 11, 20))}:${goalPeriodsLeft(civilDate(2026, 9, 1), civilDate(2026, 8, 20))}`, "5:5:1");
+
+      const windowGoal = await prisma.goal.create({ data: { name: "Verify Afford Goal Window", targetAmount: 1000, currency: "USD", targetDate: civilDate(2026, 11, 20) } });
+      const edgeGoal = await prisma.goal.create({ data: { name: "Verify Afford Goal Edge", targetAmount: 600, currency: "USD", targetDate: civilDate(2026, 10, 31) } });
+      const pastGoal = await prisma.goal.create({ data: { name: "Verify Afford Goal Past", targetAmount: 300, currency: "USD", targetDate: civilDate(2026, 8, 20) } });
+      const windowRefs = [
+        { year: 2026, month: 9, period: "A" as const }, { year: 2026, month: 9, period: "B" as const },
+        { year: 2026, month: 10, period: "A" as const }, { year: 2026, month: 10, period: "B" as const },
+        { year: 2026, month: 11, period: "A" as const }, { year: 2026, month: 11, period: "B" as const },
+        { year: 2026, month: 12, period: "A" as const },
+      ];
+      const walked = await affordData.projectPeriods(windowRefs, chosenForAfford, activeForAfford, affordContext);
+      const planned = (goalId: string) => windowRefs.map((ref) => walked.get(`${ref.year}-${String(ref.month).padStart(2, "0")}-${ref.period}`)!.goalPlans.some((plan) => plan.goalId === goalId) ? "1" : "0").join(",");
+      const paceOf = async (goalId: string) => roadmapForAfford(goalId, planRefForAfford(affordContext), affordContext);
+      eq("the window goal's pace is 1,000 over its 5 periods", await paceOf(windowGoal.id), 200);
+      eq("it is planned in Sep 1-15 through Nov 1-15 and in none after", planned(windowGoal.id), "1,1,1,1,1,0,0");
+      eq("a target date on the last day of Oct 16-31 keeps Oct 16-31 and drops Nov 1-15", planned(edgeGoal.id), "1,1,1,1,0,0,0");
+      eq("a target date already behind us keeps only the plan period", planned(pastGoal.id), "1,0,0,0,0,0,0");
+      eq("a goal dated beyond the horizon (Jun 30, 2027) is planned in every period, as before", planned(openGoal.id), "1,1,1,1,1,1,1");
+      const paces = (key: string, goalId: string) => walked.get(key)!.goalPlans.find((plan) => plan.goalId === goalId)?.pace;
+      eq("inside its window each goal keeps the pace the roadmap shows", `${paces("2026-09-B", windowGoal.id)}:${paces("2026-11-A", windowGoal.id)}:${paces("2026-10-B", edgeGoal.id)}:${paces("2026-09-A", pastGoal.id)}`, `${await paceOf(windowGoal.id)}:${await paceOf(windowGoal.id)}:${await paceOf(edgeGoal.id)}:${await paceOf(pastGoal.id)}`);
+      const estimatedIn = (key: string) => walked.get(key)!.estimatedGoals.map((goal) => `${goal.name.replace("Verify Afford Goal ", "")}:${goal.amount}`).join("+");
+      eq("Oct 16-31 estimates the open, window and edge goals at their paces", estimatedIn("2026-10-B"), "Open:250+Window:200+Edge:150");
+      eq("Nov 1-15 has lost the edge goal, whose window ended on Oct 31", estimatedIn("2026-11-A"), "Open:250+Window:200");
+      eq("Nov 16-30, where the window goal's target date falls, has lost it too", estimatedIn("2026-11-B"), "Open:250");
+      eq("and Dec 1-15 is estimated only the goal dated beyond the horizon", estimatedIn("2026-12-A"), "Open:250");
+      eq("the period-wide estimate falls with each goal that leaves", ["2026-10-B", "2026-11-A", "2026-11-B", "2026-12-A"].map((key) => walked.get(key)!.flexible.estimatedGoalFunding).join(","), "600,450,250,250");
+      eq("and so do the period's commitments, by exactly the goal's pace", round2(walked.get("2026-11-A")!.flexible.committed - walked.get("2026-11-B")!.flexible.committed - (scheduledOf(walked.get("2026-11-A")!.flexible) - scheduledOf(walked.get("2026-11-B")!.flexible))), 200);
+      eq("a goal's window is the same whichever account is chosen", JSON.stringify((await affordData.projectPeriods(windowRefs, activeForAfford.find((a) => a.id !== affordAccount.id) ?? chosenForAfford, activeForAfford, affordContext)).get("2026-11-B")!.goalPlans.map((plan) => plan.goalId)), JSON.stringify([openGoal.id]));
+
+      // An undated goal stays out of every period, inside any window or not.
+      const undatedWindow = await prisma.goal.create({ data: { name: "Verify Afford Goal Undated Window", targetAmount: 900, currency: "USD" } });
+      const withUndated = await affordData.projectPeriods(windowRefs, chosenForAfford, activeForAfford, affordContext);
+      eq("an undated goal is in no period's plans or estimates", windowRefs.map((ref) => { const p = withUndated.get(`${ref.year}-${String(ref.month).padStart(2, "0")}-${ref.period}`)!; return `${p.goalPlans.some((plan) => plan.goalId === undatedWindow.id)}:${p.estimatedGoals.some((goal) => goal.goalId === undatedWindow.id)}`; }).join(","), Array(7).fill("false:false").join(","));
+      eq("and the periods' figures are what they were without it", windowRefs.map((ref) => { const key = `${ref.year}-${String(ref.month).padStart(2, "0")}-${ref.period}`; return withUndated.get(key)!.flexible.committed === walked.get(key)!.flexible.committed; }).join(","), Array(7).fill("true").join(","));
+      await prisma.goal.delete({ where: { id: undatedWindow.id } });
+
+      // A confirmed check-in keeps its real GOAL rows and no estimate, and
+      // the windows of the periods around it are unaffected.
+      await prisma.paydayCheckin.update({ where: { id: goalPlanCheckin.id }, data: { status: "CONFIRMED" } });
+      const withConfirmed = await affordData.projectPeriods(windowRefs, chosenForAfford, activeForAfford, affordContext);
+      const septemberConfirmed = withConfirmed.get("2026-09-A")!;
+      eq("a confirmed period carries no estimate and no plan for any goal, in or out of its window", `${septemberConfirmed.goalPlans.length}:${septemberConfirmed.estimatedGoals.length}:${septemberConfirmed.flexible.estimatedGoalFunding}`, "0:0:0");
+      eq("the periods after it are estimated exactly as when nothing was confirmed", ["2026-09-B", "2026-10-B", "2026-11-A", "2026-11-B"].map((key) => withConfirmed.get(key)!.flexible.estimatedGoalFunding === walked.get(key)!.flexible.estimatedGoalFunding).join(","), "true,true,true,true");
+      await prisma.paydayCheckin.update({ where: { id: goalPlanCheckin.id }, data: { status: "DRAFT" } });
+      await prisma.goal.deleteMany({ where: { id: { in: [windowGoal.id, edgeGoal.id, pastGoal.id] } } });
       eq("and leaves the period unconfirmed, so the estimate is back exactly as before", `${draftOnly.verdict.periods[0].account.estimatedGoalFunding}:${draftOnly.verdict.periods[0].flexible.estimatedGoalFunding}`, `${sepBefore.account.estimatedGoalFunding}:250`);
 
       await prisma.transaction.deleteMany({ where: { source: "PAYDAY_CHECKIN", accountId: { in: activeForAfford.map((a) => a.id) }, date: periodRange(periodInfo(currentRef)) } });

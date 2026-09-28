@@ -70,6 +70,7 @@ import { maxDate } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import { countsInIncomeHistory, defaultProtectedBuffer, planGoalFunding } from "@/lib/payday";
 import {
+  goalWindow,
   parsePeriodKey,
   periodForDate,
   periodInfo,
@@ -376,7 +377,8 @@ async function loadScheduledCommitments(
  * A period with no confirmed check-in also carries an estimate of its goal
  * funding: every dated goal's pace as of today (getGoalRoadmapAmounts over
  * the period a check-in opened now would plan for, read once for the whole
- * horizon), spread over the accounts by planGoalFunding against the headroom
+ * horizon), in each period inside that goal's roadmap window only (goalWindow),
+ * spread over the accounts by planGoalFunding against the headroom
  * each has left in that period once its income, scheduled commitments and
  * buffer are projected - the same split, over the same kind of room, that
  * Step 3 of the check-in recommends. Each account's share joins its
@@ -424,7 +426,17 @@ export async function projectPeriods(
   // the same money once per period. It is left out of the estimate entirely;
   // a confirmed check-in's real GOAL rows for it still count as they always
   // did, and every other reader of the roadmap figure is untouched.
-  const goalPaces = allPaces.filter((pace) => pace.targetDate !== null);
+  //
+  // A dated goal's pace is also only meaningful inside its roadmap window:
+  // the periods from the plan period up to its target date, counted exactly
+  // as the roadmap counts them (goalWindow). Each pace carries the keys of
+  // its window, and a period past it is estimated nothing for that goal.
+  const planStart = periodInfo(planPeriodRef(context)).start;
+  const goalPaces = allPaces.flatMap((pace) =>
+    pace.targetDate
+      ? [{ ...pace, window: new Set(goalWindow(planStart, pace.targetDate).map((period) => period.key)) }]
+      : [],
+  );
 
   const floorFor = (account: ActiveAccount) =>
     round2(convert(context.bufferFloorAmount, context.bufferFloorCurrency, account.currency, context.rates));
@@ -454,9 +466,10 @@ export async function projectPeriods(
     const estimatedByAccount = new Map<string, number>();
     const estimatedGoals: EstimatedGoalFunding[] = [];
     const goalPlans: ProjectedGoalPlan[] = [];
-    if (!commitments?.confirmed && goalPaces.length > 0) {
+    const periodPaces = goalPaces.filter((pace) => pace.window.has(period.key));
+    if (!commitments?.confirmed && periodPaces.length > 0) {
       const plans = planGoalFunding(
-        goalPaces.map((pace) => ({ goalId: pace.goalId, amount: pace.amount })),
+        periodPaces.map((pace) => ({ goalId: pace.goalId, amount: pace.amount })),
         figures.map(({ account, income, scheduledCommitted, buffer }) => ({
           accountId: account.id,
           name: account.name,
@@ -474,14 +487,14 @@ export async function projectPeriods(
           );
         }
         if (plan.recommendedTotal > 0) {
-          estimatedGoals.push({ goalId: plan.goalId, name: goalPaces[index].name, amount: plan.recommendedTotal });
+          estimatedGoals.push({ goalId: plan.goalId, name: periodPaces[index].name, amount: plan.recommendedTotal });
         }
         // The whole plan, kept for the goal-forecast detector: the same
         // figures the estimate above was reduced from, whether or not the
         // room gave the goal anything.
         goalPlans.push({
           goalId: plan.goalId,
-          name: goalPaces[index].name,
+          name: periodPaces[index].name,
           pace: plan.amount,
           recommended: plan.recommendedTotal,
           shortfall: plan.shortfall,

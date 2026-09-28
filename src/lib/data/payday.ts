@@ -32,6 +32,7 @@ import {
   paydayDateFor,
   periodInfo,
   periodKey,
+  goalPeriodsLeft,
   periodsRemaining,
   previousComparablePeriod,
   previousPeriod,
@@ -357,7 +358,7 @@ export function goalRoadmapAmount(
   planStart: Date,
   dueContribution: number,
 ): number {
-  const periodsLeft = goal.targetDate ? Math.max(1, periodsRemaining(planStart, goal.targetDate)) : 1;
+  const periodsLeft = goal.targetDate ? goalPeriodsLeft(planStart, goal.targetDate) : 1;
   return round2(Math.max(0, goal.displayRemaining / periodsLeft - dueContribution));
 }
 

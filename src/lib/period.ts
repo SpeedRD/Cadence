@@ -216,6 +216,33 @@ export function periodsRemaining(from: Date, to: Date): number {
   return count;
 }
 
+/**
+ * How many pay periods a dated goal's roadmap spreads its pace over, counted
+ * from the plan period's start: periodsRemaining(), but never fewer than the
+ * plan period itself, so a target date already behind us still asks for the
+ * whole remaining balance in the period being planned. The one rule the
+ * roadmap pace, the goal forecast and Afford's per-period estimate share.
+ */
+export function goalPeriodsLeft(planStart: Date, targetDate: Date): number {
+  return Math.max(1, periodsRemaining(planStart, targetDate));
+}
+
+/**
+ * The periods a dated goal's roadmap pace covers: goalPeriodsLeft() of them,
+ * from the plan period on. A period after the last of them lies past the
+ * goal's target date (or holds it part-way through), where the pace has no
+ * meaning.
+ */
+export function goalWindow(planStart: Date, targetDate: Date): PeriodInfo[] {
+  const window: PeriodInfo[] = [];
+  let cursor = periodForDate(planStart);
+  for (let i = goalPeriodsLeft(planStart, targetDate); i > 0; i -= 1) {
+    window.push(cursor);
+    cursor = periodInfo(nextPeriod(cursor));
+  }
+  return window;
+}
+
 /** The `count` most recent periods ending with `ref`, oldest first. */
 export function periodSeries(ref: PeriodRef, count: number): PeriodInfo[] {
   const periods: PeriodInfo[] = [];

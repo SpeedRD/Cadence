@@ -22,7 +22,7 @@
  * no active account there is nothing to walk and no forecast.
  */
 import type { GoalForecast } from "@/lib/goal-forecast";
-import { nextPeriod, periodInfo, periodsRemaining, type PeriodInfo } from "@/lib/period";
+import { goalPeriodsLeft, nextPeriod, periodInfo, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 
 import { projectPeriods, type AffordContext } from "@/lib/data/afford";
@@ -54,7 +54,7 @@ export async function forecastGoalFunding(context: AffordContext): Promise<GoalF
   // How many periods each goal's pace is spread over, counted from the plan
   // period's start as goalRoadmapAmount counts them - at least the plan
   // period itself for a target date already behind us.
-  const lengths = dated.map((goal) => Math.max(1, periodsRemaining(plan.start, goal.targetDate)));
+  const lengths = dated.map((goal) => goalPeriodsLeft(plan.start, goal.targetDate));
   const horizon: PeriodInfo[] = [];
   let cursor = plan;
   for (let i = 0; i < Math.max(...lengths); i += 1) {
