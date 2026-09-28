@@ -77,6 +77,28 @@ export function TransactionDialog({
   const [type, setType] = useState(values.type ?? "EXPENSE");
   const isExternalTransfer = type === "EXTERNAL_TRANSFER";
 
+  // The account and category are tracked so that picking the expense a deposit
+  // reimburses can fill them in (prefillFromExpense below). "Touched" means the
+  // user changed the field themselves in this session: Radix calls
+  // onValueChange for their picks only, never for a programmatic value, so the
+  // prefill can never count as a touch.
+  const defaultAccountId = values.accountId ?? accounts[0]?.id;
+  const defaultCategoryId = values.categoryId ?? "none";
+  const [accountId, setAccountId] = useState(defaultAccountId);
+  const [categoryId, setCategoryId] = useState(defaultCategoryId);
+  const [accountTouched, setAccountTouched] = useState(false);
+  const [categoryTouched, setCategoryTouched] = useState(false);
+  const resetCategory = () => {
+    setCategoryId(defaultCategoryId);
+    setCategoryTouched(false);
+  };
+  const changeType = (next: string) => {
+    setType(next);
+    // The category field is unmounted for a transfer and comes back at its
+    // default, so the state it mirrors goes back with it.
+    if (next === "EXTERNAL_TRANSFER") resetCategory();
+  };
+
   // The share switch, carried as a hidden field the way the goal form carries
   // isDebt (the Radix switch is not a form control of its own), and the
   // currency, tracked only to label the share input with its code. Both
@@ -118,8 +140,32 @@ export function TransactionDialog({
       setType(values.type ?? "EXPENSE");
       setIsShared(values.yourShare != null);
       setCurrency(values.currency ?? CURRENCIES[0]);
+      setAccountId(defaultAccountId);
+      setAccountTouched(false);
+      resetCategory();
     }
   }
+
+  // Picking the shared expense a new deposit pays back defaults the deposit to
+  // that expense's account and category, each only while the user has not
+  // chosen one themselves. An edit never prefills - a saved deposit's account
+  // is where the money actually landed - and "none" leaves both as they are.
+  // An account outside `accounts` (an archived one the new-transaction picker
+  // does not offer) is skipped rather than set to a value the select cannot show.
+  const prefillFromExpense = (expenseId: string) => {
+    if (editing) return;
+    const expense = openSharedExpenses.find((candidate) => candidate.id === expenseId);
+    if (!expense) return;
+    if (!accountTouched && accounts.some((account) => account.id === expense.accountId)) {
+      setAccountId(expense.accountId);
+    }
+    if (!categoryTouched) {
+      if (expense.categoryId === null) setCategoryId("none");
+      else if (categories.some((category) => category.id === expense.categoryId)) {
+        setCategoryId(expense.categoryId);
+      }
+    }
+  };
 
   // A save that created an unusually large expense comes back with a
   // suggestion (ActionState.extraordinarySuggestion). The row is already
@@ -159,7 +205,7 @@ export function TransactionDialog({
             options={["EXPENSE", "INCOME", "EXTERNAL_TRANSFER"]}
             labels={common.transactionTypeLabels}
             defaultValue={values.type ?? "EXPENSE"}
-            onValueChange={setType}
+            onValueChange={changeType}
           />
         </Field>
         <Field label={common.date} htmlFor="transaction-date">
@@ -201,7 +247,11 @@ export function TransactionDialog({
             id="transaction-account"
             name="accountId"
             accounts={accounts}
-            defaultValue={values.accountId ?? accounts[0]?.id}
+            value={accountId}
+            onValueChange={(next) => {
+              setAccountId(next);
+              setAccountTouched(true);
+            }}
             common={common}
           />
         </Field>
@@ -221,7 +271,11 @@ export function TransactionDialog({
               id="transaction-category"
               name="categoryId"
               categories={categories}
-              defaultValue={values.categoryId ?? "none"}
+              value={categoryId}
+              onValueChange={(next) => {
+                setCategoryId(next);
+                setCategoryTouched(true);
+              }}
               common={common}
             />
           </Field>
@@ -283,6 +337,7 @@ export function TransactionDialog({
           <Select
             name="reimbursesTransactionId"
             defaultValue={values.reimbursesTransactionId ?? "none"}
+            onValueChange={prefillFromExpense}
           >
             <SelectTrigger id="transaction-reimburses" className="w-full">
               <SelectValue />

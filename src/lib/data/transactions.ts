@@ -313,6 +313,9 @@ export interface OpenSharedExpense {
   id: string;
   date: Date;
   note: string | null;
+  /** Where the money left, so a deposit paying it back can default to the same account. */
+  accountId: string;
+  categoryId: string | null;
   categoryName: string | null;
   amount: number;
   yourShare: number;
@@ -342,6 +345,8 @@ export async function listOpenSharedExpenses(
       amount: true,
       yourShare: true,
       currency: true,
+      accountId: true,
+      categoryId: true,
       category: { select: { name: true } },
     },
   });
@@ -363,6 +368,8 @@ export async function listOpenSharedExpenses(
         id: expense.id,
         date: expense.date,
         note: expense.note,
+        accountId: expense.accountId,
+        categoryId: expense.categoryId,
         categoryName: expense.category?.name ?? null,
         amount,
         yourShare,

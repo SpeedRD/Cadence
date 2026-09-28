@@ -6889,6 +6889,20 @@ async function main() {
     const openBefore = await listOpenSharedExpenses(sharedContext);
     eq("the picker offers the tickets with what is still pending", JSON.stringify(openBefore.filter((e) => e.id === tickets.id).map((e) => e.reimbursement.pending)), "[1180]");
     check("the ordinary dinner is not on offer", !openBefore.some((e) => e.id === ordinary.id));
+    // What the dialog defaults a deposit to when its expense is picked: the
+    // account and category the expense was logged on, null when it had none.
+    const pickedTickets = openBefore.find((e) => e.id === tickets.id)!;
+    eq("the picker carries the tickets' account and category, for the deposit to default to", `${pickedTickets.accountId}/${pickedTickets.categoryId}`, `${sharedAccount.id}/${sharedCategory.id}`);
+    const otherAccount = await prisma.account.create({ data: { name: "Verify Shared Other Account", currency: "DOP", type: "CHECKING" } });
+    const uncategorized = await prisma.transaction.create({
+      data: { ...sharedRow(400, { yourShare: 100, note: "Verify Shared no category" }), accountId: otherAccount.id, categoryId: null },
+    });
+    const pickedUncategorized = (await listOpenSharedExpenses(sharedContext)).find((e) => e.id === uncategorized.id)!;
+    eq("an expense on another account carries that account", pickedUncategorized.accountId, otherAccount.id);
+    eq("...and a null category when it had none, not the other expense's", pickedUncategorized.categoryId, null);
+    eq("...while its category name stays null as before", pickedUncategorized.categoryName, null);
+    await prisma.transaction.delete({ where: { id: uncategorized.id } });
+    await prisma.account.delete({ where: { id: otherAccount.id } });
 
     // Afford projects 2026-10-B from B-period history walked from 2026-08-B
     // (today is past its end): the account's income is the pay and the side

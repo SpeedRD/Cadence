@@ -20,6 +20,7 @@ export function AccountSelect({
   name,
   accounts,
   defaultValue,
+  value,
   placeholder,
   common,
   onValueChange,
@@ -29,13 +30,15 @@ export function AccountSelect({
   name: string;
   accounts: Option[];
   defaultValue?: string;
+  /** For a caller that also sets the selection itself (the transaction dialog's reimbursement prefill); wins over defaultValue. */
+  value?: string;
   placeholder?: string;
   common: Pick<Dictionary["common"], "pickAnAccount" | "pickACategory" | "noCategory">;
   /** For a caller that keeps its own state (the Afford calculator); the form dialogs read the FormData instead. */
   onValueChange?: (value: string) => void;
 }) {
   return (
-    <Select name={name} defaultValue={defaultValue} onValueChange={onValueChange}>
+    <Select name={name} defaultValue={defaultValue} value={value} onValueChange={onValueChange}>
       <SelectTrigger id={id} className="w-full">
         <SelectValue placeholder={placeholder ?? common.pickAnAccount} />
       </SelectTrigger>
@@ -90,18 +93,28 @@ export function CategorySelect({
   name,
   categories,
   defaultValue,
+  value,
   includeNone = true,
   common,
+  onValueChange,
 }: {
   id?: string;
   name: string;
   categories: Option[];
   defaultValue?: string;
+  /** Wins over defaultValue - see AccountSelect. */
+  value?: string;
   includeNone?: boolean;
   common: Pick<Dictionary["common"], "pickAnAccount" | "pickACategory" | "noCategory">;
+  onValueChange?: (value: string) => void;
 }) {
   return (
-    <Select name={name} defaultValue={defaultValue ?? (includeNone ? "none" : undefined)}>
+    <Select
+      name={name}
+      defaultValue={defaultValue ?? (includeNone ? "none" : undefined)}
+      value={value}
+      onValueChange={onValueChange}
+    >
       <SelectTrigger id={id} className="w-full">
         <SelectValue placeholder={common.pickACategory} />
       </SelectTrigger>
