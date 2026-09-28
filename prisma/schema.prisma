@@ -211,6 +211,9 @@ model Transaction {
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   reimburses     Transaction?  @relation("Reimbursement", fields: [reimbursesTransactionId], references: [id], onDelete: SetNull)
   reimbursements Transaction[] @relation("Reimbursement")
+  /// Set when this charge stands for one occurrence of a recurring item that
+  /// posting therefore did not write (see RecurringSettlement).
+  recurringSettlement RecurringSettlement?
 
   @@unique([source, externalId])
   @@index([date])
@@ -347,6 +350,7 @@ model RecurringItem {
   goal              Goal?                  @relation(fields: [goalId], references: [id], onDelete: SetNull)
   paydayAllocations PaydayPlanAllocation[]
   goalContributions GoalContribution[]
+  settlements       RecurringSettlement[]
 
   @@index([active, nextDate])
   @@index([kind])
@@ -369,6 +373,39 @@ model RecurringSuggestionDismissal {
   account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@unique([accountId, merchantKey])
+}
+
+/// One charge Cadence did not write itself (a manual entry, a CSV row, an
+/// approved receipt) standing for one occurrence of a recurring item, so
+/// posting rolled that occurrence forward instead of writing a second row for
+/// the same money. Written only by postDueRecurringItems, in the same database
+/// transaction as the occurrence's claim; which charge settles which
+/// occurrence is decided by planSettlements (src/lib/recurring-settlement.ts),
+/// the matcher the payday check-in reads too.
+///
+/// Both keys are unique, and that is the rule: a charge settles at most one
+/// occurrence of at most one item, for good, and an occurrence is settled at
+/// most once. A charge already paired here is never a candidate again.
+model RecurringSettlement {
+  id              String        @id @default(cuid())
+  transactionId   String        @unique
+  /// "<itemId>:<YYYY-MM-DD>" - the key the occurrence's RECURRING row would
+  /// have carried (recurringExternalId). A CONTRIBUTION occurrence's
+  /// GoalContribution carries the same key in recurringExternalId, which is
+  /// what makes this charge that contribution's ledger half. A plain string,
+  /// so deleting the item cannot erase it.
+  occurrenceKey   String        @unique
+  /// Null once the item is deleted; occurrenceKey still names it.
+  recurringItemId String?
+  /// The item's kind when the charge settled it, kept for the same reason.
+  kind            RecurringKind
+  dueDate         DateTime      @db.Date
+  createdAt       DateTime      @default(now())
+
+  transaction   Transaction    @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)
+
+  @@index([recurringItemId])
 }
 
 /// An insight the user dismissed on the Inbox page (src/lib/insights.ts):

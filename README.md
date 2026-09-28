@@ -269,7 +269,13 @@ so a day the cron missed is never lost. Monthly and yearly items keep their anch
 day (an item due on the 31st is charged on the 28th in February and back on the 31st
 in March). An item missing its account or goal, or pointing at an archived account,
 is flagged here and skipped rather than posted; so is a contribution to a goal that
-is already fully funded, which resumes on its own if the goal's target is raised. A
+is already fully funded, which resumes on its own if the goal's target is raised; a
+backlog of contributions stops as soon as the goal is reached. A charge you already
+entered yourself (by hand, from a CSV or an approved receipt, on any account, up to
+five days before a due date early in a pay period) is taken as that occurrence paid
+and nothing is posted for it. Each such charge stands for one occurrence of one item,
+for good, and the payday check-in marks exactly the same occurrences "Already paid".
+For a contribution, the goal gets the contribution and your charge stays its expense. A
 finite item — an installment plan recorded from Afford, or any item given a "Payments
 left" count — shows how many payments are left and switches itself off after the last
 one, showing as finished rather than paused. "Mark as paid off" ends a plan early when

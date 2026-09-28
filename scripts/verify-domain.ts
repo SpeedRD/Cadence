@@ -2411,14 +2411,26 @@ async function main() {
     );
     eq("a fully covered weekly item drops out of subscriptionsTotal entirely", draftAllLogged.subscriptionsTotal, 15);
 
-    eq(
-      "the shared helper caps logged occurrences at what the item still owes",
-      JSON.stringify([...loggedOccurrencesByItem(
-        [{ id: "w", occurrenceCount: 2 }, { id: "m", occurrenceCount: 1 }, { id: "none", occurrenceCount: 1 }],
-        new Map([["w", 5], ["m", 1]]),
-      ).entries()]),
-      JSON.stringify([["w", 2], ["m", 1], ["none", 0]]),
-    );
+    // Flipped deliberately with the settlement fix (B2): this used to feed the
+    // helper a per-item match count and cap it at the occurrences owed, which
+    // let one charge answer for an occurrence posting had already rolled past.
+    // It now reads posting's own per-occurrence verdicts, so it can only ever
+    // count an owed date that is settled or already posted.
+    {
+      const aug20 = civilDate(2026, 8, 20);
+      const aug27 = civilDate(2026, 8, 27);
+      eq(
+        "the shared helper counts exactly the owed dates posting settled or already posted",
+        JSON.stringify([...loggedOccurrencesByItem(
+          [{ id: "w", occurrenceDates: [aug20, aug27] }, { id: "m", occurrenceDates: [aug20] }, { id: "none", occurrenceDates: [aug27] }],
+          {
+            posted: new Set(["m:2026-08-20"]),
+            settledBy: new Map([["w:2026-08-27", { id: "c", date: aug20, amount: 9, currency: "USD", accountId: "a", isContributionTwin: false }], ["none:2026-08-20", { id: "d", date: aug20, amount: 9, currency: "USD", accountId: "a", isContributionTwin: false }]]),
+          },
+        ).entries()]),
+        JSON.stringify([["w", 1], ["m", 1], ["none", 0]]),
+      );
+    }
 
     await prisma.transaction.deleteMany({
       where: { id: { in: [weeklyPosted.id, weeklyManualOne.id, weeklyManualTwo.id, weeklyManualThree.id] } },
@@ -4471,6 +4483,399 @@ async function main() {
     await prisma.recurringItem.delete({ where: { id: semiPostingItem.id } });
     await prisma.account.delete({ where: { id: semiPostingAccount.id } });
   }
+
+  // Every other active item is paused while these sections run: each posting
+  // run below would otherwise post leftover linked items from earlier
+  // sections, and each settlement plan judges the look-alike guard over every
+  // active item. Restored right after them.
+  const pausedForSettlement = (
+    await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })
+  ).map((item) => item.id);
+  await prisma.recurringItem.updateMany({ where: { id: { in: pausedForSettlement } }, data: { active: false } });
+
+  console.log("\n== recurring settlement: the six findings (B2 B3 B10 B15 B16 B26) ==");
+  {
+    // Public APIs only (posting, the check-in draft, ledger rows), so this
+    // block also runs unchanged against the code before the fix.
+    const { postDueRecurringItems: settleRun } = await import("../src/lib/recurring-posting");
+    const { getPaydayCheckinDraft: settleDraft } = await import("../src/lib/data/payday");
+    const settleCategoryId = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
+    const settleSubs = await settleCategoryId("Subscriptions");
+    const settleSavings = await settleCategoryId("Savings/Investment");
+    const settleHealth = (await prisma.category.create({ data: { name: "Verify Settle Health", kind: "EXPENSE", color: "#4f8a8b" } })).id;
+    const settleContext = (today: Date) => ({
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    });
+    const settleAccount = (name: string, currency: string) =>
+      prisma.account.create({ data: { name: `Verify Settle ${name}`, currency, type: "CHECKING" } });
+    const settleRows = async (itemId: string) =>
+      (await prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${itemId}:` } }, orderBy: { date: "asc" } }))
+        .map((row) => toISODate(row.date))
+        .join(",");
+    const draftFor = async (today: Date, period: "A" | "B", itemId: string) => {
+      const draft = await settleDraft(settleContext(today), { year: today.getUTCFullYear(), month: period === "A" && today.getUTCDate() > 15 ? today.getUTCMonth() + 2 : today.getUTCMonth() + 1, period });
+      const row = [...draft.subscriptions, ...draft.contributions].find((r) => r.recurringItemId === itemId);
+      return `${row?.occurrenceCount}:${row?.loggedOccurrences}:${row?.alreadyLogged}`;
+    };
+    const wipeSettle = async () => {
+      const accounts = await prisma.account.findMany({ where: { name: { startsWith: "Verify Settle" } }, select: { id: true } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Settle" } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts.map((a) => a.id) } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Settle" } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Settle" } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts.map((a) => a.id) } } });
+    };
+
+    // B2, posting: a weekly 500 DOP gym due 09-03 and one 500 paid by hand on
+    // 09-02. The 09-03 run settles 09-03 with it; the 09-10 run must post.
+    {
+      const dop = await settleAccount("DOP", "DOP");
+      const gym = await prisma.recurringItem.create({ data: { name: "Verify Settle Gym", amount: 500, currency: "DOP", frequency: "WEEKLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 9, 3), anchorDay: 3, categoryId: settleSubs, accountId: dop.id } });
+      await prisma.transaction.create({ data: { date: civilDate(2026, 9, 2), amount: 500, currency: "DOP", type: "EXPENSE", accountId: dop.id, categoryId: settleSubs, note: "gym", source: "MANUAL" } });
+      const first = await settleRun(civilDate(2026, 9, 3));
+      eq("B2: the 09-03 run takes the 09-02 payment as the 09-03 occurrence", `${first.occurrencesAlreadyLogged}:${first.transactionsCreated}`, "1:0");
+      const second = await settleRun(civilDate(2026, 9, 10));
+      eq(
+        "B2: a later run never takes the same payment again - the 09-10 occurrence posts",
+        `${second.occurrencesAlreadyLogged}:${second.transactionsCreated}:${await settleRows(gym.id)}`,
+        "0:1:2026-09-10",
+      );
+      await wipeSettle();
+    }
+
+    // B2, check-in: the Oct 2 occurrence was settled by an Oct 1 charge; the
+    // Oct A draft on Oct 3 still owes Oct 9 and must reserve it.
+    {
+      const dop = await settleAccount("DOP", "DOP");
+      const gym = await prisma.recurringItem.create({ data: { name: "Verify Settle Gym", amount: 500, currency: "DOP", frequency: "WEEKLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 2), anchorDay: 2, categoryId: settleSubs, accountId: dop.id } });
+      await prisma.transaction.create({ data: { date: civilDate(2026, 10, 1), amount: 500, currency: "DOP", type: "EXPENSE", accountId: dop.id, categoryId: settleSubs, note: "gym", source: "MANUAL" } });
+      await settleRun(civilDate(2026, 10, 2));
+      eq(
+        "B2: the check-in does not count a payment already credited to Oct 2 against Oct 9 (occurrences:logged:alreadyLogged)",
+        await draftFor(civilDate(2026, 10, 3), "A", gym.id),
+        "1:0:false",
+      );
+      await wipeSettle();
+    }
+
+    // B3: two 50 USD items in one category and a 50 USD doctor's visit whose
+    // note names neither. The check-in keeps them apart; posting must too.
+    {
+      const visa = await settleAccount("Visa", "USD");
+      const gym = await prisma.recurringItem.create({ data: { name: "Verify Settle Gym", amount: 50, currency: "USD", kind: "SUBSCRIPTION", frequency: "MONTHLY", nextDate: civilDate(2026, 10, 5), anchorDay: 5, categoryId: settleHealth, accountId: visa.id } });
+      const therapy = await prisma.recurringItem.create({ data: { name: "Verify Settle Therapy", amount: 50, currency: "USD", kind: "SUBSCRIPTION", frequency: "MONTHLY", nextDate: civilDate(2026, 10, 10), anchorDay: 10, categoryId: settleHealth, accountId: visa.id } });
+      await prisma.transaction.create({ data: { date: civilDate(2026, 10, 3), amount: 50, currency: "USD", type: "EXPENSE", accountId: visa.id, categoryId: settleHealth, note: "Dr. Perez visit", source: "MANUAL" } });
+      eq(
+        "B3: the Oct A check-in counts the visit as neither item (gym, therapy)",
+        `${await draftFor(civilDate(2026, 10, 3), "A", gym.id)} ${await draftFor(civilDate(2026, 10, 3), "A", therapy.id)}`,
+        "1:0:false 1:0:false",
+      );
+      const onFifth = await settleRun(civilDate(2026, 10, 5));
+      const onTenth = await settleRun(civilDate(2026, 10, 10));
+      eq(
+        "B3: posting agrees - both items post, and the one visit settles nothing",
+        `${onFifth.occurrencesAlreadyLogged + onTenth.occurrencesAlreadyLogged}:${await settleRows(gym.id)}:${await settleRows(therapy.id)}`,
+        "0:2026-10-05:2026-10-10",
+      );
+      await wipeSettle();
+    }
+
+    // B10: a charge on another account, and one a day before the period.
+    {
+      const visa = await settleAccount("Visa", "USD");
+      const checking = await settleAccount("Checking", "USD");
+      const netflix = await prisma.recurringItem.create({ data: { name: "Verify Settle Netflix", amount: 15.49, currency: "USD", kind: "SUBSCRIPTION", frequency: "MONTHLY", nextDate: civilDate(2026, 9, 20), anchorDay: 20, categoryId: settleSubs, accountId: visa.id } });
+      await prisma.transaction.create({ data: { date: civilDate(2026, 9, 18), amount: 15.49, currency: "USD", type: "EXPENSE", accountId: checking.id, categoryId: settleSubs, note: "NETFLIX.COM", source: "CSV" } });
+      eq("B10: the Sep B check-in counts the Checking payment as Netflix's, due on Visa", await draftFor(civilDate(2026, 9, 19), "B", netflix.id), "1:1:true");
+      const netflixRun = await settleRun(civilDate(2026, 9, 20));
+      eq("B10: and posting agrees - no second 15.49 on Visa", `${netflixRun.occurrencesAlreadyLogged}:${await settleRows(netflix.id)}`, "1:");
+
+      const rent = await prisma.recurringItem.create({ data: { name: "Verify Settle Rent", amount: 900, currency: "USD", kind: "SUBSCRIPTION", frequency: "MONTHLY", nextDate: civilDate(2026, 10, 1), anchorDay: 1, categoryId: settleSubs, accountId: checking.id } });
+      await prisma.transaction.create({ data: { date: civilDate(2026, 9, 30), amount: 900, currency: "USD", type: "EXPENSE", accountId: checking.id, categoryId: settleSubs, note: "rent october", source: "MANUAL" } });
+      eq("B10: rent due 10-01 paid on 09-30 reads as paid in the Oct A check-in", await draftFor(civilDate(2026, 9, 30), "A", rent.id), "1:1:true");
+      const rentRun = await settleRun(civilDate(2026, 10, 1));
+      eq("B10: and posting on 10-01 writes no duplicate", `${rentRun.occurrencesAlreadyLogged}:${await settleRows(rent.id)}`, "1:");
+      await wipeSettle();
+    }
+
+    // B16: a 5,000 DOP contribution due 09-20 and a bank transfer of 5,000 to
+    // savings imported on 09-17. The goal must receive it; the ledger must not
+    // get a second outflow.
+    {
+      const dop = await settleAccount("DOP", "DOP");
+      const goal = await prisma.goal.create({ data: { name: "Verify Settle Emergency", targetAmount: 100000, currency: "DOP" } });
+      const auto = await prisma.recurringItem.create({ data: { name: "Verify Settle Emergency auto", amount: 5000, currency: "DOP", kind: "CONTRIBUTION", frequency: "MONTHLY", nextDate: civilDate(2026, 9, 20), anchorDay: 20, categoryId: settleSavings, accountId: dop.id, goalId: goal.id } });
+      const transfer = await prisma.transaction.create({ data: { date: civilDate(2026, 9, 17), amount: 5000, currency: "DOP", type: "EXPENSE", accountId: dop.id, categoryId: settleSavings, note: "Transfer to savings", source: "CSV" } });
+      const run = await settleRun(civilDate(2026, 9, 20));
+      const contributions = await prisma.goalContribution.findMany({ where: { goalId: goal.id } });
+      eq(
+        "B16: a contribution settled by a matching charge reaches the goal (logged:contributions:saved)",
+        `${run.occurrencesAlreadyLogged}:${contributions.length}:${num((await prisma.goal.findUniqueOrThrow({ where: { id: goal.id } })).savedAmount)}`,
+        "1:1:5000",
+      );
+      eq(
+        "B16: the contribution carries the occurrence key and the charge's own date and amount",
+        `${contributions[0]?.recurringExternalId}:${contributions[0] ? toISODate(contributions[0].date) : ""}:${num(contributions[0]?.amount)}:${contributions[0]?.recurringItemId}`,
+        `${auto.id}:2026-09-20:2026-09-17:5000:${auto.id}`,
+      );
+      eq(
+        "B16: and the money leaves the ledger once - the imported transfer, no RECURRING row",
+        `${await prisma.transaction.count({ where: { accountId: dop.id, type: "EXPENSE" } })}:${await settleRows(auto.id)}:${(await prisma.transaction.findFirst({ where: { accountId: dop.id, type: "EXPENSE" } }))?.id === transfer.id}`,
+        "1::true",
+      );
+      await wipeSettle();
+    }
+
+    // B15: a 5,000 DOP goal, a 5,000 monthly contribution, three occurrences
+    // overdue. The first reaches the goal; the rest must wait.
+    {
+      const dop = await settleAccount("DOP", "DOP");
+      const goal = await prisma.goal.create({ data: { name: "Verify Settle Laptop", targetAmount: 5000, currency: "DOP" } });
+      const auto = await prisma.recurringItem.create({ data: { name: "Verify Settle Laptop auto", amount: 5000, currency: "DOP", kind: "CONTRIBUTION", frequency: "MONTHLY", nextDate: civilDate(2026, 7, 1), anchorDay: 1, categoryId: settleSavings, accountId: dop.id, goalId: goal.id } });
+      const run = await settleRun(civilDate(2026, 9, 28));
+      const after = await prisma.recurringItem.findUniqueOrThrow({ where: { id: auto.id } });
+      eq(
+        "B15: the backlog stops at the goal (posted:saved:nextDate:reason)",
+        `${await settleRows(auto.id)}:${num((await prisma.goal.findUniqueOrThrow({ where: { id: goal.id } })).savedAmount)}:${toISODate(after.nextDate)}:${run.skipped.find((s) => s.id === auto.id)?.reason}`,
+        "2026-07-01:5000:2026-08-01:goal_achieved",
+      );
+      await wipeSettle();
+    }
+
+    // B26: a 6-payment plan from Jul 10, three posted by Sep 10; its nextDate
+    // is moved back onto the posted Sep 10 and it posts through Dec 31.
+    {
+      const usd = await settleAccount("Checking", "USD");
+      const sofa = await prisma.recurringItem.create({ data: { name: "Verify Settle Sofa", amount: 100, currency: "USD", kind: "SUBSCRIPTION", frequency: "MONTHLY", nextDate: civilDate(2026, 7, 10), anchorDay: 10, remainingOccurrences: 6, fromAfford: true, accountId: usd.id } });
+      await settleRun(civilDate(2026, 9, 10));
+      eq("B26: three payments posted by Sep 10", `${(await prisma.recurringItem.findUniqueOrThrow({ where: { id: sofa.id } })).remainingOccurrences}`, "3");
+      await prisma.recurringItem.update({ where: { id: sofa.id }, data: { nextDate: civilDate(2026, 9, 10) } });
+      const run = await settleRun(civilDate(2026, 12, 31));
+      const after = await prisma.recurringItem.findUniqueOrThrow({ where: { id: sofa.id } });
+      eq(
+        "B26: rolling past the already-posted Sep 10 spends no installment - all six are charged",
+        `${run.occurrencesAlreadyPosted}:${await settleRows(sofa.id)}:${after.remainingOccurrences}:${after.active}`,
+        "1:2026-07-10,2026-08-10,2026-09-10,2026-10-10,2026-11-10,2026-12-10:0:false",
+      );
+      await wipeSettle();
+    }
+    await prisma.category.delete({ where: { id: settleHealth } });
+  }
+
+  console.log("\n== recurring settlement: pairing, matcher and readers ==");
+  {
+    const {
+      planSettlements,
+      settlementWindow,
+      SETTLEMENT_LEAD_DAYS,
+      recurringExternalId: keyOf,
+    } = await import("../src/lib/recurring-settlement");
+    const { loadSettlementPlan } = await import("../src/lib/data/recurring-settlement");
+    const { postDueRecurringItems: settleRun } = await import("../src/lib/recurring-posting");
+    const { getPaydayCheckinDraft: settleDraft } = await import("../src/lib/data/payday");
+
+    console.log("\n-- the window (pure) --");
+    const windowOf = (due: Date) => {
+      const window = settlementWindow(due);
+      return `${toISODate(window.start)}..${toISODate(window.end)}`;
+    };
+    eq("the lead is five days", SETTLEMENT_LEAD_DAYS, 5);
+    eq("due on a period's first day: reaches five days back into the period before", windowOf(civilDate(2026, 10, 1)), "2026-09-26..2026-10-15");
+    eq("due on the 3rd: three days back", windowOf(civilDate(2026, 10, 3)), "2026-09-28..2026-10-15");
+    eq("due mid-period: exactly the pay period", windowOf(civilDate(2026, 10, 10)), "2026-10-01..2026-10-15");
+    eq("due on the 16th: back into the A period's last days", windowOf(civilDate(2026, 10, 16)), "2026-10-11..2026-10-31");
+
+    console.log("\n-- the matcher (pure) --");
+    const item = (id: string, overrides: Partial<{ name: string; amount: number; categoryId: string | null; kind: "SUBSCRIPTION" | "CONTRIBUTION"; goalId: string | null }> = {}) => ({
+      id, name: `Item ${id}`, amount: 50, currency: "USD", categoryId: "health", kind: "SUBSCRIPTION" as const, goalId: null, ...overrides,
+    });
+    const charge = (id: string, date: Date, overrides: Partial<{ amount: number; note: string | null; categoryId: string | null; contributionGoalId: string | null; currency: string }> = {}) => ({
+      id, date, amount: 50, currency: "USD", categoryId: "health", note: null, contributionGoalId: null, ...overrides,
+    });
+    const settled = (result: Map<string, string>) =>
+      [...result.entries()].map(([key, chargeId]) => `${key.slice(0, key.indexOf(":"))}@${key.slice(key.indexOf(":") + 1)}=${chargeId}`).sort().join(" ");
+    eq(
+      "one charge settles one occurrence: the earlier of two a weekly item owes",
+      settled(planSettlements({
+        items: [item("w")],
+        occurrences: [{ itemId: "w", due: civilDate(2026, 9, 3) }, { itemId: "w", due: civilDate(2026, 9, 10) }],
+        charges: [charge("c1", civilDate(2026, 9, 2))],
+      })),
+      "w@2026-09-03=c1",
+    );
+    eq(
+      "two look-alike items: a charge naming neither settles neither, even when only one is due",
+      settled(planSettlements({
+        items: [item("gym", { name: "Gym" }), item("therapy", { name: "Therapy" })],
+        occurrences: [{ itemId: "gym", due: civilDate(2026, 10, 5) }],
+        charges: [charge("visit", civilDate(2026, 10, 3), { note: "Dr. Perez visit" })],
+      })),
+      "",
+    );
+    eq(
+      "two look-alike items: a charge naming one settles that one",
+      settled(planSettlements({
+        items: [item("gym", { name: "Gym" }), item("therapy", { name: "Therapy" })],
+        occurrences: [{ itemId: "gym", due: civilDate(2026, 10, 5) }, { itemId: "therapy", due: civilDate(2026, 10, 10) }],
+        charges: [charge("t", civilDate(2026, 10, 3), { note: "THERAPY session" })],
+      })),
+      "therapy@2026-10-10=t",
+    );
+    eq(
+      "a charge outside the window settles nothing (six days before a period-start due date)",
+      settled(planSettlements({ items: [item("r")], occurrences: [{ itemId: "r", due: civilDate(2026, 10, 1) }], charges: [charge("early", civilDate(2026, 9, 25))] })),
+      "",
+    );
+    eq(
+      "a hand-logged contribution's own expense settles a contribution to its goal, never another goal's or a subscription",
+      settled(planSettlements({
+        items: [item("sub"), item("mine", { kind: "CONTRIBUTION", goalId: "g1" }), item("other", { kind: "CONTRIBUTION", goalId: "g2" })],
+        occurrences: [{ itemId: "sub", due: civilDate(2026, 10, 5) }, { itemId: "other", due: civilDate(2026, 10, 6) }, { itemId: "mine", due: civilDate(2026, 10, 7) }],
+        charges: [charge("twin", civilDate(2026, 10, 2), { contributionGoalId: "g1", categoryId: "savings" })],
+      })),
+      "mine@2026-10-07=twin",
+    );
+    // Posting plans through today, the check-in through its period's end; on
+    // every occurrence both cover they must name the same charge. A seeded
+    // sweep of random schedules and charges, planned through each day of a
+    // month against the whole month.
+    {
+      let seed = 20260928;
+      const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+      let disagreements = 0;
+      let compared = 0;
+      for (let scenario = 0; scenario < 150; scenario += 1) {
+        const items = Array.from({ length: 2 + Math.floor(random() * 4) }, (_, i) =>
+          item(`i${i}`, { amount: [50, 50, 75][Math.floor(random() * 3)], categoryId: ["health", "subs"][Math.floor(random() * 2)], name: `Item${i}` }));
+        const occurrences = items.flatMap((it) => {
+          const start = 1 + Math.floor(random() * 7);
+          const step = [7, 14, 30][Math.floor(random() * 3)];
+          return Array.from({ length: 5 }, (_, k) => ({ itemId: it.id, due: addDays(civilDate(2026, 10, 1), start - 1 + k * step) }));
+        });
+        const charges = Array.from({ length: 1 + Math.floor(random() * 6) }, (_, c) =>
+          charge(`c${c}`, addDays(civilDate(2026, 9, 26), Math.floor(random() * 40)), {
+            amount: [50, 75][Math.floor(random() * 2)],
+            categoryId: ["health", "subs"][Math.floor(random() * 2)],
+            note: random() < 0.3 ? `Item${Math.floor(random() * items.length)}` : null,
+          }));
+        const whole = planSettlements({ items, occurrences, charges });
+        for (let day = 1; day <= 31; day += 1) {
+          const through = civilDate(2026, 10, day);
+          const partial = planSettlements({ items, occurrences: occurrences.filter((o) => o.due.getTime() <= through.getTime()), charges });
+          for (const occurrence of occurrences.filter((o) => o.due.getTime() <= through.getTime())) {
+            compared += 1;
+            const key = keyOf(occurrence.itemId, occurrence.due);
+            if (whole.get(key) !== partial.get(key)) disagreements += 1;
+          }
+        }
+      }
+      check(`planning through any day agrees with planning through the month on every occurrence it covers (${compared} compared)`, disagreements === 0 && compared > 1000, { disagreements, compared });
+    }
+
+    console.log("\n-- the pairing (database) --");
+    const settleSubs = (await prisma.category.findFirstOrThrow({ where: { name: "Subscriptions" } })).id;
+    const settleSavings = (await prisma.category.findFirstOrThrow({ where: { name: "Savings/Investment" } })).id;
+    const shopping = (await prisma.category.findFirstOrThrow({ where: { name: "Shopping" } })).id;
+    const visa = await prisma.account.create({ data: { name: "Verify Settle Visa", currency: "USD", type: "CHECKING" } });
+    const checking = await prisma.account.create({ data: { name: "Verify Settle Checking", currency: "USD", type: "CHECKING" } });
+    const netflix = await prisma.recurringItem.create({ data: { name: "Verify Settle Netflix", amount: 15.49, currency: "USD", kind: "SUBSCRIPTION", frequency: "MONTHLY", nextDate: civilDate(2026, 9, 20), anchorDay: 20, categoryId: settleSubs, accountId: visa.id } });
+    const paid = await prisma.transaction.create({ data: { date: civilDate(2026, 9, 18), amount: 15.49, currency: "USD", type: "EXPENSE", accountId: checking.id, categoryId: settleSubs, note: "NETFLIX.COM", source: "CSV" } });
+    const planBefore = await loadSettlementPlan(civilDate(2026, 9, 20));
+    eq("the plan names the Checking charge for Netflix's 09-20", planBefore.settledBy.get(keyOf(netflix.id, civilDate(2026, 9, 20)))?.id, paid.id);
+    await settleRun(civilDate(2026, 9, 20));
+    const settlement = await prisma.recurringSettlement.findUnique({ where: { transactionId: paid.id } });
+    eq(
+      "posting persists the pairing: charge, occurrence key, item, kind, due date",
+      `${settlement?.occurrenceKey}:${settlement?.recurringItemId}:${settlement?.kind}:${settlement ? toISODate(settlement.dueDate) : ""}`,
+      `${netflix.id}:2026-09-20:${netflix.id}:SUBSCRIPTION:2026-09-20`,
+    );
+    eq("a paired charge is never a candidate again", (await loadSettlementPlan(civilDate(2026, 10, 20))).settledBy.size, 0);
+    let secondPairingRefused = false;
+    try {
+      await prisma.recurringSettlement.create({ data: { transactionId: paid.id, occurrenceKey: keyOf(netflix.id, civilDate(2026, 10, 20)), recurringItemId: netflix.id, kind: "SUBSCRIPTION", dueDate: civilDate(2026, 10, 20) } });
+    } catch {
+      secondPairingRefused = true;
+    }
+    check("the database refuses to pair one charge with a second occurrence", secondPairingRefused);
+    const octoberContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 10, 16), currentPeriod: periodForDate(civilDate(2026, 10, 16)), bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP" };
+    const checkinOnOct = await settleDraft(octoberContext, { year: 2026, month: 10, period: "B" });
+    eq("nor does the check-in count it for October's occurrence", checkinOnOct.subscriptions.find((row) => row.recurringItemId === netflix.id)?.loggedOccurrences, 0);
+    await prisma.transaction.delete({ where: { id: paid.id } });
+    eq("deleting the charge removes its pairing", await prisma.recurringSettlement.count({ where: { transactionId: paid.id } }), 0);
+
+    // Two overlapping runs over one settled occurrence: one claim, one pairing.
+    const gym = await prisma.recurringItem.create({ data: { name: "Verify Settle Gym", amount: 20, currency: "USD", kind: "SUBSCRIPTION", frequency: "WEEKLY", nextDate: civilDate(2026, 9, 3), anchorDay: 3, categoryId: settleSubs, accountId: checking.id } });
+    const gymPaid = await prisma.transaction.create({ data: { date: civilDate(2026, 9, 2), amount: 20, currency: "USD", type: "EXPENSE", accountId: checking.id, categoryId: settleSubs, note: "gym", source: "MANUAL" } });
+    const [runA, runB] = await Promise.all([settleRun(civilDate(2026, 9, 10)), settleRun(civilDate(2026, 9, 10))]);
+    eq(
+      "overlapping runs: 09-03 settled once, 09-10 posted once (logged:posted:rows:pairings)",
+      `${runA.occurrencesAlreadyLogged + runB.occurrencesAlreadyLogged}:${runA.transactionsCreated + runB.transactionsCreated}:${(await prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${gym.id}:` } } })).map((row) => toISODate(row.date)).join(",")}:${await prisma.recurringSettlement.count({ where: { transactionId: gymPaid.id } })}`,
+      "1:1:2026-09-10:1",
+    );
+
+    console.log("\n-- a settled contribution is one event: goal, ledger, budget, pace --");
+    const goal = await prisma.goal.create({ data: { name: "Verify Settle Fund", targetAmount: 100000, currency: "USD" } });
+    const auto = await prisma.recurringItem.create({ data: { name: "Verify Settle Fund auto", amount: 300, currency: "USD", kind: "CONTRIBUTION", frequency: "MONTHLY", nextDate: civilDate(2026, 8, 20), anchorDay: 20, categoryId: settleSavings, accountId: checking.id, goalId: goal.id } });
+    // Filed under Shopping but naming the item: matched by name, and the
+    // category is one the period budget counts - so only the twin rule keeps
+    // it out of budget spending.
+    const transfer = await prisma.transaction.create({ data: { date: civilDate(2026, 8, 18), amount: 300, currency: "USD", type: "EXPENSE", accountId: checking.id, categoryId: shopping, note: "Verify Settle Fund auto transfer", source: "CSV" } });
+    const augustB = periodInfo({ year: 2026, month: 8, period: "B" });
+    const augustContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 8, 31), currentPeriod: periodForDate(civilDate(2026, 8, 31)) };
+    const spentBefore = (await getPeriodSummary(augustB, augustContext)).spent;
+    const augustWindow = monthWindow({ year: 2026, month: 8 });
+    const autoForMatch = [{ ...auto, amount: num(auto.amount) }];
+    const savingsBefore = (await classifyCompletedMonth(augustWindow, augustContext, autoForMatch, categoryMeta)).savingsInvesting;
+    await settleRun(civilDate(2026, 8, 20));
+    const fundContribution = await prisma.goalContribution.findFirst({ where: { goalId: goal.id } });
+    eq("the goal counts the transfer once", `${fundContribution?.recurringExternalId}:${num(fundContribution?.amount)}`, `${auto.id}:2026-08-20:300`);
+    eq(
+      "the period budget stops counting the transfer as spending once it is the contribution's twin",
+      round2(spentBefore - (await getPeriodSummary(augustB, augustContext)).spent),
+      300,
+    );
+    eq(
+      "the monthly pace counts it once: the new GoalContribution adds nothing to August's savings/investing",
+      round2((await classifyCompletedMonth(augustWindow, augustContext, autoForMatch, categoryMeta)).savingsInvesting - savingsBefore),
+      0,
+    );
+    const { listTransactions } = await import("../src/lib/data/transactions");
+    const listed = (await listTransactions({ accountId: checking.id }, augustContext)).rows.find((row) => row.id === transfer.id);
+    eq("the transaction list locks it like any contribution's expense", listed?.hasLinkedGoalContribution, true);
+    const { updateRecurringContributionAmount, removeContribution: removeSettled, recomputeGoalSaved: recomputeSettled } = await import("../src/lib/goals");
+    const corrected = await updateRecurringContributionAmount(fundContribution!.id, 280, rates);
+    eq("correcting the contribution corrects the charge that carries it", `${corrected.ok}:${num((await prisma.transaction.findUniqueOrThrow({ where: { id: transfer.id } })).amount)}`, "true:280");
+    await removeSettled({ id: fundContribution!.id, accountId: null, recurringExternalId: fundContribution!.recurringExternalId });
+    await recomputeSettled(goal.id);
+    eq("removing the contribution removes the charge with it, as with every contribution pair", `${await prisma.transaction.count({ where: { id: transfer.id } })}:${await prisma.recurringSettlement.count({ where: { occurrenceKey: fundContribution!.recurringExternalId! } })}`, "0:0");
+
+    console.log("\n-- a hand-logged contribution settles its own goal's occurrence, adding nothing --");
+    const { logManualContribution: logSettled } = await import("../src/lib/goals");
+    await prisma.recurringItem.update({ where: { id: auto.id }, data: { nextDate: civilDate(2026, 9, 20) } });
+    const manual = await logSettled({ goalId: goal.id, accountId: checking.id, amount: 300, date: civilDate(2026, 9, 17), note: null }, rates);
+    const manualRun = await settleRun(civilDate(2026, 9, 20));
+    eq(
+      "the manual twin settles 09-20: no RECURRING row, no second contribution (logged:contributions:rows:pairedTwin)",
+      `${manualRun.occurrencesAlreadyLogged}:${await prisma.goalContribution.count({ where: { goalId: goal.id } })}:${await prisma.transaction.count({ where: { source: "RECURRING", externalId: keyOf(auto.id, civilDate(2026, 9, 20)) } })}:${(await prisma.recurringSettlement.findUnique({ where: { transactionId: manual.transactionId } }))?.occurrenceKey === keyOf(auto.id, civilDate(2026, 9, 20))}`,
+      "1:1:0:true",
+    );
+
+    const settleAccounts = [visa.id, checking.id];
+    await prisma.goalContribution.deleteMany({ where: { goalId: goal.id } });
+    await prisma.transaction.deleteMany({ where: { accountId: { in: settleAccounts } } });
+    await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Settle" } } });
+    await prisma.goal.delete({ where: { id: goal.id } });
+    await prisma.account.deleteMany({ where: { id: { in: settleAccounts } } });
+  }
+
+  await prisma.recurringItem.updateMany({ where: { id: { in: pausedForSettlement } }, data: { active: true } });
 
   console.log("\n== afford: installment plans ==");
   {

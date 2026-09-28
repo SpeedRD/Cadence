@@ -55,7 +55,9 @@ export interface TransactionRow extends SharedExpenseDetails {
   externalId: string | null;
   /**
    * True for a RECURRING row that a GoalContribution was posted beside (see
-   * recurringExternalId on GoalContribution). transactionEditBlock cannot
+   * recurringExternalId on GoalContribution), or a charge the user entered
+   * that posting settled a contribution occurrence with (its
+   * RecurringSettlement carries the same key). transactionEditBlock cannot
    * tell such a row from a subscription's - both carry "<itemId>:<date>" -
    * so listTransactions looks the pairing up once per page and the table
    * locks the row up front, as the actions would refuse it after the fact.
@@ -115,6 +117,7 @@ export async function listTransactions(
       include: {
         account: { select: { name: true } },
         category: { select: { name: true, color: true } },
+        recurringSettlement: { select: { occurrenceKey: true } },
       },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       skip: (page - 1) * PAGE_SIZE,

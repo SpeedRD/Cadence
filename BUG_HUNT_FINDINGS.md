@@ -53,6 +53,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** weekly and biweekly items, and SEMI_MONTHLY items with both anchors in one half of the month, whenever one occurrence is paid by hand. Expenses are omitted from the ledger, so balances run high, and the check-in reserves nothing for a charge still due.
 - **Severity / confidence:** High / High. Evidence: DB runs.
 - **Fix:** tie a logged charge to the occurrence it settled. Either persist the link (the charge's id on the consumed occurrence, or a marker row), or skip charges already credited to an earlier occurrence of the same item. Apply the same pairing in `loggedOccurrencesByItem`.
+- **Status:** fixed. Posting records each settled occurrence as a `RecurringSettlement` row (charge id and occurrence key, both unique), written in the claim's own transaction, so a charge settles at most one occurrence ever, and `loggedOccurrencesByItem` reads posting's per-occurrence verdicts instead of a per-period count.
 
 ### B3. Posting matches items one at a time, so one charge cancels look-alike items the check-in keeps apart
 - **What:** `findLoggedCharge` passes a single item to `matchRecurringToTransactions`. The matcher's ambiguity guard (same amount and category on two items means the name must match) therefore never triggers. `consumed` is also scoped to one item, so the same charge can cancel an occurrence of every look-alike item.
@@ -64,6 +65,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** any two recurring items with the same amount, currency and category, which is common for fixed-price services. Charges are omitted and balances overstated. The check-in and posting disagree.
 - **Severity / confidence:** High / High. Evidence: DB run.
 - **Fix:** match against all due items at once, as the check-in does, and let a charge be consumed by at most one item. B2's persisted pairing also covers this.
+- **Status:** fixed. One planner, `planSettlements` in `src/lib/recurring-settlement.ts`, matches every item's occurrences together in due-date order with the look-alike guard judged over all active items, and both posting and the check-in use it.
 
 ### B4. Resuming a paused item, or raising an achieved goal's target, back-posts every skipped occurrence
 - **What:** pausing leaves `nextDate` where it was. So does the `goal_achieved` skip. On resume or re-activation, posting walks every missed occurrence, up to 24, and writes a dated ledger row for each. Money that never moved lands in past periods. Restoring an archived account (skip reason `account_archived`) does the same.
@@ -152,6 +154,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** bills paid early or from another account. Expenses are doubled, or the plan reserves money that has already left.
 - **Severity / confidence:** Medium / High. Evidence: DB runs.
 - **Fix:** use one candidate set for both: every account, plus a window of a few days before the period start for an item due in the first days of a period. Then apply B2's one-charge-one-occurrence pairing.
+- **Status:** fixed. Posting and the check-in now share one candidate set: every account, and each occurrence's pay period extended back to five days before the due date (`SETTLEMENT_LEAD_DAYS`, which covers a payday pulled back to Friday before a period starting on the 1st or 16th); the persisted pairing stops an early charge from settling two occurrences.
 
 ### B11. A goal pace netted of the plan period's recurring contributions is reused in every period
 - **What:** `goalRoadmapAmount` subtracts the plan period's own recurring contributions to the goal. Afford, and the goal forecast built on it, then repeat that net figure in every period of the window, while each period's real contributions are also counted as scheduled commitments. The error equals the difference in contribution counts per period, and its sign flips with which half of the month "today" is in.
@@ -208,6 +211,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** backlogs, after a cron outage, an account restore or B4. Money leaves the account for an already-funded goal, so the goal is over-credited and the balance understated.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** before each contribution claim, re-read the goal's remaining balance inside the transaction and stop at achievement. Optionally cap the last contribution at the remaining amount.
+- **Status:** fixed. Before each contribution it would write, the claim locks the goal row and re-sums its contributions inside the write transaction, and a reached goal leaves that occurrence and the rest of the backlog unclaimed (reported as `goal_achieved`); the last contribution is not capped, matching single posted and manual contributions today.
 
 ### B16. A contribution occurrence consumed as "already logged" never reaches the goal
 - **What:** when a same-amount, same-category expense exists in the period, the occurrence is rolled forward with no GoalContribution. The "already logged" branch returns before the contribution is written.
@@ -218,6 +222,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** users who import bank statements, or log their own transfer to savings. The goal is understated by every consumed occurrence.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** for CONTRIBUTION items, never consume by category alone. Either require a manual-contribution twin (`goal-contribution:` externalId), or create the GoalContribution linked to the matched charge instead of skipping it.
+- **Status:** fixed. A matched charge that settles a contribution occurrence becomes that contribution's twin: posting writes the GoalContribution with the occurrence key (dated and sized from the charge), and every twin reader (monthly pace, period budget, transaction list lock, edit and delete cascades, the audit) recognises the pair; a hand-logged contribution's own expense settles only its own goal's occurrence and adds nothing.
 
 ### B17. Afford accepts a first payment in the past, judges past periods with no commitments, then back-posts immediately
 - **What:** `affordInputSchema.firstDate` has no lower bound. Past installments are evaluated in their own past periods, where the commitment walk (which starts at today) finds nothing. After "I bought this", the next request posts every past installment. `recurringSchema.nextDate` behaves the same way (see B27).
@@ -317,6 +322,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** users who correct a plan's date. One installment is never charged, so expenses are understated.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** do not decrement on `already_posted`, or refuse an edit that moves `nextDate` onto an existing RECURRING row.
+- **Status:** fixed. The `already_posted` claim rolls `nextDate` forward without touching `remainingOccurrences`, so every installment is still charged.
 
 ### B27. The import review's pre-filled next date can be in the past or clamped for good
 - **What:** `inferredNextDate` is the latest row plus one cadence (`addMonths`), with no "on or after today" rule and no anchor. The Recurring page's suggestions do guarantee a date on or after today (`recurring-detection.ts:510-515`). Saving the pre-fill:

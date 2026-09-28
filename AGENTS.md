@@ -34,6 +34,12 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   `postDueRecurringItems()` in `src/lib/recurring-posting.ts`, called by
   `/api/cron/recurring` and by `getAppContext()` on every request. Do not add
   a second one.
+- Whether a charge the user entered already paid a recurring occurrence is
+  decided in one place, `planSettlements()` in `src/lib/recurring-settlement.ts`
+  (loaded by `loadSettlementPlan()` in `src/lib/data/recurring-settlement.ts`),
+  and read by posting and the payday check-in alike. Only posting persists a
+  pairing, as a `RecurringSettlement` row. Reuse it rather than matching
+  charges to items a second way.
 - New `/api/cron/*` routes must be added to `BEARER_AUTH_PATHS` in
   `src/proxy.ts`, or the proxy redirects them to `/login` before the
   handler's bearer check ever runs.

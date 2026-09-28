@@ -81,11 +81,12 @@ export async function logManualContribution(
  * Removes a contribution and the Transaction that carries its money, together.
  * A manual row is paired through its accountId and the goal-contribution
  * externalId; a row recurring posting wrote is paired through
- * recurringExternalId, the same key its RECURRING Transaction carries. A row
- * with neither (logged before contributions had an account) is deleted on its
- * own. deleteMany rather than delete for the twin: the user may already have
- * removed it from the ledger, and that must not block removing the
- * contribution.
+ * recurringExternalId, the same key its RECURRING Transaction carries - or,
+ * when posting settled that occurrence with a charge the user entered, the
+ * key that charge's RecurringSettlement carries. A row with neither (logged
+ * before contributions had an account) is deleted on its own. deleteMany
+ * rather than delete for the twin: the user may already have removed it from
+ * the ledger, and that must not block removing the contribution.
  */
 export async function removeContribution(contribution: {
   id: string;
@@ -101,9 +102,27 @@ export async function removeContribution(contribution: {
     }
     if (contribution.recurringExternalId) {
       await tx.transaction.deleteMany({
-        where: { source: "RECURRING", externalId: contribution.recurringExternalId },
+        where: {
+          OR: [
+            { source: "RECURRING", externalId: contribution.recurringExternalId },
+            { recurringSettlement: { is: { occurrenceKey: contribution.recurringExternalId } } },
+          ],
+        },
       });
     }
+  });
+}
+
+/** The ledger half of a contribution recurring posting wrote: its RECURRING row, or the charge that settled its occurrence. */
+function recurringContributionTwin(key: string) {
+  return prisma.transaction.findFirst({
+    where: {
+      OR: [
+        { source: "RECURRING", externalId: key },
+        { recurringSettlement: { is: { occurrenceKey: key } } },
+      ],
+    },
+    select: { id: true, currency: true },
   });
 }
 
@@ -115,8 +134,9 @@ export type RecurringContributionUpdate =
 
 /**
  * Corrects one already-posted occurrence of a recurring contribution: the
- * amount the goal counts (in the goal's currency, as stored) and the RECURRING
- * expense that moved the money, in one write. The expense keeps its own
+ * amount the goal counts (in the goal's currency, as stored) and the expense
+ * that moved the money - the RECURRING row, or the charge that settled the
+ * occurrence - in one write. The expense keeps its own
  * currency - the item's - so when that differs from the goal's the new amount
  * is converted at today's rate, the way a manual contribution's expense is.
  * The RecurringItem itself is untouched: this is about what was charged on
@@ -135,12 +155,7 @@ export async function updateRecurringContributionAmount(
   if (!contribution) return { ok: false, reason: "not_found" };
   if (!contribution.recurringExternalId) return { ok: false, reason: "not_recurring" };
 
-  const twin = await prisma.transaction.findUnique({
-    where: {
-      source_externalId: { source: "RECURRING", externalId: contribution.recurringExternalId },
-    },
-    select: { id: true, currency: true },
-  });
+  const twin = await recurringContributionTwin(contribution.recurringExternalId);
   const table =
     rates ??
     (!twin || twin.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
@@ -291,6 +306,28 @@ export async function recomputeGoalSaved(goalId: string): Promise<number> {
 }
 
 /**
+ * A goal's saved total from its contribution rows, in the goal's currency: a
+ * plain sum, converting only rows stored in another currency. The one
+ * formula behind Goal.savedAmount, shared with recurring posting's check that
+ * a goal is not already reached before each contribution it writes.
+ */
+export function savedFromContributions(
+  contributions: readonly { amount: { toString(): string } | number; currency: string }[],
+  goalCurrency: string,
+  rates: RateTable,
+): number {
+  return round2(
+    contributions.reduce((total, contribution) => {
+      const amount = num(contribution.amount);
+      return (
+        total +
+        (contribution.currency === goalCurrency ? amount : convert(amount, contribution.currency, goalCurrency, rates))
+      );
+    }, 0),
+  );
+}
+
+/**
  * The same rebuild, reporting whether *this* call is the one that crossed the
  * target - i.e. the goal had no achievedAt going in and has one coming out.
  *
@@ -331,17 +368,7 @@ export async function rebuildGoalSaved(
       select: { amount: true, currency: true },
     });
 
-    const saved = round2(
-      contributions.reduce((total, contribution) => {
-        const amount = num(contribution.amount);
-        return (
-          total +
-          (contribution.currency === goal.currency
-            ? amount
-            : convert(amount, contribution.currency, goal.currency, rates))
-        );
-      }, 0),
-    );
+    const saved = savedFromContributions(contributions, goal.currency, rates);
 
     const target = num(goal.targetAmount);
     const achieved = target > 0 && saved >= target;

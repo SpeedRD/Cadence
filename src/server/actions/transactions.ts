@@ -72,7 +72,10 @@ export async function saveTransactionAction(
   }
 
   if (id) {
-    const existing = await prisma.transaction.findUnique({ where: { id } });
+    const existing = await prisma.transaction.findUnique({
+      where: { id },
+      include: { recurringSettlement: { select: { occurrenceKey: true } } },
+    });
     if (!existing) return fail(t.transactionNoLongerExists);
     const block = transactionEditBlock(existing);
     if (block === "transfer") return fail(t.editFromTransferForm);
@@ -81,8 +84,10 @@ export async function saveTransactionAction(
     if (block === "payday_income") return fail(t.editPaycheckFromCheckin);
     // A RECURRING row that carries a goal contribution is that contribution's
     // ledger half: its amount is corrected from the goal's page so both stay
-    // in step, the same rule the manual pair follows. Only a lookup can tell
-    // it from a subscription's row, so this check lives here, not in the
+    // in step, the same rule the manual pair follows. So is a charge the user
+    // entered that posting settled a contribution occurrence with (its
+    // settlement carries the contribution's key). Only a lookup can tell
+    // either from a subscription's row, so this check lives here, not in the
     // pure transactionEditBlock.
     const recurringKey = recurringContributionKeyFromTransaction(existing);
     if (recurringKey !== null) {
@@ -194,7 +199,10 @@ export async function deleteTransactionAction(
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return fail(t.nothingToDelete);
 
-  const existing = await prisma.transaction.findUnique({ where: { id } });
+  const existing = await prisma.transaction.findUnique({
+    where: { id },
+    include: { recurringSettlement: { select: { occurrenceKey: true } } },
+  });
   if (!existing) return fail(t.transactionNoLongerExists);
 
   // The paycheck a payday check-in recorded is owned by that check-in's
@@ -239,10 +247,11 @@ export async function deleteTransactionAction(
       await prisma.transaction.delete({ where: { id } });
     }
   } else if (recurringKey !== null) {
-    // The same pairing for a row recurring posting wrote: if a contribution
-    // was logged beside it, the two go together, exactly as deleting from the
-    // goal's page does. A subscription's row has no contribution and is
-    // deleted on its own.
+    // The same pairing for a row recurring posting wrote, or a charge it
+    // settled an occurrence with: if a contribution was logged beside it, the
+    // two go together, exactly as deleting from the goal's page does. A
+    // subscription's row has no contribution and is deleted on its own (a
+    // settled charge's RecurringSettlement row goes with it).
     const contribution = await prisma.goalContribution.findFirst({
       where: { recurringExternalId: recurringKey },
       select: { id: true, goalId: true, accountId: true, recurringExternalId: true },

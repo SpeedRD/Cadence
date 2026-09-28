@@ -11,7 +11,8 @@
  *           row's twin (source MANUAL, externalId "goal-contribution:<id>",
  *           see logManualContribution in src/lib/goals.ts) or an auto-posted
  *           row's twin (source RECURRING, the same "<itemId>:<date>" key on
- *           both rows). The contribution counts as saving; the twin must never
+ *           both rows, or a charge the user entered that posting settled the
+ *           occurrence with - its RecurringSettlement carries the key). The contribution counts as saving; the twin must never
  *           also count as spending (monthly pace, src/lib/data/monthly.ts;
  *           period budget "spent", src/lib/data/period-summary.ts), and a twin
  *           whose contribution is gone must not vanish from both.
@@ -445,6 +446,7 @@ async function main(): Promise<number> {
         OR: [
           { source: "MANUAL", externalId: { startsWith: MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } },
           { source: "RECURRING", externalId: { not: null } },
+          { recurringSettlement: { isNot: null } },
         ],
       },
       select: {
@@ -458,10 +460,20 @@ async function main(): Promise<number> {
         accountId: true,
         categoryId: true,
         account: { select: { name: true } },
+        recurringSettlement: { select: { occurrenceKey: true, kind: true } },
       },
     });
-    const manualTwinByKey = new Map(twins.filter((tx) => tx.source === "MANUAL").map((tx) => [tx.externalId as string, tx]));
-    const recurringTwinByKey = new Map(twins.filter((tx) => tx.source === "RECURRING").map((tx) => [tx.externalId as string, tx]));
+    const isManualTwin = (tx: (typeof twins)[number]) =>
+      tx.source === "MANUAL" && (tx.externalId ?? "").startsWith(MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX);
+    const manualTwinByKey = new Map(twins.filter(isManualTwin).map((tx) => [tx.externalId as string, tx]));
+    // An occurrence's ledger row: the RECURRING row posting wrote, or the
+    // charge it settled the occurrence with instead (a hand-logged
+    // contribution's own expense stays a manual twin above).
+    const recurringTwinByKey = new Map<string, (typeof twins)[number]>();
+    for (const tx of twins) {
+      if (tx.source === "RECURRING") recurringTwinByKey.set(tx.externalId as string, tx);
+      else if (tx.recurringSettlement && !isManualTwin(tx)) recurringTwinByKey.set(tx.recurringSettlement.occurrenceKey, tx);
+    }
     const contributionById = new Map(contributions.map((row) => [row.id, row]));
     const contributionByRecurringKey = new Map(
       contributions.filter((row) => row.recurringExternalId).map((row) => [row.recurringExternalId as string, row]),
@@ -525,8 +537,16 @@ async function main(): Promise<number> {
     // the same figure without the twins from the raw rows and checks the
     // reader's figure against it, so a twin that leaked shows up as the
     // difference rather than being inferred from a rule.
+    // A settled charge that is a contribution's ledger half is a twin on the
+    // same terms as a manual one: the reader must leave it out of spending.
+    const settledTwinPairs = contributions
+      .filter((contribution) => contribution.recurringExternalId !== null)
+      .map((contribution) => ({ contribution, twin: recurringTwinByKey.get(contribution.recurringExternalId as string) }))
+      .filter((pair): pair is { contribution: (typeof contributions)[number]; twin: (typeof twins)[number] } =>
+        pair.twin !== undefined && pair.twin.source !== "RECURRING");
+    const budgetPairs = [...manualPairs, ...settledTwinPairs];
     const periodsWithTwins = new Map<string, PeriodInfo>();
-    for (const { twin } of manualPairs) periodsWithTwins.set(periodForDate(twin.date).key, periodForDate(twin.date));
+    for (const { twin } of budgetPairs) periodsWithTwins.set(periodForDate(twin.date).key, periodForDate(twin.date));
     for (const [key, period] of [...periodsWithTwins.entries()].sort()) {
       const [summary, expenses] = await Promise.all([
         getPeriodSummary(period, context as AppContext),
@@ -535,7 +555,7 @@ async function main(): Promise<number> {
           select: { id: true, amount: true, currency: true, source: true, categoryId: true, externalId: true },
         }),
       ]);
-      const twinIds = new Set(manualPairs.map(({ twin }) => twin.id));
+      const twinIds = new Set(budgetPairs.map(({ twin }) => twin.id));
       let spentWithoutTwins = 0;
       const twinsInsideByRule: { id: string; amount: number }[] = [];
       for (const tx of expenses) {
@@ -550,7 +570,7 @@ async function main(): Promise<number> {
       const ruleTotal = round2(twinsInsideByRule.reduce((sum, row) => sum + row.amount, 0));
       if (sameCents(leaked, ruleTotal)) {
         for (const inside of twinsInsideByRule) {
-          const pair = manualPairs.find(({ twin }) => twin.id === inside.id)!;
+          const pair = budgetPairs.find(({ twin }) => twin.id === inside.id)!;
           flag(1, "DOUBLE", `getPeriodSummary(${key}).spent counts goal "${pair.contribution.goal.name}"'s contribution twin as budget spending`, [
             `saving side:   GoalContribution ${pair.contribution.id} (${toISODate(pair.contribution.date)}) ${money(num(pair.contribution.amount), pair.contribution.currency)} - the plan set this aside as goal funding`,
             `spending side: Transaction ${pair.twin.id} (${toISODate(pair.twin.date)}) ${money(num(pair.twin.amount), pair.twin.currency)}, category ${categoryName(pair.twin.categoryId)} -> counted in spent (${money(inside.amount, displayCurrency)})`,
@@ -715,15 +735,27 @@ async function main(): Promise<number> {
           ownPeriodsAudited += 1;
           const expected = anchorRealizations(anchors, period.start, period.end);
           const posted = rows.filter((row) => row.date.getTime() >= period.start.getTime() && row.date.getTime() <= period.end.getTime());
+          // Hand-logged payments of this period's occurrences: the charges
+          // posting recorded as settling them (RecurringSettlement - any
+          // account, possibly dated just before the period), plus, for
+          // occurrences claimed before that pairing was kept, unpaired charges
+          // on the item's own account the matcher recognises as this item.
+          const settledHere = await prisma.recurringSettlement.findMany({
+            where: { recurringItemId: item.id, dueDate: periodRange(period) },
+            select: { transaction: { select: { id: true, date: true, amount: true, currency: true, note: true } } },
+          });
           const candidates = await prisma.transaction.findMany({
-            where: { type: "EXPENSE", accountId: item.accountId, source: { not: "RECURRING" }, date: periodRange(period) },
+            where: { type: "EXPENSE", accountId: item.accountId, source: { not: "RECURRING" }, recurringSettlement: { is: null }, date: periodRange(period) },
             select: { id: true, date: true, amount: true, currency: true, categoryId: true, note: true },
           });
           const matched = matchRecurringToTransactions(
             [{ id: item.id, name: item.name, amount: num(item.amount), currency: item.currency, categoryId: item.categoryId, kind: item.kind, frequency: item.frequency, nextDate: item.nextDate }],
             candidates.map((tx) => ({ id: tx.id, amount: num(tx.amount), currency: tx.currency, categoryId: tx.categoryId, note: tx.note })),
           );
-          const manual = candidates.filter((tx) => matched.matchedTransactionIds.has(tx.id));
+          const manual = [
+            ...settledHere.map((row) => row.transaction),
+            ...candidates.filter((tx) => matched.matchedTransactionIds.has(tx.id)),
+          ];
           const describeManual = manual.map((tx) => `${tx.id} (${toISODate(tx.date)}, ${money(num(tx.amount), tx.currency)}, "${tx.note ?? ""}")`).join("; ");
           const describePosted = posted.map((row) => `${row.id} (${toISODate(row.date)})`).join("; ");
           if (posted.length > expected.length) {

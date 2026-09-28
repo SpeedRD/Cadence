@@ -41,7 +41,9 @@
  *      it holds however the RecurringItem is edited, paused or deleted
  *      afterwards, because none of that can change a key already written. It
  *      also means an auto-posted contribution's two rows are one event, counted
- *      once, whether or not the item behind them still exists.
+ *      once, whether or not the item behind them still exists. A charge the
+ *      user entered that posting settled an occurrence with (RecurringSettlement)
+ *      carries the same key through its settlement and is read the same way.
  *   2. Anything else is heuristic, because Cadence has no link between an item
  *      and a charge it did not write itself: same currency, amount within one
  *      cent, and either the item's category or its name in the note. See
@@ -60,6 +62,7 @@ import { num, round2, sum } from "@/lib/money";
 import { daysElapsedInMonth, monthForDate, monthWindow, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
 import { monthlyEquivalent, owedOccurrences } from "@/lib/recurring";
+import { chargeMatchesItem, itemsWithAmbiguousCategory } from "@/lib/recurring-settlement";
 import { ownShare } from "@/lib/shared-expense";
 import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } from "@/lib/transactions";
 
@@ -69,9 +72,6 @@ import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums
 
 export const MIN_HISTORICAL_MONTHS = 3;
 export const MAX_HISTORICAL_MONTHS = 6;
-
-/** Amounts within a cent of each other are treated as the same charge. */
-const AMOUNT_MATCH_TOLERANCE = 0.01;
 
 /** "On pace" band: within 2% of the average, or $1-equivalent, whichever is larger. */
 const ON_PACE_TOLERANCE_RATIO = 0.02;
@@ -124,15 +124,6 @@ export interface RecurringMatchResult {
   matchedCountByItemId: Map<string, number>;
 }
 
-function normalizeForMatch(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-/** Currency, amount and category: everything a category-only match can see. */
-function shapeKey(item: RecurringForMatch): string {
-  return `${item.currency}|${item.amount.toFixed(2)}|${item.categoryId ?? ""}`;
-}
-
 /**
  * Matches recurring items (subscriptions or contributions) to actual expense
  * transactions in the same set, so a real charge and its recurring item are
@@ -152,6 +143,9 @@ function shapeKey(item: RecurringForMatch): string {
  *     cannot tell them apart, so for both of them a category match alone is not
  *     enough and the item's name must appear in the note. Without that, a $50
  *     doctor's visit filed under Health could satisfy a $50 gym membership.
+ *
+ * The per-pair predicate is chargeMatchesItem (src/lib/recurring-settlement.ts),
+ * the one recurring posting and the payday check-in settle occurrences with.
  */
 export function matchRecurringToTransactions(
   items: RecurringForMatch[],
@@ -162,27 +156,12 @@ export function matchRecurringToTransactions(
   const matchedCountByItemId = new Map<string, number>();
 
   const ordered = [...items].sort((a, b) => a.id.localeCompare(b.id));
-  const shapeCounts = new Map<string, number>();
-  for (const item of ordered) {
-    const key = shapeKey(item);
-    shapeCounts.set(key, (shapeCounts.get(key) ?? 0) + 1);
-  }
+  const ambiguous = itemsWithAmbiguousCategory(ordered);
 
   for (const item of ordered) {
-    const normalizedName = normalizeForMatch(item.name);
-    const categoryIsAmbiguous = (shapeCounts.get(shapeKey(item)) ?? 0) > 1;
-
     for (const tx of transactions) {
       if (matchedTransactionIds.has(tx.id)) continue;
-      if (tx.currency !== item.currency) continue;
-      if (Math.abs(tx.amount - item.amount) > AMOUNT_MATCH_TOLERANCE) continue;
-      const nameMatches =
-        normalizedName.length > 0 &&
-        Boolean(tx.note) &&
-        normalizeForMatch(tx.note as string).includes(normalizedName);
-      const categoryMatches =
-        item.categoryId !== null && tx.categoryId === item.categoryId && !categoryIsAmbiguous;
-      if (!nameMatches && !categoryMatches) continue;
+      if (!chargeMatchesItem(item, tx, ambiguous.has(item.id))) continue;
 
       matchedTransactionIds.add(tx.id);
       actualNativeByItemId.set(item.id, (actualNativeByItemId.get(item.id) ?? 0) + tx.amount);
@@ -369,6 +348,7 @@ async function computeMonthActuals(
         externalId: true,
         isExtraordinary: true,
         yourShare: true,
+        recurringSettlement: { select: { occurrenceKey: true, kind: true } },
       },
     }),
     // Every contribution in the window; which of them are already represented
@@ -394,26 +374,11 @@ async function computeMonthActuals(
   }));
   const itemById = new Map(recurringItems.map((item) => [item.id, item]));
 
-  // An auto-posted occurrence is one event written as two rows. The pairing key
-  // both rows carry survives anything that can happen to the RecurringItem
-  // afterwards - editing its amount, pausing it, deleting it - which is exactly
-  // what reading the item's current fields did not.
-  const postedExternalIds = new Set(
-    transactions
-      .filter((tx) => tx.source === "RECURRING" && tx.externalId !== null)
-      .map((tx) => tx.externalId as string),
-  );
-  const pairedContributionKeys = new Set(
-    goalContributions
-      .map((contribution) => contribution.recurringExternalId)
-      .filter((key): key is string => key !== null && postedExternalIds.has(key)),
-  );
-
-  // A hand-logged contribution that moved money is likewise one event as two
-  // rows: the GoalContribution, counted below in goalContributionTotal, and the
-  // MANUAL Transaction it wrote (see manualContributionExternalId). The
-  // Transaction is set aside here so it is neither lifestyle spending nor a
-  // heuristic match for some CONTRIBUTION item that happens to share its amount.
+  // A hand-logged contribution that moved money is one event as two rows: the
+  // GoalContribution, counted below in goalContributionTotal, and the MANUAL
+  // Transaction it wrote (see manualContributionExternalId). The Transaction is
+  // set aside here so it is neither lifestyle spending nor a heuristic match
+  // for some CONTRIBUTION item that happens to share its amount.
   const manualContributionTwinIds = new Set(
     transactions
       .filter(
@@ -425,6 +390,30 @@ async function computeMonthActuals(
       .map((tx) => tx.id),
   );
 
+  // The ledger row standing for one recurring occurrence: the RECURRING row
+  // posting wrote, keyed "<itemId>:<YYYY-MM-DD>", or the charge the user
+  // entered that posting settled the occurrence with instead
+  // (RecurringSettlement, same key). A hand-logged contribution's own expense
+  // can settle one too, but it stays the manual twin above.
+  const occurrenceKeyOf = (tx: (typeof transactions)[number]): string | null => {
+    if (tx.source === "RECURRING") return tx.externalId;
+    if (manualContributionTwinIds.has(tx.id)) return null;
+    return tx.recurringSettlement?.occurrenceKey ?? null;
+  };
+
+  // An auto-posted occurrence is one event written as two rows. The pairing key
+  // both rows carry survives anything that can happen to the RecurringItem
+  // afterwards - editing its amount, pausing it, deleting it - which is exactly
+  // what reading the item's current fields did not.
+  const postedExternalIds = new Set(
+    transactions.map(occurrenceKeyOf).filter((key): key is string => key !== null),
+  );
+  const pairedContributionKeys = new Set(
+    goalContributions
+      .map((contribution) => contribution.recurringExternalId)
+      .filter((key): key is string => key !== null && postedExternalIds.has(key)),
+  );
+
   let committedActual = 0;
   let contributionActual = 0;
   const actualSubscriptionItemIds = new Set<string>();
@@ -432,14 +421,17 @@ async function computeMonthActuals(
   const postedTransactionIds = new Set<string>();
 
   for (const tx of transactions) {
-    if (tx.source !== "RECURRING" || tx.externalId === null) continue;
-    const itemId = recurringItemIdFromExternalId(tx.externalId);
+    const key = occurrenceKeyOf(tx);
+    if (key === null) continue;
+    const itemId = recurringItemIdFromExternalId(key);
     const item = itemId ? itemById.get(itemId) : undefined;
     // A contribution is known by its GoalContribution twin first and by the
-    // item's kind second, so an occurrence stays savings even after the item
-    // behind it is gone.
+    // item's kind second (as recorded on a settlement, then as it is now), so
+    // an occurrence stays savings even after the item behind it is gone.
     const isContribution =
-      pairedContributionKeys.has(tx.externalId) || item?.kind === "CONTRIBUTION";
+      pairedContributionKeys.has(key) ||
+      tx.recurringSettlement?.kind === "CONTRIBUTION" ||
+      item?.kind === "CONTRIBUTION";
     const amount = toDisplay(num(tx.amount), tx.currency);
 
     if (isContribution) {

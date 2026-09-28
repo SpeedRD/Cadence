@@ -54,19 +54,26 @@ export function manualContributionIdFromTransaction(row: {
 }
 
 /**
- * The key a RECURRING-sourced row shares with the GoalContribution posted
- * beside it ("<itemId>:<YYYY-MM-DD>", see recurringExternalId in
- * src/lib/recurring-posting.ts), or null for any other row. Only a lookup can
- * tell whether a contribution actually exists for it - a subscription's row
- * carries the same shape of key with nothing paired - so callers that cascade
- * must check, and transactionEditBlock deliberately does not use this.
+ * The key a row shares with the GoalContribution recurring posting wrote for
+ * it ("<itemId>:<YYYY-MM-DD>", see recurringExternalId in
+ * src/lib/recurring-settlement.ts), or null for any other row: a RECURRING
+ * row's own externalId, or - for a charge the user entered that posting
+ * settled an occurrence with - its RecurringSettlement's occurrenceKey, which
+ * the caller must have loaded. Only a lookup can tell whether a contribution
+ * actually exists for it - a subscription's occurrence carries the same shape
+ * of key with nothing paired - so callers that cascade must check, and
+ * transactionEditBlock deliberately does not use this.
  */
 export function recurringContributionKeyFromTransaction(row: {
   source: string;
   externalId: string | null;
+  recurringSettlement?: { occurrenceKey: string } | null;
 }): string | null {
-  if (row.source !== "RECURRING" || !row.externalId) return null;
-  return row.externalId;
+  if (row.source === "RECURRING") return row.externalId || null;
+  // A hand-logged contribution's own expense can settle an occurrence too, but
+  // its contribution is the manual one (manualContributionIdFromTransaction).
+  if (manualContributionIdFromTransaction(row) !== null) return null;
+  return row.recurringSettlement?.occurrenceKey ?? null;
 }
 
 export type TransactionEditBlock =

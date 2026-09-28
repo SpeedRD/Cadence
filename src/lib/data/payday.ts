@@ -40,13 +40,14 @@ import {
   type PeriodRef,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
+import { recurringExternalId } from "@/lib/recurring-settlement";
 import type { paydayConfirmSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAccountBalances } from "@/lib/data/accounts";
 import { getPeriodSummary, type CommittedItem } from "@/lib/data/period-summary";
 import { listGoals } from "@/lib/data/goals";
-import { matchRecurringToTransactions } from "@/lib/data/monthly";
+import { isAlreadyInLedger, loadSettlementPlan, type SettlementPlan } from "@/lib/data/recurring-settlement";
 
 import type { AppContext } from "@/lib/data/context";
 
@@ -574,32 +575,31 @@ function ledgerBefore(
 
 /**
  * How many of each committed item's owed occurrences in the plan period are
- * already in the ledger from another route, so the plan does not reserve money
- * for a charge that has already gone out.
+ * already in the ledger, so the plan does not reserve money for a charge that
+ * has already gone out.
  *
- * The rule is the posting job's (the `consumed` set in
- * src/lib/recurring-posting.ts): one logged charge answers for exactly one
- * occurrence, never for a whole item. A weekly item with two charges still
- * ahead and one payment in the ledger has one occurrence covered and one still
- * owed. Every candidate here lies inside the one plan period - the same window
- * that job judges each occurrence over - so consuming reduces to a count: the
- * item's matched charges, capped at the occurrences it still owes. The owed
- * count is getPeriodSummary's, from the same owedOccurrences() walk the
- * committed figure and the Afford calculator use; nothing is re-enumerated.
- *
- * `matchedCountByItemId` must come from candidates that exclude RECURRING
- * rows: those are the posting job's own output for occurrences it has already
- * rolled past, not payments of the ones still ahead, and counting one would
- * cancel a charge that is genuinely still due.
+ * The verdict is recurring posting's own, occurrence by occurrence: the
+ * settlement plan (loadSettlementPlan, src/lib/data/recurring-settlement.ts)
+ * that postDueRecurringItems settles occurrences from - one charge the user
+ * entered answers for exactly one occurrence of one item, over every account,
+ * with the same window and the same look-alike guard - plus any occurrence
+ * whose RECURRING row already exists. Planned through the plan period's end,
+ * it names the same charge for every occurrence posting will reach, so what
+ * the check-in shows as already paid is what posting will roll past without
+ * a second row. The owed dates are getPeriodSummary's, from the same
+ * owedOccurrences() walk the committed figure and the Afford calculator use;
+ * nothing is re-enumerated.
  */
 export function loggedOccurrencesByItem(
-  items: readonly Pick<CommittedItem, "id" | "occurrenceCount">[],
-  matchedCountByItemId: ReadonlyMap<string, number>,
+  items: readonly Pick<CommittedItem, "id" | "occurrenceDates">[],
+  plan: SettlementPlan,
 ): Map<string, number> {
   const logged = new Map<string, number>();
   for (const item of items) {
-    const matched = matchedCountByItemId.get(item.id) ?? 0;
-    logged.set(item.id, Math.max(0, Math.min(matched, item.occurrenceCount)));
+    logged.set(
+      item.id,
+      item.occurrenceDates.filter((due) => isAlreadyInLedger(plan, recurringExternalId(item.id, due))).length,
+    );
   }
   return logged;
 }
@@ -745,8 +745,7 @@ export async function getPaydayCheckinDraft(
     carryover,
     settings,
     existing,
-    recurringForMatchRows,
-    plannedPeriodExpenses,
+    settlementPlan,
     existingBudgetRows,
   ] = await Promise.all([
     // Every account, not only the active ones: a check-in that recorded income
@@ -769,47 +768,15 @@ export async function getPaydayCheckinDraft(
       where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
       include: { snapshots: true, allocations: true },
     }),
-    prisma.recurringItem.findMany({
-      where: {
-        active: true,
-        kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] },
-        // No lower bound: an overdue item is still owed and still appears in
-        // the plan's committed list, so it needs an already-paid verdict too.
-        nextDate: { lte: plan.end },
-      },
-      select: {
-        id: true,
-        name: true,
-        amount: true,
-        currency: true,
-        categoryId: true,
-        kind: true,
-        frequency: true,
-        nextDate: true,
-      },
-    }),
-    // Charges that could be an owed occurrence already paid through another
-    // route. RECURRING rows are excluded: they are posting's own output for
-    // occurrences already rolled past - see loggedOccurrencesByItem.
-    prisma.transaction.findMany({
-      where: { type: "EXPENSE", source: { not: "RECURRING" }, date: { gte: plan.start, lte: plan.end } },
-      select: { id: true, amount: true, currency: true, categoryId: true, note: true },
-    }),
+    // Which owed occurrences are already paid: posting's own verdict, planned
+    // through the period's end - see loggedOccurrencesByItem.
+    loadSettlementPlan(plan.end),
     prisma.budget.findMany({
       where: { year: planRef.year, month: planRef.month, period: planRef.period, categoryId: { not: null } },
     }),
   ]);
 
-  const forMatch = recurringForMatchRows.map((item) => ({ ...item, amount: num(item.amount) }));
-  const matchableExpenses = plannedPeriodExpenses.map((tx) => ({
-    id: tx.id,
-    amount: num(tx.amount),
-    currency: tx.currency,
-    categoryId: tx.categoryId,
-    note: tx.note,
-  }));
-  const { matchedCountByItemId } = matchRecurringToTransactions(forMatch, matchableExpenses);
-  const loggedByItem = loggedOccurrencesByItem(planSummary.committedItems, matchedCountByItemId);
+  const loggedByItem = loggedOccurrencesByItem(planSummary.committedItems, settlementPlan);
 
   // Category budgets already saved for the plan period - set by hand on the
   // Budgets page, copied forward, or written by an earlier confirmation and
@@ -1128,8 +1095,7 @@ export async function confirmPaydayCheckin(
     essentialCategories,
     flexibleCategories,
     carryover,
-    recurringForMatchRows,
-    plannedPeriodExpenses,
+    settlementPlan,
     existingCheckinSnapshots,
   ] = await Promise.all([
     getAccountBalances(context, { status: "ALL" }),
@@ -1142,32 +1108,9 @@ export async function confirmPaydayCheckin(
       where: { kind: "EXPENSE", isEssentialFixed: false, isSubscriptionDefault: false, isSavingsDefault: false },
     }),
     getAvailableCarryover(planRef, context),
-    prisma.recurringItem.findMany({
-      where: {
-        active: true,
-        kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] },
-        // No lower bound: an overdue item is still owed and still appears in
-        // the plan's committed list, so it needs an already-paid verdict too.
-        nextDate: { lte: plan.end },
-      },
-      select: {
-        id: true,
-        name: true,
-        amount: true,
-        currency: true,
-        categoryId: true,
-        kind: true,
-        frequency: true,
-        nextDate: true,
-      },
-    }),
-    // Charges that could be an owed occurrence already paid through another
-    // route. RECURRING rows are excluded: they are posting's own output for
-    // occurrences already rolled past - see loggedOccurrencesByItem.
-    prisma.transaction.findMany({
-      where: { type: "EXPENSE", source: { not: "RECURRING" }, date: { gte: plan.start, lte: plan.end } },
-      select: { id: true, amount: true, currency: true, categoryId: true, note: true },
-    }),
+    // Which owed occurrences are already paid: posting's own verdict, planned
+    // through the period's end - see loggedOccurrencesByItem.
+    loadSettlementPlan(plan.end),
     // Read before the write so income already recorded for an account archived
     // since can be carried into the totals rather than dropped.
     prisma.paydayCheckin.findFirst({
@@ -1210,16 +1153,7 @@ export async function confirmPaydayCheckin(
     }, archivedIncome),
   );
 
-  const forMatch = recurringForMatchRows.map((item) => ({ ...item, amount: num(item.amount) }));
-  const matchableExpenses = plannedPeriodExpenses.map((tx) => ({
-    id: tx.id,
-    amount: num(tx.amount),
-    currency: tx.currency,
-    categoryId: tx.categoryId,
-    note: tx.note,
-  }));
-  const { matchedCountByItemId } = matchRecurringToTransactions(forMatch, matchableExpenses);
-  const loggedByItem = loggedOccurrencesByItem(planSummary.committedItems, matchedCountByItemId);
+  const loggedByItem = loggedOccurrencesByItem(planSummary.committedItems, settlementPlan);
 
   // The same per-occurrence accounting the draft showed, recomputed here from
   // live data rather than trusted from the client.

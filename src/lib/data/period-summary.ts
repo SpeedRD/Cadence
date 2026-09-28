@@ -60,6 +60,8 @@ export interface CommittedItem {
   perOccurrenceAmount: number;
   /** How many occurrences of this item the window owes. */
   occurrenceCount: number;
+  /** Their due dates (occurrenceCount of them), in order - an overdue item's outstanding one first. */
+  occurrenceDates: Date[];
   currency: string;
   nextDate: Date;
   /** The item's due date has passed and posting has not been able to clear it. */
@@ -137,6 +139,7 @@ export async function getPeriodSummary(
         categoryId: true,
         isExtraordinary: true,
         yourShare: true,
+        recurringSettlement: { select: { kind: true } },
       },
     }),
     prisma.category.findMany({ orderBy: { name: "asc" } }),
@@ -245,9 +248,16 @@ export async function getPeriodSummary(
     // already do, closes that gap: the row stays excluded from budget
     // spending (and from leaking into a category's average, e.g.
     // getCategorySuggestions) however its category ends up.
+    //
+    // A charge the user entered that recurring posting settled a
+    // CONTRIBUTION occurrence with (RecurringSettlement) is the same kind of
+    // row: posting wrote the GoalContribution beside it, so it is savings, not
+    // spending, and is treated exactly like the manual twin.
     const inSavingsOrSubscriptionCategory =
       transaction.categoryId !== null && outsideBudgetCategoryIds.has(transaction.categoryId);
-    const isManualContributionTwin = manualContributionIdFromTransaction(transaction) !== null;
+    const isManualContributionTwin =
+      manualContributionIdFromTransaction(transaction) !== null ||
+      transaction.recurringSettlement?.kind === "CONTRIBUTION";
     const isRecurringPosting = transaction.source === "RECURRING";
 
     // The per-category breakdown stays complete whatever the budget covers -
@@ -305,6 +315,7 @@ export async function getPeriodSummary(
         nativeAmount: round2(perOccurrenceAmount * occurrences.length),
         perOccurrenceAmount,
         occurrenceCount: occurrences.length,
+        occurrenceDates: occurrences,
         currency: item.currency,
         nextDate: item.nextDate,
         overdue: item.nextDate.getTime() < owedFrom.getTime(),
