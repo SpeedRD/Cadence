@@ -596,6 +596,42 @@ full walkthrough.
 - Afford projects future income from history, so an account with no comparable-period
   income is judged on its buffer floor alone.
 
+### On your phone
+
+On a phone the same app switches to a bottom tab bar, list layouts in place of wide
+tables, bottom-sheet dialogs, and a full-screen payday check-in; a tablet keeps the
+desktop layout. Captured in the iOS Simulator.
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-dashboard.png" width="160" alt="Cadence dashboard on an iPhone: the period's safe-to-spend per day as the hero figure, spending against budget, committed and income figures, and the Next 7 days list above the bottom tab bar">
+      <br><sub>Dashboard: hero figure and Next 7 days</sub>
+    </td>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-transactions.png" width="160" alt="Transactions page on an iPhone: a search field beside a Filters button, and the ledger grouped by day with each row's category, account, source badge and amount">
+      <br><sub>Transactions: day-grouped list and Filters button</sub>
+    </td>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-payday-check-in.png" width="160" alt="Payday check-in step 3 on an iPhone: the account buffer and each goal collapsed to a single line, with the Available for flexible categories line pinned above the Back and Next buttons">
+      <br><sub>Payday check-in step 3: collapsed blocks, pinned Available line</sub>
+    </td>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-afford-verdict.png" width="160" alt="Afford calculator on an iPhone: a Viable verdict, and directly under it the Record it card with the I'll add it myself later and I bought this buttons">
+      <br><sub>Afford: Viable verdict with the Record it card under it</sub>
+    </td>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-inbox.png" width="160" alt="Inbox on an iPhone: two advisory rows, each a charge that looks recurring, with its last amount, cadence and next expected date, a review link and a Dismiss button">
+      <br><sub>Inbox: two recurring-charge suggestions</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="screenshots/tablet-dashboard.png" width="480" alt="Cadence dashboard on an iPad Air 11-inch in the desktop layout: the sidebar navigation with an Inbox count badge, the payday check-in prompt, the period hero with safe-to-spend per day, and the monthly spending pace card">
+  <br><sub>The same dashboard on an iPad Air 11-inch, in the desktop layout with the sidebar</sub>
+</p>
+
 ## Project status
 
 Cadence is an actively used personal project. Manual tracking, CSV import, budgets,
