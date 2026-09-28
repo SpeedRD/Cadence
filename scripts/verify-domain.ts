@@ -15,6 +15,7 @@ import {
   BPD_RATE_MAX_AGE_DAYS,
   BPD_SOURCE,
   fetchBpdRates,
+  resetBpdFailureBackoffForTests,
   isSameUtcDay,
   parseBpdPayload,
   toRateTableEntries,
@@ -5998,11 +5999,22 @@ async function main() {
     console.log("-- fetchBpdRates(): a hung response is abandoned at the configured hard timeout --");
     const hangingFetch = ((_input: unknown, init?: { signal?: AbortSignal }) =>
       new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () =>
-          reject(new DOMException("The operation was aborted.", "AbortError")),
-        );
+        // AbortSignal.timeout's timer is unref'd, so a timeout longer than
+        // anything else keeping the process alive would let node exit
+        // mid-check with code 0. This ref'd timer holds the loop open past
+        // any too-long timeout and fails the stub instead, so the elapsed-time
+        // check reports it.
+        const guard = setTimeout(() => reject(new Error("hung fetch was never aborted")), 15000);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(guard);
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
       })) as typeof fetch;
     const originalFetch = globalThis.fetch;
+    // An earlier section's real getRateTable() may have failed against the live
+    // bank (403/timeout) and armed the module's failure backoff, which would
+    // make this call return at once without reaching the stub.
+    resetBpdFailureBackoffForTests();
     globalThis.fetch = hangingFetch;
     const hangStart = Date.now();
     const hangResult = await fetchBpdRates();

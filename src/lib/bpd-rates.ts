@@ -37,6 +37,16 @@ const FAILURE_BACKOFF_MS = 10 * 60 * 1000;
 let lastFailureAt = 0;
 
 /**
+ * Test-only: clears the failure backoff so a timing check isn't short-circuited
+ * by an earlier real fetch that failed. Nothing in the app calls it, and it is
+ * a no-op in production builds.
+ */
+export function resetBpdFailureBackoffForTests(): void {
+  if (process.env.NODE_ENV === "production") return;
+  lastFailureAt = 0;
+}
+
+/**
  * Exported so a hard-timeout test can call this directly without depending
  * on ExchangeRate table state. Note that from a server this currently never
  * succeeds - the feed sits behind bot protection that 403s every bare HTTP
