@@ -1,4 +1,5 @@
 import { civilDate, daysInMonth } from "@/lib/date";
+import { parseAmountInput } from "@/lib/money";
 
 /** RFC 4180-style parser: quoted fields, escaped quotes, CR/LF line endings. */
 export function parseCsv(text: string): string[][] {
@@ -115,7 +116,8 @@ export function parseFlag(value: string): boolean {
 
 /**
  * Amounts as banks export them: "1,234.56", "-$45.00", "(45.00)", "45,00 EUR".
- * Returns a signed number, or null when nothing numeric is present.
+ * Returns a signed number, or null when the text cannot be read as an amount
+ * (nothing numeric, more than two decimals, a misplaced separator).
  */
 export function parseAmount(value: string): number | null {
   let text = value.trim();
@@ -126,25 +128,9 @@ export function parseAmount(value: string): number | null {
     negative = true;
     text = text.slice(1, -1);
   }
-  text = text.replace(/[^0-9.,+-]/g, "");
-  if (text.startsWith("-")) {
-    negative = true;
-    text = text.slice(1);
-  } else if (text.startsWith("+")) {
-    text = text.slice(1);
-  }
-  if (!text) return null;
-
-  const lastComma = text.lastIndexOf(",");
-  const lastDot = text.lastIndexOf(".");
-  if (lastComma > lastDot) {
-    // European style: 1.234,56
-    text = text.replace(/\./g, "").replace(",", ".");
-  } else {
-    text = text.replace(/,/g, "");
-  }
-
-  const parsed = Number(text);
-  if (!Number.isFinite(parsed)) return null;
-  return negative ? -parsed : parsed;
+  // Currency symbols and letters are dropped; what is left is read by the same
+  // rule as the typed-amount field, so the two never disagree about "1,500".
+  const parsed = parseAmountInput(text.replace(/[^0-9.,+\s-]/g, ""));
+  if (!parsed.ok) return null;
+  return negative ? -Math.abs(parsed.amount) : parsed.amount;
 }

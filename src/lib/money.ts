@@ -28,18 +28,31 @@ export type ParsedAmount =
   | { ok: true; amount: number }
   | { ok: false; reason: "empty" | "invalid" | "too_many_decimals" | "too_large" };
 
+/** The first digits before a thousands separator: 1-3 digits, no leading zero ("0,125" is not 125). */
+function isLeadingGroup(group: string): boolean {
+  return /^[1-9]\d{0,2}$/.test(group);
+}
+
+/** Digits split on a thousands separator: a valid leading group, then groups of exactly three. */
+function isGroupedInteger(groups: string[]): boolean {
+  return isLeadingGroup(groups[0]) && groups.slice(1).every((group) => /^\d{3}$/.test(group));
+}
+
 /**
  * Parse a money amount the way people actually type it on a phone or paste it
  * from a statement, without ever guessing at a hundredfold difference:
  *
  *   "12.50" / "12,50" / "12,5"  -> 12.5   (either separator is a decimal point)
  *   "1,250" / "1,250.00"        -> 1250   (a comma followed by exactly three
- *                                          digits is a thousands separator,
- *                                          matching how Cadence formats money)
+ *                                          digits is a thousands separator when
+ *                                          the digits before it are a valid
+ *                                          leading group of 1-3 digits, not a
+ *                                          lone 0, matching how Cadence
+ *                                          formats money)
  *   "1.250,50" / "1,234.56"     -> both separators present: the last one is the
  *                                  decimal point, the other groups thousands
  *   "1 250,50"                  -> spaces are ignored
- *   "12.345" / "1.250"          -> rejected: more than two decimals is either a
+ *   "0,125" / "12.345" / "1.250" -> rejected: more than two decimals is either a
  *                                  typo or a thousands separator in a locale
  *                                  Cadence does not display in, so ask rather
  *                                  than pick
@@ -71,9 +84,7 @@ export function parseAmountInput(raw: string): ParsedAmount {
     const pieces = text.split(decimalSeparator);
     if (pieces.length !== 2) return { ok: false, reason: "invalid" };
     const groups = pieces[0].split(groupSeparator);
-    if (groups[0] === "" || groups.slice(1).some((group) => group.length !== 3)) {
-      return { ok: false, reason: "invalid" };
-    }
+    if (!isGroupedInteger(groups)) return { ok: false, reason: "invalid" };
     integerPart = groups.join("");
     fractionPart = pieces[1];
   } else if (lastComma !== -1 || lastDot !== -1) {
@@ -81,7 +92,7 @@ export function parseAmountInput(raw: string): ParsedAmount {
     const pieces = text.split(separator);
     if (pieces.length === 2) {
       const [whole, rest] = pieces;
-      if (separator === "," && whole !== "" && rest.length === 3) {
+      if (separator === "," && rest.length === 3 && isLeadingGroup(whole)) {
         integerPart = whole + rest;
         fractionPart = "";
       } else {
@@ -89,9 +100,7 @@ export function parseAmountInput(raw: string): ParsedAmount {
         fractionPart = rest;
       }
     } else {
-      if (pieces[0] === "" || pieces.slice(1).some((group) => group.length !== 3)) {
-        return { ok: false, reason: "invalid" };
-      }
+      if (!isGroupedInteger(pieces)) return { ok: false, reason: "invalid" };
       integerPart = pieces.join("");
       fractionPart = "";
     }

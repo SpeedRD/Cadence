@@ -376,6 +376,34 @@ async function main() {
   const eightCents = parseAmountInput("0.08");
   eq("parsed cents are exact for 0.07 + 0.01 style inputs", eightCents.ok ? eightCents.amount : "error", 0.08);
 
+  // One rule for both parsers: the typed-amount field and the CSV importer read the
+  // same text as the same value, and text neither can place is refused by both.
+  const sharedAmountCases: [string, number | null][] = [
+    ["1,500", 1500],
+    ["-1,250", -1250],
+    ["RD$ 12,345", 12345],
+    ["1,500.00", 1500],
+    ["12,50", 12.5],
+    ["12,5", 12.5],
+    ["1.500,00", 1500],
+    ["1,234,567", 1234567],
+    ["999,999", 999999],
+    ["12.50", 12.5],
+    ["0,99", 0.99],
+    ["0,125", null],
+    ["0,500", null],
+    ["0.125", null],
+    ["0,125,000", null],
+    ["01,500", null],
+    ["1234,567", null],
+    ["not an amount", null],
+  ];
+  for (const [raw, expected] of sharedAmountCases) {
+    const typed = parseAmountInput(raw.replace(/[^0-9.,+\-\s]/g, ""));
+    eq(`CSV reads ${JSON.stringify(raw)} as ${expected}`, parseAmount(raw), expected);
+    eq(`typed amount reads ${JSON.stringify(raw)} as ${expected}`, typed.ok ? typed.amount : null, expected);
+  }
+
   const { transactionSchema } = await import("../src/lib/validation");
   const txBase = { date: "2026-08-20", currency: "DOP", type: "EXPENSE", accountId: "acct", categoryId: "", note: "" };
   const commaTx = transactionSchema.safeParse({ ...txBase, amount: "12,50" });
