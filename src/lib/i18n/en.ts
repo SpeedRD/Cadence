@@ -117,6 +117,7 @@ export const en = {
       transferGroup: "Transfer group",
       externalId: "External ID",
       isExtraordinary: "One-off",
+      isOneOffIncome: "One-off income",
       yourShare: "Your share",
       reimburses: "Reimburses",
       createdAt: "Created at",
@@ -421,6 +422,9 @@ export const en = {
     oneOffColumn: "One-off column",
     oneOffColumnHint:
       "Optional. A row whose cell says Yes is imported as a one-off, left out of typical-spending averages.",
+    oneOffIncomeColumn: "One-off income column",
+    oneOffIncomeColumnHint:
+      "Optional. An income row whose cell says Yes is imported as one-off income, left out of the income Cadence expects in future periods.",
     yourShareColumn: "Your share column",
     yourShareColumnHint:
       "Optional. A spending row with an amount here is imported as a shared expense, with that much of it yours.",
@@ -533,6 +537,12 @@ export const en = {
     keepAsNormal: "Keep as normal",
     appliedExtraordinary: "One-off",
     appliedNormal: "Normal spending",
+    // One-off income (a gift, a sale, a refund) - see Transaction.isOneOffIncome.
+    oneOffIncomeBadge: "One-off income",
+    oneOffIncomeLabel: "One-off income",
+    oneOffIncomeHint:
+      "A gift, a sale, a refund. It counts as this period's income, but Cadence won't expect it again in future periods.",
+    oneOffIncomeNotApplicable: "Only income you logged or imported can be marked as one-off income",
     // Shared expenses and their reimbursements - see src/lib/shared-expense.ts.
     sharedExpenseLabel: "This was a shared expense",
     sharedExpenseHint:

@@ -63,6 +63,8 @@ export interface TransactionRow extends SharedExpenseDetails {
   hasLinkedGoalContribution: boolean;
   /** The user marked this expense as a one-off - see Transaction.isExtraordinary. */
   isExtraordinary: boolean;
+  /** The user marked this income as a one-off - see Transaction.isOneOffIncome. */
+  isOneOffIncome: boolean;
   /** The shared expense this INCOME row pays back, or null - see Transaction.reimbursesTransactionId. */
   reimbursesTransactionId: string | null;
   note: string | null;
@@ -181,6 +183,7 @@ export async function listTransactions(
       externalId: transaction.externalId,
       hasLinkedGoalContribution: contributionKey !== null && pairedKeys.has(contributionKey),
       isExtraordinary: transaction.isExtraordinary,
+      isOneOffIncome: transaction.isOneOffIncome,
       reimbursesTransactionId: transaction.reimbursesTransactionId,
       note: transaction.note,
       transferId: transaction.transferId,

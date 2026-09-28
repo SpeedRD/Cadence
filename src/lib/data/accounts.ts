@@ -260,6 +260,8 @@ export interface AccountLedgerRow extends SharedExpenseDetails {
   runningBalance: number;
   type: string;
   source: string;
+  /** The user marked this income as a one-off - see Transaction.isOneOffIncome. */
+  isOneOffIncome: boolean;
   transferId: string | null;
   transferDirection: string | null;
   note: string | null;
@@ -314,6 +316,7 @@ export async function getAccountLedger(accountId: string, context: AppContext) {
       runningBalance: round2(running),
       type: transaction.type,
       source: transaction.source,
+      isOneOffIncome: transaction.isOneOffIncome,
       transferId: transaction.transferId,
       transferDirection: transaction.transferDirection,
       note: transaction.note,

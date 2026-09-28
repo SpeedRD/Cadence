@@ -7054,6 +7054,174 @@ async function main() {
     console.log("  ok   shared expense fixtures removed");
   }
 
+  console.log("\n== one-off income ==");
+  {
+    const { canBeOneOffIncome } = await import("../src/lib/transactions");
+    const { getPeriodSummary: summaryFor } = await import("../src/lib/data/period-summary");
+    const { getAccountBalances: balancesFor, getAccountLedger: ledgerFor } = await import("../src/lib/data/accounts");
+    const { listTransactions: listRows } = await import("../src/lib/data/transactions");
+    const { getSpendingTrend: trendFor } = await import("../src/lib/data/reports");
+    const { projectPeriods: projectFor } = await import("../src/lib/data/afford");
+
+    console.log("-- which rows may be one-off income (pure) --");
+    const incomeRow = { type: "INCOME", source: "MANUAL", reimbursesTransactionId: null as string | null };
+    check("a manual income row may", canBeOneOffIncome(incomeRow));
+    check("an imported income row may", canBeOneOffIncome({ ...incomeRow, source: "CSV" }));
+    check("an emailed income row may", canBeOneOffIncome({ ...incomeRow, source: "GMAIL" }));
+    check("an expense may not", !canBeOneOffIncome({ ...incomeRow, type: "EXPENSE" }));
+    check("a transfer leg may not", !canBeOneOffIncome({ ...incomeRow, type: "TRANSFER" }));
+    check("an external transfer may not", !canBeOneOffIncome({ ...incomeRow, type: "EXTERNAL_TRANSFER" }));
+    check("an opening balance may not", !canBeOneOffIncome({ ...incomeRow, type: "OPENING_BALANCE" }));
+    check("a payday check-in's paycheck may not", !canBeOneOffIncome({ ...incomeRow, source: "PAYDAY_CHECKIN" }));
+    check("a posted recurring income row may not", !canBeOneOffIncome({ ...incomeRow, source: "RECURRING" }));
+    check("a deposit linked to a shared expense may not - its link already excludes it", !canBeOneOffIncome({ ...incomeRow, reimbursesTransactionId: "exp1" }));
+
+    console.log("-- transactionSchema: the switch --");
+    {
+      const base = { date: "2026-08-21", currency: "DOP", accountId: "acct", note: "", categoryId: "", amount: "5000" };
+      const flag = (extra: Record<string, string>) => {
+        const parsed = transactionSchema.safeParse({ ...base, ...extra });
+        return parsed.success ? String(parsed.data.isOneOffIncome) : "invalid";
+      };
+      eq("income with the switch on carries true", flag({ type: "INCOME", isOneOffIncome: "true" }), "true");
+      eq("...off, false", flag({ type: "INCOME", isOneOffIncome: "false" }), "false");
+      eq("...and with no switch at all, undefined - an update leaves the stored flag alone", flag({ type: "INCOME" }), "undefined");
+      eq("a deposit linked to a shared expense is never one-off, whatever the field says", flag({ type: "INCOME", isOneOffIncome: "true", reimbursesTransactionId: "exp1" }), "false");
+      eq("...the picker's 'none' is no link", flag({ type: "INCOME", isOneOffIncome: "true", reimbursesTransactionId: "none" }), "true");
+      eq("an expense never carries it, so a row switched to EXPENSE is cleared", flag({ type: "EXPENSE", isOneOffIncome: "true" }), "false");
+      eq("...even with the share switch on", flag({ type: "EXPENSE", isOneOffIncome: "true", isShared: "true", yourShare: "1000" }), "false");
+      eq("an external transfer never carries it", flag({ type: "EXTERNAL_TRANSFER", transferDirection: "IN", isOneOffIncome: "true" }), "false");
+    }
+
+    console.log("-- the motivating case (database): a DOP 5,000 gift back-dated into history --");
+    const giftAccount = await prisma.account.create({ data: { name: "Verify OneOff Account", currency: "DOP", type: "CHECKING" } });
+    const giftToday = civilDate(2026, 9, 20);
+    const giftContext = {
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates,
+      today: giftToday,
+      currentPeriod: periodForDate(giftToday),
+      bufferPercent: 10,
+      bufferFloorAmount: 0,
+      bufferFloorCurrency: "DOP",
+    };
+    const giftRow = (amount: number, date: Date, note: string, extra: { isOneOffIncome?: boolean; type?: "INCOME" | "EXPENSE" } = {}) => ({
+      date,
+      amount,
+      currency: "DOP",
+      type: extra.type ?? ("INCOME" as const),
+      accountId: giftAccount.id,
+      source: "MANUAL" as const,
+      isOneOffIncome: extra.isOneOffIncome ?? false,
+      note,
+    });
+    const giftAccounts = [{ id: giftAccount.id, name: giftAccount.name, currency: "DOP" }];
+    const giftHistoryPeriod = periodInfo({ year: 2026, month: 8, period: "B" });
+    const octoberB = [{ year: 2026, month: 10, period: "B" as const }];
+    const projectedIncome = async () =>
+      (await projectFor(octoberB, giftAccounts[0], giftAccounts, giftContext)).get("2026-10-B")!.account.income;
+    const trendIncome = async () =>
+      (await trendFor({ ...giftContext, currentPeriod: giftHistoryPeriod }, 1))[0].income;
+
+    await prisma.transaction.create({ data: giftRow(20000, civilDate(2026, 8, 20), "Verify OneOff pay") });
+    const baseline = await projectedIncome();
+    eq("baseline: the projection averages the 20,000 of pay in the history walk", baseline, 20000);
+    const summaryBefore = (await summaryFor(giftHistoryPeriod, giftContext)).income;
+    const trendBefore = await trendIncome();
+    const balanceBefore = (await balancesFor(giftContext)).find((a) => a.id === giftAccount.id)!.balance;
+
+    const gift = await prisma.transaction.create({ data: giftRow(5000, civilDate(2026, 8, 21), "Verify OneOff gift") });
+    eq("unflagged, the gift leaks into the projection: 20,000 + 5,000", await projectedIncome(), 25000);
+    const summaryLeaking = (await summaryFor(giftHistoryPeriod, giftContext)).income;
+    const trendLeaking = await trendIncome();
+    const balanceLeaking = (await balancesFor(giftContext)).find((a) => a.id === giftAccount.id)!.balance;
+
+    await prisma.transaction.update({ where: { id: gift.id }, data: { isOneOffIncome: true } });
+    eq("flagged, the projection is back to the baseline", await projectedIncome(), baseline);
+    const summaryFlagged = (await summaryFor(giftHistoryPeriod, giftContext)).income;
+    eq("the period summary counts the gift either way: +5,000 over the baseline", round2(summaryFlagged - summaryBefore), 5000);
+    eq("...and flagging it changes nothing there", summaryFlagged, summaryLeaking);
+    eq("Reports' income counts it either way", `${round2((await trendIncome()) - trendBefore)}/${(await trendIncome()) === trendLeaking}`, "5000/true");
+    const balanceFlagged = (await balancesFor(giftContext)).find((a) => a.id === giftAccount.id)!.balance;
+    eq("the account balance includes it either way: +5,000", `${round2(balanceFlagged - balanceBefore)}/${balanceFlagged === balanceLeaking}`, "5000/true");
+    const ledger = (await ledgerFor(giftAccount.id, giftContext))!;
+    eq("the ledger shows the gift at full value with its flag", JSON.stringify(ledger.rows.filter((row) => row.type === "INCOME").map((row) => [row.effect, row.isOneOffIncome]).sort()), JSON.stringify([[20000, false], [5000, true]]));
+    eq("...and its inflow total counts it", ledger.totals.inflow, 25000);
+    const listed = (await listRows({ accountId: giftAccount.id }, giftContext)).rows;
+    eq("the Transactions listing carries the flag", JSON.stringify(listed.map((row) => [row.note, row.isOneOffIncome]).sort()), JSON.stringify([["Verify OneOff gift", true], ["Verify OneOff pay", false]]));
+
+    await prisma.transaction.update({ where: { id: gift.id }, data: { isOneOffIncome: false } });
+    eq("taking the flag off puts it back in the projection", await projectedIncome(), 25000);
+    await prisma.transaction.update({ where: { id: gift.id }, data: { isOneOffIncome: true } });
+
+    console.log("-- export -> import round trip keeps the flag --");
+    {
+      const { buildExportFiles: exportFiles } = await import("../src/lib/data/export");
+      const { importCsvTransactions } = await import("../src/lib/data/import");
+      const { parseFlag } = await import("../src/lib/csv");
+      const table = parseCsv((await exportFiles("en")).find((file) => file.name === "transactions.csv")!.text);
+      const header = table[0];
+      const col = (name: string) => header.indexOf(name);
+      check("transactions.csv carries a One-off income column", col("One-off income") >= 0);
+      const idColumn = header.length - 1;
+      const exportedById = new Map(table.slice(1).map((cells) => [cells[idColumn], cells]));
+      eq("the gift exports as Yes", exportedById.get(gift.id)![col("One-off income")], "Yes");
+      eq("an ordinary income row exports as No", table.slice(1).find((cells) => cells[2] === "Verify OneOff pay")![col("One-off income")], "No");
+      eq("the spending One-off column is untouched by it", exportedById.get(gift.id)![col("One-off")], "No");
+      const spanish = parseCsv((await exportFiles("es")).find((file) => file.name === "transactions.csv")!.text);
+      check("the Spanish export names the column too", spanish[0].includes("Ingreso único"));
+
+      const rowsFor = () =>
+        table.slice(1).filter((cells) => cells[col("Account")] === "Verify OneOff Account").map((cells) => {
+          const signed = parseAmount(cells[1]) as number;
+          return {
+            date: cells[0],
+            amount: Math.abs(signed),
+            type: signed < 0 ? ("EXPENSE" as const) : ("INCOME" as const),
+            transferDirection: null,
+            note: cells[2] || null,
+            categoryId: null,
+            importAnyway: false,
+            isExtraordinary: parseFlag(cells[col("One-off")]),
+            isOneOffIncome: parseFlag(cells[col("One-off income")]),
+            yourShare: null,
+            reimburses: null,
+          };
+        });
+      check("the file holds both income rows of the account", rowsFor().length === 2);
+      const importAccount = await prisma.account.create({ data: { name: "Verify OneOff Import", currency: "DOP", type: "CHECKING" } });
+      const imported = await importCsvTransactions({ accountId: importAccount.id, currency: "DOP", rows: rowsFor() });
+      eq("both rows import", JSON.stringify(imported), JSON.stringify({ ok: true, count: 2, unresolvedReimbursements: 0 }));
+      const importedRows = await prisma.transaction.findMany({ where: { accountId: importAccount.id } });
+      eq("the re-imported gift keeps its flag", importedRows.find((row) => row.note === "Verify OneOff gift")!.isOneOffIncome, true);
+      eq("...and the pay stays unflagged", importedRows.find((row) => row.note === "Verify OneOff pay")!.isOneOffIncome, false);
+
+      // The importer honours the flag for INCOME rows only, the way it does
+      // isExtraordinary for EXPENSE rows only.
+      const misplaced = await prisma.account.create({ data: { name: "Verify OneOff Misplaced", currency: "DOP", type: "CHECKING" } });
+      await importCsvTransactions({
+        accountId: misplaced.id,
+        currency: "DOP",
+        rows: [
+          { ...rowsFor()[0], type: "EXPENSE", note: "Verify OneOff spending row", isOneOffIncome: true },
+          { ...rowsFor()[0], type: "INCOME", note: "Verify OneOff income row", isOneOffIncome: true, isExtraordinary: true },
+        ],
+      });
+      const misplacedRows = await prisma.transaction.findMany({ where: { accountId: misplaced.id } });
+      const spending = misplacedRows.find((row) => row.note === "Verify OneOff spending row")!;
+      const income = misplacedRows.find((row) => row.note === "Verify OneOff income row")!;
+      eq("a spending row never takes the income flag", `${spending.isOneOffIncome}/${spending.isExtraordinary}`, "false/false");
+      eq("an income row takes it, and never the spending flag", `${income.isOneOffIncome}/${income.isExtraordinary}`, "true/false");
+      await prisma.transaction.deleteMany({ where: { accountId: { in: [importAccount.id, misplaced.id] } } });
+      await prisma.account.deleteMany({ where: { id: { in: [importAccount.id, misplaced.id] } } });
+    }
+
+    await prisma.transaction.deleteMany({ where: { accountId: giftAccount.id } });
+    await prisma.account.delete({ where: { id: giftAccount.id } });
+    console.log("  ok   one-off income fixtures removed");
+  }
+
   console.log("\n== recurring pattern detection ==");
   {
     const {

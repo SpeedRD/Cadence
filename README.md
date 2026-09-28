@@ -187,8 +187,8 @@ column mappings cover a file that already carries more than a bank statement doe
 such as Cadence's own `transactions.csv` export: with an Account column set, only
 the rows naming the account you picked are imported (one pass per account brings
 a multi-account file back), a Category column files each row under the category
-whose name it carries, and One-off, Your share and Reimburses columns restore the
-per-row flags described below - a payback names its shared expense by date,
+whose name it carries, and One-off, One-off income, Your share and Reimburses
+columns restore the per-row flags described below - a payback names its shared expense by date,
 description and amount, and is linked to it when exactly one such expense exists
 (in the same file first, then in the ledger); otherwise it lands as ordinary
 income and the import says so. Every row shows where it came from: manual, CSV,
@@ -220,6 +220,17 @@ has come back so far and what is still pending. Nothing is projected for money
 not yet received; a share is recovered only when its deposit is a real, logged
 row. A shared expense with deposits linked to it cannot be deleted or unshared
 until they are unlinked.
+
+Income that will not come again - a gift, a sale, a refund - can be marked as
+**one-off income** with the switch on the transaction form. It counts as real
+income wherever income is a fact - the period's income, Reports, the account
+ledger and balance - but is left out of the income history Afford averages to
+project future periods, so a single DOP 5,000 gift does not inflate what Cadence
+expects you to earn next. Paychecks recorded by a payday check-in, automatically
+posted recurring income and deposits linked to a shared expense cannot carry the
+flag (the last are already left out of the averages by their link). Flagged rows
+show a "One-off income" badge in the Transactions table and the account ledger,
+and the export's One-off income column brings the flag back through the CSV import.
 
 ### Review queue
 

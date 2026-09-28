@@ -1,4 +1,4 @@
-import { HandCoins, Users } from "lucide-react";
+import { HandCoins, Sparkles, Users } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { formatMoney } from "@/lib/currency";
@@ -48,6 +48,17 @@ export function ReimbursementBadge({
     <Badge variant="outline" className={BADGE_CLASS}>
       <HandCoins className="size-2.5" />
       {t.reimbursementOf(reimburses.note ?? reimburses.categoryName ?? t.uncategorized)}
+    </Badge>
+  );
+}
+
+/** Income the user marked as a one-off: real income here, but not expected again - same badge as a one-off expense. */
+export function OneOffIncomeBadge({ locale }: { locale: Locale }) {
+  const t = getDictionary(locale).transactions;
+  return (
+    <Badge variant="outline" className={BADGE_CLASS}>
+      <Sparkles className="size-2.5" />
+      {t.oneOffIncomeBadge}
     </Badge>
   );
 }

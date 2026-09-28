@@ -25,7 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { CURRENCIES, formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
-import { canBeSharedExpense } from "@/lib/transactions";
+import { canBeOneOffIncome, canBeSharedExpense } from "@/lib/transactions";
 import { saveTransactionAction } from "@/server/actions/transactions";
 
 import type { OpenSharedExpense } from "@/lib/data/transactions";
@@ -45,6 +45,8 @@ export interface TransactionFormValues {
   yourShare?: number | null;
   /** The shared expense an income row pays back (Transaction.reimbursesTransactionId), when editing one. */
   reimbursesTransactionId?: string | null;
+  /** The user marked this income as a one-off (Transaction.isOneOffIncome), when editing one. */
+  isOneOffIncome?: boolean;
   /** With externalId, lets canBeSharedExpense decide whether the share switch is offered; a new row is MANUAL. */
   source?: string;
   externalId?: string | null;
@@ -105,6 +107,17 @@ export function TransactionDialog({
   // reset with `type` below.
   const [isShared, setIsShared] = useState(values.yourShare != null);
   const [currency, setCurrency] = useState(values.currency ?? CURRENCIES[0]);
+  // The one-off income switch, carried as a hidden field like the share
+  // switch, and the reimbursement pick it depends on: a deposit linked to a
+  // shared expense is already left out of income averages by its link, so the
+  // switch is offered only while no expense is picked (canBeOneOffIncome).
+  const [isOneOffIncome, setIsOneOffIncome] = useState(values.isOneOffIncome ?? false);
+  const [reimbursesId, setReimbursesId] = useState(values.reimbursesTransactionId ?? "none");
+  const canFlagOneOffIncome = canBeOneOffIncome({
+    type,
+    source: values.source ?? "MANUAL",
+    reimbursesTransactionId: reimbursesId === "none" ? null : reimbursesId,
+  });
   // Same rows the one-off flag admits: an organic expense. A new row is MANUAL
   // and always qualifies; an edit of a posted recurring charge does not.
   const canShare = canBeSharedExpense({
@@ -139,6 +152,8 @@ export function TransactionDialog({
     if (open) {
       setType(values.type ?? "EXPENSE");
       setIsShared(values.yourShare != null);
+      setIsOneOffIncome(values.isOneOffIncome ?? false);
+      setReimbursesId(values.reimbursesTransactionId ?? "none");
       setCurrency(values.currency ?? CURRENCIES[0]);
       setAccountId(defaultAccountId);
       setAccountTouched(false);
@@ -337,7 +352,10 @@ export function TransactionDialog({
           <Select
             name="reimbursesTransactionId"
             defaultValue={values.reimbursesTransactionId ?? "none"}
-            onValueChange={prefillFromExpense}
+            onValueChange={(next) => {
+              setReimbursesId(next);
+              prefillFromExpense(next);
+            }}
           >
             <SelectTrigger id="transaction-reimburses" className="w-full">
               <SelectValue />
@@ -356,6 +374,22 @@ export function TransactionDialog({
             </SelectContent>
           </Select>
         </Field>
+      ) : null}
+
+      {/* One-off income (Transaction.isOneOffIncome): a gift, a sale, a refund.
+          Still this period's income everywhere; only the projection of
+          future income leaves it out. Absent - no hidden field - on a row
+          that cannot carry it, so transactionSchema leaves the stored flag
+          alone (or clears it, for a deposit just linked to an expense). */}
+      {canFlagOneOffIncome ? (
+        <div className="grid gap-1.5">
+          <input type="hidden" name="isOneOffIncome" value={isOneOffIncome ? "true" : "false"} />
+          <label className="flex items-center gap-2.5 text-sm">
+            <Switch checked={isOneOffIncome} onCheckedChange={setIsOneOffIncome} />
+            {t.oneOffIncomeLabel}
+          </label>
+          <p className="text-xs text-muted-foreground">{t.oneOffIncomeHint}</p>
+        </div>
       ) : null}
 
       <Field label={common.note} htmlFor="transaction-note">

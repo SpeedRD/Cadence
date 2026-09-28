@@ -12,6 +12,7 @@ import { checkReferences } from "@/lib/references";
 import { ownShare, yourShareIssue } from "@/lib/shared-expense";
 import {
   canBeExtraordinary,
+  canBeOneOffIncome,
   canBeSharedExpense,
   manualContributionIdFromTransaction,
   recurringContributionKeyFromTransaction,
@@ -62,6 +63,14 @@ export async function saveTransactionAction(
     }
   }
 
+  // The one-off income flag belongs on ordinary income only
+  // (canBeOneOffIncome); the form offers the switch on exactly those rows,
+  // but is not trusted to have. A row created here is MANUAL; an edited one
+  // is checked against its stored source below.
+  if (!id && values.isOneOffIncome === true && !canBeOneOffIncome({ ...values, source: "MANUAL" })) {
+    return fail(t.oneOffIncomeNotApplicable);
+  }
+
   if (id) {
     const existing = await prisma.transaction.findUnique({ where: { id } });
     if (!existing) return fail(t.transactionNoLongerExists);
@@ -82,6 +91,9 @@ export async function saveTransactionAction(
         select: { id: true },
       });
       if (paired) return fail(t.editContributionFromGoal);
+    }
+    if (values.isOneOffIncome === true && !canBeOneOffIncome({ ...values, source: existing.source })) {
+      return fail(t.oneOffIncomeNotApplicable);
     }
     // A share belongs on an organic expense only (canBeSharedExpense, the
     // same rows the one-off flag admits); a subscription's posted row is

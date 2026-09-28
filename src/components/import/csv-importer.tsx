@@ -69,6 +69,8 @@ interface ParsedRow {
   columnCategoryId: string | null;
   /** The optional One-off column says yes (src/lib/extraordinary.ts). */
   columnExtraordinary: boolean;
+  /** The optional One-off income column says yes, for an income row (Transaction.isOneOffIncome). */
+  columnOneOffIncome: boolean;
   /** The optional Your share column's amount, for a spending row (src/lib/shared-expense.ts). */
   columnYourShare: number | null;
   /** The optional Reimburses column's cell, for an income row: resolved to the expense it names on the server. */
@@ -119,9 +121,10 @@ export function CsvImporter({
   // row (Cadence's own transactions.csv export does). Null means unmapped.
   const [accountColumn, setAccountColumn] = useState<number | null>(null);
   const [categoryColumn, setCategoryColumn] = useState<number | null>(null);
-  // Likewise optional: the export's One-off, Your share and Reimburses
-  // columns, so a re-imported export keeps all three per-row flags.
+  // Likewise optional: the export's One-off, One-off income, Your share and
+  // Reimburses columns, so a re-imported export keeps all four per-row flags.
   const [oneOffColumn, setOneOffColumn] = useState<number | null>(null);
+  const [oneOffIncomeColumn, setOneOffIncomeColumn] = useState<number | null>(null);
   const [yourShareColumn, setYourShareColumn] = useState<number | null>(null);
   const [reimbursesColumn, setReimbursesColumn] = useState<number | null>(null);
   const [dateFormat, setDateFormat] = useState<DateFormat>("YYYY-MM-DD");
@@ -239,6 +242,8 @@ export function CsvImporter({
         otherAccount,
         columnCategoryId,
         columnExtraordinary: oneOffColumn !== null && parseFlag(cells[oneOffColumn] ?? ""),
+        columnOneOffIncome:
+          type === "INCOME" && oneOffIncomeColumn !== null && parseFlag(cells[oneOffIncomeColumn] ?? ""),
         columnYourShare,
         columnReimburses: type === "INCOME" && reimbursesCell !== "" ? reimbursesCell : null,
       };
@@ -251,6 +256,7 @@ export function CsvImporter({
     accountColumn,
     categoryColumn,
     oneOffColumn,
+    oneOffIncomeColumn,
     yourShareColumn,
     reimbursesColumn,
     selectedAccountName,
@@ -397,6 +403,7 @@ export function CsvImporter({
       // The file's own flags. A one-off the file already marks needs no
       // review-step question; a shared row is measured at its share below.
       columnExtraordinary: row.columnExtraordinary,
+      isOneOffIncome: type === "INCOME" && row.columnOneOffIncome,
       yourShare: type === "EXPENSE" ? row.columnYourShare : null,
       reimburses: type === "INCOME" ? row.columnReimburses : null,
     };
@@ -503,6 +510,7 @@ export function CsvImporter({
               setAccountColumn(null);
               setCategoryColumn(null);
               setOneOffColumn(null);
+              setOneOffIncomeColumn(null);
               setYourShareColumn(null);
               setReimbursesColumn(null);
             }}
@@ -619,12 +627,20 @@ export function CsvImporter({
                 </Field>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <Field label={t.oneOffColumn} hint={t.oneOffColumnHint}>
                   <OptionalColumnSelect
                     options={columnOptions}
                     value={oneOffColumn}
                     onChange={setOneOffColumn}
+                    noneLabel={t.noColumn}
+                  />
+                </Field>
+                <Field label={t.oneOffIncomeColumn} hint={t.oneOffIncomeColumnHint}>
+                  <OptionalColumnSelect
+                    options={columnOptions}
+                    value={oneOffIncomeColumn}
+                    onChange={setOneOffIncomeColumn}
                     noneLabel={t.noColumn}
                   />
                 </Field>

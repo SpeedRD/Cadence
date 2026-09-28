@@ -236,6 +236,18 @@ export const transactionSchema = z
      * switch was absent, which Prisma reads as "leave the column untouched".
      */
     yourShare: positiveAmountOrEmpty,
+    /**
+     * The "One-off income" switch, carried as a hidden field like isShared.
+     * "true" or "false" is the user's answer; absent means the form never
+     * offered the switch (a paycheck, a posted recurring row), and the row's
+     * flag is left exactly as it is. Only INCOME can carry it: see the
+     * transform below.
+     */
+    isOneOffIncome: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (value === undefined ? undefined : value === "true")),
     /** INCOME only - the shared expense this deposit pays back. Null everywhere else. */
     reimbursesTransactionId: z
       .string()
@@ -254,10 +266,18 @@ export const transactionSchema = z
         });
         return z.NEVER;
       }
-      return { ...row, categoryId: null, yourShare: null, reimbursesTransactionId: null };
+      return { ...row, categoryId: null, yourShare: null, reimbursesTransactionId: null, isOneOffIncome: false };
     }
     if (row.type === "INCOME") {
-      return { ...row, transferDirection: null, yourShare: null };
+      // A deposit linked to a shared expense is already left out of income
+      // averages by its link, so linking one clears the flag rather than
+      // keeping a stale "true" the switch (hidden while linked) cannot undo.
+      return {
+        ...row,
+        transferDirection: null,
+        yourShare: null,
+        isOneOffIncome: row.reimbursesTransactionId !== null ? false : row.isOneOffIncome,
+      };
     }
     // EXPENSE. With the switch off, whatever is left in the share field is
     // discarded so the row is an ordinary expense; with it on, the share must
@@ -265,10 +285,10 @@ export const transactionSchema = z
     // not this form's to change. A stale reimbursement pick from a type
     // switched back from INCOME never survives either.
     if (isShared === undefined) {
-      return { ...row, transferDirection: null, yourShare: undefined, reimbursesTransactionId: null };
+      return { ...row, transferDirection: null, yourShare: undefined, reimbursesTransactionId: null, isOneOffIncome: false };
     }
     if (!isShared) {
-      return { ...row, transferDirection: null, yourShare: null, reimbursesTransactionId: null };
+      return { ...row, transferDirection: null, yourShare: null, reimbursesTransactionId: null, isOneOffIncome: false };
     }
     if (row.yourShare === null) {
       ctx.addIssue({ code: "custom", message: "Enter your share", path: ["yourShare"] });
@@ -279,7 +299,7 @@ export const transactionSchema = z
       ctx.addIssue({ code: "custom", message: shareIssue, path: ["yourShare"] });
       return z.NEVER;
     }
-    return { ...row, transferDirection: null, reimbursesTransactionId: null };
+    return { ...row, transferDirection: null, reimbursesTransactionId: null, isOneOffIncome: false };
   });
 
 export const transferSchema = z

@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/page-header";
 import { SourceBadge } from "@/components/source-badge";
 import { EmptyState, Stat } from "@/components/stat";
 import {
+  OneOffIncomeBadge,
   ReimbursementBadge,
   ReimbursementProgressLine,
   SharedExpenseBadge,
@@ -167,7 +168,7 @@ export default async function AccountDetailPage({
                                     ? t.openingBalanceAmountLabel
                                     : (row.categoryName ?? common.uncategorized))}
                           </span>
-                          {row.categoryName || row.yourShare !== null || row.reimburses ? (
+                          {row.categoryName || row.isOneOffIncome || row.yourShare !== null || row.reimburses ? (
                             <span className="flex flex-wrap items-center gap-1.5 text-hint text-muted-foreground">
                               {row.categoryName ? (
                                 <>
@@ -181,7 +182,8 @@ export default async function AccountDetailPage({
                                   {row.categoryName}
                                 </>
                               ) : null}
-                              {/* The same shared-expense badges the Transactions table shows. */}
+                              {/* The same row badges the Transactions table shows. */}
+                              {row.isOneOffIncome ? <OneOffIncomeBadge locale={context.language} /> : null}
                               {row.yourShare !== null ? (
                                 <SharedExpenseBadge
                                   yourShare={row.yourShare}

@@ -30,6 +30,8 @@ export interface CsvImportRow {
   importAnyway: boolean;
   /** The user's own verdict - the review step's, or the file's One-off column. */
   isExtraordinary: boolean;
+  /** INCOME only: the file's One-off income column says yes (Transaction.isOneOffIncome). */
+  isOneOffIncome?: boolean;
   /** EXPENSE only: the user's own part of the amount, from the file's Your share column (src/lib/shared-expense.ts). */
   yourShare: number | null;
   /**
@@ -126,6 +128,10 @@ export async function importCsvTransactions(input: CsvImportInput): Promise<CsvI
       // Only the user's own verdict ever sets this, and only on spending:
       // the flag means nothing on income or a transfer.
       isExtraordinary: row.type === "EXPENSE" && row.isExtraordinary,
+      // The one-off income flag is income's own, on the same terms. A row that
+      // also names a shared expense it pays back is left ordinary here, as
+      // the dialog does (canBeOneOffIncome): the link already excludes it.
+      isOneOffIncome: row.type === "INCOME" && row.isOneOffIncome === true && row.reimburses === null,
       // A share belongs to an expense only, on the same terms.
       yourShare: row.type === "EXPENSE" ? row.yourShare : null,
     };

@@ -124,6 +124,26 @@ export function canBeExtraordinary(row: {
 }
 
 /**
+ * Rows the user may mark as one-off income (Transaction.isOneOffIncome): a
+ * gift, a sale, a refund - an INCOME row that is not earnings to expect
+ * again. A paycheck belongs to its check-in and a RECURRING row is scheduled
+ * income, neither is one-off by nature; a deposit linked to a shared expense
+ * is already left out of income averages by its link
+ * (reimbursedExpenseIdFromTransaction), so a second flag there would say the
+ * same thing twice. Defined here, without a database import, so the
+ * transaction dialog offers the switch on exactly the rows the action accepts.
+ */
+export function canBeOneOffIncome(row: {
+  type: string;
+  source: string;
+  reimbursesTransactionId: string | null;
+}): boolean {
+  if (row.type !== "INCOME") return false;
+  if (row.source === "PAYDAY_CHECKIN" || row.source === "RECURRING") return false;
+  return reimbursedExpenseIdFromTransaction(row) === null;
+}
+
+/**
  * Rows that may carry a share (Transaction.yourShare, see
  * src/lib/shared-expense.ts): the same organic expenses canBeExtraordinary
  * admits, for the same reasons - a scheduled charge's amount is the item's,

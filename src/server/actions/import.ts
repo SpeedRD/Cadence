@@ -40,6 +40,8 @@ const importPayloadSchema = z.object({
           importAnyway: z.boolean().optional().default(false),
           /** The user reviewed this row as unusually large and marked it a one-off (see src/lib/extraordinary.ts), or the file's One-off column says so. */
           isExtraordinary: z.boolean().optional().default(false),
+          /** The file's One-off income column, for an INCOME row (see Transaction.isOneOffIncome). */
+          isOneOffIncome: z.boolean().optional().default(false),
           /** The file's Your share column, for an EXPENSE (see src/lib/shared-expense.ts). */
           yourShare: z.number().positive("Enter an amount greater than 0").nullable().optional().default(null),
           /** The file's Reimburses column, for an INCOME row: the shared expense it pays back, by reference. */

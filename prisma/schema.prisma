@@ -184,6 +184,13 @@ model Transaction {
   /// planner's category suggestions and Reports' monthly pace - while still
   /// counting as real spending everywhere else. Only ever set by the user.
   isExtraordinary   Boolean            @default(false)
+  /// INCOME only: a one-off receipt (a gift, a sale, a refund) the user marked
+  /// as such. It counts as the period's real income everywhere it is a fact -
+  /// the period summary, Reports, the ledger, account balances - and is left
+  /// out only of Afford's income history, the figure that estimates what the
+  /// user will earn in future periods. Kept apart from isExtraordinary, which
+  /// is spending only. Only ever set by the user.
+  isOneOffIncome    Boolean            @default(false)
   /// EXPENSE only: the part of `amount` that was the user's own cost, when the
   /// purchase covered other people who will pay their part back (see
   /// src/lib/shared-expense.ts). Null - every ordinary row - means the whole

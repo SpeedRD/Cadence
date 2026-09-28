@@ -110,6 +110,7 @@ export const es = {
       transferGroup: "Grupo de transferencia",
       externalId: "ID externo",
       isExtraordinary: "Gasto único",
+      isOneOffIncome: "Ingreso único",
       yourShare: "Tu parte",
       reimburses: "Reembolsa",
       createdAt: "Creado el",
@@ -412,6 +413,9 @@ export const es = {
     oneOffColumn: "Columna de gasto único",
     oneOffColumnHint:
       "Opcional. Una fila cuya celda dice Sí se importa como gasto único, fuera de los promedios de gasto habitual.",
+    oneOffIncomeColumn: "Columna de ingreso único",
+    oneOffIncomeColumnHint:
+      "Opcional. Una fila de ingreso cuya celda dice Sí se importa como ingreso único, fuera del ingreso que Cadence espera en periodos futuros.",
     yourShareColumn: "Columna de tu parte",
     yourShareColumnHint:
       "Opcional. Una fila de gasto con un monto aquí se importa como gasto compartido, con esa parte como tuya.",
@@ -524,6 +528,12 @@ export const es = {
     keepAsNormal: "Dejar como normal",
     appliedExtraordinary: "Gasto único",
     appliedNormal: "Gasto normal",
+    // Ingreso único (un regalo, una venta, un reembolso) - ver Transaction.isOneOffIncome.
+    oneOffIncomeBadge: "Ingreso único",
+    oneOffIncomeLabel: "Ingreso único",
+    oneOffIncomeHint:
+      "Un regalo, una venta, una devolución. Cuenta como ingreso de este periodo, pero Cadence no lo esperará de nuevo en periodos futuros.",
+    oneOffIncomeNotApplicable: "Solo un ingreso que registraste o importaste puede marcarse como ingreso único",
     // Gastos compartidos y sus reembolsos - ver src/lib/shared-expense.ts.
     sharedExpenseLabel: "Fue un gasto compartido",
     sharedExpenseHint:

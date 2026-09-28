@@ -8,6 +8,7 @@ import { ConfirmDelete } from "@/components/form/confirm-delete";
 import type { Option } from "@/components/form/selects";
 import { SourceBadge } from "@/components/source-badge";
 import {
+  OneOffIncomeBadge,
   ReimbursementBadge,
   ReimbursementProgressLine,
   SharedExpenseBadge,
@@ -222,6 +223,7 @@ function RowBadges({ row, locale, t }: { row: TransactionRow; locale: Locale; t:
           {t.extraordinaryBadge}
         </Badge>
       ) : null}
+      {row.isOneOffIncome ? <OneOffIncomeBadge locale={locale} /> : null}
       {row.yourShare !== null ? (
         <SharedExpenseBadge yourShare={row.yourShare} currency={row.currency} locale={locale} />
       ) : null}
@@ -321,7 +323,7 @@ function MobileLedger({
                       {formatMoney(row.amount, row.currency)}
                     </span>
                   ) : null}
-                  {row.isExtraordinary || row.yourShare !== null || row.reimburses ? (
+                  {row.isExtraordinary || row.isOneOffIncome || row.yourShare !== null || row.reimburses ? (
                     <span className="col-span-2 flex flex-wrap items-center gap-1.5 text-hint text-muted-foreground">
                       <RowBadges row={row} locale={locale} t={t} />
                     </span>
@@ -452,6 +454,7 @@ export function TransactionTable({
                     </span>
                     {row.categoryName ||
                     row.isExtraordinary ||
+                    row.isOneOffIncome ||
                     row.yourShare !== null ||
                     row.reimbursesTransactionId ? (
                       <span className="flex flex-wrap items-center gap-1.5 text-hint text-muted-foreground">
@@ -557,6 +560,7 @@ export function TransactionTable({
             transferDirection: editingPlain.transferDirection,
             yourShare: editingPlain.yourShare,
             reimbursesTransactionId: editingPlain.reimbursesTransactionId,
+            isOneOffIncome: editingPlain.isOneOffIncome,
             source: editingPlain.source,
             externalId: editingPlain.externalId,
           }}

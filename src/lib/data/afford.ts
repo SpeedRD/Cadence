@@ -13,7 +13,8 @@
  *               ordinary INCOME rows by date, plus the confirmed check-in's
  *               per-account income for the period rather than the check-in
  *               day's transaction - minus deposits that pay back a shared
- *               expense, which are not earnings; see loadPeriodIncome)
+ *               expense, which are not earnings, and income the user marked
+ *               as one-off, which is not expected again; see loadPeriodIncome)
  *   committed   known exactly, not estimated: every active RecurringItem has a
  *               schedule, so its occurrences in the period are enumerated with
  *               owedOccurrences() - the walk getPeriodSummary's committed
@@ -192,7 +193,11 @@ type PeriodIncome = Map<string, number>;
  * manualContributionIdFromTransaction gives getPeriodSummary for a
  * contribution's expense - never by category or note: it raised the account's
  * balance like any income, but it is the user's own money coming back, and
- * averaging it in would project earnings that were never earned.
+ * averaging it in would project earnings that were never earned. Income the
+ * user marked as a one-off (Transaction.isOneOffIncome - a gift, a sale, a
+ * refund) is left out by its flag: it was earned and counts wherever income
+ * is a fact, but this walk estimates what the next periods will bring, and
+ * a one-time receipt is not that.
  */
 async function loadPeriodIncome(
   period: PeriodInfo,
@@ -211,6 +216,7 @@ async function loadPeriodIncome(
         // added from the snapshots below; its transaction sits on the
         // check-in day.
         source: { not: "PAYDAY_CHECKIN" },
+        isOneOffIncome: false,
       },
       select: { accountId: true, amount: true, currency: true, type: true, reimbursesTransactionId: true },
     }),

@@ -17,8 +17,9 @@ import { createZip } from "@/lib/zip";
  * negative - exactly the importer's defaults (header on, YYYY-MM-DD, "signed"
  * convention), so it reads the file with no remapping. Account and Category
  * columns follow so the importer's optional column pickers can restore those
- * too, as do One-off, Your share and Reimburses (the per-row flags of
- * src/lib/extraordinary.ts and src/lib/shared-expense.ts), so an export
+ * too, as do One-off, One-off income, Your share and Reimburses (the per-row
+ * flags of src/lib/extraordinary.ts, Transaction.isOneOffIncome and
+ * src/lib/shared-expense.ts), so an export
  * re-imported through those pickers loses none of them. The other six files
  * have no import path; they are complete, readable
  * backups, so every column the row carries is included and foreign keys are
@@ -132,6 +133,7 @@ export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
       h.transferGroup,
       h.externalId,
       h.isExtraordinary,
+      h.isOneOffIncome,
       h.yourShare,
       h.reimburses,
       h.createdAt,
@@ -152,9 +154,10 @@ export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
       label(t.dataExport.transferDirectionLabels, row.transferDirection),
       text(row.transferId),
       text(row.externalId),
-      // The three per-row flags the importer's optional column pickers can
-      // restore (One-off, Your share and Reimburses columns).
+      // The per-row flags the importer's optional column pickers can restore
+      // (One-off, One-off income, Your share and Reimburses columns).
       yesNo(row.isExtraordinary),
+      yesNo(row.isOneOffIncome),
       row.yourShare === null ? "" : money(row.yourShare),
       row.reimburses
         ? formatReimbursedExpenseReference({
