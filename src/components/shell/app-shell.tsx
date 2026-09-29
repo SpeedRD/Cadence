@@ -49,7 +49,7 @@ export function AppShell({
         <NavLinks locale={context.language} badges={navBadges} />
         <div className="mt-auto px-5.5 pt-6">
           <p className="text-hint leading-relaxed text-muted-foreground">
-            {t.shell.paidTwiceAMonth(currentPeriod.period === "A" ? "1-15" : "16-end")}
+            {t.shell.paidTwiceAMonth(currentPeriod.period === "A" ? t.shell.periodRangeFirstHalf : t.shell.periodRangeSecondHalf)}
           </p>
         </div>
       </aside>

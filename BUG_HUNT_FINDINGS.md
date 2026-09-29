@@ -524,6 +524,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** users who set budgets by hand. The copy implies a safety margin that does not exist.
 - **Severity / confidence:** Low / High. Evidence: code path.
 - **Fix:** reword to "the payday check-in sets them aside before your budget", or subtract outstanding committed items when the budget was set by hand.
+- **Status:** fixed (text, not calculation, as decided). `recurring.description`, `recurring.stopsCounting` and `dashboard.setBudgetPrompt` now say that the payday check-in sets committed items aside before the budget it proposes and that safe to spend is the budget minus what was spent; deleting an item no longer claims to change it. English and Spanish.
 
 ### B47. Inbox and badge copy misstates severity and completeness
 - **What:**
@@ -552,7 +553,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Repro:** each string was read against its computation, as cited.
 - **Severity / confidence:** Low / High. Evidence: code path.
 - **Fix:** one wording pass driven by the computations. Item 3's threshold should be checked on the monthly equivalent.
-- **Status:** items 3 (behavior only) and 7 fixed. The room check runs when one charge or the monthly equivalent reaches the threshold (SEMI_MONTHLY stays unchecked), and "Next 7 days" covers today and the following six; the copy in item 3 and the other items is still open.
+- **Status:** items 1, 2, 3, 4, 5, 8, 10, 11 and 12 fixed (copy, English and Spanish; item 1 also carries a `confirmed` flag from the projection so the note can say whether check-ins exist for none, all or some of the evaluated periods; item 5 adds a hint under the field). Item 3's behavior and item 7 were fixed earlier: the room check runs when one charge or the monthly equivalent reaches the threshold (SEMI_MONTHLY stays unchecked), and "Next 7 days" covers today and the following six. Still open: items 6 and 9 (payday wizard and goals-roadmap strings, out of scope here). No string used by the wizard was needed for the other items.
 
 ---
 

@@ -794,6 +794,7 @@ export async function projectPeriods(
 
     projections.set(period.key, {
       period,
+      confirmed: commitments?.confirmed ?? false,
       account: own,
       flexible: {
         currency: context.displayCurrency,

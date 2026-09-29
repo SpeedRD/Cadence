@@ -190,6 +190,8 @@ export const en = {
   },
   shell: {
     paidTwiceAMonth: (range: string) => `Paid twice a month. Budgets run ${range}.`,
+    periodRangeFirstHalf: "1-15",
+    periodRangeSecondHalf: "16-end",
     periodClosed: "Period closed",
     daysLeft: (n: number) => `${n} day${n === 1 ? "" : "s"} left`,
     lockCadenceAria: "Lock Cadence",
@@ -198,7 +200,7 @@ export const en = {
     languageLabel: "Language",
     staleRatesTitle: "Converted figures may be out of date",
     staleRatesSince: (datetime: string) =>
-      `Exchange rates could not be refreshed, so every converted amount still uses the rates fetched ${datetime}.`,
+      `Exchange rates could not be refreshed, so converted amounts use the rates last fetched ${datetime}. DOP and EUR may come from a more recent Banco Popular rate.`,
     staleRatesNeverFetched:
       "Exchange rates could not be refreshed and none have been fetched yet, so every converted amount is an estimate.",
   },
@@ -256,7 +258,7 @@ export const en = {
         ? "1 purchase from Afford no longer fits"
         : `${count} purchases from Afford no longer fit`,
     affordShortDescription:
-      "Commitments added since these were confirmed have shrunk the room their remaining payments were counting on. Nothing is blocked - the check is advisory, like Afford's.",
+      "Re-checked today - with your current income average, today's exchange rates, your commitments and goal estimates - the room their remaining payments were counting on has shrunk. Nothing is blocked - the check is advisory, like Afford's.",
     affordShortItem: (name: string, amount: string, period: string) =>
       `${name} - short by ${amount} in ${period}`,
     affordShortLink: "See them on the recurring page",
@@ -279,7 +281,7 @@ export const en = {
     leftForRest: "left for the rest of this period",
     overThePlan: "over the plan for this period",
     setBudgetPrompt:
-      "Set a budget for this period and Cadence works out what you can spend each day after committed outflows.",
+      "Set a budget for this period and Cadence works out what you can spend each day: the budget minus what you have spent, over the days left.",
     setPeriodBudget: "Set this period's budget",
     recommendedBudget: (amount: string) =>
       `Recommended: ${amount} - what your payday check-in leaves for flexible categories.`,
@@ -297,7 +299,7 @@ export const en = {
     of: (amount: string) => `of ${amount}`,
     reached: "Reached",
     dueThisPeriod: "due this period",
-    periodsTo: (n: number, date: string) => `${n} periods to ${date}`,
+    periodsTo: (n: number, date: string) => `${n} period${n === 1 ? "" : "s"} to ${date}`,
     perPayPeriod: "per pay period",
     pace: "Pace",
     perPeriod: "per period",
@@ -739,7 +741,7 @@ export const en = {
   recurring: {
     title: "Recurring",
     description:
-      "Everything that leaves on a schedule. Both kinds reduce safe to spend for the period they fall in, and are posted to your accounts automatically when they come due.",
+      "Everything that leaves on a schedule, posted to your accounts automatically when it comes due. The payday check-in sets these items aside before the budget it proposes. Safe to spend is that budget minus what you have spent: upcoming items are not subtracted from it, so a budget set by hand should leave room for them.",
     newItem: "New item",
     subscriptions: "Subscriptions",
     monthlyAcrossActive: (amount: string, count: number) =>
@@ -785,7 +787,7 @@ export const en = {
     pause: "Pause",
     resume: "Resume",
     deleteItemTitle: (name: string) => `Delete ${name}?`,
-    stopsCounting: "It stops counting against safe to spend straight away. Transactions it already posted stay.",
+    stopsCounting: "It no longer counts as a commitment and nothing more is posted for it. Safe to spend does not change. Transactions it already posted stay.",
     itemUpdated: "Recurring item updated",
     itemAdded: "Recurring item added",
     itemDeleted: "Recurring item deleted",
@@ -809,7 +811,7 @@ export const en = {
     paymentsLeft: (n: number) => (n === 1 ? "1 payment left" : `${n} payments left`),
     roomHeading: "Which account can carry this?",
     roomDescription: (threshold: string, period: string, periods: number) =>
-      `A subscription of ${threshold} or more is checked the way Afford checks a purchase: each account's income for ${period} is projected as ${incomeBasisEn(periods)} (same half of the month), its other recurring items due then and its share of your essential fixed categories are subtracted, and its protected buffer is kept back. Room means the account's typical margin covers the charge - not a guarantee for every period. Saving is never blocked by this.`,
+      `A subscription is checked when one charge is ${threshold} or more, or when its monthly total reaches that. The check works the way Afford checks a purchase: each account's income for ${period} is projected as ${incomeBasisEn(periods)} (same half of the month); its other recurring items due then, the period's goal funding (a confirmed check-in's, or an estimate at each goal's current pace) and its share of your essential fixed categories are subtracted; and its protected buffer is kept back. Twice-a-month items are not checked. Room means the account's typical margin covers the charge - not a guarantee for every period. Saving is never blocked by this.`,
     roomLowHistory: (periods: number) =>
       `Only ${comparablePeriodsEn(periods)} of income history ${periods === 1 ? "backs" : "back"} these figures, so treat them as rough until more pay periods have passed.`,
     roomChecking: "Checking which account has room...",
@@ -852,8 +854,8 @@ export const en = {
     suggestionsTitle: "Looks recurring",
     suggestionsDescription: (count: number) =>
       count === 1
-        ? "1 pattern in your manual and imported spending repeats on a schedule but isn't tracked yet. Nothing is added until you say so."
-        : `${count} patterns in your manual and imported spending repeat on a schedule but aren't tracked yet. Nothing is added until you say so.`,
+        ? "1 pattern in your manual and CSV-imported spending repeats on a schedule but isn't tracked yet. Nothing is added until you say so."
+        : `${count} patterns in your manual and CSV-imported spending repeat on a schedule but aren't tracked yet. Nothing is added until you say so.`,
     /** "Twice a month, around the 1st and the 16th" - anchorDays as the detector reports them (see RecurringCandidate). */
     suggestionCadence: (cadence: string, anchorDays: number[]) => {
       switch (cadence) {
@@ -937,8 +939,13 @@ export const en = {
     flexibleShortfall: (period: string, amount: string) =>
       `${period}: the period would be ${amount} short for its flexible categories.`,
     projectionHeading: "How these figures are projected",
-    projectionDescription: (account: string, periods: number | null) =>
-      `No payday check-in exists for these periods yet. Income is projected as ${periods === null ? "the average of the comparable pay periods noted under each period" : incomeBasisEn(periods)} (same half of the month), counted in every account from the first period with income in any of them, so pay that moved from one account to another is not counted in both. If your income changed - a new job, for example - Settings' "Count income history from" sets where that history starts. ${account}'s commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here, and, in the current period, what already posted as well as what is still ahead - plus whatever a confirmed payday check-in planned toward your goals for that period. Where no check-in is confirmed yet, an estimate stands in for that goal funding: what you would keep putting toward each goal at its current pace, marked * and spelled out below. The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
+    projectionDescription: (
+      account: string,
+      periods: number | null,
+      coverage: "all" | "none" | "some" = "none",
+      confirmedPeriods: string[] = [],
+    ) =>
+      `${coverage === "none" ? "No payday check-in exists for these periods yet. " : coverage === "some" ? `A payday check-in is confirmed for ${confirmedPeriods.join(", ")}, but not for the other periods. ` : ""}Income is projected as ${periods === null ? "the average of the comparable pay periods noted under each period" : incomeBasisEn(periods)} (same half of the month), counted in every account from the first period with income in any of them, so pay that moved from one account to another is not counted in both. If your income changed - a new job, for example - Settings' "Count income history from" sets where that history starts. ${account}'s commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here, and, in the current period, what already posted as well as what is still ahead - plus whatever a confirmed payday check-in planned toward your goals for that period.${coverage === "all" ? "" : " Where no check-in is confirmed yet, an estimate stands in for that goal funding: what you would keep putting toward each goal at its current pace, marked * and spelled out below."} The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
     projectionIncomePeriods: (periods: number) => (periods === 1 ? "income: 1 period" : `income: ${periods} periods`),
     lowIncomeHistory: (periods: number) =>
       `Only ${comparablePeriodsEn(periods)} of income history ${periods === 1 ? "backs" : "back"} this projection, so treat its income as rough until more pay periods have passed.`,
@@ -1005,7 +1012,7 @@ export const en = {
     fullyFunded: "Fully funded",
     perPayPeriod: "per pay period",
     dueThisPeriod: "due this period",
-    periodsLeft: (n: number) => `${n} periods left`,
+    periodsLeft: (n: number) => `${n} period${n === 1 ? "" : "s"} left`,
     pace: "Pace",
     perPeriod: "per period",
     onTrackApprox: (date: string) => `on track for ~${date}`,
@@ -1016,7 +1023,7 @@ export const en = {
     stillToGo: "Still to go",
     contributionCount: (n: number) => `${n} contribution${n === 1 ? "" : "s"}`,
     perPayPeriodLabel: "Per pay period",
-    periodsToTarget: (n: number) => `${n} periods to the target date`,
+    periodsToTarget: (n: number) => `${n} period${n === 1 ? "" : "s"} to the target date`,
     doneAround: (date: string) => `on this pace, done around ${date}`,
     logToSetPace: "log a contribution to set a pace",
     inCurrency: (code: string) => `In ${code}`,
@@ -1209,12 +1216,14 @@ export const en = {
     bufferPercentLabel: "Buffer percentage",
     bufferPercentHint: "Percent of each check-in's income reserved as a buffer by default.",
     bufferFloorLabel: "Fixed minimum buffer",
+    bufferFloorHint:
+      "The smallest buffer kept for each account that receives income in a check-in, so two income accounts reserve two floors. The larger of this and the percentage counts for each account.",
     carryoverDefaultLabel: "Include carryover by default",
     carryoverDefaultHint:
       "When on, unspent money from the previous period's budget pre-fills as included carryover in each new check-in.",
     incomeHistoryStartLabel: "Count income history from",
     incomeHistoryStartHint:
-      "If your income situation changed - a new job, for example - set this to stop Cadence's averages (Afford's income projection, the payday planner's category suggestions) from counting older, no-longer-relevant pay periods. Leave blank to use your full history as normal.",
+      "If your income situation changed - a new job, for example - set this to stop Cadence's averages (Afford's income projection, the payday planner's category suggestions, the monthly spending pace and the monthly averages in Reports) from counting older, no-longer-relevant periods. Leave blank to use your full history as normal.",
     planningPreferencesSaved: "Planning preferences saved",
     essentialCategoriesTitle: "Essential fixed categories",
     essentialCategoriesDescription:

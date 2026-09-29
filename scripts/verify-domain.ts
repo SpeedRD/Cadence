@@ -6141,6 +6141,7 @@ async function main() {
       const info = periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" });
       return [key, {
         period: info,
+        confirmed: false,
         account: { accountId: "acc", name: "Checking", currency: account.currency ?? "USD", income: account.income, committed: account.committed, buffer: account.buffer, essentialFixed: 0, basis: "average" as const, incomePeriods: 6, estimatedGoalFunding: 0 },
         flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0, essentialFixed: 0, incomePeriods: 6 },
         essentialFixedBasis: "unset" as const,
@@ -7178,6 +7179,7 @@ async function main() {
         const info = periodInfo(octA);
         const pure = new Map([["2026-10-A", {
           period: info,
+          confirmed: false,
           account: { accountId: "acc", name: "Checking", currency: "DOP", income: 60000, committed: 3000, buffer: 6000, essentialFixed: 30000, basis: "average" as const, incomePeriods: 6, estimatedGoalFunding: 0 },
           flexible: { currency: "DOP", income: 60000, committed: 3000, buffer: 6000, estimatedGoalFunding: 0, essentialFixed: 30000, incomePeriods: 6 },
           essentialFixedBasis: "budget" as const,
@@ -7268,6 +7270,44 @@ async function main() {
       check("B22: the room check reports the projection's own divisor for its period, not the constant", typeof roomPeriods === "number" && roomPeriods === projectedPeriods, `room ${String(roomPeriods)}, projection ${String(projectedPeriods)}`);
       const roomDescription = enDictionary.recurring.roomDescription as (...args: unknown[]) => string;
       check("B22: the room description renders that divisor", roomDescription("DOP 10,000", "Oct 1-15", 1).includes("the average of 1 comparable pay period ("), roomDescription("DOP 10,000", "Oct 1-15", 1));
+
+      console.log("\n-- B46/B48: copy that says what the code does --");
+      {
+        const { es: esDictionary } = await import("../src/lib/i18n/es");
+        const forms = (fn: (n: number) => string) => [0, 1, 2].map(fn);
+        eq("B48.10: en goals.periodsLeft for 0, 1, 2", forms(enDictionary.goals.periodsLeft).join("|"), "0 periods left|1 period left|2 periods left");
+        eq("B48.10: en goals.periodsToTarget for 0, 1, 2", forms(enDictionary.goals.periodsToTarget).join("|"), "0 periods to the target date|1 period to the target date|2 periods to the target date");
+        eq("B48.10: en dashboard.periodsTo for 0, 1, 2", forms((n) => enDictionary.dashboard.periodsTo(n, "Mar 31")).join("|"), "0 periods to Mar 31|1 period to Mar 31|2 periods to Mar 31");
+        eq("B48.10: es goals.periodsLeft for 0, 1, 2", forms(esDictionary.goals.periodsLeft).join("|"), "0 periodos restantes|1 periodo restante|2 periodos restantes");
+        eq("B48.10: es goals.periodsToTarget for 0, 1, 2", forms(esDictionary.goals.periodsToTarget).join("|"), "0 periodos hasta la fecha límite|1 periodo hasta la fecha límite|2 periodos hasta la fecha límite");
+        eq("B48.10: es dashboard.periodsTo for 0, 1, 2", forms((n) => esDictionary.dashboard.periodsTo(n, "31 mar")).join("|"), "0 periodos hasta 31 mar|1 periodo hasta 31 mar|2 periodos hasta 31 mar");
+
+        const periodOf = (confirmed: boolean) => ({ confirmed });
+        eq("B48.1: every evaluated period confirmed is 'all'", affordLib.checkInCoverage([periodOf(true), periodOf(true)]), "all");
+        eq("B48.1: none confirmed is 'none'", affordLib.checkInCoverage([periodOf(false), periodOf(false)]), "none");
+        eq("B48.1: a mix is 'some'", affordLib.checkInCoverage([periodOf(true), periodOf(false)]), "some");
+        eq("B48.1: no periods at all is 'none'", affordLib.checkInCoverage([]), "none");
+        const projection = (await affordData.projectPeriods([octA], allActive[0], allActive, usd28)).get("2026-10-A")!;
+        eq("B48.1: projectPeriods marks a period with no check-in unconfirmed", projection.confirmed, false);
+        const describeIn = (dictionary: typeof enDictionary | typeof esDictionary) =>
+          dictionary.afford.projectionDescription as (account: string, periods: number | null, coverage?: "all" | "none" | "some", confirmed?: string[]) => string;
+        for (const [name, dictionary, none, someHint] of [
+          ["en", enDictionary, "No payday check-in exists", "confirmed for Oct 1-15, but not for the other periods"],
+          ["es", esDictionary, "Todavía no existe un check-in de pago", "confirmado para Oct 1-15, pero no para los demás"],
+        ] as const) {
+          const render = describeIn(dictionary);
+          check(`B48.1 ${name}: 'none' says no check-in exists`, render("A", 3, "none").startsWith(none), render("A", 3, "none").slice(0, 60));
+          check(`B48.1 ${name}: 'all' never says no check-in exists and drops the estimate sentence`, !render("A", 3, "all").includes(none) && !render("A", 3, "all").includes("*"), render("A", 3, "all").slice(0, 60));
+          check(`B48.1 ${name}: 'some' names the confirmed periods`, render("A", 3, "some", ["Oct 1-15"]).includes(someHint) && !render("A", 3, "some", ["Oct 1-15"]).includes(none), render("A", 3, "some", ["Oct 1-15"]).slice(0, 90));
+          check(`B48.1 ${name}: 'some' and 'none' keep the estimate sentence`, render("A", 3, "some", ["Oct 1-15"]).includes("*") && render("A", 3, "none").includes("*"));
+        }
+        eq("B48.12: the shell has both period ranges in both languages", `${enDictionary.shell.periodRangeFirstHalf}|${enDictionary.shell.periodRangeSecondHalf}|${esDictionary.shell.periodRangeFirstHalf}|${esDictionary.shell.periodRangeSecondHalf}`, "1-15|16-end|1 al 15|16 al final del mes");
+        eq("B48.12: the Spanish shell line reads naturally", esDictionary.shell.paidTwiceAMonth(esDictionary.shell.periodRangeSecondHalf), "Pago dos veces al mes. Los presupuestos van del 16 al final del mes.");
+        const roomEn = enDictionary.recurring.roomDescription("DOP 10,000", "Oct 1-15", 3);
+        const roomEs = esDictionary.recurring.roomDescription("DOP 10,000", "Oct 1-15", 3);
+        check("B48.3: the room copy says single charge OR monthly total, goal funding, and no twice-a-month", roomEn.includes("one charge is DOP 10,000 or more, or when its monthly total") && roomEn.includes("goal funding") && roomEn.includes("Twice-a-month items are not checked"), roomEn.slice(0, 120));
+        check("B48.3 es: the same three facts", roomEs.includes("un solo cobro llega a DOP 10,000 o cuando su total mensual") && roomEs.includes("aporte a metas") && roomEs.includes("dos veces al mes no se comprueban"), roomEs.slice(0, 120));
+      }
 
       console.log("\n-- B34: from payday to period end, the unconfirmed current period keeps its goal estimate --");
       const pace = await prisma.account.create({ data: { name: "Verify Proj Pace", currency: "USD", type: "CHECKING" } });
@@ -9566,6 +9606,7 @@ async function main() {
       const info = periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" });
       return [key, {
         period: info,
+        confirmed: false,
         account: { accountId: "acc", name: "Checking", currency: "USD", income: account.income, committed: account.committed, buffer: account.buffer, essentialFixed: 0, basis: "average" as const, incomePeriods: 6, estimatedGoalFunding: 0 },
         flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0, essentialFixed: 0, incomePeriods: 6 },
         essentialFixedBasis: "unset" as const,

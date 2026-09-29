@@ -60,7 +60,7 @@ export function PlanningPreferencesForm({
             defaultValue={bufferPercent}
           />
         </Field>
-        <Field label={t.bufferFloorLabel} htmlFor="buffer-floor">
+        <Field label={t.bufferFloorLabel} htmlFor="buffer-floor" hint={t.bufferFloorHint}>
           <div className="flex gap-2">
             <Input
               id="buffer-floor"

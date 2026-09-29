@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { MIN_INCOME_HISTORY_PERIODS, showsEssentialFixed } from "@/lib/afford";
+import { checkInCoverage, MIN_INCOME_HISTORY_PERIODS, showsEssentialFixed } from "@/lib/afford";
 import { formatMoney } from "@/lib/currency";
 import { formatDate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -248,6 +248,9 @@ export function AffordResults({
   // draw on different history (a confirmed check-in joins one half of the
   // month only) each row says its own.
   const incomePeriodCounts = [...new Set(verdict.periods.map((period) => period.flexible.incomePeriods))];
+  // Whether the payday check-ins behind these periods are confirmed: the
+  // projection note only says none exists when none does.
+  const coverage = checkInCoverage(verdict.periods);
   const sharedIncomePeriods = incomePeriodCounts.length === 1 ? incomePeriodCounts[0] : null;
   const fewestIncomePeriods = Math.min(...incomePeriodCounts.filter((count) => count > 0));
   const lowIncomeHistory = Number.isFinite(fewestIncomePeriods) && fewestIncomePeriods < MIN_INCOME_HISTORY_PERIODS;
@@ -523,7 +526,14 @@ export function AffordResults({
       <Card size="sm" className="max-sm:mb-0">
         <CardHeader>
           <CardTitle>{t.projectionHeading}</CardTitle>
-          <CardDescription>{t.projectionDescription(accountName, sharedIncomePeriods)}</CardDescription>
+          <CardDescription>
+            {t.projectionDescription(
+              accountName,
+              sharedIncomePeriods,
+              coverage,
+              verdict.periods.filter((period) => period.confirmed).map((period) => period.period.label),
+            )}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <ScrollFade>

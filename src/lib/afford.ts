@@ -177,6 +177,8 @@ export type EssentialFixedBasis = "budget" | "suggestion" | "none" | "unset";
 /** Everything a period's two checks need, as projected by src/lib/data/afford.ts. */
 export interface PeriodProjection {
   period: PeriodInfo;
+  /** A payday check-in is confirmed for this period, so its real GOAL rows (not an estimate) are in the commitments. */
+  confirmed: boolean;
   /** The chosen account's own figures, in its own currency. */
   account: {
     accountId: string;
@@ -312,6 +314,8 @@ export interface FlexibleCheck {
 export interface PeriodVerdict {
   key: string;
   period: PeriodInfo;
+  /** PeriodProjection.confirmed as projected. */
+  confirmed: boolean;
   /** Every installment of this purchase that lands in the period, in plan order. */
   installments: Installment[];
   /** Their sum, in the purchase's currency - what both checks subtract. */
@@ -325,6 +329,17 @@ export interface PeriodVerdict {
   /** PeriodProjection.historyPeriods as projected. */
   historyPeriods: number;
   passes: boolean;
+}
+
+/**
+ * How many of the evaluated periods have a confirmed payday check-in: every
+ * one, none, or a mix. The results page words its projection note from this,
+ * so it never says no check-in exists for a period whose GOAL rows are counted.
+ */
+export function checkInCoverage(periods: ReadonlyArray<{ confirmed: boolean }>): "all" | "none" | "some" {
+  const confirmed = periods.filter((period) => period.confirmed).length;
+  if (periods.length > 0 && confirmed === periods.length) return "all";
+  return confirmed === 0 ? "none" : "some";
 }
 
 export interface AffordVerdict {
@@ -449,6 +464,7 @@ export function evaluateAffordability(input: {
     return {
       key,
       period: projection.period,
+      confirmed: projection.confirmed,
       installments: own,
       installmentTotal,
       account,

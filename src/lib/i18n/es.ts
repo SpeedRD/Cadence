@@ -179,6 +179,8 @@ export const es = {
   },
   shell: {
     paidTwiceAMonth: (range: string) => `Pago dos veces al mes. Los presupuestos van del ${range}.`,
+    periodRangeFirstHalf: "1 al 15",
+    periodRangeSecondHalf: "16 al final del mes",
     periodClosed: "Periodo cerrado",
     daysLeft: (n: number) => `${n} día${n === 1 ? "" : "s"} restante${n === 1 ? "" : "s"}`,
     lockCadenceAria: "Bloquear Cadence",
@@ -187,7 +189,7 @@ export const es = {
     languageLabel: "Idioma",
     staleRatesTitle: "Las cifras convertidas pueden estar desactualizadas",
     staleRatesSince: (datetime: string) =>
-      `Las tasas de cambio no se pudieron actualizar, así que todo monto convertido sigue usando las tasas obtenidas el ${datetime}.`,
+      `Las tasas de cambio no se pudieron actualizar, así que los montos convertidos usan las últimas tasas obtenidas el ${datetime}. DOP y EUR pueden venir de una tasa más reciente del Banco Popular.`,
     staleRatesNeverFetched:
       "Las tasas de cambio no se pudieron actualizar y aún no se ha obtenido ninguna, así que todo monto convertido es una estimación.",
   },
@@ -245,7 +247,7 @@ export const es = {
         ? "1 compra desde Cuotas ya no encaja"
         : `${count} compras desde Cuotas ya no encajan`,
     affordShortDescription:
-      "Los compromisos agregados desde que se confirmaron redujeron el margen con el que contaban sus pagos restantes. Nada se bloquea: la revisión es orientativa, como la de Cuotas.",
+      "Revisado hoy - con tu promedio de ingresos actual, las tasas de cambio de hoy, tus compromisos y los estimados de metas - el margen con el que contaban sus pagos restantes se redujo. Nada se bloquea: la revisión es orientativa, como la de Cuotas.",
     affordShortItem: (name: string, amount: string, period: string) =>
       `${name} - faltan ${amount} en ${period}`,
     affordShortLink: "Verlas en la página de recurrentes",
@@ -268,7 +270,7 @@ export const es = {
     leftForRest: "restante para el resto de este periodo",
     overThePlan: "sobre lo planeado para este periodo",
     setBudgetPrompt:
-      "Define un presupuesto para este periodo y Cadence calcula cuánto puedes gastar cada día después de los compromisos.",
+      "Define un presupuesto para este periodo y Cadence calcula cuánto puedes gastar cada día: el presupuesto menos lo que has gastado, entre los días que quedan.",
     setPeriodBudget: "Definir el presupuesto de este periodo",
     recommendedBudget: (amount: string) =>
       `Recomendado: ${amount} - lo que tu revisión de día de pago deja para categorías flexibles.`,
@@ -286,7 +288,7 @@ export const es = {
     of: (amount: string) => `de ${amount}`,
     reached: "Alcanzada",
     dueThisPeriod: "vence este periodo",
-    periodsTo: (n: number, date: string) => `${n} periodos hasta ${date}`,
+    periodsTo: (n: number, date: string) => `${n} periodo${n === 1 ? "" : "s"} hasta ${date}`,
     perPayPeriod: "por periodo de pago",
     pace: "Ritmo",
     perPeriod: "por periodo",
@@ -731,7 +733,7 @@ export const es = {
   recurring: {
     title: "Recurrentes",
     description:
-      "Todo lo que sale según un calendario. Ambos tipos reducen lo disponible para gastar en el periodo en que caen y se registran automáticamente en tus cuentas al vencer.",
+      "Todo lo que sale según un calendario, registrado automáticamente en tus cuentas al vencer. El check-in de pago aparta estos elementos antes del presupuesto que propone. Lo disponible para gastar es ese presupuesto menos lo que has gastado: los elementos que vencen no se restan de él, así que un presupuesto definido a mano debe dejarles margen.",
     newItem: "Nuevo elemento",
     subscriptions: "Suscripciones",
     monthlyAcrossActive: (amount: string, count: number) =>
@@ -776,7 +778,7 @@ export const es = {
     pause: "Pausar",
     resume: "Reanudar",
     deleteItemTitle: (name: string) => `¿Eliminar ${name}?`,
-    stopsCounting: "Deja de contar contra lo disponible para gastar de inmediato. Las transacciones ya registradas se conservan.",
+    stopsCounting: "Deja de contar como compromiso y ya no se registra ningún cargo suyo. Lo disponible para gastar no cambia. Las transacciones ya registradas se conservan.",
     itemUpdated: "Elemento recurrente actualizado",
     itemAdded: "Elemento recurrente agregado",
     itemDeleted: "Elemento recurrente eliminado",
@@ -800,7 +802,7 @@ export const es = {
     paymentsLeft: (n: number) => (n === 1 ? "1 pago restante" : `${n} pagos restantes`),
     roomHeading: "¿Qué cuenta puede con esto?",
     roomDescription: (threshold: string, period: string, periods: number) =>
-      `Una suscripción de ${threshold} o más se comprueba como ¿Me alcanza? comprueba una compra: el ingreso de cada cuenta para ${period} se proyecta como ${incomeBasisEs(periods)} (la misma mitad del mes), se restan sus otros elementos recurrentes que vencen entonces y su parte de tus categorías fijas esenciales, y se reserva su colchón protegido. Que haya margen significa que el margen habitual de la cuenta cubre el cobro, no una garantía para todos los períodos. Esto nunca impide guardar.`,
+      `Una suscripción se comprueba cuando un solo cobro llega a ${threshold} o cuando su total mensual lo alcanza. La comprobación funciona como ¿Me alcanza? con una compra: el ingreso de cada cuenta para ${period} se proyecta como ${incomeBasisEs(periods)} (la misma mitad del mes); se restan sus otros elementos recurrentes que vencen entonces, el aporte a metas de ese período (el de un check-in confirmado o, si no hay, un estimado al ritmo actual de cada meta) y su parte de tus categorías fijas esenciales; y se reserva su colchón protegido. Los elementos de dos veces al mes no se comprueban. Que haya margen significa que el margen habitual de la cuenta cubre el cobro, no una garantía para todos los períodos. Esto nunca impide guardar.`,
     roomLowHistory: (periods: number) =>
       `Solo ${comparablePeriodsEs(periods)} de historial de ingresos ${periods === 1 ? "respalda" : "respaldan"} estas cifras, así que tómalas como aproximadas hasta que pasen más períodos de pago.`,
     roomChecking: "Comprobando qué cuenta tiene margen...",
@@ -843,8 +845,8 @@ export const es = {
     suggestionsTitle: "Parecen recurrentes",
     suggestionsDescription: (count: number) =>
       count === 1
-        ? "1 patrón en tus gastos manuales e importados se repite según un calendario pero aún no está registrado. No se agrega nada hasta que lo confirmes."
-        : `${count} patrones en tus gastos manuales e importados se repiten según un calendario pero aún no están registrados. No se agrega nada hasta que lo confirmes.`,
+        ? "1 patrón en tus gastos manuales e importados por CSV se repite según un calendario pero aún no está registrado. No se agrega nada hasta que lo confirmes."
+        : `${count} patrones en tus gastos manuales e importados por CSV se repiten según un calendario pero aún no están registrados. No se agrega nada hasta que lo confirmes.`,
     suggestionCadence: (cadence: string, anchorDays: number[]) => {
       switch (cadence) {
         case "WEEKLY":
@@ -927,8 +929,13 @@ export const es = {
     flexibleShortfall: (period: string, amount: string) =>
       `${period}: al período le faltarían ${amount} para sus categorías flexibles.`,
     projectionHeading: "Cómo se proyectan estas cifras",
-    projectionDescription: (account: string, periods: number | null) =>
-      `Todavía no existe un check-in de pago para estos períodos. El ingreso se proyecta como ${periods === null ? "el promedio de los períodos de pago comparables indicados bajo cada período" : incomeBasisEs(periods)} (la misma mitad del mes), contado en todas las cuentas desde el primer período con ingresos en cualquiera de ellas, así que un pago que pasó de una cuenta a otra no se cuenta en ambas. Si tus ingresos cambiaron (un trabajo nuevo, por ejemplo), "Contar historial de ingresos desde" en Ajustes define dónde empieza ese historial. Los compromisos de ${account} son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí y, en el período actual, lo que ya se registró además de lo que falta, más lo que un check-in de pago confirmado haya planificado hacia tus metas para ese período. Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo. El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
+    projectionDescription: (
+      account: string,
+      periods: number | null,
+      coverage: "all" | "none" | "some" = "none",
+      confirmedPeriods: string[] = [],
+    ) =>
+      `${coverage === "none" ? "Todavía no existe un check-in de pago para estos períodos. " : coverage === "some" ? `Hay un check-in de pago confirmado para ${confirmedPeriods.join(", ")}, pero no para los demás períodos. ` : ""}El ingreso se proyecta como ${periods === null ? "el promedio de los períodos de pago comparables indicados bajo cada período" : incomeBasisEs(periods)} (la misma mitad del mes), contado en todas las cuentas desde el primer período con ingresos en cualquiera de ellas, así que un pago que pasó de una cuenta a otra no se cuenta en ambas. Si tus ingresos cambiaron (un trabajo nuevo, por ejemplo), "Contar historial de ingresos desde" en Ajustes define dónde empieza ese historial. Los compromisos de ${account} son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí y, en el período actual, lo que ya se registró además de lo que falta, más lo que un check-in de pago confirmado haya planificado hacia tus metas para ese período.${coverage === "all" ? "" : " Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo."} El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
     projectionAccountColumns: (account: string) => `${account} (proyectado)`,
     projectionPeriodColumns: "Todas las cuentas (proyectado)",
     projectionIncome: "Ingreso",
@@ -1202,12 +1209,14 @@ export const es = {
     bufferPercentLabel: "Porcentaje de colchón",
     bufferPercentHint: "Porcentaje del ingreso de cada chequeo reservado como colchón por defecto.",
     bufferFloorLabel: "Colchón mínimo fijo",
+    bufferFloorHint:
+      "El colchón mínimo que se reserva por cada cuenta que recibe ingresos en un chequeo, así que dos cuentas con ingresos reservan dos mínimos. En cada cuenta rige el mayor entre este monto y el porcentaje.",
     carryoverDefaultLabel: "Incluir remanente por defecto",
     carryoverDefaultHint:
       "Si está activo, el dinero sin gastar del presupuesto del periodo anterior se precarga como remanente incluido en cada chequeo nuevo.",
     incomeHistoryStartLabel: "Contar historial de ingresos desde",
     incomeHistoryStartHint:
-      "Si tu situación de ingresos cambió (un trabajo nuevo, por ejemplo), define esta fecha para que los promedios de Cadence (la proyección de ingresos de Cuotas, las sugerencias por categoría del chequeo de pago) dejen de contar periodos antiguos que ya no aplican. Déjala en blanco para usar todo tu historial como siempre.",
+      "Si tu situación de ingresos cambió (un trabajo nuevo, por ejemplo), define esta fecha para que los promedios de Cadence (la proyección de ingresos de Cuotas, las sugerencias por categoría del chequeo de pago, el ritmo de gasto mensual y los promedios mensuales de Informes) dejen de contar periodos antiguos que ya no aplican. Déjala en blanco para usar todo tu historial como siempre.",
     planningPreferencesSaved: "Preferencias de planificación guardadas",
     essentialCategoriesTitle: "Categorías fijas esenciales",
     essentialCategoriesDescription:
