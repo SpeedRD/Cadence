@@ -547,6 +547,27 @@ function nextDatesFor(fit: CadenceFit, days: readonly Date[], today: Date): Date
   }
 }
 
+/**
+ * The first due date on or after `today` for a series of imported rows the
+ * review step proposes as a recurring item, and the anchor day to keep it on.
+ * The same walk the Recurring page's suggestions take (nextDatesFor -
+ * firstDueDate from the last occurrence, on the fitted anchor), so an import
+ * pre-fill and a suggestion for the same charges agree: never in the past,
+ * and a month-end series steps on the 31st through a short month instead of
+ * stranding on the 28th. `anchorDay` is null for a weekly or biweekly series,
+ * which has none. `frequency` is the review's own guess for the group, taken
+ * as given.
+ */
+export function nextDueOfImportedSeries(
+  dates: readonly Date[],
+  frequency: "WEEKLY" | "BIWEEKLY" | "MONTHLY" | "YEARLY",
+  today: Date,
+): { nextDate: Date; anchorDay: number | null } {
+  const days = distinctDays(dates);
+  const anchorDays = frequency === "MONTHLY" || frequency === "YEARLY" ? [fitMonthlyAnchor(days)] : [];
+  return { nextDate: nextDatesFor({ cadence: frequency, anchorDays }, days, today)[0], anchorDay: anchorDays[0] ?? null };
+}
+
 // --- candidates -----------------------------------------------------------
 
 function normalizeForMatch(value: string): string {

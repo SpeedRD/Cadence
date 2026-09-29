@@ -173,6 +173,7 @@ function RecordCard({
             t.frequencyAdverb[recorded.frequency] ?? recorded.frequency,
             recorded.count,
             formatDate(recorded.firstDate),
+            recorded.paidCount,
           )}
         </CardDescription>
       </CardHeader>

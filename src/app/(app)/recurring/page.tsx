@@ -75,6 +75,7 @@ export default async function RecurringPage() {
             accounts={accounts}
             goals={goals}
             values={{ nextDate: today, currency }}
+            today={context.today}
             locale={context.language}
             trigger={
               <Button size="sm" className="max-sm:hidden">
@@ -90,6 +91,7 @@ export default async function RecurringPage() {
             accounts={accounts}
             goals={goals}
             values={{ nextDate: today, currency }}
+            today={context.today}
             locale={context.language}
             trigger={
               <Button size="sm">
@@ -174,6 +176,7 @@ export default async function RecurringPage() {
                 accounts={accounts}
                 goals={goals}
                 values={{ nextDate: today, currency, kind: "CONTRIBUTION" }}
+                today={context.today}
                 locale={context.language}
                 trigger={
                   <Button variant="ghost" size="xs">

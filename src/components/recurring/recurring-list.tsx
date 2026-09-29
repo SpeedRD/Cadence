@@ -249,6 +249,7 @@ export function RecurringList({
           goals={goals}
           open
           onOpenChange={(next) => !next && setEditing(null)}
+          today={today}
           locale={locale}
           values={{
             id: editing.id,

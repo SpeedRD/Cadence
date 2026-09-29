@@ -9,7 +9,6 @@
  * transaction's final category, and it never creates a RecurringItem or a
  * transfer.
  */
-import { addDays, addMonths, addYears } from "@/lib/date";
 import { suggestCategoryName } from "@/lib/categorization-rules";
 
 export type ImportRowType = "EXPENSE" | "INCOME";
@@ -46,11 +45,9 @@ export interface DetectedGroup {
   /** Repeated, same-amount, evenly-spaced charges - or a known Subscriptions
    *  merchant repeated - so a "create recurring item" review action applies. */
   possibleSubscription: boolean;
-  /** Best-guess cadence for prefilling a RecurringItem's frequency/nextDate. */
+  /** Best-guess cadence for prefilling a RecurringItem's frequency. Its next
+   *  due date is nextDueOfImportedSeries's (src/lib/recurring-detection.ts). */
   inferredFrequency: RecurringFrequencyGuess;
-  /** Suggested next due date for a RecurringItem, one cadence after the
-   *  latest occurrence in the group. */
-  inferredNextDate: Date;
   /** Set only when kind is "transfer" - which side of the transfer the
    *  current import account is on, derived from the rows' own type (all rows
    *  in a transfer group share one type - see detectImportGroups). Null for
@@ -187,20 +184,6 @@ export function inferFrequency(dates: Date[]): RecurringFrequencyGuess {
   return "YEARLY";
 }
 
-function advanceByFrequency(date: Date, frequency: RecurringFrequencyGuess): Date {
-  switch (frequency) {
-    case "WEEKLY":
-      return addDays(date, 7);
-    case "BIWEEKLY":
-      return addDays(date, 14);
-    case "YEARLY":
-      return addYears(date, 1);
-    case "MONTHLY":
-    default:
-      return addMonths(date, 1);
-  }
-}
-
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -215,7 +198,6 @@ function buildGroup(
   transferDirection: TransferGroupDirection | null,
 ): DetectedGroup {
   const dates = rows.map((row) => row.date);
-  const latestDate = dates.reduce((latest, date) => (date > latest ? date : latest), dates[0]);
   const inferredFrequency = inferFrequency(dates);
   return {
     id: `${bucket}:${key}`,
@@ -232,7 +214,6 @@ function buildGroup(
     suggestedCategoryName,
     possibleSubscription,
     inferredFrequency,
-    inferredNextDate: advanceByFrequency(latestDate, inferredFrequency),
     transferDirection,
   };
 }

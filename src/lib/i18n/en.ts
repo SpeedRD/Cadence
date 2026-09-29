@@ -748,6 +748,8 @@ export const en = {
     frequency: "Frequency",
     nextDue: "Next due",
     nextDueHint: "Every due date up to today is posted automatically.",
+    pastDateNote: (count: number, first: string, last: string, capped: boolean) =>
+      `Saving posts ${count === 1 ? "1 charge" : `${count} charges`} dated ${count === 1 ? first : `${first} - ${last}`}${capped ? "; the rest follow on later runs" : ""}.`,
     /** Only shown when Frequency is "Twice a month" - the day this item's *other* charge lands on each month. */
     secondDueDay: "Second due day",
     secondDueDayHint:
@@ -781,6 +783,7 @@ export const en = {
       "This item changed somewhere else while the form was open. Reopen it and make the change again.",
     itemPaused: "Paused",
     itemResumed: "Resumed",
+    itemResumedNext: (date: string) => `Resumed. Next charge: ${date}`,
     finished: "finished",
     goalReached: "goal reached",
     goalReachedHint: "Its goal is fully funded, so this isn't posting. It resumes on its own if the goal's target is raised; pause it to stop counting it.",
@@ -932,8 +935,8 @@ export const en = {
     estimatedGoalFunding: (period: string, goals: string[]) =>
       `* ${period}: commitments include an estimated ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} and ${goals[goals.length - 1]}, each at its current pace` : `${goals[0]} at its current pace`} - not yet confirmed by a payday check-in, so it may change when you do that period's check-in.`,
     recordHeading: "Record it",
-    recordedNote: (amount: string, frequency: string, count: number, date: string) =>
-      `Records one subscription of ${amount} ${frequency}, ${count} times starting ${date}. It stops on its own after the last payment and shows up everywhere a subscription does - Recurring, the payday check-in, posting, reports.`,
+    recordedNote: (amount: string, frequency: string, count: number, date: string, paid: number) =>
+      `Records one subscription of ${amount} ${frequency}, ${count} times starting ${date}.${paid > 0 ? ` The ${paid === 1 ? "payment" : `${paid} payments`} dated before today ${paid === 1 ? "counts" : "count"} as already paid and ${paid === 1 ? "is" : "are"} not recorded or posted.` : ""} It stops on its own after the last payment and shows up everywhere a subscription does - Recurring, the payday check-in, posting, reports.`,
     acknowledgeLabel:
       "I understand this purchase leaves at least one pay period below its protected buffer or in deficit, and I'm recording it anyway.",
     bought: "I bought this",
@@ -947,6 +950,9 @@ export const en = {
       "Add an account before checking a purchase - every installment is charged to one.",
     accountNoLongerActive: "That account is no longer active",
     acknowledgeFirst: "Acknowledge the shortfall before recording the purchase",
+    alreadyPaid: "Already paid",
+    allInstallmentsPaid:
+      "Every payment in this plan is dated before today, so they all count as already paid. There is nothing left to check or record.",
     frequencyAdverb: {
       WEEKLY: "every week",
       BIWEEKLY: "every 2 weeks",

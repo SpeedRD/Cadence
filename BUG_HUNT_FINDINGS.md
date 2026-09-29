@@ -76,6 +76,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** anyone who pauses a subscription while it is cancelled or suspended, or whose auto-contribution parks on a reached goal. Expenses are overstated and balances understated, backdated into closed periods. Goals are over-credited.
 - **Severity / confidence:** High / High. Evidence: DB runs.
 - **Fix:** on resume, on re-activation after `goal_achieved`, and on account restore, move `nextDate` to the first occurrence on or after today. Posting the backlog should need an explicit confirmation from the user.
+- **Status:** fixed. Every transition that makes a skipped item postable again (resumed, a goal leaving the achieved state, an account restored or assigned, or a goal, kind or active flag changed through the Recurring form) now moves an overdue `nextDate` to the first occurrence on or after today with posting's own recurrence rules (`skipMissedOccurrences`), leaves `remainingOccurrences` alone because the skipped occurrences were never charged, and keeps a date the user types by hand; an item that is merely overdue after a failed run keeps its backlog.
 
 ### B5. No de-duplication against an already-posted RECURRING row
 - **What:** posting runs at 00:15 local (cron) and on every request, so the RECURRING row for a charge is normally written before the real charge arrives by CSV, email approval or manual entry. None of those paths compares against RECURRING rows:
@@ -235,6 +236,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** recording a purchase made weeks ago. The verdict overstates room in those periods, and backdated rows land in closed periods.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** reject a past first date, or treat installments before today as already paid: exclude them from the checks, count down `remainingOccurrences`, and start `nextDate` at the first future one.
+- **Status:** fixed. Installments dated before today are treated as already paid: they are left out of the checks and of what "I bought this" records (the countdown and `nextDate` start at the first payment still ahead, the anchor stays the plan's own), a plan with none ahead is refused, and the schedule and the Record it note say which payments count as paid.
 
 ### B18. Email ingestion permanently drops receipts when the parsing call fails
 - **What:** `parseTransactionEmail` returns `null` on any API error (rate limit, 5xx, bad key), which is the same value as "not a transaction". `syncConnection` then advances `lastSyncedAt` to `now` unless the account cap or provider truncation applies. Both the cron and "Sync now" report success.
@@ -336,6 +338,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** creating items from an older statement. Backdated charges are posted, and a month-end item stays on the 28th.
 - **Severity / confidence:** Low / High. Evidence: pure run.
 - **Fix:** reuse `firstDueDate` and the anchor fit from `recurring-detection.ts` for the import pre-fill.
+- **Status:** fixed. The import review's pre-fill comes from `nextDueOfImportedSeries`, which reuses `firstDueDate` and the anchor fit from `recurring-detection.ts`, so it is never before today, and a month-end series carries its anchor through the dialog (a validated `anchorDay` field on `recurringSchema`) to the saved item.
 
 ### B28. Merging a category deletes its budgets in every period, and the toast doesn't say so
 - **What:** `reassignAndDeleteCategory` moves transactions and items but runs `budget.deleteMany` for the merged category in all periods. The period budget shrinks while the spending moves in, and past periods' figures change too. The toast counts only moved rows.

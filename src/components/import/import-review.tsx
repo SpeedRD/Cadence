@@ -31,6 +31,7 @@ import { formatMoney } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { buildTransferPrefill, type DetectedGroup } from "@/lib/import-grouping";
+import { nextDueOfImportedSeries } from "@/lib/recurring-detection";
 import type { CsvDuplicateHit, CsvExtraordinaryHit } from "@/server/actions/import";
 
 /**
@@ -65,6 +66,7 @@ export function ImportReview({
   currency,
   accountId,
   locale,
+  today,
   decisions,
   onDecideAction,
   unknownDecisions,
@@ -88,6 +90,8 @@ export function ImportReview({
   currency: string;
   accountId: string;
   locale: Locale;
+  /** The app's business date: a pre-filled next due date is never before it. */
+  today: Date;
   decisions: Record<string, string>;
   onDecideAction: (groupId: string, categoryId: string | undefined) => void;
   /** Per-row decisions for the "unknown merchants" bucket - keyed by the same
@@ -149,6 +153,7 @@ export function ImportReview({
             currency={currency}
             accountId={accountId}
             locale={locale}
+            today={today}
             decision={decisions[group.id]}
             onDecideAction={(categoryId) => onDecideAction(group.id, categoryId)}
             typeDecision={typeDecisions[group.id]}
@@ -292,6 +297,7 @@ function GroupCard({
   currency,
   accountId,
   locale,
+  today,
   decision,
   onDecideAction,
   typeDecision,
@@ -305,6 +311,7 @@ function GroupCard({
   currency: string;
   accountId: string;
   locale: Locale;
+  today: Date;
   decision: string | undefined;
   onDecideAction: (categoryId: string | undefined) => void;
   /** "Mark as income" for an incoming transfer-shaped group - a type
@@ -324,13 +331,21 @@ function GroupCard({
   const subscriptionsId = categoryIdByName.get("subscriptions");
 
   const latestDate = rows.reduce((latest, row) => (row.date > latest ? row.date : latest), rows[0].date);
+  // On or after today, and on the series' own day of the month: a month-end
+  // series pre-fills its next month-end and carries the 31st as the anchor.
+  const nextDue = nextDueOfImportedSeries(
+    rows.map((row) => row.date),
+    group.inferredFrequency,
+    today,
+  );
   const recurringValues = {
     name: group.displayName,
     amount: rows[0].amount,
     currency,
     frequency: group.inferredFrequency,
     kind: "SUBSCRIPTION",
-    nextDate: toISODate(group.inferredNextDate),
+    nextDate: toISODate(nextDue.nextDate),
+    anchorDay: nextDue.anchorDay,
     categoryId: subscriptionsId ?? "none",
     accountId,
     note: group.sampleNote,
@@ -510,6 +525,7 @@ function GroupCard({
                   categories={categories}
                   accounts={accounts}
                   values={recurringValues}
+                  today={today}
                   locale={locale}
                   trigger={
                     <Button type="button" variant="outline" size="xs">

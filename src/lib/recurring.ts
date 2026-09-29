@@ -1,7 +1,7 @@
 import { addDays, civilDate, daysInMonth } from "@/lib/date";
 import { payDayOfMonth } from "@/lib/period";
 
-import type { RecurringFrequency } from "@/generated/prisma/enums";
+import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
 
 /**
  * The occurrence `months` after `date`, placed on `anchorDay` of the target
@@ -112,6 +112,31 @@ export function advanceDate(
   }
 }
 
+/**
+ * The first occurrence of `item` on or after `today`, walking from its own
+ * nextDate with the rules posting walks by (advanceDate: the stored anchor,
+ * SEMI_MONTHLY's weekend shift, month-end clamping), so the date it lands on
+ * is one posting itself would have reached. An item already due on or after
+ * today is returned unchanged. Used where an item becomes postable again
+ * after a stretch in which it could not post, to skip the occurrences that
+ * stretch covered instead of charging them (see skipMissedOccurrences in
+ * src/lib/data/recurring.ts).
+ */
+export function firstOccurrenceOnOrAfter(
+  item: Pick<ScheduledItem, "nextDate" | "frequency" | "anchorDay" | "secondAnchorDay">,
+  today: Date,
+): Date {
+  let cursor = item.nextDate;
+  // Bounded defensively: every step moves forward, and 5,000 weekly steps is
+  // ninety years of standing still.
+  for (let i = 0; i < MAX_SKIP_WALK && cursor.getTime() < today.getTime(); i += 1) {
+    cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
+  }
+  return cursor;
+}
+
+const MAX_SKIP_WALK = 5000;
+
 /** The schedule fields every occurrence walk needs, whatever loaded the row. */
 export interface ScheduledItem {
   nextDate: Date;
@@ -167,6 +192,44 @@ export function owedOccurrences(item: ScheduledItem, from: Date, to: Date): Date
   return dates;
 }
 
+/**
+ * How many elapsed occurrences a single posting run posts per item. Bounds the
+ * work (and the surprise) when the app has been untouched for a long time; a
+ * longer backlog finishes over the following runs.
+ */
+export const MAX_OCCURRENCES_PER_ITEM = 24;
+
+/** What posting will write for an item whose nextDate is already behind. */
+export interface PostingPreview {
+  /** Charges the first run posts: everything owed, up to MAX_OCCURRENCES_PER_ITEM. */
+  count: number;
+  first: Date;
+  last: Date;
+  /** More occurrences are owed than one run posts; the rest follow on later runs. */
+  capped: boolean;
+}
+
+/**
+ * What saving `item` would have posting write, as of `today`: the occurrences
+ * owedOccurrences() finds from nextDate up to today - the same walk, stopping
+ * at a finite item's countdown - of which one run posts the first
+ * MAX_OCCURRENCES_PER_ITEM. Null when nextDate is today or later (the form's
+ * note has nothing to say) or nothing is owed. Blind to a charge the user
+ * already entered, which posting may settle an occurrence with instead.
+ */
+export function previewPostingFrom(item: ScheduledItem, today: Date): PostingPreview | null {
+  if (item.nextDate.getTime() >= today.getTime()) return null;
+  const owed = owedOccurrences(item, item.nextDate, today);
+  if (owed.length === 0) return null;
+  const posted = owed.slice(0, MAX_OCCURRENCES_PER_ITEM);
+  return {
+    count: posted.length,
+    first: posted[0],
+    last: posted[posted.length - 1],
+    capped: owed.length > MAX_OCCURRENCES_PER_ITEM,
+  };
+}
+
 /** Cost per calendar month, used for the subscriptions total. */
 export function monthlyEquivalent(
   amount: number,
@@ -196,4 +259,42 @@ export function monthlyEquivalent(
  */
 export function isFinishedPlan(item: { active: boolean; remainingOccurrences: number | null }): boolean {
   return !item.active && item.remainingOccurrences !== null && item.remainingOccurrences <= 0;
+}
+
+export type RecurringSkipReason =
+  | "missing_account"
+  | "missing_goal"
+  | "missing_account_and_goal"
+  | "account_archived"
+  /** A contribution whose goal is already fully funded: nothing more to put in. */
+  | "goal_achieved";
+
+/** What a RecurringItem is linked to, as far as posting needs it to be. */
+export interface PostingLinks {
+  kind: RecurringKind;
+  accountId: string | null;
+  goalId: string | null;
+  account: { status: string } | null;
+  goal: { achievedAt: Date | null } | null;
+}
+
+/**
+ * Why posting would skip this item, or null when its links let it post.
+ * Says nothing about `active`: a paused item is filtered out before this is
+ * asked. The one definition behind postDueRecurringItems' skip and every
+ * place that has to know whether an item is postable (the transitions that
+ * make one postable again, see skipMissedOccurrences).
+ */
+export function skipReasonFor(item: PostingLinks): RecurringSkipReason | null {
+  const missingAccount = !item.accountId;
+  const missingGoal = item.kind === "CONTRIBUTION" && !item.goalId;
+  if (missingAccount && missingGoal) return "missing_account_and_goal";
+  if (missingAccount) return "missing_account";
+  if (missingGoal) return "missing_goal";
+  if (item.account?.status === "ARCHIVED") return "account_archived";
+  // A contribution to a goal that has reached its target is skipped, never
+  // advanced and never paused: the item stays exactly as it is until the
+  // goal is open again (which clears achievedAt, see rebuildGoalSaved).
+  if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) return "goal_achieved";
+  return null;
 }

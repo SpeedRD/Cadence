@@ -94,6 +94,26 @@ export function buildInstallments(dates: Date[], amount: number): Installment[] 
 }
 
 /**
+ * An installment dated before `today` is already paid: the purchase was made
+ * and the money has left, so it belongs to no check ahead and is never
+ * posted. One dated today or later is still owed.
+ */
+export function isPaidInstallment(date: Date, today: Date): boolean {
+  return date.getTime() < today.getTime();
+}
+
+/** The installments already behind `today` and the ones still ahead, each in plan order. */
+export function splitPaidInstallments(
+  installments: Installment[],
+  today: Date,
+): { paid: Installment[]; upcoming: Installment[] } {
+  return {
+    paid: installments.filter((installment) => isPaidInstallment(installment.date, today)),
+    upcoming: installments.filter((installment) => !isPaidInstallment(installment.date, today)),
+  };
+}
+
+/**
  * One goal's share of a period's estimated goal funding, in the display
  * currency: what the period is assumed to put toward the goal at the goal's
  * current pace, because no confirmed check-in has said what it really will.
@@ -251,7 +271,10 @@ export interface AffordVerdict {
   viable: boolean;
   /** The purchase's currency, which every installment amount is in. */
   currency: string;
+  /** The installments still ahead - the ones the periods below judge and "I bought this" records. */
   installments: Installment[];
+  /** Installments dated before today, treated as already paid: judged nowhere and never recorded (see isPaidInstallment). */
+  paidInstallments: Installment[];
   /** One per affected period, earliest first. */
   periods: PeriodVerdict[];
   /** The periods that fail either check, earliest first. */
@@ -273,12 +296,15 @@ export function installmentTotalsByPeriod(installments: Installment[]): Map<stri
  * one is a programming error rather than a shortfall, so it throws.
  */
 export function evaluateAffordability(input: {
+  /** The installments still ahead; the caller has already set aside any that are paid. */
   installments: Installment[];
   currency: string;
   projections: Map<string, PeriodProjection>;
   rates: RateTable;
+  /** Installments already paid, carried on the verdict for the schedule; judged nowhere. */
+  paidInstallments?: Installment[];
 }): AffordVerdict {
-  const { installments, currency, projections, rates } = input;
+  const { installments, currency, projections, rates, paidInstallments = [] } = input;
   const totals = installmentTotalsByPeriod(installments);
   const keys = [...totals.keys()].sort();
 
@@ -358,6 +384,7 @@ export function evaluateAffordability(input: {
     viable: failing.length === 0,
     currency,
     installments,
+    paidInstallments,
     periods,
     failing,
   };

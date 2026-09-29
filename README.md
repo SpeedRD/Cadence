@@ -270,7 +270,12 @@ day (an item due on the 31st is charged on the 28th in February and back on the 
 in March). An item missing its account or goal, or pointing at an archived account,
 is flagged here and skipped rather than posted; so is a contribution to a goal that
 is already fully funded, which resumes on its own if the goal's target is raised; a
-backlog of contributions stops as soon as the goal is reached. A charge you already
+backlog of contributions stops as soon as the goal is reached. What an item missed
+while it could not post is never charged afterwards: resuming it, restoring or
+assigning its account, giving it a goal, or raising an achieved goal's target moves
+its next date to the first occurrence on or after today (a payments-left count is
+left as it was), whereas an item merely overdue because a run failed posts its whole
+backlog. A charge you already
 entered yourself (by hand, from a CSV or an approved receipt, on any account, up to
 five days before a due date early in a pay period) is taken as that occurrence paid
 and nothing is posted for it. Each such charge stands for one occurrence of one item,
@@ -351,7 +356,9 @@ date, and the account each installment is charged to. Cadence splits the price i
 equal parts, places each on the pay period it lands in, and runs two checks per
 period: the chosen account stays at or above its own protected buffer, and the
 period's available-for-flexible figure stays out of deficit. Installments landing in
-the same period are checked together. Because those periods haven't happened yet,
+the same period are checked together. Installments dated before today count as already
+paid: the schedule marks them, the checks leave them out, and "I bought this" records
+only the payments still ahead (a plan with none ahead is refused). Because those periods haven't happened yet,
 income is projected from the average of your comparable periods (same half of the
 month) — up to the last six, fewer if a **Count income history from** date (Settings)
 has trimmed some of them off — while commitments are exact: every active recurring

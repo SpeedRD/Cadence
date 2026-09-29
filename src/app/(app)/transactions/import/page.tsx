@@ -56,6 +56,7 @@ export default async function ImportPage() {
           categories={categories}
           defaultCurrency={accounts[0]?.currency ?? context.displayCurrency}
           locale={context.language}
+          today={context.today}
         />
       )}
     </div>

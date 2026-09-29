@@ -16,12 +16,15 @@ import { SubscriptionRoomPanel } from "@/components/recurring/subscription-room-
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { CURRENCIES, formatMoney } from "@/lib/currency";
+import { formatDate, fromISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { RECURRING_FREQUENCIES, RECURRING_KINDS } from "@/lib/labels";
+import { previewPostingFrom } from "@/lib/recurring";
 import { LARGE_SUBSCRIPTION_THRESHOLD } from "@/lib/subscription-room";
 import { checkSubscriptionRoomAction, saveRecurringAction } from "@/server/actions/recurring";
 
 import type { SubscriptionRoom } from "@/lib/data/subscription-room";
+import type { RecurringFrequency } from "@/generated/prisma/enums";
 
 /** How long the amount field rests before the room check runs, so typing "12000" projects once, not five times. */
 const ROOM_CHECK_DEBOUNCE_MS = 400;
@@ -33,6 +36,9 @@ interface RoomInputs {
   frequency: string;
   nextDate: string;
   accountId: string;
+  /** The payments-left and second-due-day fields, as typed, for the past-date note. */
+  remaining: string;
+  secondAnchorDay: string;
 }
 
 export interface RecurringFormValues {
@@ -54,6 +60,13 @@ export interface RecurringFormValues {
   remainingOccurrences?: number | null;
   /** Only meaningful when frequency is SEMI_MONTHLY: the item's other due day each month. */
   secondAnchorDay?: number | null;
+  /**
+   * A new item's due day of the month when it is not the day of `nextDate` -
+   * the import review pre-fills a month-end series with its next 28th or 30th
+   * and the 31st here. Sent only for a new item, and the save honours it only
+   * while it still explains the date (see recurringSchema).
+   */
+  anchorDay?: number | null;
 }
 
 export function RecurringDialog({
@@ -61,6 +74,7 @@ export function RecurringDialog({
   accounts,
   goals = [],
   values,
+  today,
   trigger,
   open: controlledOpen,
   onOpenChange,
@@ -71,6 +85,8 @@ export function RecurringDialog({
   /** Optional only for callers that can only ever create a subscription. */
   goals?: Option[];
   values: RecurringFormValues;
+  /** The app's business date, for the note under a next date that is already past. */
+  today: Date;
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -118,6 +134,8 @@ export function RecurringDialog({
     frequency: values.frequency ?? "MONTHLY",
     nextDate: values.nextDate,
     accountId: accountDefault ?? "",
+    remaining: values.remainingOccurrences == null ? "" : String(values.remainingOccurrences),
+    secondAnchorDay: values.secondAnchorDay == null ? "" : String(values.secondAnchorDay),
   });
   const [roomInputs, setRoomInputs] = useState<RoomInputs>(initialRoomInputs);
   const [room, setRoom] = useState<SubscriptionRoom | null>(null);
@@ -136,6 +154,29 @@ export function RecurringDialog({
 
   const { amount, currency, frequency, nextDate } = roomInputs;
   const isSemiMonthly = frequency === "SEMI_MONTHLY";
+
+  // A next date already in the past is saved as typed and posting then owes
+  // every occurrence since, so the date field says how many charges saving
+  // writes. Only for a date the user typed (a new item, or an edit that changed
+  // the date - one left alone is an overdue backlog, not a choice) on an item
+  // that will be active. Advisory: it never changes the save.
+  const typedDate = fromISODate(nextDate);
+  const secondDay = Number(roomInputs.secondAnchorDay);
+  const remainingTyped = Number(roomInputs.remaining);
+  const dateTyped = !editing || nextDate !== values.nextDate;
+  const pastPreview =
+    open && dateTyped && values.active !== false && typedDate !== null && (!isSemiMonthly || Number.isInteger(secondDay))
+      ? previewPostingFrom(
+          {
+            nextDate: typedDate,
+            frequency: frequency as RecurringFrequency,
+            anchorDay: typedDate.getUTCDate(),
+            secondAnchorDay: isSemiMonthly ? secondDay : null,
+            remainingOccurrences: Number.isInteger(remainingTyped) && remainingTyped >= 1 ? remainingTyped : null,
+          },
+          today,
+        )
+      : null;
   // Only a subscription with an amount is checked; a contribution never is
   // (its funding is planned per account in the payday check-in's Step 3),
   // and neither is a SEMI_MONTHLY item - the room check's own occurrence
@@ -193,6 +234,9 @@ export function RecurringDialog({
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
       {values.updatedAt ? (
         <input type="hidden" name="updatedAt" value={values.updatedAt} />
+      ) : null}
+      {!editing && values.anchorDay ? (
+        <input type="hidden" name="anchorDay" value={values.anchorDay} />
       ) : null}
       {editing ? (
         // The due date as rendered, so the save can tell "re-picked the date"
@@ -262,7 +306,27 @@ export function RecurringDialog({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label={t.nextDue} htmlFor="recurring-next" hint={t.nextDueHint}>
+        <Field
+          label={t.nextDue}
+          htmlFor="recurring-next"
+          hint={
+            pastPreview ? (
+              <>
+                {t.nextDueHint}
+                <span className="mt-1 block" role="status">
+                  {t.pastDateNote(
+                    pastPreview.count,
+                    formatDate(pastPreview.first),
+                    formatDate(pastPreview.last),
+                    pastPreview.capped,
+                  )}
+                </span>
+              </>
+            ) : (
+              t.nextDueHint
+            )
+          }
+        >
           <Input
             id="recurring-next"
             type="date"
@@ -288,6 +352,7 @@ export function RecurringDialog({
             className="font-mono"
             placeholder={t.paymentsLeftPlaceholder}
             defaultValue={values.remainingOccurrences ?? ""}
+            onChange={(event) => updateRoomInputs({ remaining: event.target.value })}
           />
         </Field>
       </div>
@@ -308,6 +373,7 @@ export function RecurringDialog({
             step={1}
             className="font-mono"
             defaultValue={values.secondAnchorDay ?? ""}
+            onChange={(event) => updateRoomInputs({ secondAnchorDay: event.target.value })}
             required
           />
         </Field>

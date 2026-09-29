@@ -1,9 +1,11 @@
 import { convert } from "@/lib/currency";
+import { today as todayInAppZone } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { balanceSign } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
+import { skipMissedOccurrences } from "@/lib/data/recurring";
 import { loadReimbursementDetails, type SharedExpenseDetails } from "@/lib/data/transactions";
 import { Prisma } from "@/generated/prisma/client";
 import type { AccountStatus, AccountType } from "@/generated/prisma/enums";
@@ -221,10 +223,22 @@ export async function archiveAccount(accountId: string): Promise<void> {
   });
 }
 
-export async function restoreAccount(accountId: string): Promise<void> {
-  await prisma.account.update({
-    where: { id: accountId },
-    data: { status: "ACTIVE", archivedAt: null },
+/**
+ * Restores an archived account. Its recurring items sat unposted for as long as
+ * it was archived (skipReasonFor's account_archived), and what they missed was
+ * never charged, so those that can post now move to the first occurrence on or
+ * after `today` instead of posting the whole stretch (skipMissedOccurrences).
+ * Restoring an account that was not archived changes nothing, its items
+ * included: an overdue one is a failed run's backlog, not something skipped.
+ */
+export async function restoreAccount(accountId: string, today: Date = todayInAppZone()): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const account = await tx.account.findUnique({ where: { id: accountId }, select: { status: true } });
+    await tx.account.update({
+      where: { id: accountId },
+      data: { status: "ACTIVE", archivedAt: null },
+    });
+    if (account?.status === "ARCHIVED") await skipMissedOccurrences({ accountId }, today, tx);
   });
 }
 

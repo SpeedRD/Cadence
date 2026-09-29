@@ -96,11 +96,14 @@ export function CsvImporter({
   categories,
   defaultCurrency,
   locale,
+  today,
 }: {
   accounts: Option[];
   categories: Option[];
   defaultCurrency: string;
   locale: Locale;
+  /** The app's business date, for the review's pre-filled next due dates. */
+  today: Date;
 }) {
   const router = useRouter();
   const dictionary = getDictionary(locale);
@@ -820,6 +823,7 @@ export function CsvImporter({
                 currency={currency}
                 accountId={accountId}
                 locale={locale}
+                today={today}
                 decisions={groupDecisions}
                 onDecideAction={(groupId, decision) =>
                   setGroupDecisions((previous) => {

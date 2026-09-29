@@ -1,7 +1,9 @@
 import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
+import { today as todayInAppZone } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
+import { skipMissedOccurrences } from "@/lib/data/recurring";
 import { manualContributionExternalId } from "@/lib/transactions";
 
 export interface ManualContributionInput {
@@ -301,8 +303,8 @@ export async function deleteGoalDetachingLedger(goalId: string): Promise<boolean
  * savedAmount that is missing a contribution - which also drags achievedAt
  * back and forth with it.
  */
-export async function recomputeGoalSaved(goalId: string): Promise<number> {
-  return (await rebuildGoalSaved(goalId)).saved;
+export async function recomputeGoalSaved(goalId: string, today: Date = todayInAppZone()): Promise<number> {
+  return (await rebuildGoalSaved(goalId, today)).saved;
 }
 
 /**
@@ -337,9 +339,19 @@ export function savedFromContributions(
  * achievedAt and reports the crossing, and the second sees the timestamp the
  * first wrote and reports nothing. A caller reading achievedAt outside the lock
  * could have both report it.
+ *
+ * A goal that leaves the achieved state here - its target raised, the
+ * contribution that reached it removed or edited down, its currency changed -
+ * reopens the contributions recurring posting skipped while it was full
+ * (skipReasonFor's goal_achieved). Those occurrences were never charged, so
+ * the items aimed at the goal move to the first occurrence on or after
+ * `today` in the same transaction (skipMissedOccurrences) instead of posting
+ * the whole stretch. A goal that stays open, or that was never achieved,
+ * touches no item.
  */
 export async function rebuildGoalSaved(
   goalId: string,
+  today: Date = todayInAppZone(),
 ): Promise<{ saved: number; justAchieved: boolean }> {
   const exists = await prisma.goal.findUnique({
     where: { id: goalId },
@@ -380,6 +392,9 @@ export async function rebuildGoalSaved(
         achievedAt: achieved ? (goal.achievedAt ?? new Date()) : null,
       },
     });
+    if (goal.achievedAt !== null && !achieved) {
+      await skipMissedOccurrences({ goalId, kind: "CONTRIBUTION" }, today, tx);
+    }
 
     return { saved, justAchieved: achieved && goal.achievedAt === null };
   });

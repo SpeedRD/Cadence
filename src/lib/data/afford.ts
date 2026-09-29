@@ -47,6 +47,9 @@
  *   buffer      defaultProtectedBuffer() over the projected income, per
  *               account, as the check-in's per-account buffer card does
  *
+ * Installments dated before today are already paid: they are set aside before
+ * anything is checked (evaluateAffordRequest) and never recorded.
+ *
  * Nothing here reads a check-in for the periods being evaluated, and nothing
  * here writes until confirmAffordPurchase() - the calculator is a pure read
  * until "I bought this".
@@ -58,6 +61,7 @@ import {
   equalInstallmentAmount,
   evaluateAffordability,
   installmentDates,
+  splitPaidInstallments,
   type AffordVerdict,
   type EstimatedGoalFunding,
   type PeriodProjection,
@@ -561,11 +565,15 @@ export async function projectPeriods(
  * What "I bought this" will write, shown to the user before they press it.
  * `amount` is the equal installment every schedule row shows and every check
  * subtracted - the same equalInstallmentAmount() the evaluation ran on.
+ * `count` is the payments still ahead, starting on `firstDate`, the first of
+ * them; `paidCount` more are dated before today and count as already paid -
+ * they are neither checked nor recorded.
  */
 export interface AffordRecordedPlan {
   amount: number;
   currency: string;
   count: number;
+  paidCount: number;
   frequency: AffordInput["frequency"];
   firstDate: Date;
   accountId: string;
@@ -574,7 +582,7 @@ export interface AffordRecordedPlan {
 
 export type AffordEvaluation =
   | { ok: true; verdict: AffordVerdict; recorded: AffordRecordedPlan }
-  | { ok: false; reason: "account_not_active" };
+  | { ok: false; reason: "account_not_active" | "all_installments_paid" };
 
 async function loadActiveAccounts(): Promise<ActiveAccount[]> {
   return prisma.account.findMany({
@@ -602,13 +610,19 @@ export async function evaluateAffordRequest(
   // records, so the two cannot drift apart.
   const amount = equalInstallmentAmount(input.totalAmount, input.installments);
   const dates = installmentDates(input.firstDate, input.frequency, input.installments);
-  const installments = buildInstallments(dates, amount);
-  const refs = [...new Set(installments.map((installment) => installment.periodKey))]
+  // A payment dated before today was made already: it is not judged in its
+  // own (past) period, where nothing is committed and the room would look
+  // larger than it was, and it is never recorded - posting would otherwise
+  // charge it again on the next request.
+  const { paid, upcoming } = splitPaidInstallments(buildInstallments(dates, amount), context.today);
+  if (upcoming.length === 0) return { ok: false, reason: "all_installments_paid" };
+  const refs = [...new Set(upcoming.map((installment) => installment.periodKey))]
     .map((key) => parsePeriodKey(key))
     .filter((ref): ref is PeriodRef => ref !== null);
   const projections = await projectPeriods(refs, chosen, accounts, context);
   const verdict = evaluateAffordability({
-    installments,
+    installments: upcoming,
+    paidInstallments: paid,
     currency: input.currency,
     projections,
     rates: context.rates,
@@ -619,9 +633,10 @@ export async function evaluateAffordRequest(
     recorded: {
       amount,
       currency: input.currency,
-      count: input.installments,
+      count: upcoming.length,
+      paidCount: paid.length,
       frequency: input.frequency,
-      firstDate: input.firstDate,
+      firstDate: upcoming[0].date,
       accountId: chosen.id,
       accountName: chosen.name,
     },
@@ -631,6 +646,7 @@ export async function evaluateAffordRequest(
 export type AffordConfirmation =
   | { ok: true; recurringItemId: string; verdict: AffordVerdict }
   | { ok: false; reason: "account_not_active" }
+  | { ok: false; reason: "all_installments_paid" }
   | { ok: false; reason: "not_acknowledged"; verdict: AffordVerdict };
 
 /**
@@ -640,6 +656,12 @@ export type AffordConfirmation =
  * the plan is an ordinary recurring item to posting, the period summary and
  * the check-in. Only `fromAfford` tells it apart, for the Recurring page's
  * "From Afford" section and the tracker below.
+ *
+ * Only the payments still ahead are recorded: the item's countdown is the
+ * count of installments dated today or later and its nextDate the first of
+ * them, while the anchor stays the plan's own first date, so a month-end plan
+ * keeps its 31st. Payments dated before today were paid already and are
+ * never posted; a plan with none ahead is refused (see evaluateAffordRequest).
  */
 export async function confirmAffordPurchase(
   input: AffordInput,
@@ -657,9 +679,11 @@ export async function confirmAffordPurchase(
       currency: input.currency,
       frequency: input.frequency,
       kind: "SUBSCRIPTION",
-      nextDate: input.firstDate,
+      nextDate: evaluation.recorded.firstDate,
       // The first payment's day anchors every later one, as the recurring
       // form's schema does for a hand-entered item - see RecurringItem.anchorDay.
+      // It is the plan's own first date, not the first one still ahead, whose
+      // day a short month may have clamped.
       anchorDay: input.firstDate.getUTCDate(),
       accountId: evaluation.recorded.accountId,
       remainingOccurrences: evaluation.recorded.count,

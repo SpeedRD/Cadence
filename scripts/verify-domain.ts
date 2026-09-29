@@ -4406,13 +4406,21 @@ async function main() {
       eq("the goal's contributions are untouched", await prisma.goalContribution.count({ where: { goalId: achievedGoal.id } }), 1);
       eq("the cron summary names the reason", describeRecurringPosting(achievedRun).includes("Verify Posting Achieved Contribution (goal fully funded)"), true);
       await prisma.goal.update({ where: { id: achievedGoal.id }, data: { targetAmount: 1000 } });
-      await recomputeForPosting(achievedGoal.id);
+      await recomputeForPosting(achievedGoal.id, postingToday);
       eq("raising the target clears achievedAt", (await prisma.goal.findUniqueOrThrow({ where: { id: achievedGoal.id } })).achievedAt, null);
+      // Flipped by B4 (was: "the next run posts it normally again, catching up
+      // from its original due date" - Jul 15 and Aug 15 - and both reached the
+      // goal). The occurrences the goal was full for were never charged, so
+      // reopening the goal moves the item to the first occurrence on or after
+      // today instead of posting them.
+      eq("the item moves to the first occurrence on or after today when the goal opens again", await nextDateOf(achievedItem.id), "2026-09-15");
       const resumedRun = await postDueRecurringItems(postingToday);
-      eq("the next run posts it normally again, catching up from its original due date", (await postedFor(achievedItem.id)).map((row) => toISODate(row.date)).join(","), "2026-07-15,2026-08-15");
+      eq("the next run posts none of the occurrences the goal was full for", (await postedFor(achievedItem.id)).length, 0);
       eq("and no longer reports it skipped", resumedRun.skipped.some((item) => item.id === achievedItem.id), false);
-      eq("its nextDate has moved past today", await nextDateOf(achievedItem.id), "2026-09-15");
-      eq("both occurrences reached the goal", await prisma.goalContribution.count({ where: { goalId: achievedGoal.id } }), 3);
+      eq("the goal keeps only its seed contribution", await prisma.goalContribution.count({ where: { goalId: achievedGoal.id } }), 1);
+      await postDueRecurringItems(civilDate(2026, 9, 15));
+      eq("the run on the new date posts it normally", (await postedFor(achievedItem.id)).map((row) => toISODate(row.date)).join(","), "2026-09-15");
+      eq("and it reaches the goal", await prisma.goalContribution.count({ where: { goalId: achievedGoal.id } }), 2);
       await prisma.goal.delete({ where: { id: achievedGoal.id } });
     }
 
@@ -5406,6 +5414,467 @@ async function main() {
     }
 
     await prisma.category.delete({ where: { id: healthId } });
+  }
+
+  console.log("\n== stale dates never back-post: resuming, recording and importing (B4 B17 B27) ==");
+  {
+    // Public APIs only where the old tree has them (posting, restoreAccount,
+    // recomputeGoalSaved, setRecurringItemAccount, the Afford evaluate/confirm,
+    // recurringSchema), so those checks fail on behavior against the code before
+    // the fix; the two entry points that did not exist as functions
+    // (setRecurringItemActive, updateRecurringItem, nextDueOfImportedSeries)
+    // fail as missing. Every check is wrapped so one missing function is one
+    // FAIL, not a crash that skips the cleanup below.
+    const { postDueRecurringItems: staleRun } = await import("../src/lib/recurring-posting");
+    const staleRecurring = await import("../src/lib/data/recurring");
+    const staleAccounts = await import("../src/lib/data/accounts");
+    const staleGoals = await import("../src/lib/goals");
+    const staleAfford = await import("../src/lib/data/afford");
+    const { recurringSchema: staleSchema } = await import("../src/lib/validation");
+    const { remainingInstallments: staleRemaining } = await import("../src/lib/afford-tracking");
+    const staleDetection = await import("../src/lib/recurring-detection");
+    const staleToday = civilDate(2026, 9, 28);
+    const attempt = async (name: string, run: () => Promise<void>) => {
+      try {
+        await run();
+      } catch (error) {
+        check(`${name} (threw)`, false, error instanceof Error ? error.message : error);
+      }
+    };
+    const wipeStale = async () => {
+      const accounts = await prisma.account.findMany({ where: { name: { startsWith: "Verify Stale" } }, select: { id: true } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Stale" } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts.map((a) => a.id) } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Stale" } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Stale" } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts.map((a) => a.id) } } });
+    };
+    const staleAccount = (name: string, currency = "USD", archived = false) =>
+      prisma.account.create({
+        data: { name: `Verify Stale ${name}`, currency, type: "CHECKING", ...(archived ? { status: "ARCHIVED" as const, archivedAt: new Date() } : {}) },
+      });
+    const staleItem = (data: { name: string; nextDate: Date } & Record<string, unknown>) =>
+      prisma.recurringItem.create({ data: { currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", amount: 15.49, ...data } as never });
+    const staleRows = async (itemId: string) =>
+      (await prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${itemId}:` } }, orderBy: { date: "asc" } }))
+        .map((row) => toISODate(row.date))
+        .join(",");
+    const staleNext = async (itemId: string) => toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: itemId } })).nextDate);
+    await wipeStale();
+
+    // B4, the report's first repro: a 15.49 item paused since February and
+    // resumed on 09-28 posted 8 rows (Feb 15 - Sep 15).
+    await attempt("B4 paused item", async () => {
+      const account = await staleAccount("Checking");
+      const paused = await staleItem({ name: "Verify Stale Netflix", nextDate: civilDate(2026, 2, 15), anchorDay: 15, accountId: account.id, active: false });
+      const resumed = await staleRecurring.setRecurringItemActive(paused.id, true, staleToday);
+      eq("B4: the toggle resumes the item", resumed.ok, true);
+      const run = await staleRun(staleToday);
+      eq("B4: resuming an item paused since February posts nothing for the months it sat paused", `${run.transactionsCreated}:${await staleRows(paused.id)}`, "0:");
+      eq("B4: its nextDate is the first occurrence on or after today", await staleNext(paused.id), "2026-10-15");
+      eq("B4: it is active again", (await prisma.recurringItem.findUniqueOrThrow({ where: { id: paused.id } })).active, true);
+      const onTheDay = await staleRun(civilDate(2026, 10, 15));
+      eq("B4: the run on that date posts exactly one row", `${onTheDay.transactionsCreated}:${await staleRows(paused.id)}`, "1:2026-10-15");
+      eq("B4: and rolls on a month", await staleNext(paused.id), "2026-11-15");
+      const pausedAgain = await staleRecurring.setRecurringItemActive(paused.id, false, staleToday);
+      eq("B4: pausing changes only the flag - the date stays where it is", `${pausedAgain.ok}:${await staleNext(paused.id)}`, "true:2026-11-15");
+      await wipeStale();
+    });
+
+    // B4, the second repro: a 5,000 DOP contribution parked on a goal achieved
+    // in March posted 6 rows (30,000 DOP) when the target was raised.
+    await attempt("B4 achieved goal", async () => {
+      const account = await staleAccount("DOP", "DOP");
+      const goal = await prisma.goal.create({ data: { name: "Verify Stale Goal", targetAmount: 10000, currency: "DOP" } });
+      await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 10000, currency: "DOP", date: civilDate(2026, 3, 1), note: "Verify Stale Seed" } });
+      await staleGoals.recomputeGoalSaved(goal.id, civilDate(2026, 3, 2));
+      check("B4: the seed marks the goal achieved", (await prisma.goal.findUniqueOrThrow({ where: { id: goal.id } })).achievedAt !== null);
+      const contribution = await staleItem({ name: "Verify Stale Contribution", amount: 5000, currency: "DOP", kind: "CONTRIBUTION", nextDate: civilDate(2026, 4, 1), anchorDay: 1, accountId: account.id, goalId: goal.id });
+      const parked = await staleRun(staleToday);
+      eq("B4: while the goal is achieved the item is skipped and keeps its date", `${parked.skipped.find((s) => s.id === contribution.id)?.reason}:${await staleNext(contribution.id)}`, "goal_achieved:2026-04-01");
+      await prisma.goal.update({ where: { id: goal.id }, data: { targetAmount: 100000 } });
+      await staleGoals.recomputeGoalSaved(goal.id, staleToday);
+      eq("B4: raising the target clears achievedAt", (await prisma.goal.findUniqueOrThrow({ where: { id: goal.id } })).achievedAt, null);
+      eq("B4: and moves the parked item to the first occurrence on or after today", await staleNext(contribution.id), "2026-10-01");
+      const run = await staleRun(staleToday);
+      eq("B4: the next run posts none of the six months the goal was achieved", `${run.transactionsCreated}:${await staleRows(contribution.id)}`, "0:");
+      eq("B4: the goal received nothing but its seed", await prisma.goalContribution.count({ where: { goalId: goal.id } }), 1);
+      const onTheDay = await staleRun(civilDate(2026, 10, 1));
+      eq("B4: the run on Oct 1 posts one row and one goal contribution", `${onTheDay.transactionsCreated}:${onTheDay.goalContributionsCreated}:${await staleRows(contribution.id)}:${await prisma.goalContribution.count({ where: { goalId: goal.id } })}`, "1:1:2026-10-01:2");
+      await wipeStale();
+    });
+
+    // Other ways a goal leaves the achieved state: a contribution removed, a
+    // contribution edited down, the goal's own edit.
+    await attempt("B4 goal leaves achieved by other edits", async () => {
+      const account = await staleAccount("DOP", "DOP");
+      const goal = await prisma.goal.create({ data: { name: "Verify Stale Goal", targetAmount: 10000, currency: "DOP" } });
+      const seed = await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 10000, currency: "DOP", date: civilDate(2026, 3, 1), note: "Verify Stale Seed" } });
+      await staleGoals.recomputeGoalSaved(goal.id, civilDate(2026, 3, 2));
+      const contribution = await staleItem({ name: "Verify Stale Contribution", amount: 5000, currency: "DOP", kind: "CONTRIBUTION", nextDate: civilDate(2026, 4, 1), anchorDay: 1, accountId: account.id, goalId: goal.id });
+      await prisma.goalContribution.update({ where: { id: seed.id }, data: { amount: 9000 } });
+      await staleGoals.recomputeGoalSaved(goal.id, staleToday);
+      eq("B4: editing the contribution that reached the goal down moves the parked item on", await staleNext(contribution.id), "2026-10-01");
+      await prisma.recurringItem.update({ where: { id: contribution.id }, data: { nextDate: civilDate(2026, 4, 1) } });
+      await prisma.goalContribution.update({ where: { id: seed.id }, data: { amount: 10000 } });
+      await staleGoals.recomputeGoalSaved(goal.id, civilDate(2026, 3, 3));
+      await prisma.goalContribution.delete({ where: { id: seed.id } });
+      await staleGoals.recomputeGoalSaved(goal.id, staleToday);
+      eq("B4: removing the contribution that reached the goal does the same", await staleNext(contribution.id), "2026-10-01");
+      await wipeStale();
+    });
+
+    // B4: an account restored (skip reason account_archived).
+    await attempt("B4 archived account", async () => {
+      const archived = await staleAccount("Archived", "USD", true);
+      const item = await staleItem({ name: "Verify Stale Archived Sub", nextDate: civilDate(2026, 5, 10), anchorDay: 10, accountId: archived.id });
+      const parked = await staleRun(staleToday);
+      eq("B4: on an archived account the item is skipped and keeps its date", `${parked.skipped.find((s) => s.id === item.id)?.reason}:${await staleNext(item.id)}`, "account_archived:2026-05-10");
+      await staleAccounts.restoreAccount(archived.id, staleToday);
+      const run = await staleRun(staleToday);
+      eq("B4: restoring the account posts none of the months it was archived", `${run.transactionsCreated}:${await staleRows(item.id)}`, "0:");
+      eq("B4: the item waits for the first occurrence on or after today", await staleNext(item.id), "2026-10-10");
+      const onTheDay = await staleRun(civilDate(2026, 10, 10));
+      eq("B4: one row on that date", `${onTheDay.transactionsCreated}:${await staleRows(item.id)}`, "1:2026-10-10");
+      await wipeStale();
+    });
+
+    // B4: an account assigned to an item that had none (missing_account).
+    await attempt("B4 missing account", async () => {
+      const account = await staleAccount("Checking");
+      const item = await staleItem({ name: "Verify Stale No Account", nextDate: civilDate(2026, 6, 5), anchorDay: 5 });
+      const parked = await staleRun(staleToday);
+      eq("B4: with no account the item is skipped and keeps its date", `${parked.skipped.find((s) => s.id === item.id)?.reason}:${await staleNext(item.id)}`, "missing_account:2026-06-05");
+      const assigned = await staleRecurring.setRecurringItemAccount(item.id, account.id, staleToday);
+      eq("B4: the account is assigned", assigned, true);
+      const run = await staleRun(staleToday);
+      eq("B4: assigning it posts none of the months it had no account", `${run.transactionsCreated}:${await staleRows(item.id)}`, "0:");
+      eq("B4: the item waits for the first occurrence on or after today", await staleNext(item.id), "2026-10-05");
+      await wipeStale();
+    });
+
+    // B4: the Recurring form's own save, for the transitions it can make.
+    await attempt("B4 form edits", async () => {
+      const account = await staleAccount("Checking");
+      const otherAccount = await staleAccount("Other");
+      const goal = await prisma.goal.create({ data: { name: "Verify Stale Goal", targetAmount: 100, currency: "USD" } });
+      const formFor = async (itemId: string, over: Record<string, string>) => {
+        const item = await prisma.recurringItem.findUniqueOrThrow({ where: { id: itemId } });
+        const parsed = staleSchema.parse({
+          id: item.id,
+          updatedAt: item.updatedAt.toISOString(),
+          originalNextDate: toISODate(item.nextDate),
+          name: item.name,
+          amount: String(num(item.amount)),
+          currency: item.currency,
+          frequency: item.frequency,
+          kind: item.kind,
+          nextDate: toISODate(item.nextDate),
+          categoryId: "none",
+          accountId: item.accountId ?? "",
+          goalId: item.goalId ?? "",
+          active: item.active ? "true" : "false",
+          note: "",
+          ...over,
+        });
+        const { id, updatedAt, ...values } = parsed;
+        return staleRecurring.updateRecurringItem(id as string, updatedAt, values, staleToday);
+      };
+
+      const noGoal = await staleItem({ name: "Verify Stale No Goal", kind: "CONTRIBUTION", nextDate: civilDate(2026, 7, 20), anchorDay: 20, accountId: account.id });
+      eq("B4: a contribution with no goal is skipped", (await staleRun(staleToday)).skipped.find((s) => s.id === noGoal.id)?.reason, "missing_goal");
+      eq("B4: the form assigning it a goal saves", await formFor(noGoal.id, { goalId: goal.id }), 1);
+      eq("B4: a goal assigned through the form moves the item to the first occurrence on or after today", await staleNext(noGoal.id), "2026-10-20");
+
+      const paused = await staleItem({ name: "Verify Stale Paused By Form", nextDate: civilDate(2026, 2, 15), anchorDay: 15, accountId: account.id, active: false });
+      eq("B4: the form saving a paused item as active saves", await formFor(paused.id, { active: "true" }), 1);
+      eq("B4: an item reactivated through the form skips what it missed", `${await staleNext(paused.id)}:${(await staleRun(staleToday)).transactionsCreated}`, "2026-10-15:0");
+      eq("B4: and the anchor the item already had is untouched", (await prisma.recurringItem.findUniqueOrThrow({ where: { id: paused.id } })).anchorDay, 15);
+
+      const typed = await staleItem({ name: "Verify Stale Typed Date", nextDate: civilDate(2026, 2, 15), anchorDay: 15, accountId: account.id, active: false });
+      await formFor(typed.id, { active: "true", nextDate: "2026-07-15" });
+      eq("a date the user types by hand is kept exactly as typed, even in the past", await staleNext(typed.id), "2026-07-15");
+
+      const achieved = await prisma.goal.create({ data: { name: "Verify Stale Achieved Goal", targetAmount: 50, currency: "USD" } });
+      await prisma.goalContribution.create({ data: { goalId: achieved.id, amount: 60, currency: "USD", date: civilDate(2026, 3, 1), note: "Verify Stale Seed" } });
+      await staleGoals.recomputeGoalSaved(achieved.id, civilDate(2026, 3, 2));
+      const parkedContribution = await staleItem({ name: "Verify Stale Kind Change", kind: "CONTRIBUTION", nextDate: civilDate(2026, 4, 1), anchorDay: 1, accountId: account.id, goalId: achieved.id });
+      await formFor(parkedContribution.id, { kind: "SUBSCRIPTION", goalId: "" });
+      eq("B4: turning a contribution to an achieved goal into a subscription skips what it missed", await staleNext(parkedContribution.id), "2026-10-01");
+
+      const overdue = await staleItem({ name: "Verify Stale Overdue Edit", nextDate: civilDate(2026, 7, 15), anchorDay: 15, accountId: account.id });
+      await formFor(overdue.id, { amount: "20" });
+      eq("an ordinary edit of an overdue item that could post keeps its backlog", await staleNext(overdue.id), "2026-07-15");
+      eq("and moving it to another active account does too", `${await staleRecurring.setRecurringItemAccount(overdue.id, otherAccount.id, staleToday)}:${await staleNext(overdue.id)}`, "true:2026-07-15");
+      await wipeStale();
+    });
+
+    // A postable item that is overdue only because posting failed keeps its
+    // backlog through the events that do not make it postable.
+    await attempt("B4 backlog kept", async () => {
+      const account = await staleAccount("Checking");
+      const goal = await prisma.goal.create({ data: { name: "Verify Stale Goal", targetAmount: 100000, currency: "USD" } });
+      const backlog = await staleItem({ name: "Verify Stale Backlog", nextDate: civilDate(2026, 7, 15), anchorDay: 15, accountId: account.id });
+      const contribution = await staleItem({ name: "Verify Stale Backlog Contribution", kind: "CONTRIBUTION", nextDate: civilDate(2026, 7, 1), anchorDay: 1, accountId: account.id, goalId: goal.id });
+      await staleAccounts.restoreAccount(account.id, staleToday);
+      await staleGoals.recomputeGoalSaved(goal.id, staleToday);
+      eq("restoring an account that was never archived leaves an overdue item alone", await staleNext(backlog.id), "2026-07-15");
+      eq("a goal that was never achieved leaves an overdue contribution alone", await staleNext(contribution.id), "2026-07-01");
+      const run = await staleRun(staleToday);
+      eq("so a failed run's backlog still posts, occurrence by occurrence, as it always did", `${await staleRows(backlog.id)}|${await staleRows(contribution.id)}`, "2026-07-15,2026-08-15,2026-09-15|2026-07-01,2026-08-01,2026-09-01");
+      void run;
+      await wipeStale();
+    });
+
+    // Recurrence rules: month-end anchor, SEMI_MONTHLY weekend shift, weekly
+    // phase, an item due today, and a finite plan's countdown.
+    await attempt("B4 recurrence rules", async () => {
+      const account = await staleAccount("Checking");
+      const monthEnd = await staleItem({ name: "Verify Stale Month End", nextDate: civilDate(2026, 1, 31), anchorDay: 31, accountId: account.id, active: false });
+      await staleRecurring.setRecurringItemActive(monthEnd.id, true, staleToday);
+      eq("a month-end item resumes on its 31st-anchored September date", await staleNext(monthEnd.id), "2026-09-30");
+      const onTheDay = await staleRun(civilDate(2026, 9, 30));
+      eq("it posts once on the 30th and stays on the 31st anchor afterwards", `${await staleRows(monthEnd.id)}:${await staleNext(monthEnd.id)}:${onTheDay.transactionsCreated}`, "2026-09-30:2026-10-31:1");
+
+      const weekly = await staleItem({ name: "Verify Stale Weekly", frequency: "WEEKLY", nextDate: civilDate(2026, 1, 1), anchorDay: 1, accountId: account.id, active: false });
+      await staleRecurring.setRecurringItemActive(weekly.id, true, staleToday);
+      eq("a weekly item resumes on its own weekday", await staleNext(weekly.id), "2026-10-01");
+
+      const laterToday = civilDate(2026, 10, 20);
+      const semi = await staleItem({ name: "Verify Stale Semi", frequency: "SEMI_MONTHLY", nextDate: civilDate(2026, 7, 1), anchorDay: 1, secondAnchorDay: 16, accountId: account.id, active: false });
+      await staleRecurring.setRecurringItemActive(semi.id, true, laterToday);
+      eq("a semi-monthly item lands on the weekend-shifted Friday before Sunday Nov 1", await staleNext(semi.id), "2026-10-30");
+      const semiRun = await staleRun(civilDate(2026, 10, 30));
+      eq("and posts exactly one row there", `${await staleRows(semi.id)}:${await staleNext(semi.id)}`, "2026-10-30:2026-11-16");
+      void semiRun;
+
+      const dueToday = await staleItem({ name: "Verify Stale Due Today", nextDate: staleToday, anchorDay: 28, accountId: account.id, active: false });
+      await staleRecurring.setRecurringItemActive(dueToday.id, true, staleToday);
+      eq("an item due today is not moved", await staleNext(dueToday.id), "2026-09-28");
+
+      const finite = await staleItem({ name: "Verify Stale Finite", nextDate: civilDate(2026, 5, 10), anchorDay: 10, accountId: account.id, active: false, remainingOccurrences: 4 });
+      await staleRecurring.setRecurringItemActive(finite.id, true, staleToday);
+      const finiteRow = await prisma.recurringItem.findUniqueOrThrow({ where: { id: finite.id } });
+      eq("a resumed installment plan keeps its countdown - the skipped payments were never charged", `${finiteRow.remainingOccurrences}:${toISODate(finiteRow.nextDate)}`, "4:2026-10-10");
+
+      const finished = await staleItem({ name: "Verify Stale Finished", nextDate: civilDate(2026, 5, 10), anchorDay: 10, accountId: account.id, active: false, remainingOccurrences: 0 });
+      const refused = await staleRecurring.setRecurringItemActive(finished.id, true, staleToday);
+      eq("a finished plan still cannot be resumed", `${refused.ok}:${"reason" in refused ? refused.reason : ""}:${await staleNext(finished.id)}`, "false:finished_plan:2026-05-10");
+      await wipeStale();
+    });
+
+    // B17, the report's sofa: 600 in 3 monthly payments from 2026-08-05,
+    // evaluated on 09-28. The first two are already in the past.
+    const staleContext = {
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today: staleToday,
+      currentPeriod: periodForDate(staleToday),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    };
+    await attempt("B17 sofa", async () => {
+      const account = await staleAccount("Afford");
+      const sofa = { name: "Verify Stale Sofa", currency: "USD" as const, frequency: "MONTHLY" as const, firstDate: civilDate(2026, 8, 5), accountId: account.id, totalAmount: 600, installments: 3, acknowledged: true };
+      const evaluated = await staleAfford.evaluateAffordRequest(sofa, staleContext);
+      if (!evaluated.ok) throw new Error(`evaluation refused: ${evaluated.reason}`);
+      eq("B17: the recorded plan is the one payment still ahead", `${evaluated.recorded.amount}:${evaluated.recorded.count}:${toISODate(evaluated.recorded.firstDate)}`, "200:1:2026-10-05");
+      eq("B17: two payments are counted as already paid", (evaluated.recorded as { paidCount?: number }).paidCount, 2);
+      eq("B17: only Oct A is judged - the two past periods are not", evaluated.verdict.periods.map((p) => p.key).join(","), "2026-10-A");
+      eq("B17: the past payments are listed apart, dated as entered", (evaluated.verdict as { paidInstallments?: { date: Date }[] }).paidInstallments?.map((i) => toISODate(i.date)).join(","), "2026-08-05,2026-09-05");
+      eq("B17: what is checked is the one payment ahead", evaluated.verdict.installments.map((i) => toISODate(i.date)).join(","), "2026-10-05");
+
+      const confirmed = await staleAfford.confirmAffordPurchase(sofa, staleContext);
+      eq("B17: confirming records the plan", confirmed.ok, true);
+      const item = await prisma.recurringItem.findFirstOrThrow({ where: { name: "Verify Stale Sofa" } });
+      eq("B17: the item counts down from the payments still ahead", `${item.remainingOccurrences}:${toISODate(item.nextDate)}:${item.anchorDay}:${item.fromAfford}`, "1:2026-10-05:5:true");
+      const run = await staleRun(staleToday);
+      eq("B17: the next request posts neither past installment", `${run.transactionsCreated}:${await staleRows(item.id)}`, "0:");
+      const onTheDay = await staleRun(civilDate(2026, 10, 5));
+      const finished = await prisma.recurringItem.findUniqueOrThrow({ where: { id: item.id } });
+      eq("B17: the run on Oct 5 posts the one payment and finishes the plan", `${onTheDay.transactionsCreated}:${await staleRows(item.id)}:${finished.active}:${finished.remainingOccurrences}`, "1:2026-10-05:false:0");
+      await wipeStale();
+    });
+
+    // B17, every installment already in the past: nothing to record.
+    await attempt("B17 all past", async () => {
+      const account = await staleAccount("Afford");
+      const bought = { name: "Verify Stale Sofa All Past", currency: "USD" as const, frequency: "MONTHLY" as const, firstDate: civilDate(2026, 6, 5), accountId: account.id, totalAmount: 600, installments: 3, acknowledged: true };
+      const evaluated = await staleAfford.evaluateAffordRequest(bought, staleContext);
+      eq("B17: a plan whose every payment is in the past is refused", `${evaluated.ok}:${evaluated.ok ? "" : evaluated.reason}`, "false:all_installments_paid");
+      const confirmed = await staleAfford.confirmAffordPurchase(bought, staleContext);
+      eq("B17: and cannot be recorded", `${confirmed.ok}:${confirmed.ok ? "" : confirmed.reason}`, "false:all_installments_paid");
+      eq("B17: no item is created", await prisma.recurringItem.count({ where: { name: "Verify Stale Sofa All Past" } }), 0);
+      await wipeStale();
+    });
+
+    // B17: a first payment today is not past, and a month-end plan keeps its
+    // anchor when its first payments are behind it.
+    await attempt("B17 today and month end", async () => {
+      const account = await staleAccount("Afford");
+      const dueToday = await staleAfford.evaluateAffordRequest({ name: "Verify Stale Due Today Plan", currency: "USD" as const, frequency: "MONTHLY" as const, firstDate: staleToday, accountId: account.id, totalAmount: 400, installments: 2, acknowledged: true }, staleContext);
+      if (!dueToday.ok) throw new Error(`evaluation refused: ${dueToday.reason}`);
+      eq("B17: a plan whose first payment is today records every payment", `${dueToday.recorded.count}:${(dueToday.recorded as { paidCount?: number }).paidCount}:${toISODate(dueToday.recorded.firstDate)}`, "2:0:2026-09-28");
+
+      const monthEnd = { name: "Verify Stale Month End Plan", currency: "USD" as const, frequency: "MONTHLY" as const, firstDate: civilDate(2026, 7, 31), accountId: account.id, totalAmount: 400, installments: 4, acknowledged: true };
+      const evaluated = await staleAfford.evaluateAffordRequest(monthEnd, staleContext);
+      if (!evaluated.ok) throw new Error(`evaluation refused: ${evaluated.reason}`);
+      eq("B17: Jul 31 and Aug 31 are behind, Sep 30 and Oct 31 are ahead", `${evaluated.recorded.count}:${toISODate(evaluated.recorded.firstDate)}`, "2:2026-09-30");
+      await staleAfford.confirmAffordPurchase(monthEnd, staleContext);
+      const item = await prisma.recurringItem.findFirstOrThrow({ where: { name: "Verify Stale Month End Plan" } });
+      eq("B17: the plan keeps the 31st as its anchor", item.anchorDay, 31);
+      const tracked = staleRemaining({ ...item, amount: undefined } as never, num(item.amount), staleToday, staleContext.currentPeriod.key);
+      eq("B17: the tracker walks exactly the payments ahead", tracked.map((i) => toISODate(i.date)).join(","), "2026-09-30,2026-10-31");
+      const recheck = await staleAfford.recheckAffordItem(item.id, staleContext);
+      eq("B17: the re-check judges those two payments", recheck.ok ? recheck.verdict.installments.length : recheck.reason, 2);
+      const run = await staleRun(civilDate(2026, 9, 30));
+      eq("B17: posting charges Sep 30 once and rolls to Oct 31", `${await staleRows(item.id)}:${await staleNext(item.id)}:${run.transactionsCreated}`, "2026-09-30:2026-10-31:1");
+      await wipeStale();
+    });
+
+    await attempt("B17 copy", async () => {
+      const { getDictionary: dictionaryFor } = await import("../src/lib/i18n");
+      const en = dictionaryFor("en").afford;
+      const es = dictionaryFor("es").afford;
+      check("B17: the Record it note in English says what is treated as already paid", /already paid/i.test(en.recordedNote("$200.00", "every month", 1, "Oct 5, 2026", 2)) && !/already paid/i.test(en.recordedNote("$200.00", "every month", 1, "Oct 5, 2026", 0)));
+      check("B17: and in Spanish", /ya pagad/i.test(es.recordedNote("$200.00", "cada mes", 1, "5 oct 2026", 2)) && !/ya pagad/i.test(es.recordedNote("$200.00", "cada mes", 1, "5 oct 2026", 0)));
+      check("B17: the refusal has a message in both languages", en.allInstallmentsPaid.length > 10 && es.allInstallmentsPaid.length > 10);
+      check("B17: the schedule marks a past row in both languages", en.alreadyPaid.length > 0 && es.alreadyPaid.length > 0 && en.alreadyPaid !== es.alreadyPaid);
+    });
+
+    // B27, the import review's pre-filled next date.
+    await attempt("B27 import pre-fill", async () => {
+      const nextDue = staleDetection.nextDueOfImportedSeries;
+      const series = (...days: string[]) => days.map((d) => fromIso(d));
+      const fromIso = (value: string) => civilDate(Number(value.slice(0, 4)), Number(value.slice(5, 7)), Number(value.slice(8, 10)));
+      const describe = (result: { nextDate: Date; anchorDay: number | null }) => `${toISODate(result.nextDate)}:${result.anchorDay}`;
+      eq("B27: Nov 30, Dec 31, Jan 31 pre-fill Feb 28 and stay anchored on the 31st", describe(nextDue(series("2026-11-30", "2026-12-31", "2027-01-31"), "MONTHLY", staleToday)), "2027-02-28:31");
+      eq("B27: a month-end series ending in August pre-fills Sep 30 on the 31st", describe(nextDue(series("2026-05-31", "2026-06-30", "2026-07-31", "2026-08-31"), "MONTHLY", staleToday)), "2026-09-30:31");
+      eq("B27: a Dec-Feb statement pre-fills a date on or after today, not Mar 5", describe(nextDue(series("2025-12-05", "2026-01-05", "2026-02-05"), "MONTHLY", staleToday)), "2026-10-05:5");
+      eq("B27: a weekly series steps by its own weekday to the first date on or after today", describe(nextDue(series("2026-08-01", "2026-08-08", "2026-08-15"), "WEEKLY", staleToday)), "2026-10-03:null");
+      eq("B27: a yearly series steps a year at a time", describe(nextDue(series("2024-03-10", "2025-03-10"), "YEARLY", staleToday)), "2027-03-10:10");
+      eq("B27: a series still current keeps its next occurrence", describe(nextDue(series("2026-07-15", "2026-08-15", "2026-09-15"), "MONTHLY", staleToday)), "2026-10-15:15");
+
+      const form = { name: "Verify Stale Import", amount: "9", currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", categoryId: "none", accountId: "acc_1", note: "", active: "true" };
+      const anchored = (over: Record<string, string>) => {
+        const parsed = staleSchema.safeParse({ ...form, ...over });
+        return parsed.success ? String(parsed.data.anchorDay) : "rejected";
+      };
+      eq("B27: saving the pre-filled Feb 28 with its month-end anchor keeps the 31st", anchored({ nextDate: "2027-02-28", anchorDay: "31" }), "31");
+      eq("B27: the same date without an anchor still anchors on the 28th, as a typed date always did", anchored({ nextDate: "2027-02-28" }), "28");
+      eq("B27: a date the user changes drops the anchor that no longer fits it", anchored({ nextDate: "2027-02-27", anchorDay: "31" }), "27");
+      eq("B27: a longer month whose day is the anchor keeps it", anchored({ nextDate: "2027-03-31", anchorDay: "31" }), "31");
+      eq("B27: a day before the anchor's own day in a long month drops it", anchored({ nextDate: "2027-03-30", anchorDay: "31" }), "30");
+      eq("B27: an anchor outside 1-31 is ignored", anchored({ nextDate: "2027-02-28", anchorDay: "40" }), "28");
+      eq("B27: an edit that leaves the date alone still leaves the stored anchor alone", staleSchema.safeParse({ ...form, id: "item_1", originalNextDate: "2027-02-28", nextDate: "2027-02-28", anchorDay: "31" }).data?.anchorDay, undefined);
+    });
+
+    await wipeStale();
+  }
+
+  console.log("\n== typed past date note and resume notice (B4 follow-ups) ==");
+  {
+    const notePosting = await import("../src/lib/recurring-posting");
+    const noteRecurring = await import("../src/lib/data/recurring");
+    const noteLib = await import("../src/lib/recurring");
+    const { getDictionary: noteDictionary } = await import("../src/lib/i18n");
+    const { formatDate: noteFormatDate, formatDayMonth: noteDayMonth } = await import("../src/lib/date");
+    const noteToday = civilDate(2026, 9, 28);
+    const noteAttempt = async (name: string, run: () => Promise<void>) => {
+      try {
+        await run();
+      } catch (error) {
+        check(`${name} (threw)`, false, error instanceof Error ? error.message : error);
+      }
+    };
+    const wipeNote = async () => {
+      const accounts = await prisma.account.findMany({ where: { name: { startsWith: "Verify Note" } }, select: { id: true } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts.map((a) => a.id) } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Note" } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts.map((a) => a.id) } } });
+    };
+    await wipeNote();
+    const preview = (item: { nextDate: Date; frequency: "WEEKLY" | "MONTHLY" | "SEMI_MONTHLY"; anchorDay?: number; secondAnchorDay?: number; remainingOccurrences?: number }) => {
+      const result = noteLib.previewPostingFrom(item, noteToday);
+      return result ? `${result.count}:${toISODate(result.first)}:${toISODate(result.last)}:${result.capped}` : "none";
+    };
+
+    await noteAttempt("preview count and range", async () => {
+      eq("the per-run cap is one constant, shared by posting and the preview", noteLib.MAX_OCCURRENCES_PER_ITEM === notePosting.MAX_OCCURRENCES_PER_ITEM && noteLib.MAX_OCCURRENCES_PER_ITEM === 24, true);
+      eq("monthly, uncapped: Feb 15 to today is 8 charges, Feb 15 to Sep 15", preview({ nextDate: civilDate(2026, 2, 15), frequency: "MONTHLY", anchorDay: 15 }), "8:2026-02-15:2026-09-15:false");
+      eq("weekly, uncapped: Aug 1 to today is 9 charges, Aug 1 to Sep 26", preview({ nextDate: civilDate(2026, 8, 1), frequency: "WEEKLY", anchorDay: 1 }), "9:2026-08-01:2026-09-26:false");
+      eq("weekly, capped: 39 are owed from Jan 1 but one run posts 24, Jan 1 to Jun 11", preview({ nextDate: civilDate(2026, 1, 1), frequency: "WEEKLY", anchorDay: 1 }), "24:2026-01-01:2026-06-11:true");
+      eq("exactly the cap is not capped: 24 monthly from 2024-10-15 is 24 charges through Sep 15 2026", preview({ nextDate: civilDate(2024, 10, 15), frequency: "MONTHLY", anchorDay: 15 }), "24:2024-10-15:2026-09-15:false");
+      eq("one past the cap is capped: 25 monthly from 2024-09-15", preview({ nextDate: civilDate(2024, 9, 15), frequency: "MONTHLY", anchorDay: 15 }), "24:2024-09-15:2026-08-15:true");
+      eq("a finite item stops at its remaining payments: 3 left of 8 due", preview({ nextDate: civilDate(2026, 2, 15), frequency: "MONTHLY", anchorDay: 15, remainingOccurrences: 3 }), "3:2026-02-15:2026-04-15:false");
+      eq("a finite item with more left than are due posts what is due", preview({ nextDate: civilDate(2026, 8, 15), frequency: "MONTHLY", anchorDay: 15, remainingOccurrences: 12 }), "2:2026-08-15:2026-09-15:false");
+      eq("a finite item's countdown applies before the cap: 30 left of 39 weekly due posts the cap", preview({ nextDate: civilDate(2026, 1, 1), frequency: "WEEKLY", anchorDay: 1, remainingOccurrences: 30 }), "24:2026-01-01:2026-06-11:true");
+      eq("a finite item whose countdown is under the cap is not capped even when more are due", preview({ nextDate: civilDate(2026, 1, 1), frequency: "WEEKLY", anchorDay: 1, remainingOccurrences: 5 }), "5:2026-01-01:2026-01-29:false");
+      eq("semi-monthly uses the weekend-shifted dates posting uses", preview({ nextDate: civilDate(2026, 7, 1), frequency: "SEMI_MONTHLY", anchorDay: 1, secondAnchorDay: 16 }), "6:2026-07-01:2026-09-16:false");
+      eq("a month-end anchor stays on its anchor", preview({ nextDate: civilDate(2026, 1, 31), frequency: "MONTHLY", anchorDay: 31 }), "8:2026-01-31:2026-08-31:false");
+      eq("a date of today has nothing to warn about", preview({ nextDate: noteToday, frequency: "MONTHLY", anchorDay: 28 }), "none");
+      eq("a future date has nothing to warn about", preview({ nextDate: civilDate(2026, 10, 1), frequency: "MONTHLY", anchorDay: 1 }), "none");
+      eq("a finite item with nothing left owes nothing", preview({ nextDate: civilDate(2026, 2, 15), frequency: "MONTHLY", anchorDay: 15, remainingOccurrences: 0 }), "none");
+    });
+
+    // The preview is posting's own count: the same items, run through posting.
+    await noteAttempt("preview agrees with posting", async () => {
+      const account = await prisma.account.create({ data: { name: "Verify Note Account", currency: "USD", type: "CHECKING" } });
+      const make = (name: string, data: Record<string, unknown>) =>
+        prisma.recurringItem.create({ data: { name: `Verify Note ${name}`, amount: 5, currency: "USD", kind: "SUBSCRIPTION", accountId: account.id, ...data } as never });
+      const rowsOf = async (id: string) =>
+        (await prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${id}:` } }, orderBy: { date: "asc" } })).map((row) => toISODate(row.date));
+      const monthly = await make("Monthly", { frequency: "MONTHLY", nextDate: civilDate(2026, 2, 15), anchorDay: 15 });
+      const weekly = await make("Weekly", { frequency: "WEEKLY", nextDate: civilDate(2026, 1, 1), anchorDay: 1 });
+      const finite = await make("Finite", { frequency: "MONTHLY", nextDate: civilDate(2026, 2, 15), anchorDay: 15, remainingOccurrences: 3 });
+      await notePosting.postDueRecurringItems(noteToday);
+      const summarize = (rows: string[]) => `${rows.length}:${rows[0]}:${rows[rows.length - 1]}`;
+      const previewOf = (item: Parameters<typeof preview>[0]) => {
+        const result = noteLib.previewPostingFrom(item, noteToday);
+        return result ? `${result.count}:${toISODate(result.first)}:${toISODate(result.last)}` : "none";
+      };
+      eq("the monthly preview is what posting wrote", previewOf({ nextDate: civilDate(2026, 2, 15), frequency: "MONTHLY", anchorDay: 15 }), summarize(await rowsOf(monthly.id)));
+      eq("the capped weekly preview is what one run wrote", previewOf({ nextDate: civilDate(2026, 1, 1), frequency: "WEEKLY", anchorDay: 1 }), summarize(await rowsOf(weekly.id)));
+      eq("the finite preview is what posting wrote", previewOf({ nextDate: civilDate(2026, 2, 15), frequency: "MONTHLY", anchorDay: 15, remainingOccurrences: 3 }), summarize(await rowsOf(finite.id)));
+      await wipeNote();
+    });
+
+    await noteAttempt("copy", async () => {
+      const en = noteDictionary("en").recurring;
+      const es = noteDictionary("es").recurring;
+      const day = (y: number, m: number, d: number) => noteFormatDate(civilDate(y, m, d));
+      eq("English note, several charges", en.pastDateNote(8, day(2026, 2, 15), day(2026, 9, 15), false), "Saving posts 8 charges dated Feb 15, 2026 - Sep 15, 2026.");
+      eq("English note, one charge", en.pastDateNote(1, day(2026, 9, 15), day(2026, 9, 15), false), "Saving posts 1 charge dated Sep 15, 2026.");
+      eq("English note, capped", en.pastDateNote(24, day(2026, 1, 1), day(2026, 6, 11), true), "Saving posts 24 charges dated Jan 1, 2026 - Jun 11, 2026; the rest follow on later runs.");
+      eq("Spanish note, several charges", es.pastDateNote(8, day(2026, 2, 15), day(2026, 9, 15), false), "Al guardar se registran 8 cobros con fecha del Feb 15, 2026 al Sep 15, 2026.");
+      eq("Spanish note, one charge", es.pastDateNote(1, day(2026, 9, 15), day(2026, 9, 15), false), "Al guardar se registra 1 cobro con fecha Sep 15, 2026.");
+      eq("Spanish note, capped", es.pastDateNote(24, day(2026, 1, 1), day(2026, 6, 11), true), "Al guardar se registran 24 cobros con fecha del Jan 1, 2026 al Jun 11, 2026; el resto sigue en las siguientes ejecuciones.");
+      eq("the resume toast names the next charge in English", en.itemResumedNext(noteDayMonth(civilDate(2026, 10, 15))), "Resumed. Next charge: Oct 15");
+      eq("and in Spanish", es.itemResumedNext(noteDayMonth(civilDate(2026, 10, 15))), "Reanudado. Próximo cobro: Oct 15");
+    });
+
+    // The toast shows exactly when resuming moved the date.
+    await noteAttempt("resume notice condition", async () => {
+      const account = await prisma.account.create({ data: { name: "Verify Note Account", currency: "USD", type: "CHECKING" } });
+      const make = (name: string, data: Record<string, unknown>) =>
+        prisma.recurringItem.create({ data: { name: `Verify Note ${name}`, amount: 5, currency: "USD", kind: "SUBSCRIPTION", frequency: "MONTHLY", accountId: account.id, active: false, ...data } as never });
+      const stale = await make("Stale", { nextDate: civilDate(2026, 2, 15), anchorDay: 15 });
+      const current = await make("Current", { nextDate: civilDate(2026, 10, 15), anchorDay: 15 });
+      const dueToday = await make("Due Today", { nextDate: noteToday, anchorDay: 28 });
+      const movedTo = async (id: string) => {
+        const result = await noteRecurring.setRecurringItemActive(id, true, noteToday);
+        return result.ok && result.movedTo ? toISODate(result.movedTo) : "none";
+      };
+      eq("resuming an item whose date was behind reports where it moved to", await movedTo(stale.id), "2026-10-15");
+      eq("resuming an item already due later reports nothing", await movedTo(current.id), "none");
+      eq("resuming an item due today reports nothing", await movedTo(dueToday.id), "none");
+      eq("resuming an item that is already active reports nothing", await movedTo(stale.id), "none");
+      await wipeNote();
+    });
+
+    await wipeNote();
   }
 
   await prisma.recurringItem.updateMany({ where: { id: { in: pausedForSettlement } }, data: { active: true } });

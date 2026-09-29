@@ -740,6 +740,8 @@ export const es = {
     frequency: "Frecuencia",
     nextDue: "Próximo vencimiento",
     nextDueHint: "Cada vencimiento hasta hoy se registra automáticamente.",
+    pastDateNote: (count: number, first: string, last: string, capped: boolean) =>
+      `Al guardar se ${count === 1 ? "registra 1 cobro" : `registran ${count} cobros`} con fecha ${count === 1 ? first : `del ${first} al ${last}`}${capped ? "; el resto sigue en las siguientes ejecuciones" : ""}.`,
     secondDueDay: "Segundo día de vencimiento",
     secondDueDayHint:
       "El otro día del mes en que se cobra esto. Un día que cae en fin de semana se registra el viernes anterior, igual que Próximo vencimiento.",
@@ -772,6 +774,7 @@ export const es = {
       "Este elemento cambió en otro lugar mientras el formulario estaba abierto. Ábrelo de nuevo y repite el cambio.",
     itemPaused: "Pausado",
     itemResumed: "Reanudado",
+    itemResumedNext: (date: string) => `Reanudado. Próximo cobro: ${date}`,
     finished: "terminado",
     goalReached: "meta alcanzada",
     goalReachedHint: "Su meta ya está completa, así que no se registra. Se reanuda solo si se sube el objetivo de la meta; pausa el elemento para dejar de contarlo.",
@@ -922,8 +925,8 @@ export const es = {
     estimatedGoalFunding: (period: string, goals: string[]) =>
       `* ${period}: los compromisos incluyen un estimado de ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} y ${goals[goals.length - 1]}, cada una a su ritmo actual` : `${goals[0]} a su ritmo actual`} - todavía no confirmado por un check-in de pago, así que puede cambiar cuando hagas el check-in de ese período.`,
     recordHeading: "Registrarla",
-    recordedNote: (amount: string, frequency: string, count: number, date: string) =>
-      `Registra una suscripción de ${amount} ${frequency}, ${count} veces a partir del ${date}. Se apaga sola después del último pago y aparece en todo lo que muestra suscripciones: Recurrentes, el check-in de pago, la contabilización y los informes.`,
+    recordedNote: (amount: string, frequency: string, count: number, date: string, paid: number) =>
+      `Registra una suscripción de ${amount} ${frequency}, ${count} veces a partir del ${date}.${paid > 0 ? (paid === 1 ? " El pago con fecha anterior a hoy cuenta como ya pagado y no se registra ni se contabiliza." : ` Los ${paid} pagos con fecha anterior a hoy cuentan como ya pagados y no se registran ni se contabilizan.`) : ""} Se apaga sola después del último pago y aparece en todo lo que muestra suscripciones: Recurrentes, el check-in de pago, la contabilización y los informes.`,
     acknowledgeLabel:
       "Entiendo que esta compra deja al menos un período de pago por debajo de su colchón protegido o en déficit, y la registro de todos modos.",
     bought: "La compré",
@@ -937,6 +940,9 @@ export const es = {
       "Agrega una cuenta antes de comprobar una compra: cada cuota se carga a una.",
     accountNoLongerActive: "Esa cuenta ya no está activa",
     acknowledgeFirst: "Reconoce el faltante antes de registrar la compra",
+    alreadyPaid: "Ya pagado",
+    allInstallmentsPaid:
+      "Todos los pagos de este plan tienen fecha anterior a hoy, así que cuentan como ya pagados. No queda nada por revisar ni registrar.",
     frequencyAdverb: {
       WEEKLY: "cada semana",
       BIWEEKLY: "cada 2 semanas",

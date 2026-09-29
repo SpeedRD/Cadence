@@ -57,7 +57,9 @@ export async function evaluateAffordAction(payload: unknown): Promise<AffordEval
   if (!parsed.success) return { ok: false, error: firstError(parsed.error, locale) };
 
   const evaluation = await evaluateAffordRequest(parsed.data, context);
-  if (!evaluation.ok) return { ok: false, error: t.accountNoLongerActive };
+  if (!evaluation.ok) {
+    return { ok: false, error: evaluation.reason === "all_installments_paid" ? t.allInstallmentsPaid : t.accountNoLongerActive };
+  }
   return { ok: true, verdict: evaluation.verdict, recorded: evaluation.recorded };
 }
 
@@ -71,6 +73,7 @@ export async function confirmAffordAction(payload: unknown): Promise<AffordConfi
   const result = await confirmAffordPurchase(parsed.data, context);
   if (!result.ok) {
     if (result.reason === "account_not_active") return { ok: false, error: t.accountNoLongerActive };
+    if (result.reason === "all_installments_paid") return { ok: false, error: t.allInstallmentsPaid };
     return { ok: false, error: t.acknowledgeFirst, verdict: result.verdict };
   }
 

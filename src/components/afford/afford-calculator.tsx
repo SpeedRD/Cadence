@@ -17,6 +17,7 @@ import {
   buildInstallments,
   equalInstallmentAmount,
   installmentDates,
+  isPaidInstallment,
   type AffordVerdict,
 } from "@/lib/afford";
 import { formatMoney } from "@/lib/currency";
@@ -83,6 +84,12 @@ export function AffordCalculator({
     ? installmentDates(firstDateParsed, frequency as (typeof AFFORD_FREQUENCIES)[number], count)
     : [];
   const installments = amount > 0 ? buildInstallments(dates, amount) : [];
+  // Payments dated before today were made already: marked here, set aside from
+  // every check and left out of what "I bought this" records (see
+  // evaluateAffordRequest), by the same test the server applies.
+  const todayDate = fromISODate(today);
+  const isPaid = (date: Date) => todayDate !== null && isPaidInstallment(date, todayDate);
+  const hasPaidRows = installments.some((installment) => isPaid(installment.date));
   const installmentsTotal = round2(amount * count);
   const roundingDifference = round2(installmentsTotal - total);
   const account = accounts.find((option) => option.id === accountId) ?? null;
@@ -259,21 +266,30 @@ export function AffordCalculator({
             {installments.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t.noScheduleYet}</p>
             ) : (
-              <ul className={cn("divide-y divide-border/70", scheduleCollapsed && "max-sm:hidden")}>
+              <ul className={cn("divide-y divide-border/70", scheduleCollapsed && !hasPaidRows && "max-sm:hidden")}>
                 {installments.map((installment) => {
                   const period = periodForDate(installment.date);
+                  const paid = isPaid(installment.date);
                   return (
                     <li
                       key={installment.index}
-                      className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0"
+                      className={cn(
+                        "flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0",
+                        // The verdict cards list every payment still ahead, so
+                        // a phone with a verdict keeps only the paid ones here.
+                        scheduleCollapsed && !paid && "max-sm:hidden",
+                      )}
                     >
                       <div className="min-w-0">
                         <p className="text-sm">{t.paymentLabel(installment.index)}</p>
                         <p className="text-hint text-muted-foreground">
                           {formatDate(installment.date)} · {period.label}
+                          {paid ? ` · ${t.alreadyPaid}` : ""}
                         </p>
                       </div>
-                      <span className="figure text-sm">{formatMoney(installment.amount, currency)}</span>
+                      <span className={cn("figure text-sm", paid && "text-muted-foreground")}>
+                        {formatMoney(installment.amount, currency)}
+                      </span>
                     </li>
                   );
                 })}

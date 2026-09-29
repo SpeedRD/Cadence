@@ -18,8 +18,12 @@
  * An item missing the link its kind needs (account for both kinds, goal for a
  * contribution) or pointing at an archived account is skipped outright - not
  * posted and, crucially, not advanced - and reported in the returned summary so
- * the cron log and the UI can show it. It catches up from its original due date
- * once the user fixes it.
+ * the cron log and the UI can show it. The occurrences it missed while it sat
+ * there were never charged, so the app moves its nextDate to the first
+ * occurrence on or after today when the user makes it postable again (an
+ * account restored or assigned, a goal open again, the item resumed - see
+ * skipMissedOccurrences in src/lib/data/recurring.ts); an item that is merely
+ * overdue because a run failed keeps its backlog and posts all of it.
  *
  * Two occurrences are claimed (rolled forward) without writing a RECURRING row:
  *
@@ -74,27 +78,16 @@ import { recomputeGoalSaved, savedFromContributions } from "@/lib/goals";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
-import { advanceDate } from "@/lib/recurring";
+import { MAX_OCCURRENCES_PER_ITEM, advanceDate, skipReasonFor, type RecurringSkipReason } from "@/lib/recurring";
 import { recurringExternalId } from "@/lib/recurring-settlement";
 
 import { loadSettlementPlan, type PlannedCharge } from "@/lib/data/recurring-settlement";
 
 import type { RecurringKind } from "@/generated/prisma/enums";
 
-/**
- * How many elapsed occurrences a single run posts per item. Bounds the work
- * (and the surprise) when the app has been untouched for a long time; a longer
- * backlog finishes over the following runs.
- */
-export const MAX_OCCURRENCES_PER_ITEM = 24;
+export { MAX_OCCURRENCES_PER_ITEM };
 
-export type RecurringSkipReason =
-  | "missing_account"
-  | "missing_goal"
-  | "missing_account_and_goal"
-  | "account_archived"
-  /** A contribution whose goal is already fully funded: nothing more to put in. */
-  | "goal_achieved";
+export type { RecurringSkipReason };
 
 export interface SkippedRecurringItem {
   id: string;
@@ -147,21 +140,6 @@ async function loadDueItems(today: Date) {
 }
 
 type DueItem = Awaited<ReturnType<typeof loadDueItems>>[number];
-
-function skipReasonFor(item: DueItem): RecurringSkipReason | null {
-  const missingAccount = !item.accountId;
-  const missingGoal = item.kind === "CONTRIBUTION" && !item.goalId;
-  if (missingAccount && missingGoal) return "missing_account_and_goal";
-  if (missingAccount) return "missing_account";
-  if (missingGoal) return "missing_goal";
-  if (item.account?.status === "ARCHIVED") return "account_archived";
-  // A contribution to a goal that has reached its target is skipped, never
-  // advanced and never paused: the item stays exactly as it is, so raising
-  // the target later (which clears achievedAt, see rebuildGoalSaved) lets it
-  // pick up again from the same due date with no action from the user.
-  if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) return "goal_achieved";
-  return null;
-}
 
 /** The dedup key for one (item, due date) pair; see Transaction.externalId. */
 export { recurringExternalId };

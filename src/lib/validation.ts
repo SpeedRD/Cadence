@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { MAX_INSTALLMENTS, equalInstallmentAmount } from "@/lib/afford";
 import { CURRENCIES } from "@/lib/currency";
-import { fromISODate } from "@/lib/date";
+import { daysInMonth, fromISODate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
 import { INSIGHT_SOURCES } from "@/lib/insights";
 import { AMOUNT_MAX, parseAmountInput, round2, type ParsedAmount } from "@/lib/money";
@@ -369,6 +369,23 @@ export const recurringSchema = z
       .trim()
       .optional()
       .transform((value) => (value ? fromISODate(value) : null)),
+    /**
+     * The day of the month a new item is really due on, when that is not the
+     * day of the date typed - a month-end series the import review pre-fills
+     * with Feb 28 is due on the 31st. Honoured only while it explains the
+     * date (the anchor, clamped to that month's length, is the date's day);
+     * a date the user changed, or a value outside 1-31, is ignored, and the
+     * date's own day anchors the item as it always did.
+     */
+    anchorDay: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => {
+        if (!value) return null;
+        const day = Number(value);
+        return Number.isInteger(day) && day >= 1 && day <= 31 ? day : null;
+      }),
     name: z.string().trim().min(1, "Name the item").max(80),
     amount: positiveAmount,
     currency,
@@ -430,7 +447,7 @@ export const recurringSchema = z
         return day;
       }),
   })
-  .transform(({ originalNextDate, ...value }, ctx) => {
+  .transform(({ originalNextDate, anchorDay: hintedAnchorDay, ...value }, ctx) => {
     if (value.accountId === null) {
       ctx.addIssue({ code: "custom", message: "Pick an account", path: ["accountId"] });
       return z.NEVER;
@@ -449,7 +466,11 @@ export const recurringSchema = z
       Boolean(value.id) &&
       originalNextDate !== null &&
       originalNextDate.getTime() === value.nextDate.getTime();
-    const anchorDay = dateUnchanged ? undefined : value.nextDate.getUTCDate();
+    const typedDay = value.nextDate.getUTCDate();
+    const hintFits =
+      hintedAnchorDay !== null &&
+      Math.min(hintedAnchorDay, daysInMonth(value.nextDate.getUTCFullYear(), value.nextDate.getUTCMonth() + 1)) === typedDay;
+    const anchorDay = dateUnchanged ? undefined : hintFits ? hintedAnchorDay : typedDay;
     // Required only for SEMI_MONTHLY, and dropped for every other frequency
     // regardless of what was submitted - the same "a stale value left over
     // from switching Kind back never survives" rule goalId already follows.

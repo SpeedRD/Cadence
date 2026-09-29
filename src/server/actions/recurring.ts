@@ -1,6 +1,7 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
+import { formatDayMonth, today } from "@/lib/date";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { num } from "@/lib/money";
@@ -18,7 +19,9 @@ import {
   checkRecurringReferences,
   createRecurringItem,
   markRecurringItemPaidOff,
+  setRecurringItemActive,
   setRecurringItemAccount,
+  updateRecurringItem,
   type RecurringReferenceProblem,
 } from "@/lib/data/recurring";
 import {
@@ -26,7 +29,6 @@ import {
   dismissRecurringSuggestion,
 } from "@/lib/data/recurring-suggestions";
 import { checkSubscriptionRoom, type SubscriptionRoom } from "@/lib/data/subscription-room";
-import { isFinishedPlan } from "@/lib/recurring";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
@@ -52,11 +54,8 @@ export async function saveRecurringAction(
     // would write the stale value back over it. The updatedAt the form was
     // rendered with is the guard: no rows match once the item has moved on, and
     // the user is told to reopen rather than silently undoing the other change.
-    const claimed = await prisma.recurringItem.updateMany({
-      where: updatedAt ? { id, updatedAt } : { id },
-      data: values,
-    });
-    if (claimed.count === 0) {
+    const written = await updateRecurringItem(id, updatedAt, values, today());
+    if (written === 0) {
       const stillThere = await prisma.recurringItem.findUnique({
         where: { id },
         select: { id: true },
@@ -106,19 +105,18 @@ export async function toggleRecurringAction(
   const locale = isLocale(settings.language) ? settings.language : "en";
   const t = getDictionary(locale).recurring;
   const id = String(formData.get("id") ?? "").trim();
-  const item = await prisma.recurringItem.findUnique({ where: { id } });
+  const item = await prisma.recurringItem.findUnique({ where: { id }, select: { active: true } });
   if (!item) return fail(t.itemNoLongerExists);
-  // Flipping a finished plan back on would only have posting retire it again
-  // on the next run, after a toast that said "Resumed". It needs new Payments
-  // left first, which the edit form sets.
-  if (isFinishedPlan(item)) return fail(t.finishedCannotResume);
 
-  await prisma.recurringItem.update({
-    where: { id },
-    data: { active: !item.active },
-  });
+  const result = await setRecurringItemActive(id, !item.active, today());
+  if (!result.ok) {
+    return fail(result.reason === "not_found" ? t.itemNoLongerExists : t.finishedCannotResume);
+  }
   revalidateApp();
-  return done(item.active ? t.itemPaused : t.itemResumed);
+  // Resuming may have moved the next charge forward (skipMissedOccurrences);
+  // say where it is now. Nothing extra when the date stayed.
+  if (item.active) return done(t.itemPaused);
+  return done(result.movedTo ? t.itemResumedNext(formatDayMonth(result.movedTo)) : t.itemResumed);
 }
 
 /** The rest of an installment plan was paid in one go outside the app. */
