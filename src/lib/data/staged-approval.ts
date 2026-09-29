@@ -55,8 +55,8 @@ function incomingFor(input: Omit<StagedApprovalInput, "id" | "resolution">, key:
 
 /**
  * Approves one staged row. With no answer, a row matching a posted charge in
- * the same currency is refused (needs_choice) - one in another currency is
- * only a warning and approves as before. "posted" writes no transaction: the
+ * the same currency is refused (needs_choice) - a possible one
+ * (planPostedDuplicates) is only a warning and approves as before. "posted" writes no transaction: the
  * posted row takes the receipt's amount and currency where they differ, and
  * the staged row is marked APPROVED - it was accepted as the record of that
  * charge. "different" approves exactly as a row with no match does.

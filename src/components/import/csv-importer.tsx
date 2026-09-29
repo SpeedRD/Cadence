@@ -139,7 +139,7 @@ export function CsvImporter({
   // before anything is written - as CSV imports, or as a row Cadence wrote
   // itself (a posted recurring charge, a check-in's paycheck) - and the
   // per-row choice for each: absent means the hit's default (skip, except a
-  // possible match in another currency, which imports), "import" means the
+  // possible match (planPostedDuplicates), which imports), "import" means the
   // user chose to import it ("It's a different charge"), "skip" that it is
   // the one already there ("It's the posted charge"). The answer is keyed by
   // the inputs it answers for (see duplicateKey below), the choices by the

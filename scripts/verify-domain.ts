@@ -4889,10 +4889,14 @@ async function main() {
     const { createManualTransaction } = await import("../src/lib/data/manual-transaction");
     const { transactionSchema } = await import("../src/lib/validation");
     const { approveStagedTransaction } = await import("../src/lib/data/staged-approval");
-    const { planPostedDuplicates, settlementWindow: postedWindow, CROSS_CURRENCY_MATCH_TOLERANCE } = await import("../src/lib/recurring-settlement");
+    const { planPostedDuplicates, settlementWindow: postedWindow, CROSS_CURRENCY_MATCH_TOLERANCE, PROXIMITY_DAYS } = await import("../src/lib/recurring-settlement");
     const { getPaydayCheckinDraft: postedDraft, confirmPaydayCheckin: postedConfirm } = await import("../src/lib/data/payday");
     const { projectPeriods: postedProject } = await import("../src/lib/data/afford");
     const { getPeriodSummary: postedSummary } = await import("../src/lib/data/period-summary");
+    const { defaultDuplicateDecision } = await import("../src/components/import/import-review");
+    // What the CSV review answers for a row the user leaves alone.
+    const defaultFor = (match: import("../src/lib/data/posted-duplicates").PostedMatch | undefined) =>
+      match ? defaultDuplicateDecision({ index: 0, kind: "posted", match }) : "no match";
 
     const subsId = (await prisma.category.findFirstOrThrow({ where: { name: "Subscriptions" } })).id;
     const healthId = (await prisma.category.create({ data: { name: "Verify Posted Health", kind: "EXPENSE", color: "#4f8a8b" } })).id;
@@ -5138,6 +5142,7 @@ async function main() {
       const deposit = csvRow("2026-10-01", 60000, "NOMINA VERIFY SRL", { type: "INCOME" });
       const depositMatch = (await findCsvPostedDuplicates({ accountId: salary.id, currency: "DOP", rows: [deposit], skip: new Set(), rates }))?.get(0);
       eq("the bank's deposit is flagged as the paycheck already recorded", `${depositMatch?.kind}:${depositMatch?.posted.amount}:${depositMatch?.rewrite}`, "paycheck:60000:null");
+      eq("a paycheck match is exact whatever the deposit's text says: skipped by default", `${depositMatch?.possible}:${defaultFor(depositMatch)}`, "false:skip");
       const refusedDeposit = await importRows({ accountId: salary.id, currency: "DOP", rows: [deposit] }, rates);
       check("imported without an answer, it is refused", !refusedDeposit.ok);
       const keptPaycheck = await importRows({ accountId: salary.id, currency: "DOP", rows: [{ ...deposit, postedCharge: true }] }, rates);
@@ -5184,6 +5189,126 @@ async function main() {
       await prisma.account.delete({ where: { id: dop.id } });
     }
 
+    console.log("\n-- the same amount from another merchant: a warning, never a silent skip --");
+    {
+      // Claro, 1,850 DOP, posted on 10-03. A pharmacy charge of the same
+      // amount lands twelve days later, in the same period on the same card -
+      // past PROXIMITY_DAYS, so only a name or category would tie it to Claro.
+      const phone = await postedAccount("Phone", "DOP");
+      await postedItem("Claro", 1850, "DOP", 3, phone.id, subsId);
+      await postRun(civilDate(2026, 10, 3));
+      const pharmacy = csvRow("2026-10-15", 1850, "Compra Visa Local Farmacia Carol 0042");
+      const claro = csvRow("2026-10-12", 1850, "Compra Visa Local Verify Posted Claro Rec 8095550100");
+      const judge = async (rows: ReturnType<typeof csvRow>[]) =>
+        findCsvPostedDuplicates({ accountId: phone.id, currency: "DOP", rows, skip: new Set(), rates });
+
+      const coincidence = (await judge([pharmacy]))?.get(0);
+      eq(
+        "a same-amount row from another merchant is still listed with what it matched, as a possible match that imports by default",
+        `${coincidence?.kind}:${coincidence?.posted.label}:${coincidence?.posted.date}:${coincidence?.possible}:${defaultFor(coincidence)}`,
+        "recurring:Verify Posted Claro:2026-10-03:true:import",
+      );
+      const clicked = await importRows({ accountId: phone.id, currency: "DOP", rows: [pharmacy] }, rates);
+      eq(
+        "imported with no answer, it is not refused: written beside the posted row",
+        `${clicked.ok && clicked.count}:${clicked.ok && clicked.matchedPosted}|${await ledger(phone.id)}`,
+        "1:0|CSV:2026-10-15:1850:DOP,RECURRING:2026-10-03:1850:DOP",
+      );
+      await prisma.transaction.deleteMany({ where: { accountId: phone.id, source: "CSV" } });
+
+      const namesIt = (await judge([claro]))?.get(0);
+      eq("a row naming the item is an exact match nine days away, skipped by default", `${namesIt?.possible}:${defaultFor(namesIt)}`, "false:skip");
+      const namedRefused = await importRows({ accountId: phone.id, currency: "DOP", rows: [claro] }, rates);
+      eq("imported with no answer, it is refused and nothing is written", `${namedRefused.ok}|${await ledger(phone.id)}`, "false|RECURRING:2026-10-03:1850:DOP");
+
+      const byCategory = csvRow("2026-10-13", 1850, "Compra Visa Local Pago Recurrente 0042", { categoryId: subsId });
+      const categoryOnly = (await judge([byCategory]))?.get(0);
+      eq("a row in the item's category, without its name, is an exact match ten days away, skipped by default", `${categoryOnly?.possible}:${defaultFor(categoryOnly)}`, "false:skip");
+      check("imported with no answer, it is refused", !(await importRows({ accountId: phone.id, currency: "DOP", rows: [byCategory] }, rates)).ok);
+
+      const both = await judge([pharmacy, { ...pharmacy }]);
+      eq("two identical same-amount rows against one posted row: only the first is flagged", `${[...(both?.keys() ?? [])].join(",")}:${both?.get(0)?.possible}`, "0:true");
+      const bothImported = await importRows({ accountId: phone.id, currency: "DOP", rows: [pharmacy, { ...pharmacy }] }, rates);
+      eq("imported with no answer, both are written", `${bothImported.ok && bothImported.count}|${await ledger(phone.id)}`, "2|CSV:2026-10-15:1850:DOP,CSV:2026-10-15:1850:DOP,RECURRING:2026-10-03:1850:DOP");
+      await prisma.transaction.deleteMany({ where: { accountId: phone.id, source: "CSV" } });
+
+      const receipt = await prisma.stagedTransaction.create({
+        data: { date: civilDate(2026, 10, 15), amount: 1850, currency: "DOP", rawDescription: "Verify Posted receipt: Farmacia Carol", source: "GMAIL", externalId: "verify-posted-receipt-pharmacy", accountId: phone.id },
+      });
+      const receiptApproval = { id: receipt.id, date: receipt.date, amount: 1850, currency: "DOP", rawDescription: receipt.rawDescription, accountId: phone.id, categoryId: null };
+      const receiptMatch = (await findPostedDuplicates([{ key: receipt.id, accountId: phone.id, type: "EXPENSE", date: receipt.date, amount: 1850, currency: "DOP", note: receipt.rawDescription, categoryId: null }], rates)).get(receipt.id);
+      eq("a receipt for the same amount from another merchant still shows the match, as a possible one", `${receiptMatch?.posted.label}:${receiptMatch?.possible}`, "Verify Posted Claro:true");
+      const receiptApproved = await approveStagedTransaction({ ...receiptApproval, resolution: null }, rates);
+      eq("approving it with no answer is not refused: it is added", `${receiptApproved.ok ? receiptApproved.outcome : receiptApproved.reason}|${await ledger(phone.id)}`, "approved|GMAIL:2026-10-15:1850:DOP,RECURRING:2026-10-03:1850:DOP");
+      await prisma.stagedTransaction.deleteMany({ where: { id: receipt.id } });
+      await prisma.transaction.deleteMany({ where: { accountId: phone.id, source: "GMAIL" } });
+
+      const { id: _id, ...manual } = transactionSchema.parse({ date: "2026-10-15", amount: "1850", currency: "DOP", type: "EXPENSE", accountId: phone.id, categoryId: "", note: "farmacia carol" });
+      const manualSaved = await createManualTransaction(manual, {
+        getContext: async () => ({ displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 10, 15), currentPeriod: periodForDate(civilDate(2026, 10, 15)) }),
+      });
+      eq(
+        "a manual entry of the same amount is saved and the form still asks, as a possible match",
+        `${manualSaved.posted?.match.posted.label}:${manualSaved.posted?.match.possible}|${await ledger(phone.id)}`,
+        "Verify Posted Claro:true|MANUAL:2026-10-15:1850:DOP,RECURRING:2026-10-03:1850:DOP",
+      );
+
+      await prisma.transaction.deleteMany({ where: { accountId: phone.id } });
+      await prisma.recurringItem.deleteMany({ where: { name: "Verify Posted Claro" } });
+      await prisma.account.delete({ where: { id: phone.id } });
+    }
+
+    console.log("\n-- bank text that never repeats the item's name: the same amount within PROXIMITY_DAYS --");
+    {
+      // The bank bills "Aplazame iPhone 17 Pro Max" as "Compra Visa Int
+      // Aplazame Es" and "AppleCare+ iPhone 17 Pro Max" through PayPal/iTunes:
+      // neither text contains the item's name, and neither gets a category.
+      const card = await postedAccount("Apple Card", "DOP");
+      await postedItem("Aplazame iPhone 17 Pro Max", 4250, "DOP", 3, card.id, null);
+      await postedItem("AppleCare+ iPhone 17 Pro Max", 690, "DOP", 8, card.id, subsId);
+      await postRun(civilDate(2026, 10, 8));
+      const posted = "RECURRING:2026-10-03:4250:DOP,RECURRING:2026-10-08:690:DOP";
+      const aplazame = csvRow("2026-10-05", 4250, "Compra Visa Int Aplazame Es");
+      const applecare = csvRow("2026-10-10", 690, "Compra Visa Int Paypal Itunesappst Apple Ie");
+      const judge = async (rows: ReturnType<typeof csvRow>[]) =>
+        findCsvPostedDuplicates({ accountId: card.id, currency: "DOP", rows, skip: new Set(), rates });
+
+      const bankRows = await judge([aplazame, applecare]);
+      eq(
+        "each bank row, two days from its posted row, is an exact match for it: skipped by default",
+        [0, 1].map((index) => `${bankRows?.get(index)?.posted.label}:${bankRows?.get(index)?.possible}:${defaultFor(bankRows?.get(index))}`).join("|"),
+        "Verify Posted Aplazame iPhone 17 Pro Max:false:skip|Verify Posted AppleCare+ iPhone 17 Pro Max:false:skip",
+      );
+      const unanswered = await importRows({ accountId: card.id, currency: "DOP", rows: [aplazame, applecare] }, rates);
+      eq("imported with no answer, both are refused and nothing is written", `${unanswered.ok ? "ok" : unanswered.reason}:${!unanswered.ok && "count" in unanswered ? unanswered.count : ""}|${await ledger(card.id)}`, `duplicates_need_review:2|${posted}`);
+
+      const twice = await judge([aplazame, { ...aplazame }]);
+      eq("two identical bank rows against one posted row: only the first is flagged", `${[...(twice?.keys() ?? [])].join(",")}:${twice?.get(0)?.possible}`, "0:false");
+      const twiceImport = await importRows({ accountId: card.id, currency: "DOP", rows: [{ ...aplazame, postedCharge: true }, { ...aplazame }] }, rates);
+      eq("the other imports as a separate charge, with no answer needed", `${twiceImport.ok && twiceImport.count}:${twiceImport.ok && twiceImport.matchedPosted}|${await ledger(card.id)}`, `1:1|CSV:2026-10-05:4250:DOP,${posted}`);
+      await prisma.transaction.deleteMany({ where: { accountId: card.id, source: "CSV" } });
+
+      // A 690 DOP pharmacy charge seven days before AppleCare's posted row,
+      // listed first in the file and earlier in date than the real charge.
+      const pharmacy = csvRow("2026-10-01", 690, "Compra Visa Local Farmacia Carol 0042");
+      const ordered = await judge([pharmacy, applecare]);
+      eq(
+        "a weak row ahead of the strong one in the file does not take the posted row: the strong one does",
+        [...(ordered?.entries() ?? [])].map(([index, match]) => `${index}:${match.posted.label}:${match.possible}`).join("|"),
+        "1:Verify Posted AppleCare+ iPhone 17 Pro Max:false",
+      );
+      const orderedImport = await importRows({ accountId: card.id, currency: "DOP", rows: [pharmacy, { ...applecare, postedCharge: true }] }, rates);
+      eq(
+        "answering only the strong row, the weak one imports and the posted row is kept once",
+        `${orderedImport.ok && orderedImport.count}:${orderedImport.ok && orderedImport.matchedPosted}|${await ledger(card.id)}`,
+        `1:1|CSV:2026-10-01:690:DOP,${posted}`,
+      );
+
+      await prisma.transaction.deleteMany({ where: { accountId: card.id } });
+      await prisma.recurringItem.deleteMany({ where: { name: { in: ["Verify Posted Aplazame iPhone 17 Pro Max", "Verify Posted AppleCare+ iPhone 17 Pro Max"] } } });
+      await prisma.account.delete({ where: { id: card.id } });
+    }
+
     console.log("\n-- look-alike items --");
     {
       // Two 50 USD items in one category, the B3 pair: the category cannot
@@ -5200,8 +5325,23 @@ async function main() {
       );
       const named = (await findCsvPostedDuplicates({ accountId: usd.id, currency: "USD", rows: [csvRow("2026-10-06", 50, "VERIFY POSTED THERAPY CENTER")], skip: new Set(), rates }))?.get(0);
       eq("a charge naming one of them is that one, even when the other is nearer in date", `${named?.ambiguous}:${named?.posted.label}`, "false:Verify Posted Therapy");
+      // Flipped deliberately, back to refused: naming neither item, the row
+      // is still two days from Therapy's posted row (PROXIMITY_DAYS).
+      eq("naming neither item but two days from one of them, the ambiguous match is exact: skipped by default", `${vague?.possible}:${defaultFor(vague)}`, "false:skip");
       const vagueImport = await importRows({ accountId: usd.id, currency: "USD", rows: [{ ...csvRow("2026-10-12", 50, "Dr. Perez visit"), categoryId: healthId }] }, rates);
-      check("an ambiguous match still needs an answer before it imports", !vagueImport.ok);
+      eq("imported with no answer, it is refused and nothing is written", `${vagueImport.ok}:${await ledger(usd.id)}`, "false:RECURRING:2026-10-05:50:USD,RECURRING:2026-10-10:50:USD");
+      const farRow = { ...csvRow("2026-10-15", 50, "Dr. Perez visit"), categoryId: healthId };
+      const far = (await findCsvPostedDuplicates({ accountId: usd.id, currency: "USD", rows: [farRow], skip: new Set(), rates }))?.get(0);
+      eq("five days or more from both, it is ambiguous and only a warning: imports by default", `${far?.ambiguous}:${far?.possible}:${defaultFor(far)}`, "true:true:import");
+      const farImport = await importRows({ accountId: usd.id, currency: "USD", rows: [farRow] }, rates);
+      eq(
+        "imported with no answer, it is written beside both posted rows",
+        `${farImport.ok}:${await ledger(usd.id)}`,
+        "true:CSV:2026-10-15:50:USD,RECURRING:2026-10-05:50:USD,RECURRING:2026-10-10:50:USD",
+      );
+      await prisma.transaction.deleteMany({ where: { accountId: usd.id, source: "CSV" } });
+      const namedImport = await importRows({ accountId: usd.id, currency: "USD", rows: [csvRow("2026-10-06", 50, "VERIFY POSTED THERAPY CENTER")] }, rates);
+      check("a row naming one of them still needs an answer before it imports", !namedImport.ok);
       await prisma.transaction.deleteMany({ where: { accountId: usd.id } });
       await prisma.recurringItem.deleteMany({ where: { name: { in: ["Verify Posted Gym", "Verify Posted Therapy"] } } });
       await prisma.account.delete({ where: { id: usd.id } });
@@ -5215,7 +5355,8 @@ async function main() {
         return { id, kind: "recurring" as const, accountId: "a", type: "EXPENSE" as const, date, amount: 500, currency: "DOP", window: postedWindow(date), item, ...extra };
       };
       const charge = (key: string, day: number, extra: Partial<Parameters<typeof planPostedDuplicates>[0]["incoming"][number]> = {}) => ({
-        key, accountId: "a", type: "EXPENSE" as const, date: civilDate(2026, 9, day), amount: 500, currency: "DOP", categoryId: null, note: null, ...extra,
+        // In the item's category, so each row names it unless a check says otherwise.
+        key, accountId: "a", type: "EXPENSE" as const, date: civilDate(2026, 9, day), amount: 500, currency: "DOP", categoryId: "health", note: null, ...extra,
       });
       const weekly = planPostedDuplicates({ incoming: [charge("x", 10), charge("y", 3)], posted: [postedAt("p3", 3), postedAt("p10", 10)], items: [item], rates });
       eq("weekly occurrences in one period: each charge pairs with its own date's row", `${weekly.get("y")?.postedId}:${weekly.get("x")?.postedId}:${weekly.get("x")?.ambiguous}`, "p3:p10:false");
@@ -5232,6 +5373,36 @@ async function main() {
       eq("2.9% off in another currency is a possible match; 3.1% is not", `${edge(1.029)}:${edge(0.971)}:${edge(1.031)}:${edge(0.969)}`, "true:true:false:false");
       const exactFirst = planPostedDuplicates({ incoming: [charge("x", 3)], posted: [postedAt("eur", 3, { amount: 500 / 120, currency: "EUR" }), postedAt("dop", 4)], items: [item], rates });
       eq("a same-currency candidate wins over one in another currency", `${exactFirst.get("x")?.postedId}:${exactFirst.get("x")?.possible}`, "dop:false");
+      const bare = { categoryId: null, note: "COMPRA VISA LOCAL FARMACIA 0042" };
+      // Twelve days after the posted row: past PROXIMITY_DAYS.
+      const judged = (extra: Partial<Parameters<typeof planPostedDuplicates>[0]["incoming"][number]>, day = 15) =>
+        planPostedDuplicates({ incoming: [charge("x", day, extra)], posted: [postedAt("p3", 3)], items: [item], rates }).get("x")?.possible;
+      eq(
+        "twelve days away, the same amount naming neither the item nor its category is a possible match; the name alone, or the category alone, is exact",
+        `${judged(bare)}:${judged({ ...bare, note: "COMPRA VISA LOCAL GYM REC 0042" })}:${judged({ ...bare, categoryId: "health" })}`,
+        "true:false:false",
+      );
+      const twin = { ...item, id: "yoga", name: "Yoga" };
+      eq(
+        "a category shared with a look-alike item names neither: a possible match",
+        planPostedDuplicates({ incoming: [charge("x", 15)], posted: [postedAt("p3", 3)], items: [item, twin], rates }).get("x")?.possible,
+        true,
+      );
+      eq(
+        "a posted row whose item is gone, and a paycheck, stay exact on the amount alone",
+        `${planPostedDuplicates({ incoming: [charge("x", 15, bare)], posted: [postedAt("p3", 3, { item: null })], items: [item], rates }).get("x")?.possible}:${planPostedDuplicates({ incoming: [charge("x", 15, { ...bare, type: "INCOME" })], posted: [postedAt("pay", 3, { kind: "paycheck", type: "INCOME", item: null })], items: [item], rates }).get("x")?.possible}`,
+        "false:false",
+      );
+      const pair = planPostedDuplicates({ incoming: [charge("x", 15, bare), charge("y", 15, bare)], posted: [postedAt("p3", 3)], items: [item], rates });
+      eq("two identical rows naming nothing against one posted row: only one is flagged, as a warning", `${[...pair.keys()].join(",")}:${pair.get("x")?.possible}`, "x:true");
+      eq("the proximity window is 4 days", PROXIMITY_DAYS, 4);
+      const near = (postedDay: number, day: number) =>
+        planPostedDuplicates({ incoming: [charge("x", day, bare)], posted: [postedAt("p", postedDay)], items: [item], rates }).get("x")?.possible;
+      eq(
+        "naming nothing, the same amount 4 days after or before the posted row is exact; 5 days is only possible",
+        `${near(3, 7)}:${near(3, 8)}:${near(10, 6)}:${near(10, 5)}`,
+        "false:true:false:true",
+      );
     }
 
     await prisma.category.delete({ where: { id: healthId } });

@@ -36,7 +36,7 @@ import type { CsvDuplicateHit, CsvExtraordinaryHit } from "@/server/actions/impo
 /**
  * What a possible duplicate does when the user has not chosen: a re-import, or
  * an exact match for a posted charge or recorded paycheck, is skipped; a
- * possible match in another currency is only a warning and imports.
+ * possible match (planPostedDuplicates) is only a warning and imports.
  */
 export function defaultDuplicateDecision(hit: CsvDuplicateHit): "import" | "skip" {
   return hit.kind === "posted" && hit.match.possible ? "import" : "skip";
@@ -691,8 +691,8 @@ function UnknownRowsPanel({
  * decision is import-or-skip, and skip is the default: a re-imported
  * statement should add nothing unless the user says so. A posted match puts
  * it as "It's the posted charge" (skip) or "It's a different charge"
- * (import), and one in another currency defaults to importing - it is only a
- * warning (defaultDuplicateDecision).
+ * (import), and a possible one (planPostedDuplicates) defaults to importing -
+ * it is only a warning (defaultDuplicateDecision).
  */
 function DuplicateRowsPanel({
   rowIndexes,

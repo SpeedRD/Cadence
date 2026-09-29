@@ -511,7 +511,7 @@ export const es = {
     // recurrente registrado o el sueldo de un check-in (ver
     // src/lib/data/posted-duplicates.ts).
     postedDuplicatesDescription:
-      "Algunas filas coinciden con un cargo que Cadence ya registró desde un elemento recurrente, o con un sueldo que registró un check-in, en esta cuenta. Una coincidencia exacta se omite como el cargo registrado a menos que digas que es otro. Una posible coincidencia, en otra moneda, se importa a menos que digas que es el cargo registrado.",
+      "Algunas filas coinciden con un cargo que Cadence ya registró desde un elemento recurrente, o con un sueldo que registró un check-in, en esta cuenta. Una coincidencia exacta (con el nombre o la categoría del elemento, un sueldo, o el mismo monto a pocos días del cargo registrado) se omite como el cargo registrado a menos que digas que es otro. Una posible coincidencia (en otra moneda, o el mismo monto más lejos, sin el nombre ni la categoría del elemento) se importa a menos que digas que es el cargo registrado.",
     postedMatchRecurring: (name: string, date: string, amount: string) => `Coincide con ${name}, registrado el ${date} por ${amount}`,
     postedMatchPaycheck: (date: string, amount: string) => `Coincide con el sueldo registrado el ${date} por ${amount}`,
     postedMatchOthers: (list: string) => `También podría ser: ${list}`,

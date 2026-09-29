@@ -1140,7 +1140,13 @@ async function main(): Promise<number> {
         [
           `brought in: Transaction ${row.id} (${row.source}, ${toISODate(row.date)}) ${money(num(row.amount), row.currency)}${row.note ? ` "${row.note}"` : ""}`,
           `written:    Transaction ${posted.id} (${posted.kind === "paycheck" ? "PAYDAY_CHECKIN" : "RECURRING"}, ${posted.date}) ${money(posted.amount, posted.currency)}`,
-          ...(match.possible ? ["amounts agree only after conversion at the stored rates: a possible match"] : []),
+          ...(match.possible
+            ? [
+                row.currency !== posted.currency
+                  ? "amounts agree only after conversion at the stored rates: a possible match"
+                  : "the row names neither the item nor its category and is not within a few days of it: a possible match",
+              ]
+            : []),
           ...(match.ambiguous
             ? [`ambiguous: could also be ${match.others.map((other) => `${other.id} (${other.label ?? "?"}, ${other.date})`).join(", ")}`]
             : []),

@@ -53,7 +53,7 @@ export interface PostedMatchRow {
 
 export interface PostedMatch {
   kind: "recurring" | "paycheck";
-  /** Only after converting between currencies: a warning, never resolved unless the user says so. */
+  /** Only after converting between currencies, or the row neither names the item nor lands within PROXIMITY_DAYS of it: a warning, never resolved unless the user says so. */
   possible: boolean;
   /** Several items survive the look-alike guard; `others` lists the rest. */
   ambiguous: boolean;

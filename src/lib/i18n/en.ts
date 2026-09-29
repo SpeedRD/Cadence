@@ -520,7 +520,7 @@ export const en = {
     // itself: a posted recurring charge or a check-in's paycheck (see
     // src/lib/data/posted-duplicates.ts).
     postedDuplicatesDescription:
-      "Some rows match a charge Cadence already posted from a recurring item, or a paycheck a check-in recorded, on this account. An exact match is skipped as the posted charge unless you say it's a different one. A possible match, in another currency, imports unless you say it's the posted charge.",
+      "Some rows match a charge Cadence already posted from a recurring item, or a paycheck a check-in recorded, on this account. An exact match (the item's name or category, a paycheck, or the same amount within a few days of the posted charge) is skipped as the posted charge unless you say it's a different one. A possible match (in another currency, or the same amount further away with neither the item's name nor its category) imports unless you say it's the posted charge.",
     postedMatchRecurring: (name: string, date: string, amount: string) => `Matches ${name}, posted ${date} for ${amount}`,
     postedMatchPaycheck: (date: string, amount: string) => `Matches the paycheck recorded ${date} for ${amount}`,
     postedMatchOthers: (list: string) => `Could also be: ${list}`,

@@ -40,7 +40,7 @@
  * one-to-one rule.
  */
 import { convert, type RateTable } from "@/lib/currency";
-import { addDays, maxDate, minDate, toISODate } from "@/lib/date";
+import { addDays, daysBetween, maxDate, minDate, toISODate } from "@/lib/date";
 import { periodForDate } from "@/lib/period";
 
 import type { RecurringKind } from "@/generated/prisma/enums";
@@ -249,6 +249,21 @@ export function settlementSpan(dues: readonly Date[]): { start: Date; end: Date 
  */
 export const CROSS_CURRENCY_MATCH_TOLERANCE = 0.03;
 
+/**
+ * How many days from a posted RECURRING row's date a charge of exactly its
+ * amount, in its currency, may land and still be taken for it without naming
+ * the item. The posted row sits on the due date; the bank's row carries the
+ * day the card network posted the charge, one or two business days after
+ * the merchant billed, so a charge made on a Friday before a Monday holiday
+ * lands on Tuesday - four days later - and a merchant billing a day or two
+ * early lands that far before. Bank text often does not repeat the user's
+ * name for an item ("Aplazame iPhone 17 Pro Max" bills as "Compra Visa Int
+ * Aplazame Es"), so this is what ties most real charges to their row. It
+ * stays under SETTLEMENT_LEAD_DAYS and well under a week, so the same amount
+ * from another merchant further into the period is only a possible match.
+ */
+export const PROXIMITY_DAYS = 4;
+
 /** A row being brought in, before it is written (or just after, for a manual entry). */
 export interface IncomingEntry {
   /** The caller's handle for it: a CSV row index, a staged row id, a transaction id. */
@@ -286,7 +301,13 @@ export interface PostedDuplicate {
   postedId: string;
   /** Every posted row still in the running after the guard, nearest first, one per item; more than one only when `ambiguous`. */
   candidateIds: string[];
-  /** The amounts agree only after converting between currencies: a warning, never resolved on its own. */
+  /**
+   * A warning, never resolved on its own: the amounts agree only after
+   * converting between currencies, or the row does not name the posted row's
+   * item (chargeIdentifiesItem) and is more than PROXIMITY_DAYS from its date.
+   * Never set for a paycheck, or a posted row whose item is gone, on the
+   * amount alone.
+   */
   possible: boolean;
   /** Candidates from more than one item survive the look-alike guard, so which one it is cannot be told. */
   ambiguous: boolean;
@@ -318,6 +339,12 @@ function seriesOf(entry: PostedEntry): string {
  * (AMOUNT_MATCH_TOLERANCE), or - only when no same-currency candidate exists -
  * in another currency to within CROSS_CURRENCY_MATCH_TOLERANCE after
  * converting the posted amount with `rates`, which makes it a possible match.
+ * So does a posted RECURRING row whose item the incoming row does not name
+ * (chargeIdentifiesItem, under the look-alike guard below) and whose date is
+ * more than PROXIMITY_DAYS from the row's: the same amount on the same
+ * account further into the period is as often another merchant's charge. A
+ * paycheck, a row whose item is gone, a named item or a same-amount charge
+ * within PROXIMITY_DAYS is a strong match.
  *
  * Several candidates from different items go through the look-alike guard:
  * only the items the incoming row names survive (chargeIdentifiesItem, with
@@ -331,8 +358,10 @@ function seriesOf(entry: PostedEntry): string {
  * One incoming row, one posted row: rows are taken in date order, each pairs
  * with the nearest candidate still free, and an ambiguous row holds that
  * nearest one too, so two identical incoming rows and one posted row flag only
- * one of them. `incoming` is one batch; rows already in the ledger are never
- * counted against it.
+ * one of them. Strong matches are taken first: a row that would only be a
+ * possible match waits until every strong one has paired, so it can never
+ * take a posted row from the charge that really is it. `incoming` is one
+ * batch; rows already in the ledger are never counted against it.
  */
 export function planPostedDuplicates(input: {
   incoming: readonly IncomingEntry[];
@@ -347,7 +376,9 @@ export function planPostedDuplicates(input: {
   const taken = new Set<string>();
   const result = new Map<string, PostedDuplicate>();
 
-  for (const entry of incoming) {
+  // The pick today's rules make for `entry` among the posted rows still free,
+  // and whether it is strong.
+  const choose = (entry: IncomingEntry) => {
     const eligible = input.posted.filter(
       (posted) =>
         !taken.has(posted.id) &&
@@ -359,15 +390,15 @@ export function planPostedDuplicates(input: {
     let pool = eligible.filter(
       (posted) => posted.currency === entry.currency && Math.abs(posted.amount - entry.amount) <= AMOUNT_MATCH_TOLERANCE,
     );
-    const possible = pool.length === 0;
-    if (possible) {
+    const converted = pool.length === 0;
+    if (converted) {
       pool = eligible.filter((posted) => {
         if (posted.currency === entry.currency) return false;
         const converted = convert(posted.amount, posted.currency, entry.currency, input.rates);
         return converted > 0 && Math.abs(entry.amount - converted) <= CROSS_CURRENCY_MATCH_TOLERANCE * converted;
       });
     }
-    if (pool.length === 0) continue;
+    if (pool.length === 0) return null;
 
     if (new Set(pool.map(seriesOf)).size > 1) {
       const named = pool.filter(
@@ -389,13 +420,34 @@ export function planPostedDuplicates(input: {
       return true;
     });
     const primary = nearestPerSeries[0];
-    taken.add(primary.id);
+    // Beyond PROXIMITY_DAYS, only the amount ties a row that does not name
+    // the item to its posted charge: another merchant's charge of the same
+    // amount looks exactly like it.
+    const strong =
+      !converted &&
+      (primary.item === null ||
+        chargeIdentifiesItem(primary.item, entry, ambiguousCategory.has(primary.item.id)) ||
+        Math.abs(daysBetween(primary.date, entry.date)) <= PROXIMITY_DAYS);
+    return { primary, nearestPerSeries, strong };
+  };
+
+  const pair = (entry: IncomingEntry, pick: NonNullable<ReturnType<typeof choose>>) => {
+    taken.add(pick.primary.id);
     result.set(entry.key, {
-      postedId: primary.id,
-      candidateIds: nearestPerSeries.map((posted) => posted.id),
-      possible,
-      ambiguous: nearestPerSeries.length > 1,
+      postedId: pick.primary.id,
+      candidateIds: pick.nearestPerSeries.map((posted) => posted.id),
+      possible: !pick.strong,
+      ambiguous: pick.nearestPerSeries.length > 1,
     });
+  };
+  for (const entry of incoming) {
+    const pick = choose(entry);
+    if (pick?.strong) pair(entry, pick);
+  }
+  for (const entry of incoming) {
+    if (result.has(entry.key)) continue;
+    const pick = choose(entry);
+    if (pick) pair(entry, pick);
   }
   return result;
 }

@@ -86,8 +86,8 @@ function isUniqueViolation(error: unknown): boolean {
  * occurrence recurring posting charged, or a paycheck a check-in recorded
  * (findCsvPostedDuplicates, with the same rates the review step used): it
  * needs the user's answer, "a different charge" (importAnyway) or "the posted
- * charge" (postedCharge), except for a match in another currency, which is
- * only a warning and imports unless the user says otherwise. A posted-charge
+ * charge" (postedCharge), except for a possible match (planPostedDuplicates),
+ * which is only a warning and imports unless the user says otherwise. A posted-charge
  * row is not written; the posted row takes its amount and currency, in the
  * same database transaction as the rest. A posted-charge answer the ledger no
  * longer supports refuses the whole import rather than guessing. The posted
