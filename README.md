@@ -66,15 +66,21 @@ period to the goal's target date, naming the first period the room falls short
 in and by how much - a different question from "behind its roadmap", which reads
 what this period's confirmed check-in set aside.
 Items are grouped by severity in the app's own two terms:
-**Needs attention** (red, like the nav badge: money already committed is not where
-the plan says it is) first, **Advisory** (amber, like Afford's checks: nothing is
-blocked or changed) after. Each carries the figures that triggered it, a link to
-the surface that can resolve it, and **Dismiss**, which keeps it out of the Inbox
-for good even while its condition persists - the same permanent, keyed dismissal
-the Recurring page's suggestions have, generalized to every source. Dismissing
-changes nothing else: the Dashboard alert, the Recurring badge or the goal page's
-note still show the signal until it is actually resolved. The Inbox nav link
-carries a count of everything still listed, so the badge and the page always agree.
+**Needs attention** (red: money already committed is not where the plan says it is)
+first, **Advisory** (amber, like Afford's checks: nothing is blocked or changed)
+after; a plan that would stop fitting in a period ahead is advisory, since nothing
+has gone wrong yet. Each carries the figures that triggered it, a link to the
+surface that can resolve it, and **Dismiss**, which keeps that evidence out of the
+Inbox even while its condition persists - the same keyed dismissal the Recurring
+page's suggestions have, generalized to every source, but keyed by what it was made
+on: the period (goal behind its roadmap, goal at risk, an Afford plan's failing
+period) or the reason (why a recurring item is not posting), so a later or different
+problem is a new item, not a hidden one. Dismissing changes nothing else: the
+Dashboard alert, the Recurring badge or the goal page's note still show the signal
+until it is actually resolved. The Inbox nav link carries a count of everything
+still listed ("to review", advisory items included), so the badge and the page
+always agree. When dismissals are why the Inbox is empty, it says how many items
+are hidden instead of claiming everything is in order.
 Under the hood each source is one pure detector registered in
 `src/lib/insights.ts`; a new kind of insight is one more function there.
 

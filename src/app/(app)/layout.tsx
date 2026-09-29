@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   await requireAuth();
   // The nav's Inbox badge counts every current, non-dismissed insight from
-  // every source (src/lib/insights.ts). getInsights is request-cached, so the
+  // every source (src/lib/insights.ts), advisory ones included - it says
+  // "to review", not "needs attention". getInsights is request-cached, so the
   // Inbox page reads the same run rather than detecting again - and the
   // Afford tracker inside it is the same request-cached getAffordRechecks the
   // Dashboard alert and the Recurring page's section read.

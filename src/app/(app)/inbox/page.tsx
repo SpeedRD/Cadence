@@ -5,20 +5,21 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/stat";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAppContext } from "@/lib/data/context";
-import { getInsights } from "@/lib/data/insights";
+import { getInsightState } from "@/lib/data/insights";
 import { getDictionary } from "@/lib/i18n";
+import { inboxEmptyDescription } from "@/lib/insights";
 
 export const metadata = { title: "Inbox - Cadence" };
 
 /**
  * Every current insight (src/lib/insights.ts) in one place, critical ones
- * first. The list is the same request-cached getInsights() the layout's nav
- * badge counts, so the badge and this page always agree. Each row links to
- * the surface that can resolve it and can be dismissed for good; nothing
- * here changes the signal itself.
+ * first. The list is the same request-cached run (getInsightState) the
+ * layout's nav badge counts, so the badge and this page always agree. Each
+ * row links to the surface that can resolve it and can be dismissed (that
+ * evidence only); nothing here changes the signal itself.
  */
 export default async function InboxPage() {
-  const [context, insights] = await Promise.all([getAppContext(), getInsights()]);
+  const [context, { insights, dismissedCount }] = await Promise.all([getAppContext(), getInsightState()]);
   const t = getDictionary(context.language).inbox;
   const critical = insights.filter((insight) => insight.severity === "critical");
   const advisory = insights.filter((insight) => insight.severity === "advisory");
@@ -31,7 +32,7 @@ export default async function InboxPage() {
       />
 
       {insights.length === 0 ? (
-        <EmptyState title={t.emptyTitle} description={t.emptyDescription} />
+        <EmptyState title={t.emptyTitle} description={inboxEmptyDescription(t, dismissedCount)} />
       ) : null}
 
       {critical.length > 0 ? (

@@ -182,7 +182,7 @@ export const en = {
     tabBarLabel: "Main navigation",
     /** Read out with the link's label when it carries a count badge. */
     badgeLabel: (count: number) =>
-      count === 1 ? "1 needs attention" : `${count} need attention`,
+      count === 1 ? "1 to review" : `${count} to review`,
   },
   more: {
     title: "More",
@@ -1332,11 +1332,16 @@ export const en = {
     description:
       "Everything Cadence has noticed that is still waiting on you, from every part of the app in one place. Each item also stays where it came from until it is resolved.",
     pendingCount: (count: number) =>
-      count === 1 ? "1 item needs attention" : `${count} items need attention`,
-    emptyTitle: "Nothing needs attention",
+      count === 1 ? "1 item to review" : `${count} items to review`,
+    emptyTitle: "Nothing to review",
     emptyDescription:
       "Recurring items are posting, your Afford plans still fit, no untracked patterns turned up, every goal plan is on its roadmap, and every goal has room ahead to reach its target date.",
-    /** Severity headings. "Needs attention" is the nav badge's own phrase; "Advisory" is how Afford describes a check that blocks nothing. */
+    /** The empty Inbox when dismissals, not a clean bill, are why nothing is listed. */
+    emptyDescriptionDismissed: (count: number) =>
+      count === 1
+        ? "Nothing else is waiting. 1 item you dismissed is hidden here; it stays where it came from until it is resolved."
+        : `Nothing else is waiting. ${count} items you dismissed are hidden here; each stays where it came from until it is resolved.`,
+    /** Severity headings. "Advisory" is how Afford describes a check that blocks nothing. */
     severityCritical: "Needs attention",
     severityAdvisory: "Advisory",
     severityCriticalHint: "Money already committed is not where the plan says it is.",
@@ -1347,8 +1352,8 @@ export const en = {
     sourceGoalBehind: "Goals",
     sourceGoalForecast: "Goal forecast",
     dismiss: "Dismiss",
-    dismissHint: "Remove from the Inbox for good. Where it came from is unchanged.",
-    dismissed: "Dismissed. It won't come back to the Inbox.",
+    dismissHint: "Remove from the Inbox. A different or later problem will still show up. Where it came from is unchanged.",
+    dismissed: "Dismissed. A different or later problem will still show up in the Inbox.",
     dismissUnknown: "That item is no longer in the Inbox",
     /** The link each insight carries to the surface that can resolve it. */
     openRecurring: "Fix on the recurring page",

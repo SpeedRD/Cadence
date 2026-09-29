@@ -3,9 +3,12 @@
  * input through the signal's own existing computation, nothing re-derived
  * here - runs detectInsights() from src/lib/insights.ts, and strips the
  * insights the user dismissed. Dismissing writes the InsightDismissal row
- * that keeps an insight out of the Inbox and the nav badge for good, the
- * same way RecurringSuggestionDismissal keeps a pattern off the Recurring
- * page: keyed by identity, idempotent, never expiring.
+ * that keeps an insight out of the Inbox and the nav badge, keyed by the
+ * identity of the evidence it was made on (see InsightRef): the same
+ * evidence stays hidden, a different period, reason or failure is a new
+ * insight. Idempotent, and the row itself never expires (a recurring-
+ * pattern suggestion, which has its own permanent table, keeps the same
+ * permanent identity here).
  */
 import { cache } from "react";
 
@@ -14,7 +17,7 @@ import { getSettings } from "@/lib/auth";
 import { getDictionary } from "@/lib/i18n";
 import {
   detectInsights,
-  withoutDismissed,
+  partitionDismissed,
   type Insight,
   type InsightContext,
   type InsightRef,
@@ -65,21 +68,37 @@ export async function loadInsightContext(
   };
 }
 
+/** What the Inbox reads: the insights to list, and how many current ones a dismissal is hiding. */
+export interface InsightState {
+  insights: Insight[];
+  dismissedCount: number;
+}
+
 /**
  * Every current, non-dismissed insight for `context`, critical first - what
- * the Inbox lists and the nav badge counts, so the two can never disagree.
- * Plain function (no requireAuth()/cookies()) so scripts/verify-domain.ts
- * can drive it the same way the page does.
+ * the Inbox lists and the nav badge counts, so the two can never disagree -
+ * with the number of current insights the dismissals are hiding (the empty
+ * Inbox says so). Plain function (no requireAuth()/cookies()) so
+ * scripts/verify-domain.ts can drive it the same way the page does.
  */
-export async function collectInsights(
+export async function collectInsightState(
   context: AffordContext,
   affordRechecks?: AffordTrackedItem[],
-): Promise<Insight[]> {
+): Promise<InsightState> {
   const [insightContext, dismissed] = await Promise.all([
     loadInsightContext(context, affordRechecks),
     listInsightDismissals(),
   ]);
-  return withoutDismissed(detectInsights(insightContext), dismissed);
+  const { visible, hidden } = partitionDismissed(detectInsights(insightContext), dismissed);
+  return { insights: visible, dismissedCount: hidden.length };
+}
+
+/** The listed insights alone: what the nav badge counts. */
+export async function collectInsights(
+  context: AffordContext,
+  affordRechecks?: AffordTrackedItem[],
+): Promise<Insight[]> {
+  return (await collectInsightState(context, affordRechecks)).insights;
 }
 
 /**
@@ -88,13 +107,13 @@ export async function collectInsights(
  * however many places read it (the nav badge on every page, the Inbox) and
  * never kept beyond it.
  */
-export const getInsights = cache(async (): Promise<Insight[]> => {
+export const getInsightState = cache(async (): Promise<InsightState> => {
   const [context, settings, affordRechecks] = await Promise.all([
     getAppContext(),
     getSettings(),
     getAffordRechecks(),
   ]);
-  return collectInsights(
+  return collectInsightState(
     {
       ...context,
       bufferPercent: settings.bufferPercent,
@@ -105,11 +124,16 @@ export const getInsights = cache(async (): Promise<Insight[]> => {
   );
 });
 
+/** The current, non-dismissed insights, from the request's one run. */
+export const getInsights = cache(async (): Promise<Insight[]> => (await getInsightState()).insights);
+
 /**
- * Never show this insight again. Idempotent: dismissing something already
- * dismissed keeps the one row and its original time. Nothing about the
- * signal itself changes - the Dashboard alert, the Recurring badge or the
- * goal page's note still show it until it is actually resolved.
+ * Stop showing this insight - this evidence only: the key names the period,
+ * reason or failure it was made on, so a different one is a new insight.
+ * Idempotent: dismissing something already dismissed keeps the one row and
+ * its original time. Nothing about the signal itself changes - the Dashboard
+ * alert, the Recurring badge or the goal page's note still show it until it
+ * is actually resolved.
  */
 export async function dismissInsight(ref: InsightRef): Promise<void> {
   await prisma.insightDismissal.upsert({

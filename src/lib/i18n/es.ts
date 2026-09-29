@@ -171,7 +171,7 @@ export const es = {
     more: "Más",
     tabBarLabel: "Navegación principal",
     badgeLabel: (count: number) =>
-      count === 1 ? "1 requiere atención" : `${count} requieren atención`,
+      count === 1 ? "1 por revisar" : `${count} por revisar`,
   },
   more: {
     title: "Más",
@@ -1325,10 +1325,14 @@ export const es = {
     description:
       "Todo lo que Cadence ha notado y sigue esperando por ti, de cada parte de la app en un solo lugar. Cada elemento también sigue donde apareció hasta que se resuelva.",
     pendingCount: (count: number) =>
-      count === 1 ? "1 elemento requiere atención" : `${count} elementos requieren atención`,
-    emptyTitle: "Nada requiere atención",
+      count === 1 ? "1 elemento por revisar" : `${count} elementos por revisar`,
+    emptyTitle: "Nada por revisar",
     emptyDescription:
       "Los recurrentes se están registrando, tus planes de Cuotas siguen encajando, no apareció ningún patrón sin seguimiento, cada plan de meta va según su hoja de ruta y cada meta tiene margen por delante hasta su fecha objetivo.",
+    emptyDescriptionDismissed: (count: number) =>
+      count === 1
+        ? "No hay nada más pendiente. 1 elemento que descartaste está oculto aquí; sigue donde se originó hasta que se resuelva."
+        : `No hay nada más pendiente. ${count} elementos que descartaste están ocultos aquí; cada uno sigue donde se originó hasta que se resuelva.`,
     severityCritical: "Requiere atención",
     severityAdvisory: "Orientativo",
     severityCriticalHint: "Dinero ya comprometido no está donde el plan dice.",
@@ -1339,8 +1343,8 @@ export const es = {
     sourceGoalBehind: "Metas",
     sourceGoalForecast: "Pronóstico de meta",
     dismiss: "Descartar",
-    dismissHint: "Quitar de la bandeja para siempre. Donde apareció no cambia.",
-    dismissed: "Descartado. No volverá a la bandeja.",
+    dismissHint: "Quitar de la bandeja. Un problema distinto o posterior aparecerá igualmente. Donde apareció no cambia.",
+    dismissed: "Descartado. Un problema distinto o posterior aparecerá igualmente en la bandeja.",
     dismissUnknown: "Ese elemento ya no está en la bandeja",
     openRecurring: "Arreglar en la página de recurrentes",
     openRecurringPage: "Abrir la página de recurrentes",

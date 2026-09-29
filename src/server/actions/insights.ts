@@ -9,9 +9,10 @@ import { dismissInsight, getInsights } from "@/lib/data/insights";
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
 /**
- * "Dismiss" on an Inbox insight: it never appears in the Inbox or counts
- * toward the nav badge again. The form carries only the insight's identity
- * (source + key); the row is written only for an insight that is current
+ * "Dismiss" on an Inbox insight: that evidence no longer appears in the Inbox
+ * or counts toward the nav badge (a different period, reason or failure is
+ * a new insight). The form carries only the insight's identity
+ * (source + key, the key naming the evidence); the row is written only for an insight that is current
  * right now, so a stale page cannot dismiss something that has since
  * resolved on its own - or anything that never existed.
  */

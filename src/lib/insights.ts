@@ -64,10 +64,13 @@ export function isInsightSource(value: string): value is InsightSource {
 
 /**
  * The app's two existing severities, by their own names. "critical" is the
- * red `--critical` token: the nav badge's "needs attention", the Recurring
- * page's "Short by" badge, a buffer breach - money already committed is not
- * where the plan says it is. "advisory" is Afford's word for a check that
- * blocks and changes nothing (the `--warning` amber): worth a look, no more.
+ * red `--critical` token: the Inbox's "Needs attention" group, a buffer
+ * breach - money already committed is not where the plan says it is (the
+ * nav badge counts every insight and says "to review", not "needs
+ * attention"). "advisory" is Afford's word for a check that blocks and
+ * changes nothing (the `--warning` amber): worth a look, no more - a plan
+ * that would stop fitting in a period ahead is one, since nothing has gone
+ * wrong yet.
  */
 export const INSIGHT_SEVERITIES = ["critical", "advisory"] as const;
 export type InsightSeverity = (typeof INSIGHT_SEVERITIES)[number];
@@ -78,10 +81,21 @@ export type InsightEvidence =
   | { kind: "date"; label: string; date: string }
   | { kind: "text"; label: string; value: string };
 
-/** What a dismissal is keyed by: the detector and the identity it gives the insight. */
+/**
+ * What a dismissal is keyed by: the detector and the identity of the
+ * evidence it was made on, so a dismissal hides that evidence and nothing
+ * later. The thing the signal's own surface keys its row by (a recurring
+ * item's id, a goal's id, `accountId:merchantKey`), plus what makes this
+ * instance of it different from the next:
+ *   not_posting          `${itemId}:${reason}` - the skip reason, or `failed`
+ *   afford_viability     `${itemId}:${periodKey}` - the first failing period
+ *   goal_behind          `${goalId}:${periodKey}` - the plan period
+ *   goal_forecast_risk   `${goalId}:${periodKey}` - the first short period
+ *   recurring_suggestion `${accountId}:${merchantKey}` - permanent, like its own table
+ *   posting_run_failed   `run` - not dismissible
+ */
 export interface InsightRef {
   source: InsightSource;
-  /** The same identity the signal's own surface uses for the row: a recurring item's id, `accountId:merchantKey`, a goal's id. */
   key: string;
 }
 
@@ -142,10 +156,13 @@ export const detectNotPosting: InsightDetector = ({ dictionary, recurringPosting
     account_archived: reasons.notPostingReasonAccountArchived,
     goal_achieved: reasons.notPostingReasonGoalAchieved,
   };
-  const insight = (id: string, name: string, evidence: InsightEvidence[]): Insight => ({
-    id: insightId({ source: "not_posting", key: id }),
+  // Keyed by the item and why it is not posting, so a dismissed skip does not
+  // hide the item's later failure (or a different skip). A failure's key says
+  // `failed`, not the error text, which can differ run to run.
+  const insight = (id: string, reason: string, name: string, evidence: InsightEvidence[]): Insight => ({
+    id: insightId({ source: "not_posting", key: `${id}:${reason}` }),
     source: "not_posting",
-    key: id,
+    key: `${id}:${reason}`,
     severity: "critical",
     title: t.notPostingTitle(name),
     evidence,
@@ -154,7 +171,7 @@ export const detectNotPosting: InsightDetector = ({ dictionary, recurringPosting
   });
   return [
     ...recurringPosting.skipped.map((item) =>
-      insight(item.id, item.name, [
+      insight(item.id, item.reason, item.name, [
         { kind: "text", label: t.notPostingReason, value: reasonText[item.reason] },
         { kind: "date", label: t.notPostingDue, date: item.nextDate },
         {
@@ -166,7 +183,7 @@ export const detectNotPosting: InsightDetector = ({ dictionary, recurringPosting
       ]),
     ),
     ...recurringPosting.failed.map((item) =>
-      insight(item.id, item.name, [
+      insight(item.id, "failed", item.name, [
         {
           kind: "text",
           label: t.notPostingReason,
@@ -207,7 +224,10 @@ export const detectPostingRunFailed: InsightDetector = ({ dictionary, recurringP
  * The Dashboard's Afford-viability alert and the Recurring page's "Short by"
  * badge: every recorded plan whose remaining payments no longer pass Afford's
  * two checks, reduced to the first failing period exactly as
- * summarizeAffordViability reduces it for the badge.
+ * summarizeAffordViability reduces it for the badge. Advisory: it projects a
+ * period that has not happened yet (the Dashboard and Recurring copy call
+ * the same check advisory), and it is keyed by the item and that failing
+ * period, so a dismissal hides this shortfall and not a new one elsewhere.
  */
 export const detectAffordViability: InsightDetector = ({ dictionary, affordRechecks }) => {
   const t = dictionary.inbox;
@@ -216,12 +236,13 @@ export const detectAffordViability: InsightDetector = ({ dictionary, affordReche
     if (viability.status !== "short") return [];
     const failing = item.verdict.failing[0];
     const check = failing.account.passes ? failing.flexible : failing.account;
+    const key = `${item.itemId}:${viability.periodKey}`;
     return [
       {
-        id: insightId({ source: "afford_viability", key: item.itemId }),
+        id: insightId({ source: "afford_viability", key }),
         source: "afford_viability",
-        key: item.itemId,
-        severity: "critical",
+        key,
+        severity: "advisory",
         title: t.affordTitle(item.name),
         evidence: [
           { kind: "money", label: t.affordShortfall, amount: viability.shortfall, currency: viability.currency },
@@ -305,7 +326,8 @@ export const detectRecurringSuggestions: InsightDetector = ({ dictionary, recurr
  * undated goal has no roadmap to be behind (its figure is its whole
  * remaining balance), so it is never one of these. When the accounts' room
  * could not even cover the pace, that shortfall rides along as evidence,
- * as the page's own room-shortfall note does.
+ * as the page's own room-shortfall note does. Keyed by the goal and the plan
+ * period: being behind in one period says nothing about the next.
  */
 export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency, goalRoadmaps }) => {
   const t = dictionary.inbox;
@@ -314,11 +336,12 @@ export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency
     const behind = round2(status.roadmapAmount - status.planned.plannedAmount);
     if (behind <= 0.005) return [];
     const roomShortfall = round2(status.roadmapAmount - status.planned.recommendedAmount);
+    const key = `${status.goalId}:${status.period.key}`;
     return [
       {
-        id: insightId({ source: "goal_behind", key: status.goalId }),
+        id: insightId({ source: "goal_behind", key }),
         source: "goal_behind",
-        key: status.goalId,
+        key,
         severity: "advisory",
         title: t.goalTitle(status.name),
         evidence: [
@@ -365,7 +388,9 @@ export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency
  * up at all. A confirmed period is never in the walk, and an undated goal
  * has no target date to walk to (forecastGoalFunding leaves both out).
  * Advisory: nothing here is committed - the estimate is the discretionary
- * funding the user adjusts check-in to check-in.
+ * funding the user adjusts check-in to check-in. Keyed by the goal and the
+ * first short period, so a dismissal hides that shortfall and not one that
+ * appears in a different period.
  */
 export const detectGoalForecastRisk: InsightDetector = ({ dictionary, goalForecasts }) => {
   const t = dictionary.inbox;
@@ -374,11 +399,12 @@ export const detectGoalForecastRisk: InsightDetector = ({ dictionary, goalForeca
     if (summary.status !== "short") return [];
     const { period } = summary;
     const withRoom = period.draws.filter((draw) => draw.headroom > 0);
+    const key = `${forecast.goalId}:${period.period.key}`;
     return [
       {
-        id: insightId({ source: "goal_forecast_risk", key: forecast.goalId }),
+        id: insightId({ source: "goal_forecast_risk", key }),
         source: "goal_forecast_risk",
-        key: forecast.goalId,
+        key,
         severity: "advisory",
         title: t.forecastTitle(forecast.name),
         evidence: [
@@ -434,11 +460,33 @@ export function detectInsights(context: InsightContext): Insight[] {
 }
 
 /**
- * `insights` without the ones in `dismissed` - what the Inbox shows and the
- * nav badge counts. An insight that is not dismissible stays whatever the
- * dismissals say.
+ * `insights` split by `dismissed`: `visible` is what the Inbox shows and the
+ * nav badge counts, `hidden` the current insights a dismissal is keeping out
+ * (a dismissal for evidence that is no longer current matches nothing and is
+ * not in either). An insight that is not dismissible stays visible whatever
+ * the dismissals say.
  */
-export function withoutDismissed(insights: Insight[], dismissed: InsightRef[]): Insight[] {
+export function partitionDismissed(
+  insights: Insight[],
+  dismissed: InsightRef[],
+): { visible: Insight[]; hidden: Insight[] } {
   const gone = new Set(dismissed.map(insightId));
-  return insights.filter((insight) => !insight.dismissible || !gone.has(insight.id));
+  const visible: Insight[] = [];
+  const hidden: Insight[] = [];
+  for (const insight of insights) (insight.dismissible && gone.has(insight.id) ? hidden : visible).push(insight);
+  return { visible, hidden };
+}
+
+/** `insights` without the ones in `dismissed`. */
+export function withoutDismissed(insights: Insight[], dismissed: InsightRef[]): Insight[] {
+  return partitionDismissed(insights, dismissed).visible;
+}
+
+/**
+ * What the empty Inbox says. Nothing dismissed: the all-clear list. Something
+ * current is hidden by a dismissal: say so, with how many, rather than claim
+ * everything is fine.
+ */
+export function inboxEmptyDescription(t: Dictionary["inbox"], hiddenCount: number): string {
+  return hiddenCount > 0 ? t.emptyDescriptionDismissed(hiddenCount) : t.emptyDescription;
 }

@@ -9548,7 +9548,7 @@ async function main() {
       itemsCompleted: 0,
     };
     const notPosting = insights.detectNotPosting({ ...emptyContext, recurringPosting: posting });
-    eq("one insight per skipped or failed item, keyed by the item's id", notPosting.map((i) => i.id).join(","), "not_posting:item_gym,not_posting:item_fund");
+    eq("one insight per skipped or failed item, keyed by the item's id and why it is not posting (B32)", notPosting.map((i) => i.id).join(","), "not_posting:item_gym:missing_account,not_posting:item_fund:failed");
     eq("both are critical: money the plan counts on is not moving", notPosting.map((i) => i.severity).join(","), "critical,critical");
     eq("the title names the item", notPosting[0].title, "Gym is not posting");
     eq("the evidence carries the reason (the Dashboard alert's own words) and the still-due date as a date", JSON.stringify(notPosting[0].evidence.slice(0, 2)), JSON.stringify([{ kind: "text", label: "Why", value: "no account set" }, { kind: "date", label: "Still due", date: "2026-09-05" }]));
@@ -9590,8 +9590,9 @@ async function main() {
         { itemId: "plan_phone", name: "Phone", verdict: fineVerdict },
       ],
     });
-    eq("only the plan that no longer fits becomes an insight, keyed by the item", afford.map((i) => i.id).join(","), "afford_viability:plan_laptop");
-    eq("critical, titled after the plan, linking to the From Afford section", `${afford[0].severity}|${afford[0].title}|${afford[0].actionHref}`, "critical|Laptop from Afford no longer fits|/recurring#from-afford");
+    eq("only the plan that no longer fits becomes an insight", afford.length, 1);
+    eq("only the plan that no longer fits is keyed by the item and the failing period (B32)", afford[0].id, "afford_viability:plan_laptop:2026-10-A");
+    eq("advisory (a projection of a future period, as the Dashboard and Recurring copy call it), titled after the plan, linking to the From Afford section (B47b)", `${afford[0].severity}|${afford[0].title}|${afford[0].actionHref}`, "advisory|Laptop from Afford no longer fits|/recurring#from-afford");
     eq("the evidence leads with the badge's own shortfall and period", JSON.stringify(afford[0].evidence.slice(0, 2)), JSON.stringify([{ kind: "money", label: "Short by", amount: 450, currency: "USD" }, { kind: "text", label: "In", value: "Oct 1-15" }]));
     eq("... then the installment and the room it leaves, and which check failed", afford[0].evidence.slice(2).map((e) => (e.kind === "money" ? `${e.label}=${e.amount}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Installment due there=500;Room left after it=-450;Check that fails=Checking would end the period below its buffer");
 
@@ -9613,7 +9614,7 @@ async function main() {
       goalId: "goal_1", name: "Emergency Fund", targetDate: civilDate(2027, 3, 31), period: sepB, roadmapAmount: 307.69, planned: { plannedAmount: 100, recommendedAmount: 100 }, ...over,
     });
     const behind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({})] });
-    eq("a dated goal planned under its roadmap is an advisory insight keyed by the goal", `${behind[0].id}|${behind[0].severity}|${behind[0].title}|${behind[0].actionHref}`, "goal_behind:goal_1|advisory|Emergency Fund is behind its roadmap|/goals/goal_1");
+    eq("a dated goal planned under its roadmap is an advisory insight keyed by the goal", `${behind[0].id}|${behind[0].severity}|${behind[0].title}|${behind[0].actionHref}`, "goal_behind:goal_1:2026-09-B|advisory|Emergency Fund is behind its roadmap|/goals/goal_1");
     eq("behind by exactly the page's figure, beside the roadmap, the plan, the period and the target date", behind[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Behind by=207.69;Roadmap this period=307.69;Planned this period=100;Period=Sep 16-30;Target date=2027-03-31;Room couldn't cover=207.69");
     eq("the room shortfall is left out when the accounts could have covered the pace", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: { plannedAmount: 100, recommendedAmount: 400 } })] })[0].evidence.length, 5);
     eq("a plan on the roadmap (or ahead) is nothing to notice", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: { plannedAmount: 307.69, recommendedAmount: 307.69 } }), goalStatus({ goalId: "g2", planned: { plannedAmount: 400, recommendedAmount: 400 } })] }).length, 0);
@@ -9644,11 +9645,11 @@ async function main() {
     eq("... as is one with no projected period at all (every period to its target already confirmed)", forecastLib.summarizeGoalForecast(forecast({ periods: [] })).status, "on_track");
     eq("a shortfall within half a cent is covered - the same tolerance as the goal page", forecastLib.summarizeGoalForecast(forecast({ periods: [forecastPeriod("2026-10-A", { recommended: 307.686, shortfall: 0.004 })] })).status, "on_track");
     const atRisk = insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast()] });
-    eq("a goal short in a projected period is an advisory insight keyed by the goal, linking to it", `${atRisk[0].id}|${atRisk[0].severity}|${atRisk[0].title}|${atRisk[0].actionHref}|${atRisk[0].dismissible}`, "goal_forecast_risk:goal_1|advisory|Emergency Fund is at risk before its target date|/goals/goal_1|true");
+    eq("a goal short in a projected period is an advisory insight keyed by the goal, linking to it", `${atRisk[0].id}|${atRisk[0].severity}|${atRisk[0].title}|${atRisk[0].actionHref}|${atRisk[0].dismissible}`, "goal_forecast_risk:goal_1:2026-11-A|advisory|Emergency Fund is at risk before its target date|/goals/goal_1|true");
     eq("the evidence leads with the shortfall and the first short period, then the pace, what the room could give, the account with room and the target date", atRisk[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount} ${e.currency}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Short by=207.69 USD;In=Nov 1-15;Roadmap pace=307.69 USD;Room could give=100 USD;Room on Checking=100 USD;Target date=2027-03-31");
     eq("when no account has any room in that period, the evidence says so instead of listing accounts", insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast({ periods: [forecastPeriod("2026-11-B", { recommended: 0, shortfall: 307.69, draws: [] })] })] })[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Short by=307.69;In=Nov 16-30;Roadmap pace=307.69;Room could give=0;Accounts with room=none;Target date=2027-03-31");
     eq("an account the earlier goals used up (room 0) is not listed as having room", insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast({ periods: [forecastPeriod("2026-11-A", { recommended: 50, shortfall: 257.69, draws: [roomDraw(0, 0), { ...roomDraw(50, 50), accountId: "acc2", name: "Savings" }] })] })] })[0].evidence.filter((e) => e.label.startsWith("Room on")).map((e) => e.label).join(","), "Room on Savings");
-    eq("a goal with room the whole way is nothing to notice, and one insight per goal at most", insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast({ periods: [forecastPeriod("2026-10-A")] }), forecast({ goalId: "goal_2" }), forecast({ goalId: "goal_3", periods: [] })] }).map((i) => i.id).join(","), "goal_forecast_risk:goal_2");
+    eq("a goal with room the whole way is nothing to notice, and one insight per goal at most", insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast({ periods: [forecastPeriod("2026-10-A")] }), forecast({ goalId: "goal_2" }), forecast({ goalId: "goal_3", periods: [] })] }).map((i) => i.id).join(","), "goal_forecast_risk:goal_2:2026-11-A");
 
     console.log("-- the one central function: every detector, critical first --");
     const all = insights.detectInsights({
@@ -9660,11 +9661,62 @@ async function main() {
       goalForecasts: [forecast()],
     });
     eq("all five sources appear", [...new Set(all.map((i) => i.source))].sort().join(","), "afford_viability,goal_behind,goal_forecast_risk,not_posting,recurring_suggestion");
-    eq("critical insights lead, then advisory; registry order and each detector's own order within", all.map((i) => i.id).join(","), "not_posting:item_gym,not_posting:item_fund,afford_viability:plan_laptop,recurring_suggestion:acc_1:NETFLIX COM,goal_behind:goal_1,goal_forecast_risk:goal_1");
+    eq("critical insights lead, then advisory; registry order and each detector's own order within", all.map((i) => i.id).join(","), "not_posting:item_gym:missing_account,not_posting:item_fund:failed,afford_viability:plan_laptop:2026-10-A,recurring_suggestion:acc_1:NETFLIX COM,goal_behind:goal_1:2026-09-B,goal_forecast_risk:goal_1:2026-11-A");
+    eq("only the two not-posting insights are critical now; Afford's is advisory and leaves the Needs attention group (B47b)", all.filter((i) => i.severity === "critical").map((i) => i.source).join(","), "not_posting,not_posting");
     eq("every id is unique across sources", new Set(all.map((i) => i.id)).size, all.length);
-    const kept = insights.withoutDismissed(all, [{ source: "not_posting", key: "item_gym" }, { source: "goal_behind", key: "goal_1" }]);
-    eq("a dismissal removes exactly the insight with that source and key - the same goal's forecast insight, under its own source, stays", kept.map((i) => i.id).join(","), "not_posting:item_fund,afford_viability:plan_laptop,recurring_suggestion:acc_1:NETFLIX COM,goal_forecast_risk:goal_1");
-    eq("a dismissal for a key under another source does not match", insights.withoutDismissed(all, [{ source: "afford_viability", key: "item_gym" }]).length, all.length);
+    const kept = insights.withoutDismissed(all, [{ source: "not_posting", key: "item_gym:missing_account" }, { source: "goal_behind", key: "goal_1:2026-09-B" }]);
+    eq("a dismissal removes exactly the insight with that source and key - the same goal's forecast insight, under its own source, stays", kept.map((i) => i.id).join(","), "not_posting:item_fund:failed,afford_viability:plan_laptop:2026-10-A,recurring_suggestion:acc_1:NETFLIX COM,goal_forecast_risk:goal_1:2026-11-A");
+    eq("a dismissal for a key under another source does not match", insights.withoutDismissed(all, [{ source: "afford_viability", key: "item_gym:missing_account" }]).length, all.length);
+    console.log("-- dismissals hide only the evidence they were made on (B32) --");
+    const dismissedRefs = (list: import("../src/lib/insights").Insight[]) => list.map((i) => ({ source: i.source, key: i.key }));
+    // The finding's repro: Sep B 10 behind, dismissed; Dec A 400 behind.
+    const sepBehind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ roadmapAmount: 110, planned: { plannedAmount: 100, recommendedAmount: 110 } })] });
+    const decA = periodInfo({ year: 2026, month: 12, period: "A" });
+    const decBehind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ period: decA, roadmapAmount: 500, planned: { plannedAmount: 100, recommendedAmount: 500 } })] });
+    eq("Sep B, 10 behind: one insight", sepBehind.map((i) => i.evidence[0].kind === "money" ? i.evidence[0].amount : -1).join(","), "10");
+    eq("the same goal, same period, still behind: the dismissal still hides it", insights.withoutDismissed(sepBehind, dismissedRefs(sepBehind)).length, 0);
+    eq("REPRO: Dec A, 400 behind after the Sep B dismissal shows (it was 0 insights)", insights.withoutDismissed(decBehind, dismissedRefs(sepBehind)).map((i) => i.evidence[0].kind === "money" ? i.evidence[0].amount : -1).join(","), "400");
+    const gymSkip = insights.detectNotPosting({ ...emptyContext, recurringPosting: { ...posting, failed: [], skipped: [posting.skipped[0]] } });
+    const gymFailed = insights.detectNotPosting({ ...emptyContext, recurringPosting: { ...posting, skipped: [], failed: [{ id: "item_gym", name: "Gym", error: "boom" }] } });
+    const gymFailedOtherError = insights.detectNotPosting({ ...emptyContext, recurringPosting: { ...posting, skipped: [], failed: [{ id: "item_gym", name: "Gym", error: "a different message" }] } });
+    const gymArchived = insights.detectNotPosting({ ...emptyContext, recurringPosting: { ...posting, failed: [], skipped: [{ ...posting.skipped[0], reason: "account_archived" }] } });
+    eq("a not-posting skip dismissed, the same skip next request: still hidden", insights.withoutDismissed(gymSkip, dismissedRefs(gymSkip)).length, 0);
+    eq("... a later failure of the same item is not hidden by that skip's dismissal", insights.withoutDismissed(gymFailed, dismissedRefs(gymSkip)).length, 1);
+    eq("... nor a different skip reason", insights.withoutDismissed(gymArchived, dismissedRefs(gymSkip)).length, 1);
+    eq("... but a failure's changing error text does not revive a dismissed failure (the reason is 'failed', not the message)", insights.withoutDismissed(gymFailedOtherError, dismissedRefs(gymFailed)).length, 0);
+    const laptopLater = insights.detectAffordViability({
+      ...emptyContext,
+      affordRechecks: [{
+        itemId: "plan_laptop", name: "Laptop",
+        verdict: affordLib.evaluateAffordability({
+          installments: affordLib.buildInstallments([civilDate(2026, 11, 1)], 500),
+          currency: "USD",
+          projections: new Map([projectionFor("2026-11-A", { income: 1000, committed: 850, buffer: 100 }, { income: 5000, committed: 1000, buffer: 500 })]),
+          rates,
+        }),
+      }],
+    });
+    eq("an Afford shortfall dismissed, the same plan short in the same period: still hidden", insights.withoutDismissed(afford, dismissedRefs(afford)).length, 0);
+    eq("... the same plan short in a different period is not hidden by it", insights.withoutDismissed(laptopLater, dismissedRefs(afford)).map((i) => i.key).join(","), "plan_laptop:2026-11-A");
+    const riskNov = insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast()] });
+    const riskLater = insights.detectGoalForecastRisk({ ...emptyContext, goalForecasts: [forecast({ periods: [forecastPeriod("2027-01-A", { recommended: 0, shortfall: 307.69, draws: [] })] })] });
+    eq("a goal at risk dismissed, the same period: still hidden; a different failing period: shown", `${insights.withoutDismissed(riskNov, dismissedRefs(riskNov)).length}:${insights.withoutDismissed(riskLater, dismissedRefs(riskNov)).length}`, "0:1");
+    eq("suggestions keep their permanent identity (account + merchant)", suggested[0].key, "acc_1:NETFLIX COM");
+    const partition = (insights as unknown as Record<string, unknown>).partitionDismissed as undefined | ((list: import("../src/lib/insights").Insight[], refs: import("../src/lib/insights").InsightRef[]) => { visible: import("../src/lib/insights").Insight[]; hidden: import("../src/lib/insights").Insight[] });
+    eq("the engine can say how many current insights the dismissals hide", typeof partition === "function" ? `${partition(all, [{ source: "not_posting", key: "item_gym:missing_account" }, { source: "posting_run_failed", key: "run" }]).visible.length}:${partition(all, [{ source: "not_posting", key: "item_gym:missing_account" }]).hidden.length}` : "missing", `${all.length - 1}:1`);
+    eq("a dismissal that matches nothing current hides nothing (and is not counted)", typeof partition === "function" ? partition(all, [{ source: "goal_behind", key: "goal_1:2026-08-B" }]).hidden.length : -1, 0);
+
+    console.log("-- the badge says what it counts, and the empty Inbox says why it is empty (B47) --");
+    const esDict = getDictionary("es");
+    eq("badge label, English: it counts things to review, not things that need attention", `${en.nav.badgeLabel(1)}|${en.nav.badgeLabel(3)}`, "1 to review|3 to review");
+    eq("badge label, Spanish", `${esDict.nav.badgeLabel(1)}|${esDict.nav.badgeLabel(3)}`, "1 por revisar|3 por revisar");
+    const emptyDescription = (insights as unknown as Record<string, unknown>).inboxEmptyDescription as undefined | ((t: typeof en.inbox, hidden: number) => string);
+    eq("nothing to show, nothing dismissed: the existing all-clear wording", typeof emptyDescription === "function" ? emptyDescription(en.inbox, 0) : "missing", en.inbox.emptyDescription);
+    eq("nothing to show because 2 were dismissed: says so, with the count", typeof emptyDescription === "function" ? emptyDescription(en.inbox, 2) : "missing", "Nothing else is waiting. 2 items you dismissed are hidden here; each stays where it came from until it is resolved.");
+    eq("... singular", typeof emptyDescription === "function" ? emptyDescription(en.inbox, 1) : "missing", "Nothing else is waiting. 1 item you dismissed is hidden here; it stays where it came from until it is resolved.");
+    eq("... Spanish, with the count", typeof emptyDescription === "function" ? emptyDescription(esDict.inbox, 2) : "missing", "No hay nada más pendiente. 2 elementos que descartaste están ocultos aquí; cada uno sigue donde se originó hasta que se resuelva.");
+    eq("a dismissal that has been resolved elsewhere is not a hidden item: the all-clear wording stays true", typeof emptyDescription === "function" && typeof partition === "function" ? emptyDescription(en.inbox, partition(all, [{ source: "goal_behind", key: "goal_1:2026-08-B" }]).hidden.length) : "missing", en.inbox.emptyDescription);
+
     const es = insights.detectInsights({ ...emptyContext, dictionary: getDictionary("es"), recurringPosting: posting, goalRoadmaps: [goalStatus({})], goalForecasts: [forecast()] });
     eq("titles and labels follow the dictionary", `${es[0].title}|${es[2].evidence[0].label}|${es[3].title}|${es[3].evidence[0].label}`, "Gym no se está registrando|Por detrás|Emergency Fund corre riesgo antes de su fecha objetivo|Faltan");
   }
@@ -9672,6 +9724,7 @@ async function main() {
   console.log("\n== insight engine (database) ==");
   {
     const { collectInsights, dismissInsight, listInsightDismissals, loadInsightContext } = await import("../src/lib/data/insights");
+    const collectInsightState = ((await import("../src/lib/data/insights")) as unknown as Record<string, unknown>).collectInsightState as undefined | ((context: unknown) => Promise<{ insights: import("../src/lib/insights").Insight[]; dismissedCount: number }>);
     const { getGoalRoadmapStatuses, getGoalRoadmapAmount: roadmapForInsights, planPeriodRef: planRefForInsights } = await import("../src/lib/data/payday");
     const { postDueRecurringItems: postForInsights } = await import("../src/lib/recurring-posting");
     const tracking = await import("../src/lib/afford-tracking");
@@ -9741,11 +9794,11 @@ async function main() {
     const laptopInsight = mine.find((i) => i.source === "afford_viability");
     const netflixInsight = mine.find((i) => i.source === "recurring_suggestion");
     const goalInsight = mine.find((i) => i.source === "goal_behind");
-    eq("not posting: keyed by the item, with the reason and the still-due date", `${gymInsight?.key === gymItem.id}:${gymInsight?.evidence.map((e) => (e.kind === "text" ? e.value : e.kind === "date" ? e.date : e.amount)).slice(0, 2).join("|")}`, "true:no account set|2026-09-05");
-    eq("afford: keyed by the plan, short in Oct 1-15 on the account check", `${laptopInsight?.key === laptopItem.id}:${laptopInsight?.evidence[1].kind === "text" ? laptopInsight.evidence[1].value : "?"}:${laptopInsight?.evidence[4].kind === "text" ? laptopInsight.evidence[4].value : "?"}`, "true:Oct 1-15:Verify Insight Account would end the period below its buffer");
+    eq("not posting: keyed by the item and the skip reason, with the reason and the still-due date", `${gymInsight?.key === `${gymItem.id}:missing_account`}:${gymInsight?.evidence.map((e) => (e.kind === "text" ? e.value : e.kind === "date" ? e.date : e.amount)).slice(0, 2).join("|")}`, "true:no account set|2026-09-05");
+    eq("afford: keyed by the plan and the failing period, short in Oct 1-15 on the account check", `${laptopInsight?.key === `${laptopItem.id}:2026-10-A`}:${laptopInsight?.evidence[1].kind === "text" ? laptopInsight.evidence[1].value : "?"}:${laptopInsight?.evidence[4].kind === "text" ? laptopInsight.evidence[4].value : "?"}`, "true:Oct 1-15:Verify Insight Account would end the period below its buffer");
     eq("... by the amount the tracker's own badge reports", laptopInsight?.evidence[0].kind === "money" ? laptopInsight.evidence[0].amount : -1, (() => { const t = loaded.affordRechecks.find((r) => r.itemId === laptopItem.id)!; const s = tracking.summarizeAffordViability(t.verdict); return s.status === "short" ? s.shortfall : -1; })());
     eq("looks recurring: keyed by account + merchant key, three charges", `${netflixInsight?.key}:${netflixInsight?.evidence[2].kind === "text" ? netflixInsight.evidence[2].value : "?"}`, `${insightAccount.id}:VERIFY INSIGHT NETFLIX COM:3, Jul 12, 2026 to Sep 12, 2026`);
-    eq("goal: keyed by the goal, behind by the page's own figure", `${goalInsight?.key === insightGoal.id}:${goalInsight?.evidence[0].kind === "money" ? goalInsight.evidence[0].amount : -1}`, "true:207.69");
+    eq("goal: keyed by the goal and the plan period, behind by the page's own figure", `${goalInsight?.key === `${insightGoal.id}:2026-09-B`}:${goalInsight?.evidence[0].kind === "money" ? goalInsight.evidence[0].amount : -1}`, "true:207.69");
     eq("every insight links somewhere", collected.every((i) => i.actionHref.startsWith("/")), true);
 
     console.log("-- dismissing: permanent, idempotent, one row per insight --");
@@ -9759,17 +9812,24 @@ async function main() {
     eq("it stays gone as the condition persists", (await collectInsights(insightContext)).some((i) => i.id === netflixInsight!.id), false);
     await dismissInsight({ source: "recurring_suggestion", key: netflixInsight!.key });
     eq("dismissing twice keeps one row", (await listInsightDismissals()).length, dismissalsBefore + 1);
-    await dismissInsight({ source: "afford_viability", key: gymItem.id });
+    await prisma.insightDismissal.createMany({ data: [{ source: "goal_behind", key: insightGoal.id }, { source: "not_posting", key: gymItem.id }, { source: "afford_viability", key: laptopItem.id }] });
+    eq("rows written under the old keys (the bare goal or item id) match none of the new ones: those insights show again once (B32)", (await collectInsights(insightContext)).filter((i) => i.title.startsWith("Verify Insight")).map((i) => i.source).sort().join(","), "afford_viability,goal_behind,goal_forecast_risk,not_posting");
+    await prisma.insightDismissal.deleteMany({ where: { key: { in: [insightGoal.id, gymItem.id, laptopItem.id] } } });
+    await dismissInsight({ source: "afford_viability", key: gymInsight!.key });
     eq("a dismissal is keyed by source too: the gym item's key under another source leaves its not-posting insight in place", (await collectInsights(insightContext)).some((i) => i.id === gymInsight!.id), true);
-    await dismissInsight({ source: "goal_behind", key: insightGoal.id });
-    await dismissInsight({ source: "not_posting", key: gymItem.id });
-    await dismissInsight({ source: "afford_viability", key: laptopItem.id });
-    eq("dismissing the goal's behind-roadmap insight leaves its forecast insight - a different source under the same key", (await collectInsights(insightContext)).filter((i) => i.key === insightGoal.id).map((i) => i.source).join(","), "goal_forecast_risk");
-    await dismissInsight({ source: "goal_forecast_risk", key: insightGoal.id });
+    await dismissInsight({ source: "goal_behind", key: goalInsight!.key });
+    await dismissInsight({ source: "not_posting", key: gymInsight!.key });
+    await dismissInsight({ source: "afford_viability", key: laptopInsight!.key });
+    const forecastInsightForGoal = mine.find((i) => i.source === "goal_forecast_risk");
+    eq("dismissing the goal's behind-roadmap insight leaves its forecast insight - a different source for the same goal", (await collectInsights(insightContext)).filter((i) => i.key.startsWith(`${insightGoal.id}:`)).map((i) => i.source).join(","), "goal_forecast_risk");
+    await dismissInsight({ source: "goal_forecast_risk", key: forecastInsightForGoal!.key });
     const afterAll = await collectInsights(insightContext);
     eq("with all five dismissed none of the fixtures remain, whatever else is in the database", afterAll.some((i) => i.title.startsWith("Verify Insight")), false);
+    const stateAll = typeof collectInsightState === "function" ? await collectInsightState(insightContext) : undefined;
+    eq("the state the Inbox reads counts the five current dismissed insights it hides", stateAll?.dismissedCount, 5);
+    eq("... and lists the same visible insights as collectInsights", stateAll?.insights.map((i) => i.id).join(","), afterAll.map((i) => i.id).join(","));
 
-    await prisma.insightDismissal.deleteMany({ where: { OR: [{ key: netflixInsight!.key }, { key: insightGoal.id }, { key: gymItem.id }, { key: laptopItem.id }] } });
+    await prisma.insightDismissal.deleteMany({ where: { OR: [{ key: netflixInsight!.key }, { key: { startsWith: insightGoal.id } }, { key: { startsWith: gymItem.id } }, { key: { startsWith: laptopItem.id } }] } });
     eq("the fixture dismissals are removed", (await listInsightDismissals()).length, dismissalsBefore);
     await prisma.paydayCheckin.delete({ where: { id: insightCheckin.id } });
     await prisma.goal.delete({ where: { id: insightGoal.id } });
@@ -9853,19 +9913,19 @@ async function main() {
     const roadmapStatus = (await statusesForForecast(forecastContext)).find((s) => s.goalId === forecastGoal.id);
     eq("the goal page's status: 310 planned against a 307.69 roadmap", `${roadmapStatus?.roadmapAmount}:${roadmapStatus?.planned?.plannedAmount}`, "307.69:310");
     let current = await collectForForecast(forecastContext);
-    const riskInsight = current.find((i) => i.source === "goal_forecast_risk" && i.key === forecastGoal.id);
+    const riskInsight = current.find((i) => i.source === "goal_forecast_risk" && i.key.startsWith(`${forecastGoal.id}:`));
     eq("the forecast detector fires for the goal: advisory, titled after it, linking to it", `${riskInsight?.severity}|${riskInsight?.title}|${riskInsight?.actionHref}`, `advisory|Verify Forecast Goal is at risk before its target date|/goals/${forecastGoal.id}`);
     eq("naming Dec 1-15 and the 107.69, beside the pace, the room, the account with room and the target date", evidenceOf(riskInsight), "Short by=107.69 USD;In=Dec 1-15;Roadmap pace=307.69 USD;Room could give=200 USD;Room on Verify Forecast Account=200 USD;Target date=2027-03-31");
-    eq("while the behind-roadmap detector does not fire for it: the confirmed plan is on the roadmap", current.some((i) => i.source === "goal_behind" && i.key === forecastGoal.id), false);
+    eq("while the behind-roadmap detector does not fire for it: the confirmed plan is on the roadmap", current.some((i) => i.source === "goal_behind" && i.key.startsWith(`${forecastGoal.id}:`)), false);
     eq("it is in the one list the Inbox shows and the nav badge counts, among the advisory insights after every critical one", current.findIndex((i) => i.id === riskInsight?.id) >= current.filter((i) => i.severity === "critical").length, true);
 
     console.log("-- dismissing it is like dismissing any other insight --");
     const forecastDismissalsBefore = (await listForForecast()).length;
-    await dismissForForecast({ source: "goal_forecast_risk", key: forecastGoal.id });
+    await dismissForForecast({ source: "goal_forecast_risk", key: riskInsight!.key });
     const afterDismiss = await collectForForecast(forecastContext);
     eq("gone from the list, and only it", `${afterDismiss.some((i) => i.id === riskInsight?.id)}:${afterDismiss.length}`, `false:${current.length - 1}`);
     eq("the forecast itself is untouched: the signal is not changed, only the Inbox", summarizeGoalForecast((await forecastGoalFunding(forecastContext)).find((f) => f.goalId === forecastGoal.id)!).status, "short");
-    await prisma.insightDismissal.deleteMany({ where: { source: "goal_forecast_risk", key: forecastGoal.id } });
+    await prisma.insightDismissal.deleteMany({ where: { source: "goal_forecast_risk", key: { startsWith: forecastGoal.id } } });
     eq("the fixture dismissal is removed", (await listForForecast()).length, forecastDismissalsBefore);
 
     console.log("-- the reverse: behind the roadmap now, room the whole way ahead --");
@@ -9875,9 +9935,9 @@ async function main() {
     eq("with the premium gone every projected period covers the pace", roomy?.periods.map((p) => p.shortfall).join(","), Array(12).fill("0").join(","));
     eq("so the forecast is on track", summarizeGoalForecast(roomy!).status, "on_track");
     current = await collectForForecast(forecastContext);
-    const behindInsight = current.find((i) => i.source === "goal_behind" && i.key === forecastGoal.id);
+    const behindInsight = current.find((i) => i.source === "goal_behind" && i.key.startsWith(`${forecastGoal.id}:`));
     eq("the behind-roadmap detector fires: 100 planned against 307.69", behindInsight?.evidence[0].kind === "money" ? behindInsight.evidence[0].amount : -1, 207.69);
-    eq("and the forecast detector does not", current.some((i) => i.source === "goal_forecast_risk" && i.key === forecastGoal.id), false);
+    eq("and the forecast detector does not", current.some((i) => i.source === "goal_forecast_risk" && i.key.startsWith(`${forecastGoal.id}:`)), false);
 
     console.log("-- an undated goal is never walked --");
     await prisma.goal.update({ where: { id: forecastGoal.id }, data: { targetDate: null } });
@@ -9885,7 +9945,7 @@ async function main() {
     const octProjection = (await affordForForecast.projectPeriods([{ year: 2026, month: 10, period: "A" }], { id: forecastAccount.id, name: forecastAccount.name, currency: "USD" }, activeForForecast, forecastContext)).get("2026-10-A")!;
     eq("nor a goal plan in the projection: Afford estimates nothing for an undated goal", octProjection.goalPlans.some((g) => g.goalId === forecastGoal.id), false);
     current = await collectForForecast(forecastContext);
-    eq("neither goal detector fires for it", current.filter((i) => i.key === forecastGoal.id).map((i) => i.source).join(","), "");
+    eq("neither goal detector fires for it", current.filter((i) => i.key.startsWith(`${forecastGoal.id}:`)).map((i) => i.source).join(","), "");
 
     await prisma.paydayCheckin.delete({ where: { id: forecastCheckin.id } });
     await prisma.goal.delete({ where: { id: forecastGoal.id } });

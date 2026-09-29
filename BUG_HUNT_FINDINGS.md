@@ -391,6 +391,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** the Inbox and the nav badge stay silent about new, larger problems. The goal page and dashboard alerts still show them.
 - **Severity / confidence:** Low / High. This is documented as intended ("for good"), but it contradicts the insight's per-period evidence. Evidence: pure run.
 - **Fix:** include the period (and for Afford the failing period, for not_posting the reason) in the key, or expire a dismissal when the evidence changes materially.
+- **Status:** fixed. A dismissal's key now names the evidence it was made on (the period for a goal behind its roadmap, a goal at risk and an Afford plan's failing period; the skip reason, or `failed`, for a not-posting item), so it hides only that evidence and a later or different problem shows.
 
 ### B33. The Reports "average per period" includes the partial current period
 - **What:** `getSpendingTrend` walks `periodSeries(currentPeriod, 6)`, and the page divides the total by 6.
@@ -530,6 +531,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Repro (code path):** as quoted.
 - **Severity / confidence:** Low / High. Evidence: code path.
 - **Fix:** count only critical insights in the badge (or say "N to review"), align the Afford severity, and word the empty state conditionally.
+- **Status:** fixed. The badge says "N to review" (English and Spanish), the Afford "no longer fits" insight is advisory and sits in the advisory group, and the empty Inbox says how many dismissed items are hidden instead of claiming everything is in order; the goal-planned-at-0 case (B29) is untouched.
 
 ### B48. Other copy that claims more than the data supports
 - **What:**
