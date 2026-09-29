@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
 import type { Option } from "@/components/form/selects";
-import { ImportReview } from "@/components/import/import-review";
+import { defaultDuplicateDecision, ImportReview } from "@/components/import/import-review";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -135,12 +135,17 @@ export function CsvImporter({
   const [groupDecisions, setGroupDecisions] = useState<Record<string, string>>({});
   const [unknownRowDecisions, setUnknownRowDecisions] = useState<Record<number, string>>({});
   const [groupTypeDecisions, setGroupTypeDecisions] = useState<Record<string, string>>({});
-  // Rows already in the ledger as CSV imports (by validRows index), found by
-  // the server before anything is written, and the per-row choice for each:
-  // absent means skip, "import" means the user chose to import it anyway.
-  // Both are keyed by the inputs they answer for (see duplicateKey below), so
-  // a stale answer or a stale decision for a different set of rows is simply
-  // never read - no reset step, no window where old matches show for new rows.
+  // Rows already in the ledger (by validRows index), found by the server
+  // before anything is written - as CSV imports, or as a row Cadence wrote
+  // itself (a posted recurring charge, a check-in's paycheck) - and the
+  // per-row choice for each: absent means the hit's default (skip, except a
+  // possible match in another currency, which imports), "import" means the
+  // user chose to import it ("It's a different charge"), "skip" that it is
+  // the one already there ("It's the posted charge"). The answer is keyed by
+  // the inputs it answers for (see duplicateKey below), the choices by the
+  // rows alone (duplicateRowsKey), so a category decision elsewhere in the
+  // review re-checks the look-alike guard without undoing a choice; a stale
+  // answer or a choice for a different set of rows is simply never read.
   const [duplicateResult, setDuplicateResult] = useState<{
     key: string;
     hits: Record<number, CsvDuplicateHit>;
@@ -326,55 +331,10 @@ export function CsvImporter({
       groupTypeDecisions[group.id] === undefined,
   );
 
-  // Ask the server which rows are already imported whenever the rows, the
-  // account or the currency change. Debounced, and an answer for a request
-  // that is no longer the latest is dropped.
-  const duplicateKey = JSON.stringify({
-    accountId,
-    currency,
-    rows: validRows.map((row) => [toISODate(row.date as Date), row.amount, row.note || null]),
-  });
-  const hasRowsToCheck = Boolean(accountId) && validRows.length > 0;
-  const duplicateRequest = useRef(0);
-  useEffect(() => {
-    if (!hasRowsToCheck) return;
-    const request = ++duplicateRequest.current;
-    const timer = setTimeout(async () => {
-      const payload = JSON.parse(duplicateKey) as {
-        accountId: string;
-        currency: string;
-        rows: [string, number, string | null][];
-      };
-      const result = await detectCsvDuplicatesAction({
-        accountId: payload.accountId,
-        currency: payload.currency,
-        rows: payload.rows.map(([date, amount, note]) => ({ date, amount, note })),
-      });
-      if (request !== duplicateRequest.current) return;
-      if (!result.ok) {
-        toast.error(result.error);
-        setDuplicateResult({ key: duplicateKey, hits: {} });
-        return;
-      }
-      setDuplicateResult({
-        key: duplicateKey,
-        hits: Object.fromEntries(result.duplicates.map((hit) => [hit.index, hit])),
-      });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [duplicateKey, hasRowsToCheck]);
-
-  const checkingDuplicates = hasRowsToCheck && duplicateResult?.key !== duplicateKey;
-  const duplicateHits = duplicateResult?.key === duplicateKey ? duplicateResult.hits : {};
-  const duplicateDecisions = duplicateChoices?.key === duplicateKey ? duplicateChoices.decisions : {};
-  const duplicateRowIndexes = Object.keys(duplicateHits).map(Number).sort((a, b) => a - b);
-  const isSkippedDuplicate = (index: number) =>
-    duplicateHits[index] !== undefined && duplicateDecisions[index] !== "import";
-  const importIndexes = validRows.map((_, index) => index).filter((index) => !isSkippedDuplicate(index));
-  const skippedDuplicateCount = validRows.length - importIndexes.length;
-
-  // Every row that will be imported, resolved as the server will see it.
-  const resolvedRows = importIndexes.map((index) => {
+  // Each row as the server will see it, before the duplicate answer: its
+  // type after a group's type decision, and its category after the review's
+  // decisions, the row's own column and the file-wide pick.
+  const resolveRow = (index: number) => {
     const row = validRows[index];
     const type = rowTypeOverrides.get(index) ?? row.type;
     return {
@@ -399,7 +359,6 @@ export function CsvImporter({
               : categoryColumn !== null
                 ? EXPLICIT_NO_CATEGORY
                 : null)),
-      importAnyway: duplicateHits[index] !== undefined,
       // The file's own flags. A one-off the file already marks needs no
       // review-step question; a shared row is measured at its share below.
       columnExtraordinary: row.columnExtraordinary,
@@ -407,7 +366,86 @@ export function CsvImporter({
       yourShare: type === "EXPENSE" ? row.columnYourShare : null,
       reimburses: type === "INCOME" ? row.columnReimburses : null,
     };
+  };
+
+  // Ask the server which rows are already in the ledger whenever the rows,
+  // their types or categories, the account or the currency change.
+  // Debounced, and an answer for a request that is no longer the latest is
+  // dropped.
+  const checkedRows = validRows.map((_, index) => resolveRow(index));
+  const duplicateRowsKey = JSON.stringify({
+    accountId,
+    currency,
+    rows: checkedRows.map((row) => [row.date, row.amount, row.note, row.type]),
   });
+  const duplicateKey = JSON.stringify({
+    accountId,
+    currency,
+    rows: checkedRows.map((row) => [row.date, row.amount, row.note, row.type, row.categoryId]),
+  });
+  const hasRowsToCheck = Boolean(accountId) && validRows.length > 0;
+  const duplicateRequest = useRef(0);
+  useEffect(() => {
+    if (!hasRowsToCheck) return;
+    const request = ++duplicateRequest.current;
+    const timer = setTimeout(async () => {
+      const payload = JSON.parse(duplicateKey) as {
+        accountId: string;
+        currency: string;
+        rows: [string, number, string | null, "EXPENSE" | "INCOME" | "EXTERNAL_TRANSFER", string | null][];
+      };
+      const result = await detectCsvDuplicatesAction({
+        accountId: payload.accountId,
+        currency: payload.currency,
+        rows: payload.rows.map(([date, amount, note, type, rowCategoryId]) => ({
+          date,
+          amount,
+          note,
+          type,
+          categoryId: rowCategoryId,
+        })),
+      });
+      if (request !== duplicateRequest.current) return;
+      if (!result.ok) {
+        toast.error(result.error);
+        setDuplicateResult({ key: duplicateKey, hits: {} });
+        return;
+      }
+      setDuplicateResult({
+        key: duplicateKey,
+        hits: Object.fromEntries(result.duplicates.map((hit) => [hit.index, hit])),
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [duplicateKey, hasRowsToCheck]);
+
+  const checkingDuplicates = hasRowsToCheck && duplicateResult?.key !== duplicateKey;
+  const duplicateHits = duplicateResult?.key === duplicateKey ? duplicateResult.hits : {};
+  const duplicateDecisions = duplicateChoices?.key === duplicateRowsKey ? duplicateChoices.decisions : {};
+  const duplicateRowIndexes = Object.keys(duplicateHits).map(Number).sort((a, b) => a - b);
+  const isSkippedDuplicate = (index: number) => {
+    const hit = duplicateHits[index];
+    return hit !== undefined && (duplicateDecisions[index] ?? defaultDuplicateDecision(hit)) === "skip";
+  };
+  const importIndexes = validRows.map((_, index) => index).filter((index) => !isSkippedDuplicate(index));
+  const skippedDuplicateCount = validRows.length - importIndexes.length;
+
+  // Every row that will be imported, resolved as the server will see it.
+  const resolvedRows = importIndexes.map((index) => ({
+    ...checkedRows[index],
+    importAnyway: duplicateHits[index] !== undefined,
+  }));
+  // Every skipped row that matched a posted charge or a recorded paycheck:
+  // sent as "the posted charge", so the server writes nothing for it and puts
+  // its amount and currency on the posted row where they differ.
+  const postedChargeRows = validRows
+    .map((_, index) => index)
+    .filter((index) => isSkippedDuplicate(index) && duplicateHits[index]?.kind === "posted")
+    .map((index) => ({ ...checkedRows[index], importAnyway: false, postedCharge: true }));
+  const postedRewrites = postedChargeRows.filter((row) => {
+    const hit = duplicateHits[row.index];
+    return hit?.kind === "posted" && hit.match.rewrite !== null;
+  }).length;
 
   // Ask the server which spending rows are unusually large for the category
   // they will land in - after the duplicate answer, since a skipped duplicate
@@ -465,10 +503,16 @@ export function CsvImporter({
   const payload = JSON.stringify({
     accountId,
     currency,
-    rows: resolvedRows.map(({ index, columnExtraordinary, ...row }) => ({
-      ...row,
-      isExtraordinary: columnExtraordinary || isMarkedExtraordinary(index),
-    })),
+    rows: [
+      ...resolvedRows.map(({ index, columnExtraordinary, ...row }) => ({
+        ...row,
+        isExtraordinary: columnExtraordinary || isMarkedExtraordinary(index),
+      })),
+      ...postedChargeRows.map(({ index: _index, columnExtraordinary: _columnExtraordinary, ...row }) => ({
+        ...row,
+        isExtraordinary: false,
+      })),
+    ],
   });
 
   const columnOptions = Array.from({ length: columnCount }, (_, index) => ({
@@ -809,9 +853,9 @@ export function CsvImporter({
                 duplicateDecisions={duplicateDecisions}
                 onDecideDuplicateAction={(rowIndexes, decision) =>
                   setDuplicateChoices((previous) => {
-                    const next = { ...(previous?.key === duplicateKey ? previous.decisions : {}) };
+                    const next = { ...(previous?.key === duplicateRowsKey ? previous.decisions : {}) };
                     for (const index of rowIndexes) next[index] = decision;
-                    return { key: duplicateKey, decisions: next };
+                    return { key: duplicateRowsKey, decisions: next };
                   })
                 }
                 extraordinaryRowIndexes={extraordinaryRowIndexes}
@@ -834,7 +878,7 @@ export function CsvImporter({
                     unresolvedTransferGroups.length > 0 ||
                     checkingDuplicates ||
                     checkingExtraordinary ||
-                    importIndexes.length === 0
+                    (importIndexes.length === 0 && postedRewrites === 0)
                   }
                 >
                   {t.importCount(importIndexes.length)}

@@ -516,6 +516,41 @@ export const en = {
     duplicatesNeedReview: (n: number) =>
       `${n} row${n === 1 ? " matches" : "s match"} transactions already imported - review the possible duplicates first`,
     importCollision: "Some of these rows were imported a moment ago - check the ledger and try again",
+    // A row brought in that the ledger already holds as a row Cadence wrote
+    // itself: a posted recurring charge or a check-in's paycheck (see
+    // src/lib/data/posted-duplicates.ts).
+    postedDuplicatesDescription:
+      "Some rows match a charge Cadence already posted from a recurring item, or a paycheck a check-in recorded, on this account. An exact match is skipped as the posted charge unless you say it's a different one. A possible match, in another currency, imports unless you say it's the posted charge.",
+    postedMatchRecurring: (name: string, date: string, amount: string) => `Matches ${name}, posted ${date} for ${amount}`,
+    postedMatchPaycheck: (date: string, amount: string) => `Matches the paycheck recorded ${date} for ${amount}`,
+    postedMatchOthers: (list: string) => `Could also be: ${list}`,
+    postedMatchPossible: "Possible match",
+    postedMatchUpdates: (from: string, to: string) => `As the posted charge, it changes from ${from} to ${to}`,
+    postedMatchStaysAsIs: "As the posted charge, it stays as it is",
+    postedMatchBothAmounts: (recorded: string, deposit: string) =>
+      `Paycheck recorded: ${recorded}. This deposit: ${deposit}. The paycheck stays as recorded.`,
+    isPostedCharge: "It's the posted charge",
+    isRecordedPaycheck: "It's the paycheck already recorded",
+    isDifferentCharge: "It's a different charge",
+    appliedPostedCharge: "Kept as the posted charge",
+    appliedRecordedPaycheck: "Kept as the recorded paycheck",
+    postedChargesKept: (n: number, updated: number) =>
+      `${n} already in the ledger, not added again${updated ? ` (${updated} posted amount${updated === 1 ? "" : "s"} updated)` : ""}`,
+    postedMatchChanged: "The posted charges changed since this file was checked - review the possible duplicates again",
+    postedPromptTitle: "Is this the posted charge?",
+    paycheckPromptTitle: "Is this the paycheck already recorded?",
+    postedPromptDescription: (entered: string, posted: string) =>
+      `Your entry of ${entered} is saved. The posted charge is ${posted}. "It's the posted charge" removes the entry you just saved and keeps the posted one, so the money is counted once. Closing this keeps both.`,
+    paycheckPromptDescription: (entered: string, posted: string) =>
+      `Your entry of ${entered} is saved. The paycheck the check-in recorded is ${posted}. "It's the paycheck already recorded" removes the entry you just saved and keeps the paycheck as recorded. Closing this keeps both.`,
+    postedChargeKept: "Kept the posted charge - your entry wasn't added twice",
+    postedChargeKeptUpdated: (from: string, to: string) => `Kept the posted charge, now ${to} (was ${from})`,
+    paycheckKept: "Kept the paycheck already recorded - your entry wasn't added twice",
+    postedMatchGone: "That posted charge no longer matches this entry - nothing changed",
+    postedMatchNotApplicable: "Only an entry you added by hand, not yet paired with anything, can be taken as the posted charge",
+    postedEntryAlreadyGone: "That entry was already removed - nothing else changed",
+    postedEntryChanged: "That entry was changed after it was saved, so it was kept - remove it from the list if it is a duplicate",
+    postedMatchCheckFailed: "Couldn't check the posted charge just now - nothing changed, your entry is kept",
     // Extraordinary (one-off) expenses - see src/lib/extraordinary.ts.
     extraordinaryBadge: "One-off",
     markExtraordinary: "Mark as one-off",
@@ -1242,6 +1277,9 @@ export const en = {
     accountNoLongerExists: "That account no longer exists",
     transactionAlreadyExists: "This transaction already exists",
     nothingToReject: "Nothing to reject",
+    postedMatchNeedsChoice: "This matches a charge already in the ledger - say whether it's the posted charge or a different one",
+    keptAsPosted: "Kept the posted charge - the receipt wasn't added twice",
+    keptAsPostedUpdated: (from: string, to: string) => `Kept the posted charge, now ${to} (was ${from})`,
   },
   inbox: {
     title: "Inbox",

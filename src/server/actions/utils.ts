@@ -1,5 +1,7 @@
 import { revalidatePath } from "next/cache";
 
+import type { PostedMatch } from "@/lib/data/posted-duplicates";
+
 export type ActionState = {
   ok: boolean;
   error?: string;
@@ -26,6 +28,14 @@ export type ActionState = {
    */
   extraordinarySuggestion?: ExtraordinarySuggestion;
   /**
+   * Set by saveTransactionAction when the row it just created matches a row
+   * Cadence wrote itself - a posted recurring charge or a check-in's paycheck
+   * (see src/lib/data/posted-duplicates.ts) - so the form can ask whether it
+   * is the same money. The row is saved either way; only the user's answer
+   * removes it in favour of the posted one.
+   */
+  postedMatchSuggestion?: PostedMatchSuggestion;
+  /**
    * Set by importTransactionsAction: how many spending patterns look like
    * an untracked recurring bill once the new rows are in (see
    * src/lib/recurring-detection.ts), so the importer can point at the
@@ -44,6 +54,17 @@ export interface ExtraordinarySuggestion {
   medianCurrency: string;
 }
 
+export interface PostedMatchSuggestion {
+  /** The row this save created - the only one the answer may remove. */
+  transactionId: string;
+  /** That row as saved (entryDigest); an answer to an entry changed since is refused. */
+  savedDigest: string;
+  /** The entry as saved. */
+  amount: number;
+  currency: string;
+  match: PostedMatch;
+}
+
 export function fail(
   error: string,
   extra?: { categoryUsage?: NonNullable<ActionState>["categoryUsage"] },
@@ -56,6 +77,7 @@ export function done(
   extra?: {
     achievedGoalId?: string;
     extraordinarySuggestion?: ExtraordinarySuggestion;
+    postedMatchSuggestion?: PostedMatchSuggestion;
     recurringSuggestions?: number;
   },
 ): ActionState {

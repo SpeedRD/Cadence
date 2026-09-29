@@ -507,6 +507,41 @@ export const es = {
     duplicatesNeedReview: (n: number) =>
       `${n} fila${n === 1 ? " coincide" : "s coinciden"} con transacciones ya importadas: revisa primero los posibles duplicados`,
     importCollision: "Algunas de estas filas se importaron hace un momento: revisa el libro e intenta de nuevo",
+    // Una fila que el libro ya tiene como fila que Cadence escribió: un cargo
+    // recurrente registrado o el sueldo de un check-in (ver
+    // src/lib/data/posted-duplicates.ts).
+    postedDuplicatesDescription:
+      "Algunas filas coinciden con un cargo que Cadence ya registró desde un elemento recurrente, o con un sueldo que registró un check-in, en esta cuenta. Una coincidencia exacta se omite como el cargo registrado a menos que digas que es otro. Una posible coincidencia, en otra moneda, se importa a menos que digas que es el cargo registrado.",
+    postedMatchRecurring: (name: string, date: string, amount: string) => `Coincide con ${name}, registrado el ${date} por ${amount}`,
+    postedMatchPaycheck: (date: string, amount: string) => `Coincide con el sueldo registrado el ${date} por ${amount}`,
+    postedMatchOthers: (list: string) => `También podría ser: ${list}`,
+    postedMatchPossible: "Posible coincidencia",
+    postedMatchUpdates: (from: string, to: string) => `Como cargo registrado, cambia de ${from} a ${to}`,
+    postedMatchStaysAsIs: "Como cargo registrado, se queda como está",
+    postedMatchBothAmounts: (recorded: string, deposit: string) =>
+      `Sueldo registrado: ${recorded}. Este depósito: ${deposit}. El sueldo se queda como se registró.`,
+    isPostedCharge: "Es el cargo registrado",
+    isRecordedPaycheck: "Es el sueldo ya registrado",
+    isDifferentCharge: "Es otro cargo",
+    appliedPostedCharge: "Se toma como el cargo registrado",
+    appliedRecordedPaycheck: "Se toma como el sueldo registrado",
+    postedChargesKept: (n: number, updated: number) =>
+      `${n} ya en el libro, no se agrega${n === 1 ? "" : "n"} de nuevo${updated ? ` (${updated} monto${updated === 1 ? "" : "s"} registrado${updated === 1 ? "" : "s"} actualizado${updated === 1 ? "" : "s"})` : ""}`,
+    postedMatchChanged: "Los cargos registrados cambiaron desde que se revisó este archivo: revisa de nuevo los posibles duplicados",
+    postedPromptTitle: "¿Es el cargo registrado?",
+    paycheckPromptTitle: "¿Es el sueldo ya registrado?",
+    postedPromptDescription: (entered: string, posted: string) =>
+      `Tu entrada de ${entered} está guardada. El cargo registrado es de ${posted}. "Es el cargo registrado" quita la entrada que acabas de guardar y conserva el registrado, para contar el dinero una sola vez. Si cierras esto, se quedan ambos.`,
+    paycheckPromptDescription: (entered: string, posted: string) =>
+      `Tu entrada de ${entered} está guardada. El sueldo que registró el check-in es de ${posted}. "Es el sueldo ya registrado" quita la entrada que acabas de guardar y deja el sueldo como se registró. Si cierras esto, se quedan ambos.`,
+    postedChargeKept: "Se conservó el cargo registrado: tu entrada no se sumó dos veces",
+    postedChargeKeptUpdated: (from: string, to: string) => `Se conservó el cargo registrado, ahora ${to} (antes ${from})`,
+    paycheckKept: "Se conservó el sueldo ya registrado: tu entrada no se sumó dos veces",
+    postedMatchGone: "Ese cargo registrado ya no coincide con esta entrada: no cambió nada",
+    postedMatchNotApplicable: "Solo una entrada que agregaste a mano, aún sin emparejar, puede tomarse como el cargo registrado",
+    postedEntryAlreadyGone: "Esa entrada ya se quitó: no cambió nada más",
+    postedEntryChanged: "Esa entrada cambió después de guardarse, así que se conservó: quítala de la lista si es un duplicado",
+    postedMatchCheckFailed: "No se pudo revisar el cargo registrado ahora: no cambió nada, tu entrada se conserva",
     // Gastos extraordinarios (únicos) - ver src/lib/extraordinary.ts.
     extraordinaryBadge: "Único",
     markExtraordinary: "Marcar como gasto único",
@@ -1235,6 +1270,9 @@ export const es = {
     accountNoLongerExists: "Esa cuenta ya no existe",
     transactionAlreadyExists: "Esta transacción ya existe",
     nothingToReject: "Nada que rechazar",
+    postedMatchNeedsChoice: "Esto coincide con un cargo que ya está en el libro: indica si es el cargo registrado u otro",
+    keptAsPosted: "Se conservó el cargo registrado: el recibo no se sumó dos veces",
+    keptAsPostedUpdated: (from: string, to: string) => `Se conservó el cargo registrado, ahora ${to} (antes ${from})`,
   },
   inbox: {
     title: "Bandeja",

@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/table";
 import type { Option } from "@/components/form/selects";
 import { RecurringDialog } from "@/components/recurring/recurring-dialog";
+import { PostedMatchNotice } from "@/components/transactions/posted-match-notice";
 import { TransferDialog } from "@/components/transactions/transfer-dialog";
 import { EXPLICIT_NO_CATEGORY } from "@/lib/categorization-rules";
 import { formatMoney } from "@/lib/currency";
@@ -31,6 +32,15 @@ import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { buildTransferPrefill, type DetectedGroup } from "@/lib/import-grouping";
 import type { CsvDuplicateHit, CsvExtraordinaryHit } from "@/server/actions/import";
+
+/**
+ * What a possible duplicate does when the user has not chosen: a re-import, or
+ * an exact match for a posted charge or recorded paycheck, is skipped; a
+ * possible match in another currency is only a warning and imports.
+ */
+export function defaultDuplicateDecision(hit: CsvDuplicateHit): "import" | "skip" {
+  return hit.kind === "posted" && hit.match.possible ? "import" : "skip";
+}
 
 export interface ReviewRow {
   date: Date;
@@ -91,7 +101,7 @@ export function ImportReview({
   /** Rows the server found already imported from a CSV into this account (see detectCsvDuplicatesAction). */
   duplicateRowIndexes: number[];
   duplicateHits: Record<number, CsvDuplicateHit>;
-  /** Per-row choice; a row with no entry is skipped. */
+  /** Per-row choice; a row with no entry takes defaultDuplicateDecision. */
   duplicateDecisions: Record<number, "import" | "skip">;
   onDecideDuplicateAction: (rowIndexes: number[], decision: "import" | "skip") => void;
   /** Rows the server found unusually large for their category (see detectCsvExtraordinaryAction). */
@@ -153,8 +163,14 @@ export function ImportReview({
             <div>
               <p className="text-sm font-medium">{t.possibleDuplicatesTitle}</p>
               <p className="text-xs text-muted-foreground">
-                {t.patternRowCount(duplicateRowIndexes.length)} · {t.possibleDuplicatesDescription}
+                {t.patternRowCount(duplicateRowIndexes.length)}
+                {duplicateRowIndexes.some((index) => duplicateHits[index]?.kind === "imported")
+                  ? ` · ${t.possibleDuplicatesDescription}`
+                  : null}
               </p>
+              {duplicateRowIndexes.some((index) => duplicateHits[index]?.kind === "posted") ? (
+                <p className="text-xs text-muted-foreground">{t.postedDuplicatesDescription}</p>
+              ) : null}
             </div>
             <Button
               type="button"
@@ -668,10 +684,15 @@ function UnknownRowsPanel({
 
 /**
  * The "possible duplicates" bucket: rows whose fingerprint (account, date,
- * amount, currency, description) matches a CSV row already in the ledger.
- * Same shape as the unknown-merchants panel - pick rows, apply one decision
- * to them - but the decision is import-or-skip, and skip is the default: a
- * re-imported statement should add nothing unless the user says so.
+ * amount, currency, description) matches a CSV row already in the ledger, and
+ * rows matching a charge recurring posting already wrote or a paycheck a
+ * check-in recorded (findCsvPostedDuplicates). Same shape as the
+ * unknown-merchants panel - pick rows, apply one decision to them - but the
+ * decision is import-or-skip, and skip is the default: a re-imported
+ * statement should add nothing unless the user says so. A posted match puts
+ * it as "It's the posted charge" (skip) or "It's a different charge"
+ * (import), and one in another currency defaults to importing - it is only a
+ * warning (defaultDuplicateDecision).
  */
 function DuplicateRowsPanel({
   rowIndexes,
@@ -755,7 +776,9 @@ function DuplicateRowsPanel({
             {rowIndexes.map((index) => {
               const row = rows[index];
               const hit = hits[index];
-              const importing = decisions[index] === "import";
+              const importing = (decisions[index] ?? (hit ? defaultDuplicateDecision(hit) : "skip")) === "import";
+              const posted = hit?.kind === "posted" ? hit.match : null;
+              const keepLabel = posted?.kind === "paycheck" ? t.isRecordedPaycheck : t.isPostedCharge;
               return (
                 <TableRow key={index}>
                   <TableCell>
@@ -768,10 +791,18 @@ function DuplicateRowsPanel({
                   <TableCell className="figure figure-sm text-xs">{toISODate(row.date)}</TableCell>
                   <TableCell className="max-w-[22rem] text-sm">
                     <span className="block truncate">{row.note || "-"}</span>
-                    {hit ? (
+                    {hit?.kind === "imported" ? (
                       <span className="block text-xs text-muted-foreground">
                         {t.matchesExisting(hit.existingDate)}
                       </span>
+                    ) : null}
+                    {posted ? (
+                      <PostedMatchNotice
+                        match={posted}
+                        incoming={{ amount: row.amount, currency }}
+                        showOutcome={!importing}
+                        locale={locale}
+                      />
                     ) : null}
                   </TableCell>
                   <TableCell className="text-right">
@@ -779,7 +810,13 @@ function DuplicateRowsPanel({
                   </TableCell>
                   <TableCell className="text-xs">
                     <span className={importing ? "text-foreground" : "text-muted-foreground"}>
-                      {importing ? t.appliedImportAnyway : t.appliedSkipped}
+                      {importing
+                        ? t.appliedImportAnyway
+                        : posted
+                          ? posted.kind === "paycheck"
+                            ? t.appliedRecordedPaycheck
+                            : t.appliedPostedCharge
+                          : t.appliedSkipped}
                     </span>
                     <Button
                       type="button"
@@ -788,7 +825,13 @@ function DuplicateRowsPanel({
                       className="ml-1"
                       onClick={() => onDecideAction([index], importing ? "skip" : "import")}
                     >
-                      {importing ? t.skipDuplicate : t.importAnyway}
+                      {posted
+                        ? importing
+                          ? keepLabel
+                          : t.isDifferentCharge
+                        : importing
+                          ? t.skipDuplicate
+                          : t.importAnyway}
                     </Button>
                   </TableCell>
                 </TableRow>

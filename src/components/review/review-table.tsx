@@ -14,17 +14,21 @@ import {
 } from "@/components/ui/table";
 
 import { getDictionary, type Locale } from "@/lib/i18n";
+import type { PostedMatch } from "@/lib/data/posted-duplicates";
 import type { StagedRow } from "@/lib/data/staged";
 
 export function ReviewTable({
   rows,
   accounts,
   categories,
+  postedMatches,
   locale,
 }: {
   rows: StagedRow[];
   accounts: Option[];
   categories: Option[];
+  /** Pending rows' posted matches by row id, then account id (see stagedPostedMatches). */
+  postedMatches: Record<string, Record<string, PostedMatch>>;
   locale: Locale;
 }) {
   const t = getDictionary(locale).review;
@@ -36,6 +40,7 @@ export function ReviewTable({
   const picksFor = (row: StagedRow) => {
     const current = picks[row.id] ?? initialPicks(row);
     return {
+      postedMatch: postedMatches[row.id]?.[current.accountId] ?? null,
       accountId: current.accountId,
       categoryId: current.categoryId,
       onAccountChange: (accountId: string) =>

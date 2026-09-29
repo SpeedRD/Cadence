@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAppContext } from "@/lib/data/context";
 import { listStagedTransactions } from "@/lib/data/staged";
+import { stagedPostedMatches } from "@/lib/data/staged-approval";
 import { getDictionary } from "@/lib/i18n";
 import { labelFor } from "@/lib/labels";
 import { prisma } from "@/lib/prisma";
@@ -50,6 +51,15 @@ export default async function ReviewPage({
       select: { id: true, name: true, color: true },
     }),
   ]);
+
+  // Each pending row's match against a charge recurring posting already
+  // wrote, on every account it could be approved into, so the notice follows
+  // the reviewer's account pick without another round trip.
+  const postedMatches = await stagedPostedMatches(
+    rows,
+    accountsForEdit.map((account) => account.id),
+    context.rates,
+  );
 
   const bySource = new Map<string, typeof rows>();
   for (const row of rows) {
@@ -109,6 +119,7 @@ export default async function ReviewPage({
                 rows={sourceRows}
                 accounts={accountsForEdit}
                 categories={categories}
+                postedMatches={postedMatches}
                 locale={context.language}
               />
             </CardContent>

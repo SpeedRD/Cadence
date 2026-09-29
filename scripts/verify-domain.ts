@@ -4875,6 +4875,368 @@ async function main() {
     await prisma.account.deleteMany({ where: { id: { in: settleAccounts } } });
   }
 
+  console.log("\n== posted duplicates: a charge brought in after posting wrote it (B5) ==");
+  {
+    // Every scenario brings money in through a real entry point - the CSV
+    // import, a receipt's approval, a manual entry - after posting (or a
+    // check-in) already wrote a row for it, and asserts what the ledger holds
+    // afterwards. The rest of the active items are still paused (above), so
+    // the look-alike guard sees only this block's items.
+    const { postDueRecurringItems: postRun } = await import("../src/lib/recurring-posting");
+    const { importCsvTransactions: importRows } = await import("../src/lib/data/import");
+    const { findCsvPostedDuplicates } = await import("../src/lib/data/import-duplicates");
+    const { findPostedDuplicates, keepPostedInsteadOfEntry } = await import("../src/lib/data/posted-duplicates");
+    const { createManualTransaction } = await import("../src/lib/data/manual-transaction");
+    const { transactionSchema } = await import("../src/lib/validation");
+    const { approveStagedTransaction } = await import("../src/lib/data/staged-approval");
+    const { planPostedDuplicates, settlementWindow: postedWindow, CROSS_CURRENCY_MATCH_TOLERANCE } = await import("../src/lib/recurring-settlement");
+    const { getPaydayCheckinDraft: postedDraft, confirmPaydayCheckin: postedConfirm } = await import("../src/lib/data/payday");
+    const { projectPeriods: postedProject } = await import("../src/lib/data/afford");
+    const { getPeriodSummary: postedSummary } = await import("../src/lib/data/period-summary");
+
+    const subsId = (await prisma.category.findFirstOrThrow({ where: { name: "Subscriptions" } })).id;
+    const healthId = (await prisma.category.create({ data: { name: "Verify Posted Health", kind: "EXPENSE", color: "#4f8a8b" } })).id;
+    const postedAccount = (name: string, currency: string) =>
+      prisma.account.create({ data: { name: `Verify Posted ${name}`, currency, type: "CHECKING" } });
+    const postedItem = (name: string, amount: number, currency: string, day: number, accountId: string, categoryId: string | null) =>
+      prisma.recurringItem.create({
+        data: { name: `Verify Posted ${name}`, amount, currency, frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, day), anchorDay: day, categoryId, accountId },
+      });
+    const csvRow = (date: string, amount: number, note: string, extra: Record<string, unknown> = {}) => ({
+      date,
+      amount,
+      type: "EXPENSE" as "EXPENSE" | "INCOME",
+      transferDirection: null,
+      note,
+      categoryId: null,
+      importAnyway: false,
+      isExtraordinary: false,
+      yourShare: null,
+      reimburses: null,
+      ...extra,
+    });
+    const ledger = async (accountId: string) =>
+      (await prisma.transaction.findMany({ where: { accountId }, orderBy: [{ source: "asc" }, { date: "asc" }] }))
+        .map((row) => `${row.source}:${toISODate(row.date)}:${num(row.amount)}:${row.currency}`)
+        .join(",");
+
+    // Netflix, 15.49 USD, posted on 10-15; the bank's CSV row arrives later.
+    console.log("\n-- a CSV row duplicating a posted RECURRING row --");
+    {
+      const card = await postedAccount("Card", "USD");
+      await postedItem("Netflix", 15.49, "USD", 15, card.id, subsId);
+      await postRun(civilDate(2026, 10, 15));
+      const bank = csvRow("2026-10-15", 15.49, "NETFLIX.COM 866-579-7172");
+      const flagged = await findCsvPostedDuplicates({ accountId: card.id, currency: "USD", rows: [bank], skip: new Set(), rates });
+      eq("the bank's row is flagged as the posted Netflix charge", `${flagged?.get(0)?.kind}:${flagged?.get(0)?.posted.label}:${flagged?.get(0)?.possible}`, "recurring:Verify Posted Netflix:false");
+      const unreviewed = await importRows({ accountId: card.id, currency: "USD", rows: [bank] }, rates);
+      eq("imported without an answer, it is refused and nothing is written", `${unreviewed.ok}:${await ledger(card.id)}`, "false:RECURRING:2026-10-15:15.49:USD");
+      const kept = await importRows({ accountId: card.id, currency: "USD", rows: [{ ...bank, postedCharge: true }] }, rates);
+      eq(
+        '"It\'s the posted charge": nothing written, the posted row unchanged',
+        `${JSON.stringify(kept)}|${await ledger(card.id)}`,
+        `${JSON.stringify({ ok: true, count: 0, unresolvedReimbursements: 0, matchedPosted: 1, updatedPosted: 0 })}|RECURRING:2026-10-15:15.49:USD`,
+      );
+      const separate = await importRows({ accountId: card.id, currency: "USD", rows: [{ ...bank, importAnyway: true }] }, rates);
+      eq('"It\'s a different charge" imports it as usual', `${separate.ok}:${await ledger(card.id)}`, "true:CSV:2026-10-15:15.49:USD,RECURRING:2026-10-15:15.49:USD");
+      await prisma.transaction.deleteMany({ where: { accountId: card.id } });
+
+      console.log("\n-- two identical incoming rows and one posted row --");
+      await prisma.recurringItem.updateMany({ where: { name: "Verify Posted Netflix" }, data: { nextDate: civilDate(2026, 10, 15) } });
+      await postRun(civilDate(2026, 10, 15));
+      const twice = [bank, { ...bank }];
+      const twiceFlagged = await findCsvPostedDuplicates({ accountId: card.id, currency: "USD", rows: twice, skip: new Set(), rates });
+      eq("only one of the two is flagged", [...(twiceFlagged?.keys() ?? [])].join(","), "0");
+      const twiceImport = await importRows({ accountId: card.id, currency: "USD", rows: [{ ...bank, postedCharge: true }, { ...bank }] }, rates);
+      eq(
+        "the other imports as a separate charge, with no answer needed",
+        `${twiceImport.ok && twiceImport.count}:${twiceImport.ok && twiceImport.matchedPosted}|${await ledger(card.id)}`,
+        "1:1|CSV:2026-10-15:15.49:USD,RECURRING:2026-10-15:15.49:USD",
+      );
+      await prisma.transaction.deleteMany({ where: { accountId: card.id } });
+
+      console.log("\n-- a receipt approved after posting --");
+      await prisma.recurringItem.updateMany({ where: { name: "Verify Posted Netflix" }, data: { nextDate: civilDate(2026, 10, 15) } });
+      await postRun(civilDate(2026, 10, 15));
+      const receipt = await prisma.stagedTransaction.create({
+        data: { date: civilDate(2026, 10, 15), amount: 15.49, currency: "USD", rawDescription: "Verify Posted receipt: Your Netflix bill", source: "GMAIL", externalId: "verify-posted-receipt-1", accountId: card.id },
+      });
+      const approval = { id: receipt.id, date: civilDate(2026, 10, 15), amount: 15.49, currency: "USD", rawDescription: receipt.rawDescription, accountId: card.id, categoryId: subsId };
+      const bare = await approveStagedTransaction({ ...approval, resolution: null }, rates);
+      eq(
+        "approving it with no answer is refused: it matches the posted charge",
+        `${bare.ok ? bare.outcome : bare.reason}|${await ledger(card.id)}|${(await prisma.stagedTransaction.findUniqueOrThrow({ where: { id: receipt.id } })).status}`,
+        "needs_choice|RECURRING:2026-10-15:15.49:USD|PENDING",
+      );
+      const asPosted = await approveStagedTransaction({ ...approval, resolution: "posted" }, rates);
+      eq(
+        '"It\'s the posted charge": no second row, the receipt is reviewed',
+        `${asPosted.ok ? asPosted.outcome : asPosted.reason}|${await ledger(card.id)}|${(await prisma.stagedTransaction.findUniqueOrThrow({ where: { id: receipt.id } })).status}`,
+        "kept_posted|RECURRING:2026-10-15:15.49:USD|APPROVED",
+      );
+      const refetched = await prisma.stagedTransaction.createMany({
+        data: [{ date: civilDate(2026, 10, 15), amount: 15.49, currency: "USD", rawDescription: "Verify Posted receipt: re-fetched", source: "GMAIL", externalId: "verify-posted-receipt-1", status: "PENDING" }],
+        skipDuplicates: true,
+      });
+      eq(
+        "a receipt kept as the posted charge has no transaction, and re-fetching its email still stages nothing (the staged row's own key)",
+        `${await prisma.transaction.count({ where: { source: "GMAIL", externalId: "verify-posted-receipt-1" } })}:${refetched.count}`,
+        "0:0",
+      );
+      const secondReceipt = await prisma.stagedTransaction.create({
+        data: { date: civilDate(2026, 10, 15), amount: 15.49, currency: "USD", rawDescription: "Verify Posted receipt: a second Netflix profile", source: "GMAIL", externalId: "verify-posted-receipt-2", accountId: card.id },
+      });
+      const different = await approveStagedTransaction({ ...approval, id: secondReceipt.id, rawDescription: secondReceipt.rawDescription, resolution: "different" }, rates);
+      eq('"It\'s a different charge" approves it as its own expense', `${different.ok ? different.outcome : different.reason}|${await ledger(card.id)}`, "approved|GMAIL:2026-10-15:15.49:USD,RECURRING:2026-10-15:15.49:USD");
+      await prisma.stagedTransaction.deleteMany({ where: { rawDescription: { startsWith: "Verify Posted" } } });
+      await prisma.transaction.deleteMany({ where: { accountId: card.id } });
+
+      console.log("\n-- a manual expense entered after posting --");
+      await prisma.recurringItem.updateMany({ where: { name: "Verify Posted Netflix" }, data: { nextDate: civilDate(2026, 10, 15) } });
+      await postRun(civilDate(2026, 10, 15));
+      const postedNetflix = await prisma.transaction.findFirstOrThrow({ where: { accountId: card.id, source: "RECURRING" } });
+      const manualContext = async () => ({ displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 10, 15), currentPeriod: periodForDate(civilDate(2026, 10, 15)) });
+      const manualValues = (extra: Record<string, string> = {}) => {
+        const { id: _id, ...values } = transactionSchema.parse({ date: "2026-10-15", amount: "15.49", currency: "USD", type: "EXPENSE", accountId: card.id, categoryId: subsId, note: "netflix", ...extra });
+        return values;
+      };
+      // What saveTransactionAction does on a new row, then asks about.
+      const saved = await createManualTransaction(manualValues(), { getContext: manualContext });
+      eq("the saved entry matches the posted charge, so the form asks", `${saved.posted?.match.posted.label}:${saved.posted?.match.posted.date}`, "Verify Posted Netflix:2026-10-15");
+      const answer = (result: typeof saved) => ({ transactionId: result.id, savedDigest: result.posted!.savedDigest, postedId: result.posted!.match.posted.id });
+      eq(
+        "closing the prompt without answering leaves both rows",
+        `${await ledger(card.id)}|${num((await prisma.transaction.findUniqueOrThrow({ where: { id: postedNetflix.id } })).amount)}`,
+        "MANUAL:2026-10-15:15.49:USD,RECURRING:2026-10-15:15.49:USD|15.49",
+      );
+      const keptManual = await keepPostedInsteadOfEntry(answer(saved), rates);
+      eq('"It\'s the posted charge": the entry just saved is removed, the posted row stays', `${keptManual.ok}|${await ledger(card.id)}`, "true|RECURRING:2026-10-15:15.49:USD");
+      const again = await keepPostedInsteadOfEntry(answer(saved), rates);
+      eq("a repeated click finds nothing to remove and changes nothing", `${again.ok ? "ok" : again.reason}|${await ledger(card.id)}`, "not_found|RECURRING:2026-10-15:15.49:USD");
+
+      console.log("\n-- the answer removes only the row that save created, only as saved --");
+      const bystander = await prisma.transaction.create({ data: { date: civilDate(2026, 10, 15), amount: 15.49, currency: "USD", type: "EXPENSE", accountId: card.id, categoryId: subsId, note: "netflix (another entry)", source: "MANUAL" } });
+      const stale = await createManualTransaction(manualValues(), { getContext: manualContext });
+      await prisma.transaction.update({ where: { id: stale.id }, data: { note: "netflix - edited in another tab" } });
+      const staleAnswer = await keepPostedInsteadOfEntry(answer(stale), rates);
+      eq("an entry changed after it was saved is kept: both rows stay", `${staleAnswer.ok ? "ok" : staleAnswer.reason}|${await prisma.transaction.count({ where: { id: stale.id } })}`, "changed|1");
+      const otherId = await keepPostedInsteadOfEntry({ ...answer(stale), transactionId: bystander.id }, rates);
+      eq("another entry's id with this save's digest removes nothing", `${otherId.ok ? "ok" : otherId.reason}|${await prisma.transaction.count({ where: { id: bystander.id } })}`, "changed|1");
+      await prisma.transaction.deleteMany({ where: { id: { in: [stale.id, bystander.id] } } });
+      const wrongPosted = await createManualTransaction(manualValues(), { getContext: manualContext });
+      const wrongAnswer = await keepPostedInsteadOfEntry({ ...answer(wrongPosted), postedId: "not-the-posted-row" }, rates);
+      eq("an answer about a different posted row changes nothing", `${wrongAnswer.ok ? "ok" : wrongAnswer.reason}|${await prisma.transaction.count({ where: { id: wrongPosted.id } })}`, "match_gone|1");
+      const [tabOne, tabTwo] = await Promise.all([keepPostedInsteadOfEntry(answer(wrongPosted), rates), keepPostedInsteadOfEntry(answer(wrongPosted), rates)]);
+      eq(
+        "the same answer from two tabs at once removes the entry once",
+        `${[tabOne, tabTwo].map((r) => (r.ok ? "ok" : r.reason)).sort().join("+")}|${await ledger(card.id)}`,
+        "not_found+ok|RECURRING:2026-10-15:15.49:USD",
+      );
+
+      const nextPeriod = await prisma.transaction.create({ data: { date: civilDate(2026, 10, 16), amount: 15.49, currency: "USD", type: "EXPENSE", accountId: card.id, categoryId: subsId, note: "netflix", source: "MANUAL" } });
+      eq(
+        "an entry dated in the next pay period is outside the occurrence's window: no question",
+        (await findPostedDuplicates([{ key: nextPeriod.id, accountId: card.id, type: "EXPENSE", date: nextPeriod.date, amount: 15.49, currency: "USD", note: "netflix", categoryId: subsId }], rates)).size,
+        0,
+      );
+      const other = await prisma.transaction.create({ data: { date: civilDate(2026, 10, 16), amount: 15.49, currency: "USD", type: "EXPENSE", accountId: card.id, categoryId: subsId, note: "netflix", transferId: null, source: "CSV", externalId: "verify-posted-not-manual" } });
+      const refused = await keepPostedInsteadOfEntry({ transactionId: other.id, savedDigest: "x", postedId: postedNetflix.id }, rates);
+      eq("only a plain hand entry can be removed this way - an imported row is refused and kept", `${refused.ok ? "ok" : refused.reason}:${await prisma.transaction.count({ where: { id: other.id } })}`, "not_applicable:1");
+      await prisma.transaction.deleteMany({ where: { id: { in: [nextPeriod.id, other.id] } } });
+
+      console.log("\n-- a duplicate hint never blocks a money write (the lookup throws or hangs) --");
+      const throwing = async (): Promise<never> => {
+        throw new Error("simulated lookup failure");
+      };
+      const hanging = () => new Promise<never>(() => {});
+      for (const [label, lookup] of [["throws", throwing], ["times out", hanging]] as const) {
+        const failing = { lookup: lookup as never, timeoutMs: 50 };
+        const started = Date.now();
+        const kinds: string[] = [];
+        for (const extra of [
+          { type: "EXPENSE" } as Record<string, string>,
+          { type: "EXPENSE", categoryId: "" },
+          { type: "INCOME" },
+          { type: "INCOME", categoryId: "" },
+        ]) {
+          const made = await createManualTransaction(manualValues(extra), { getContext: manualContext, ...failing });
+          const row = await prisma.transaction.findUnique({ where: { id: made.id } });
+          kinds.push(`${row?.type}/${row?.categoryId ? "cat" : "none"}:${made.posted === null}`);
+          await prisma.transaction.delete({ where: { id: made.id } });
+        }
+        eq(`lookup ${label}: every manual save (expense and income, with and without a category) is written, with no question`, kinds.join(","), "EXPENSE/cat:true,EXPENSE/none:true,INCOME/cat:true,INCOME/none:true");
+        const receiptRow = await prisma.stagedTransaction.create({ data: { date: civilDate(2026, 10, 15), amount: 15.49, currency: "USD", rawDescription: "Verify Posted receipt: fail-open", source: "GMAIL", externalId: `verify-posted-failopen-${label}`, accountId: card.id } });
+        const receiptInput = { id: receiptRow.id, date: civilDate(2026, 10, 15), amount: 15.49, currency: "USD", rawDescription: receiptRow.rawDescription, accountId: card.id, categoryId: subsId };
+        const posted = await approveStagedTransaction({ ...receiptInput, resolution: "posted" }, rates, failing);
+        eq(`lookup ${label}: "posted" cannot be acted on, so nothing is written`, `${posted.ok ? posted.outcome : posted.reason}|${await prisma.transaction.count({ where: { source: "GMAIL", accountId: card.id } })}`, "check_failed|0");
+        const plain = await approveStagedTransaction({ ...receiptInput, resolution: null }, rates, failing);
+        eq(`lookup ${label}: approving the receipt succeeds without the notice`, `${plain.ok ? plain.outcome : plain.reason}|${await prisma.transaction.count({ where: { source: "GMAIL", accountId: card.id } })}`, "approved|1");
+        const csvIn = csvRow("2026-10-15", 15.49, "NETFLIX.COM 866-579-7172");
+        const noPanel = await findCsvPostedDuplicates({ accountId: card.id, currency: "USD", rows: [csvIn], skip: new Set(), rates, ...failing });
+        check(`lookup ${label}: the CSV review gets no posted panel (null, not an error)`, noPanel === null);
+        const imported = await importRows({ accountId: card.id, currency: "USD", rows: [csvIn, { ...csvIn, note: "NETFLIX answered as posted", postedCharge: true }] }, rates, failing);
+        eq(
+          `lookup ${label}: the CSV import succeeds - the unanswered row imports, the one already called the posted charge stays out`,
+          `${imported.ok && imported.count}:${imported.ok && imported.updatedPosted}|${await prisma.transaction.count({ where: { source: "CSV", accountId: card.id } })}`,
+          "1:0|1",
+        );
+        check(`lookup ${label}: all of that finished in under three seconds (50ms timeout per lookup)`, Date.now() - started < 3000, Date.now() - started);
+        await prisma.transaction.deleteMany({ where: { accountId: card.id, source: { in: ["CSV", "GMAIL"] } } });
+        await prisma.stagedTransaction.deleteMany({ where: { id: receiptRow.id } });
+      }
+      await prisma.transaction.deleteMany({ where: { accountId: card.id } });
+      await prisma.recurringItem.deleteMany({ where: { name: "Verify Posted Netflix" } });
+      await prisma.account.delete({ where: { id: card.id } });
+    }
+
+    console.log("\n-- a CSV deposit duplicating a check-in's paycheck --");
+    {
+      const salary = await postedAccount("Salary", "DOP");
+      const checkinContext = {
+        displayCurrency: "USD" as const,
+        language: "en" as const,
+        rates,
+        today: civilDate(2026, 9, 30),
+        currentPeriod: periodForDate(civilDate(2026, 9, 30)),
+        bufferPercent: 10,
+        bufferFloorAmount: 2000,
+        bufferFloorCurrency: "DOP",
+      };
+      const budgetsBefore = new Set((await prisma.budget.findMany({ where: { year: 2026, month: 10, period: "A" }, select: { id: true } })).map((b) => b.id));
+      const draft = await postedDraft(checkinContext);
+      eq("the check-in plans Oct 1-15", `${draft.periodRef.year}-${draft.periodRef.month}-${draft.periodRef.period}`, "2026-10-A");
+      const confirmed = await postedConfirm(
+        {
+          year: 2026,
+          month: 10,
+          period: "A",
+          accounts: draft.accounts.map((a) => ({
+            accountId: a.accountId,
+            reportedBalance: a.expectedLedgerBalance + (a.accountId === salary.id ? 60000 : 0),
+            incomeEntered: a.accountId === salary.id ? 60000 : 0,
+            incomeNote: a.accountId === salary.id ? "Salary" : null,
+          })),
+          goals: [],
+          essentialCategories: [],
+          flexibleCategories: [],
+          includedCarryover: 0,
+          acknowledgedDeficit: true,
+          acknowledgedZeroBuffer: true,
+        },
+        checkinContext,
+      );
+      check("the check-in records a 60,000 DOP paycheck", confirmed.ok === true);
+      const account = { id: salary.id, name: salary.name, currency: "DOP" };
+      const novA = { year: 2026, month: 11, period: "A" as const };
+      const figures = async () => {
+        const projection = (await postedProject([novA], account, [account], checkinContext)).get(periodInfo(novA).key)!;
+        const summary = await postedSummary(periodInfo({ year: 2026, month: 10, period: "A" }), checkinContext);
+        return `${projection.account.income}|${summary.income}`;
+      };
+      const before = await figures();
+      eq("before the import: Afford projects the 60,000 paycheck for Nov 1-15", before.split("|")[0], "60000");
+      const deposit = csvRow("2026-10-01", 60000, "NOMINA VERIFY SRL", { type: "INCOME" });
+      const depositMatch = (await findCsvPostedDuplicates({ accountId: salary.id, currency: "DOP", rows: [deposit], skip: new Set(), rates }))?.get(0);
+      eq("the bank's deposit is flagged as the paycheck already recorded", `${depositMatch?.kind}:${depositMatch?.posted.amount}:${depositMatch?.rewrite}`, "paycheck:60000:null");
+      const refusedDeposit = await importRows({ accountId: salary.id, currency: "DOP", rows: [deposit] }, rates);
+      check("imported without an answer, it is refused", !refusedDeposit.ok);
+      const keptPaycheck = await importRows({ accountId: salary.id, currency: "DOP", rows: [{ ...deposit, postedCharge: true }] }, rates);
+      eq("\"It's the paycheck already recorded\": the deposit is not written", `${keptPaycheck.ok && keptPaycheck.count}:${keptPaycheck.ok && keptPaycheck.matchedPosted}`, "0:1");
+      eq("Afford's projected income and the period's income are unchanged after the import", await figures(), before);
+      const paycheck = await prisma.transaction.findFirstOrThrow({ where: { accountId: salary.id, source: "PAYDAY_CHECKIN" } });
+      eq("the paycheck row itself is untouched", `${toISODate(paycheck.date)}:${num(paycheck.amount)}:${paycheck.currency}:${await prisma.transaction.count({ where: { accountId: salary.id } })}`, "2026-09-30:60000:DOP:1");
+
+      await prisma.paydayCheckin.deleteMany({ where: { year: 2026, month: 10, period: "A" } });
+      await prisma.budget.deleteMany({ where: { year: 2026, month: 10, period: "A", id: { notIn: [...budgetsBefore] } } });
+      await prisma.transaction.deleteMany({ where: { accountId: salary.id } });
+      await prisma.account.delete({ where: { id: salary.id } });
+    }
+
+    console.log("\n-- a EUR posted row against a DOP bank row --");
+    {
+      // rates: 1 USD = 0.5 EUR = 60 DOP, so 12.99 EUR is 1,558.80 DOP.
+      const dop = await postedAccount("DOP Card", "DOP");
+      const spotify = await postedItem("Spotify", 12.99, "EUR", 12, dop.id, subsId);
+      await postRun(civilDate(2026, 10, 12));
+      const postedRow = await prisma.transaction.findFirstOrThrow({ where: { accountId: dop.id, source: "RECURRING" } });
+      const within = csvRow("2026-10-13", 1580, "SPOTIFY P3A1B2");
+      const outside = csvRow("2026-10-13", 1700, "SPOTIFY P3A1B2");
+      const inside = (await findCsvPostedDuplicates({ accountId: dop.id, currency: "DOP", rows: [within], skip: new Set(), rates }))?.get(0);
+      eq(
+        "1,580 DOP (1.4% off) is a possible match that would put the bank's figure on the posted row",
+        `${inside?.possible}:${JSON.stringify(inside?.rewrite)}`,
+        `true:${JSON.stringify({ amount: 1580, currency: "DOP" })}`,
+      );
+      eq("1,700 DOP (9% off) is not a match", (await findCsvPostedDuplicates({ accountId: dop.id, currency: "DOP", rows: [outside], skip: new Set(), rates }))?.size, 0);
+      const warned = await findCsvPostedDuplicates({ accountId: dop.id, currency: "DOP", rows: [within], skip: new Set(), rates });
+      check("a possible match never blocks the import: it is a warning only", warned?.get(0)?.possible === true);
+      const asPosted = await importRows({ accountId: dop.id, currency: "DOP", rows: [{ ...within, postedCharge: true }] }, rates);
+      const after = await prisma.transaction.findUniqueOrThrow({ where: { id: postedRow.id } });
+      eq(
+        '"It\'s the posted charge": the posted row takes 1,580 DOP and nothing else changes',
+        `${asPosted.ok && asPosted.updatedPosted}|${num(after.amount)}:${after.currency}|${toISODate(after.date)}:${after.note}:${after.categoryId === postedRow.categoryId}:${after.externalId === postedRow.externalId}:${after.source}:${after.type}:${after.accountId === dop.id}|${await prisma.transaction.count({ where: { accountId: dop.id } })}`,
+        `1|1580:DOP|${toISODate(postedRow.date)}:${postedRow.note}:true:true:RECURRING:EXPENSE:true|1`,
+      );
+      const again = await importRows({ accountId: dop.id, currency: "DOP", rows: [csvRow("2026-10-14", 1580, "SPOTIFY P3A1B2")] }, rates);
+      check("with the posted row now 1,580 DOP, the same statement row again is an exact match and needs an answer", !again.ok);
+      await prisma.transaction.deleteMany({ where: { accountId: dop.id } });
+      await prisma.recurringItem.delete({ where: { id: spotify.id } });
+      await prisma.account.delete({ where: { id: dop.id } });
+    }
+
+    console.log("\n-- look-alike items --");
+    {
+      // Two 50 USD items in one category, the B3 pair: the category cannot
+      // tell them apart, so only a name in the note can.
+      const usd = await postedAccount("Health", "USD");
+      await postedItem("Gym", 50, "USD", 5, usd.id, healthId);
+      await postedItem("Therapy", 50, "USD", 10, usd.id, healthId);
+      await postRun(civilDate(2026, 10, 10));
+      const vague = (await findCsvPostedDuplicates({ accountId: usd.id, currency: "USD", rows: [{ ...csvRow("2026-10-12", 50, "Dr. Perez visit"), categoryId: healthId }], skip: new Set(), rates }))?.get(0);
+      eq(
+        "a charge naming neither is ambiguous: flagged, both listed, the posted row left as is",
+        `${vague?.ambiguous}:${[vague?.posted.label, ...(vague?.others ?? []).map((o) => o.label)].sort().join("+")}:${vague?.rewrite}`,
+        "true:Verify Posted Gym+Verify Posted Therapy:null",
+      );
+      const named = (await findCsvPostedDuplicates({ accountId: usd.id, currency: "USD", rows: [csvRow("2026-10-06", 50, "VERIFY POSTED THERAPY CENTER")], skip: new Set(), rates }))?.get(0);
+      eq("a charge naming one of them is that one, even when the other is nearer in date", `${named?.ambiguous}:${named?.posted.label}`, "false:Verify Posted Therapy");
+      const vagueImport = await importRows({ accountId: usd.id, currency: "USD", rows: [{ ...csvRow("2026-10-12", 50, "Dr. Perez visit"), categoryId: healthId }] }, rates);
+      check("an ambiguous match still needs an answer before it imports", !vagueImport.ok);
+      await prisma.transaction.deleteMany({ where: { accountId: usd.id } });
+      await prisma.recurringItem.deleteMany({ where: { name: { in: ["Verify Posted Gym", "Verify Posted Therapy"] } } });
+      await prisma.account.delete({ where: { id: usd.id } });
+    }
+
+    console.log("\n-- the matcher's rules (pure) --");
+    {
+      const item = { id: "gym", name: "Gym", amount: 500, currency: "DOP", categoryId: "health" };
+      const postedAt = (id: string, day: number, extra: Partial<Parameters<typeof planPostedDuplicates>[0]["posted"][number]> = {}) => {
+        const date = civilDate(2026, 9, day);
+        return { id, kind: "recurring" as const, accountId: "a", type: "EXPENSE" as const, date, amount: 500, currency: "DOP", window: postedWindow(date), item, ...extra };
+      };
+      const charge = (key: string, day: number, extra: Partial<Parameters<typeof planPostedDuplicates>[0]["incoming"][number]> = {}) => ({
+        key, accountId: "a", type: "EXPENSE" as const, date: civilDate(2026, 9, day), amount: 500, currency: "DOP", categoryId: null, note: null, ...extra,
+      });
+      const weekly = planPostedDuplicates({ incoming: [charge("x", 10), charge("y", 3)], posted: [postedAt("p3", 3), postedAt("p10", 10)], items: [item], rates });
+      eq("weekly occurrences in one period: each charge pairs with its own date's row", `${weekly.get("y")?.postedId}:${weekly.get("x")?.postedId}:${weekly.get("x")?.ambiguous}`, "p3:p10:false");
+      eq("another account never matches", planPostedDuplicates({ incoming: [charge("x", 3, { accountId: "b" })], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
+      eq("a deposit never matches a charge", planPostedDuplicates({ incoming: [charge("x", 3, { type: "INCOME" })], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
+      eq("outside the window (the next period) never matches", planPostedDuplicates({ incoming: [charge("x", 16)], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
+      eq("a cent apart is the same amount", planPostedDuplicates({ incoming: [charge("x", 3, { amount: 500.01 })], posted: [postedAt("p3", 3)], items: [item], rates }).get("x")?.possible, false);
+      eq("two cents apart in the same currency is not", planPostedDuplicates({ incoming: [charge("x", 3, { amount: 500.02 })], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
+      // 500 DOP = 4.1667 EUR at these rates; the edge is 3% of the converted posted amount.
+      const eurRow = { amount: 500 / 120, currency: "EUR" };
+      const edge = (factor: number) =>
+        planPostedDuplicates({ incoming: [charge("x", 3, { amount: round2(eurRow.amount * 120 * factor) })], posted: [postedAt("p3", 3, { ...eurRow, amount: eurRow.amount })], items: [item], rates }).get("x")?.possible ?? false;
+      eq("the cross-currency tolerance is 3%", CROSS_CURRENCY_MATCH_TOLERANCE, 0.03);
+      eq("2.9% off in another currency is a possible match; 3.1% is not", `${edge(1.029)}:${edge(0.971)}:${edge(1.031)}:${edge(0.969)}`, "true:true:false:false");
+      const exactFirst = planPostedDuplicates({ incoming: [charge("x", 3)], posted: [postedAt("eur", 3, { amount: 500 / 120, currency: "EUR" }), postedAt("dop", 4)], items: [item], rates });
+      eq("a same-currency candidate wins over one in another currency", `${exactFirst.get("x")?.postedId}:${exactFirst.get("x")?.possible}`, "dop:false");
+    }
+
+    await prisma.category.delete({ where: { id: healthId } });
+  }
+
   await prisma.recurringItem.updateMany({ where: { id: { in: pausedForSettlement } }, data: { active: true } });
 
   console.log("\n== afford: installment plans ==");
@@ -7506,15 +7868,15 @@ async function main() {
       // 1. The payback alone, into an empty account: the batch has no expense
       //    to name, and the ledger has exactly one - the original.
       const ledgerAccount = await prisma.account.create({ data: { name: "Verify Shared Import Ledger", currency: "DOP", type: "CHECKING" } });
-      const viaLedger = await importCsvTransactions({ accountId: ledgerAccount.id, currency: "DOP", rows: rowsFor(isPayback) });
-      eq("a payback imported on its own links to the one shared expense the ledger has", JSON.stringify(viaLedger), JSON.stringify({ ok: true, count: 1, unresolvedReimbursements: 0 }));
+      const viaLedger = await importCsvTransactions({ accountId: ledgerAccount.id, currency: "DOP", rows: rowsFor(isPayback) }, rates);
+      eq("a payback imported on its own links to the one shared expense the ledger has", JSON.stringify(viaLedger), JSON.stringify({ ok: true, count: 1, unresolvedReimbursements: 0, matchedPosted: 0, updatedPosted: 0 }));
       eq("...the original tickets, in the other account", (await prisma.transaction.findFirstOrThrow({ where: { accountId: ledgerAccount.id } })).reimbursesTransactionId, tickets.id);
 
       // 2. The whole account: the batch's own copy of the tickets wins over
       //    the original still in the ledger.
       const fullAccount = await prisma.account.create({ data: { name: "Verify Shared Import Full", currency: "DOP", type: "CHECKING" } });
-      const full = await importCsvTransactions({ accountId: fullAccount.id, currency: "DOP", rows: rowsFor(() => true) });
-      eq("every row of the account imports, no payback left unmatched", JSON.stringify(full), JSON.stringify({ ok: true, count: 8, unresolvedReimbursements: 0 }));
+      const full = await importCsvTransactions({ accountId: fullAccount.id, currency: "DOP", rows: rowsFor(() => true) }, rates);
+      eq("every row of the account imports, no payback left unmatched", JSON.stringify(full), JSON.stringify({ ok: true, count: 8, unresolvedReimbursements: 0, matchedPosted: 0, updatedPosted: 0 }));
       const importedRows = await prisma.transaction.findMany({ where: { accountId: fullAccount.id } });
       const importedTickets = importedRows.find((row) => row.note === "Verify Shared movie tickets")!;
       eq("the imported tickets keep their share", num(importedTickets.yourShare), 545);
@@ -7531,8 +7893,8 @@ async function main() {
         accountId: ambiguousAccount.id,
         currency: "DOP",
         rows: [...rowsFor(isPayback), { ...rowsFor(isPayback)[0], note: "Verify Shared payback garbled", reimburses: "not a reference" }],
-      });
-      eq("two matching expenses, or an unreadable cell: imported as ordinary income and counted", JSON.stringify(ambiguous), JSON.stringify({ ok: true, count: 2, unresolvedReimbursements: 2 }));
+      }, rates);
+      eq("two matching expenses, or an unreadable cell: imported as ordinary income and counted", JSON.stringify(ambiguous), JSON.stringify({ ok: true, count: 2, unresolvedReimbursements: 2, matchedPosted: 0, updatedPosted: 0 }));
       check("...with no link on either", (await prisma.transaction.findMany({ where: { accountId: ambiguousAccount.id } })).every((row) => row.reimbursesTransactionId === null));
 
       await prisma.transaction.update({ where: { id: ordinary.id }, data: { isExtraordinary: false } });
@@ -7682,8 +8044,8 @@ async function main() {
         });
       check("the file holds both income rows of the account", rowsFor().length === 2);
       const importAccount = await prisma.account.create({ data: { name: "Verify OneOff Import", currency: "DOP", type: "CHECKING" } });
-      const imported = await importCsvTransactions({ accountId: importAccount.id, currency: "DOP", rows: rowsFor() });
-      eq("both rows import", JSON.stringify(imported), JSON.stringify({ ok: true, count: 2, unresolvedReimbursements: 0 }));
+      const imported = await importCsvTransactions({ accountId: importAccount.id, currency: "DOP", rows: rowsFor() }, rates);
+      eq("both rows import", JSON.stringify(imported), JSON.stringify({ ok: true, count: 2, unresolvedReimbursements: 0, matchedPosted: 0, updatedPosted: 0 }));
       const importedRows = await prisma.transaction.findMany({ where: { accountId: importAccount.id } });
       eq("the re-imported gift keeps its flag", importedRows.find((row) => row.note === "Verify OneOff gift")!.isOneOffIncome, true);
       eq("...and the pay stays unflagged", importedRows.find((row) => row.note === "Verify OneOff pay")!.isOneOffIncome, false);
@@ -7698,7 +8060,7 @@ async function main() {
           { ...rowsFor()[0], type: "EXPENSE", note: "Verify OneOff spending row", isOneOffIncome: true },
           { ...rowsFor()[0], type: "INCOME", note: "Verify OneOff income row", isOneOffIncome: true, isExtraordinary: true },
         ],
-      });
+      }, rates);
       const misplacedRows = await prisma.transaction.findMany({ where: { accountId: misplaced.id } });
       const spending = misplacedRows.find((row) => row.note === "Verify OneOff spending row")!;
       const income = misplacedRows.find((row) => row.note === "Verify OneOff income row")!;

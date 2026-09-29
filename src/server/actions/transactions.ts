@@ -4,12 +4,13 @@ import { randomUUID } from "node:crypto";
 
 import { getSettings, requireAuth } from "@/lib/auth";
 import { backfillUncategorizedTransactions } from "@/lib/categorization";
+import { formatMoney } from "@/lib/currency";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { recomputeGoalSaved, removeContribution } from "@/lib/goals";
 import { num } from "@/lib/money";
 import { checkReferences } from "@/lib/references";
-import { ownShare, yourShareIssue } from "@/lib/shared-expense";
+import { yourShareIssue } from "@/lib/shared-expense";
 import {
   canBeExtraordinary,
   canBeOneOffIncome,
@@ -28,9 +29,17 @@ import {
 } from "@/lib/validation";
 
 import { getAppContext } from "@/lib/data/context";
-import { findExtraordinaryCandidates } from "@/lib/data/extraordinary";
+import { createManualTransaction } from "@/lib/data/manual-transaction";
+import { keepPostedInsteadOfEntry } from "@/lib/data/posted-duplicates";
 
-import { done, fail, revalidateApp, type ActionState, type ExtraordinarySuggestion } from "./utils";
+import {
+  done,
+  fail,
+  revalidateApp,
+  type ActionState,
+  type ExtraordinarySuggestion,
+  type PostedMatchSuggestion,
+} from "./utils";
 
 export async function saveTransactionAction(
   _previous: ActionState,
@@ -126,37 +135,84 @@ export async function saveTransactionAction(
     }
     await prisma.transaction.update({ where: { id }, data: values });
   } else {
-    // Measured before the row lands so it is not its own history. The row is
-    // saved unflagged whatever the verdict; a hit only asks the form to put
-    // the question to the user (see src/lib/extraordinary.ts). A shared
-    // expense is measured at the user's own share: that is the figure the
-    // averages the flag protects would read for it.
-    const measured = ownShare({ amount: values.amount, yourShare: values.yourShare ?? null });
-    const suggestion =
-      values.type === "EXPENSE" && values.categoryId
-        ? await findExtraordinaryCandidates(
-            [{ key: "new", categoryId: values.categoryId, amount: measured, currency: values.currency }],
-            await getAppContext(),
-          )
-        : null;
-    const created = await prisma.transaction.create({ data: { ...values, source: "MANUAL" } });
-    const hit = suggestion?.get("new");
-    if (hit) {
-      const extraordinarySuggestion: ExtraordinarySuggestion = {
-        transactionId: created.id,
-        amount: measured,
-        currency: values.currency,
-        categoryName: hit.categoryName,
-        median: hit.median,
-        medianCurrency: hit.currency,
-      };
+    // The row is written whatever the hints say; see createManualTransaction.
+    const created = await createManualTransaction(values, { getContext: getAppContext });
+    const extraordinarySuggestion: ExtraordinarySuggestion | undefined = created.extraordinary
+      ? {
+          transactionId: created.id,
+          amount: created.extraordinary.measured,
+          currency: values.currency,
+          categoryName: created.extraordinary.hit.categoryName,
+          median: created.extraordinary.hit.median,
+          medianCurrency: created.extraordinary.hit.currency,
+        }
+      : undefined;
+    // Money the ledger may already hold as a row Cadence wrote itself - a
+    // posted recurring charge, a check-in's paycheck. The entry stays saved;
+    // the form asks, and only "It's the posted charge" removes it
+    // (keepPostedChargeAction), by this id and only as saved.
+    const postedMatchSuggestion: PostedMatchSuggestion | undefined = created.posted
+      ? {
+          transactionId: created.id,
+          savedDigest: created.posted.savedDigest,
+          amount: values.amount,
+          currency: values.currency,
+          match: created.posted.match,
+        }
+      : undefined;
+    if (extraordinarySuggestion || postedMatchSuggestion) {
       revalidateApp();
-      return done(t.transactionAdded, { extraordinarySuggestion });
+      return done(t.transactionAdded, { extraordinarySuggestion, postedMatchSuggestion });
     }
   }
 
   revalidateApp();
   return done(id ? t.transactionUpdated : t.transactionAdded);
+}
+
+/**
+ * "It's the posted charge" (or "the paycheck already recorded"), asked right
+ * after a manual entry matched a row Cadence wrote itself. The posted row
+ * stays, taking the entry's amount and currency where they differ, and the
+ * entry is removed so the money is counted once - see
+ * keepPostedInsteadOfEntry, which re-checks the match on the stored rows.
+ */
+export async function keepPostedChargeAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireAuth();
+  const settings = await getSettings();
+  const locale = isLocale(settings.language) ? settings.language : "en";
+  const t = getDictionary(locale).transactions;
+  const transactionId = String(formData.get("id") ?? "").trim();
+  const savedDigest = String(formData.get("savedDigest") ?? "").trim();
+  const postedId = String(formData.get("postedId") ?? "").trim();
+  if (!transactionId || !savedDigest || !postedId) return fail(t.transactionNoLongerExists);
+
+  const result = await keepPostedInsteadOfEntry(
+    { transactionId, savedDigest, postedId },
+    async () => (await getAppContext()).rates,
+  );
+  if (!result.ok) {
+    if (result.reason === "not_found") return fail(t.postedEntryAlreadyGone);
+    if (result.reason === "not_applicable") return fail(t.postedMatchNotApplicable);
+    if (result.reason === "changed") return fail(t.postedEntryChanged);
+    if (result.reason === "check_failed") return fail(t.postedMatchCheckFailed);
+    return fail(t.postedMatchGone);
+  }
+
+  revalidateApp();
+  const { match } = result;
+  if (match.kind === "paycheck") return done(t.paycheckKept);
+  return done(
+    result.updated && match.rewrite
+      ? t.postedChargeKeptUpdated(
+          formatMoney(match.posted.amount, match.posted.currency),
+          formatMoney(match.rewrite.amount, match.rewrite.currency),
+        )
+      : t.postedChargeKept,
+  );
 }
 
 /**

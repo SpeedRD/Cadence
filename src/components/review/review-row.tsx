@@ -5,6 +5,7 @@ import { useId, useTransition } from "react";
 import { toast } from "sonner";
 
 import type { Option } from "@/components/form/selects";
+import { PostedMatchNotice } from "@/components/transactions/posted-match-notice";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -22,6 +23,7 @@ import { getDictionary, type Locale } from "@/lib/i18n";
 import { labelFor } from "@/lib/labels";
 import { approveStagedAction, rejectStagedAction } from "@/server/actions/review";
 
+import type { PostedMatch } from "@/lib/data/posted-duplicates";
 import type { StagedRow } from "@/lib/data/staged";
 
 type ReviewDictionary = ReturnType<typeof getDictionary>["review"];
@@ -38,11 +40,15 @@ function StatusBadge({ status, t }: { status: string; t: ReviewDictionary }) {
   );
 }
 
-/** Approve and reject for one staged row, with the account and category the reviewer picked. */
+/**
+ * Approve and reject for one staged row, with the account and category the
+ * reviewer picked. A row matching a posted charge is approved with the
+ * reviewer's answer: "posted" (it is that charge) or "different".
+ */
 function useReviewActions(row: StagedRow, t: ReviewDictionary, accountId: string, categoryId: string) {
   const [pending, startTransition] = useTransition();
 
-  const approve = () => {
+  const approve = (resolution?: "posted" | "different") => {
     if (!accountId) {
       toast.error(t.pickAccountFirst);
       return;
@@ -56,6 +62,7 @@ function useReviewActions(row: StagedRow, t: ReviewDictionary, accountId: string
       formData.set("rawDescription", row.rawDescription);
       formData.set("accountId", accountId);
       formData.set("categoryId", categoryId === "none" ? "" : categoryId);
+      if (resolution) formData.set("resolution", resolution);
       const result = await approveStagedAction(null, formData);
       if (result?.error) toast.error(result.error);
       else toast.success(result?.message ?? t.approvedToast);
@@ -81,6 +88,8 @@ export function initialPicks(row: StagedRow) {
 }
 
 type PickProps = {
+  /** What this row matches on the picked account - a charge recurring posting already wrote - or null. */
+  postedMatch: PostedMatch | null;
   accountId: string;
   categoryId: string;
   onAccountChange: (value: string) => void;
@@ -158,6 +167,7 @@ export function ReviewRow({
   categories,
   onEdit,
   locale,
+  postedMatch,
   accountId,
   categoryId,
   onAccountChange,
@@ -170,18 +180,32 @@ export function ReviewRow({
   locale: Locale;
 } & PickProps) {
   const t = getDictionary(locale).review;
+  const tx = getDictionary(locale).transactions;
   const common = getDictionary(locale).common;
   const { pending, approve, reject } = useReviewActions(row, t, accountId, categoryId);
   const reviewed = row.status !== "PENDING";
+  const match = reviewed ? null : postedMatch;
 
   return (
     <TableRow>
       <TableCell className="figure figure-sm text-xs text-muted-foreground">
         {toISODate(row.date)}
       </TableCell>
-      <TableCell className="max-w-[18rem] truncate text-sm">
-        {row.rawDescription}
-      </TableCell>
+      {match ? (
+        <TableCell className="max-w-[18rem] text-sm">
+          <span className="block truncate">{row.rawDescription}</span>
+          <PostedMatchNotice
+            match={match}
+            incoming={{ amount: row.amount, currency: row.currency }}
+            showOutcome
+            locale={locale}
+          />
+        </TableCell>
+      ) : (
+        <TableCell className="max-w-[18rem] truncate text-sm">
+          {row.rawDescription}
+        </TableCell>
+      )}
       <TableCell className="text-right">
         <span className="figure text-sm">{formatMoney(row.amount, row.currency)}</span>
       </TableCell>
@@ -214,17 +238,29 @@ export function ReviewRow({
         {reviewed ? (
           <StatusBadge status={row.status} t={t} />
         ) : (
-          <div className="flex items-center gap-1.5">
+          <div className={match ? "flex flex-wrap items-center gap-1.5" : "flex items-center gap-1.5"}>
             <Button variant="ghost" size="icon-xs" aria-label={t.editAria} onClick={onEdit}>
               <Pencil className="size-3.5" />
             </Button>
             <Button variant="outline" size="sm" disabled={pending} onClick={reject}>
               {t.reject}
             </Button>
-            <Button size="sm" disabled={pending} onClick={approve}>
-              {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
-              {t.approve}
-            </Button>
+            {match ? (
+              <>
+                <Button size="sm" disabled={pending} onClick={() => approve("posted")}>
+                  {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                  {tx.isPostedCharge}
+                </Button>
+                <Button variant="outline" size="sm" disabled={pending} onClick={() => approve("different")}>
+                  {tx.isDifferentCharge}
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" disabled={pending} onClick={() => approve()}>
+                {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                {t.approve}
+              </Button>
+            )}
           </div>
         )}
       </TableCell>
@@ -243,6 +279,7 @@ export function ReviewCard({
   categories,
   onEdit,
   locale,
+  postedMatch,
   accountId,
   categoryId,
   onAccountChange,
@@ -255,9 +292,11 @@ export function ReviewCard({
   locale: Locale;
 } & PickProps) {
   const t = getDictionary(locale).review;
+  const tx = getDictionary(locale).transactions;
   const common = getDictionary(locale).common;
   const { pending, approve, reject } = useReviewActions(row, t, accountId, categoryId);
   const reviewed = row.status !== "PENDING";
+  const match = reviewed ? null : postedMatch;
   const fieldId = useId();
 
   return (
@@ -270,6 +309,16 @@ export function ReviewCard({
           {" · "}
           {labelFor(common.sourceLabels, row.source)}
         </p>
+        {match ? (
+          <div className="col-span-2 pt-1">
+            <PostedMatchNotice
+              match={match}
+              incoming={{ amount: row.amount, currency: row.currency }}
+              showOutcome
+              locale={locale}
+            />
+          </div>
+        ) : null}
       </div>
 
       {reviewed ? (
@@ -324,11 +373,24 @@ export function ReviewCard({
             <Button variant="outline" size="sm" className="flex-1" disabled={pending} onClick={reject}>
               {t.reject}
             </Button>
-            <Button size="sm" className="flex-1" disabled={pending} onClick={approve}>
-              {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
-              {t.approve}
-            </Button>
+            {match ? null : (
+              <Button size="sm" className="flex-1" disabled={pending} onClick={() => approve()}>
+                {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                {t.approve}
+              </Button>
+            )}
           </div>
+          {match ? (
+            <div className="grid gap-2">
+              <Button size="sm" disabled={pending} onClick={() => approve("posted")}>
+                {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                {tx.isPostedCharge}
+              </Button>
+              <Button variant="outline" size="sm" disabled={pending} onClick={() => approve("different")}>
+                {tx.isDifferentCharge}
+              </Button>
+            </div>
+          ) : null}
         </>
       )}
     </li>

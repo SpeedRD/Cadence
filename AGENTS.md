@@ -20,9 +20,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   point it at a scratch database, never one holding real data. Add checks as
   `check`/`eq` blocks; there is no Jest/Vitest.
 - Integrity audit: `DATABASE_URL="postgres://.../any_db" npx tsx scripts/verify-no-double-counting.ts`
-  checks real data for the three pairs of mechanisms that could count one
+  checks real data for the four pairs of mechanisms that could count one
   commitment twice or drop it (goal-contribution twins, SEMI_MONTHLY anchors,
-  Afford's goal estimate vs confirmed GOAL rows). Read-only at the database
+  Afford's goal estimate vs confirmed GOAL rows, a posted RECURRING or
+  PAYDAY_CHECKIN row vs a row brought in for the same money). Read-only at the database
   level (`default_transaction_read_only=on` on its connection), so it is safe
   against real data. Exit 1 is a finding to investigate, never something to
   fix inside the script; it verifies the mechanisms and must not re-implement
@@ -40,6 +41,12 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   and read by posting and the payday check-in alike. Only posting persists a
   pairing, as a `RecurringSettlement` row. Reuse it rather than matching
   charges to items a second way.
+- The reverse question - is a CSV row, a receipt being approved or a manual
+  entry the money a RECURRING row or a check-in's paycheck already holds? -
+  is `planPostedDuplicates()` in the same file (loaded by
+  `findPostedDuplicates()` in `src/lib/data/posted-duplicates.ts`), on the same
+  window and look-alike guard. A match is only ever put to the user ("It's
+  the posted charge" / "It's a different charge"); never resolve one silently.
 - New `/api/cron/*` routes must be added to `BEARER_AUTH_PATHS` in
   `src/proxy.ts`, or the proxy redirects them to `/login` before the
   handler's bearer check ever runs.

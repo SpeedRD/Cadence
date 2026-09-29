@@ -33,7 +33,13 @@
  *     the money. Any other matched charge settles a contribution occurrence
  *     only together with a GoalContribution posting writes for it, carrying
  *     the occurrence key, so the charge becomes that contribution's twin.
+ *
+ * The reverse question - a charge brought in after posting already wrote the
+ * occurrence's RECURRING row, or a deposit after a check-in recorded the
+ * paycheck - is planPostedDuplicates below, on the same window, guard and
+ * one-to-one rule.
  */
+import { convert, type RateTable } from "@/lib/currency";
 import { addDays, maxDate, minDate, toISODate } from "@/lib/date";
 import { periodForDate } from "@/lib/period";
 
@@ -93,13 +99,15 @@ export function itemsWithAmbiguousCategory(items: readonly MatchableItem[]): Set
 }
 
 /**
- * Whether `charge` looks like one of `item`'s charges: same currency, amount
- * within a cent, and either the item's name in the note or - unless
- * `categoryIsAmbiguous` - the item's category.
+ * Whether `charge` names `item`: the item's name in the note, or - unless
+ * `categoryIsAmbiguous` - the item's category. The identity half of
+ * chargeMatchesItem, without the amount.
  */
-export function chargeMatchesItem(item: MatchableItem, charge: MatchableCharge, categoryIsAmbiguous: boolean): boolean {
-  if (charge.currency !== item.currency) return false;
-  if (Math.abs(charge.amount - item.amount) > AMOUNT_MATCH_TOLERANCE) return false;
+export function chargeIdentifiesItem(
+  item: MatchableItem,
+  charge: Pick<MatchableCharge, "categoryId" | "note">,
+  categoryIsAmbiguous: boolean,
+): boolean {
   const normalizedName = normalizeForMatch(item.name);
   const nameMatches =
     normalizedName.length > 0 && Boolean(charge.note) && normalizeForMatch(charge.note as string).includes(normalizedName);
@@ -107,9 +115,26 @@ export function chargeMatchesItem(item: MatchableItem, charge: MatchableCharge, 
   return nameMatches || categoryMatches;
 }
 
+/**
+ * Whether `charge` looks like one of `item`'s charges: same currency, amount
+ * within a cent, and either the item's name in the note or - unless
+ * `categoryIsAmbiguous` - the item's category.
+ */
+export function chargeMatchesItem(item: MatchableItem, charge: MatchableCharge, categoryIsAmbiguous: boolean): boolean {
+  if (charge.currency !== item.currency) return false;
+  if (Math.abs(charge.amount - item.amount) > AMOUNT_MATCH_TOLERANCE) return false;
+  return chargeIdentifiesItem(item, charge, categoryIsAmbiguous);
+}
+
 /** "<itemId>:<YYYY-MM-DD>": one occurrence's key - the RECURRING row's externalId, the settlement's occurrenceKey. */
 export function recurringExternalId(itemId: string, due: Date): string {
   return `${itemId}:${toISODate(due)}`;
+}
+
+/** The item id inside a recurringExternalId, or null for anything not shaped like one. */
+export function itemIdFromOccurrenceKey(key: string): string | null {
+  const separator = key.lastIndexOf(":");
+  return separator > 0 ? key.slice(0, separator) : null;
 }
 
 /**
@@ -199,4 +224,178 @@ export function settlementSpan(dues: readonly Date[]): { start: Date; end: Date 
     span = span ? { start: minDate(span.start, window.start), end: maxDate(span.end, window.end) } : window;
   }
   return span;
+}
+
+// ---------------------------------------------------------------------------
+// The other direction: a charge brought in (a CSV row, an approved receipt, a
+// manual entry) after posting already wrote the occurrence's RECURRING row, or
+// a deposit after a payday check-in recorded the paycheck. planSettlements
+// cannot see these - the occurrence is claimed - so without this the same
+// money lands twice. Same window, same look-alike guard, same one-to-one rule;
+// the loader is src/lib/data/posted-duplicates.ts, and nothing here decides
+// anything: a match is put to the user, who says whether it is the same money.
+// ---------------------------------------------------------------------------
+
+/**
+ * How far a charge in another currency may land from the posted amount,
+ * converted into the charge's currency at the current rate table, and still
+ * be shown as a possible match - a share of the converted amount. A card
+ * charge settles within a few tenths of a percent of the published bank rate,
+ * a foreign-transaction margin can add one or two points on top, and the rate
+ * table is today's while the charge is from up to a period ago. Three percent
+ * covers all of that for one charge; two genuinely different subscriptions
+ * rarely sit that close, and when they do the look-alike guard and the user
+ * still decide - a cross-currency match is only ever a warning.
+ */
+export const CROSS_CURRENCY_MATCH_TOLERANCE = 0.03;
+
+/** A row being brought in, before it is written (or just after, for a manual entry). */
+export interface IncomingEntry {
+  /** The caller's handle for it: a CSV row index, a staged row id, a transaction id. */
+  key: string;
+  accountId: string;
+  type: "EXPENSE" | "INCOME";
+  date: Date;
+  amount: number;
+  currency: string;
+  categoryId: string | null;
+  note: string | null;
+}
+
+/** A row the app wrote itself: an occurrence's RECURRING row, or a check-in's paycheck. */
+export interface PostedEntry {
+  id: string;
+  kind: "recurring" | "paycheck";
+  accountId: string;
+  type: "EXPENSE" | "INCOME";
+  date: Date;
+  amount: number;
+  currency: string;
+  /**
+   * The days an incoming row may fall on to be this row's money: the
+   * occurrence's settlementWindow, or for a paycheck that of the first day of
+   * the period its check-in planned (paycheckWindow).
+   */
+  window: { start: Date; end: Date };
+  /** RECURRING only: the item it was posted from, or null once that item is gone. */
+  item: MatchableItem | null;
+}
+
+export interface PostedDuplicate {
+  /** The posted row the incoming one most likely is: the nearest in date among those left after the guard. */
+  postedId: string;
+  /** Every posted row still in the running after the guard, nearest first, one per item; more than one only when `ambiguous`. */
+  candidateIds: string[];
+  /** The amounts agree only after converting between currencies: a warning, never resolved on its own. */
+  possible: boolean;
+  /** Candidates from more than one item survive the look-alike guard, so which one it is cannot be told. */
+  ambiguous: boolean;
+}
+
+/**
+ * The window a paycheck's deposit may land in: the settlement window of the
+ * first day of the period the check-in planned. A period's pay lands on the
+ * last day of the period before, pulled back to Friday over a weekend, which
+ * is the same few days before the period that let a bill due on the 1st be
+ * paid from it (SETTLEMENT_LEAD_DAYS).
+ */
+export function paycheckWindow(plannedPeriodStart: Date): { start: Date; end: Date } {
+  return settlementWindow(plannedPeriodStart);
+}
+
+/** Which series a posted row belongs to: several occurrences of one item (or several paychecks) are one series. */
+function seriesOf(entry: PostedEntry): string {
+  if (entry.kind === "paycheck") return "paycheck";
+  return entry.item ? `item:${entry.item.id}` : `row:${entry.id}`;
+}
+
+/**
+ * Pairs incoming rows with the posted rows they most likely duplicate. A
+ * posted row is a candidate for an incoming one when both are on the same
+ * account and go the same way (an expense against RECURRING rows, a deposit
+ * against paychecks), the incoming date is inside the posted row's window,
+ * and the amounts agree: in the same currency to within a cent
+ * (AMOUNT_MATCH_TOLERANCE), or - only when no same-currency candidate exists -
+ * in another currency to within CROSS_CURRENCY_MATCH_TOLERANCE after
+ * converting the posted amount with `rates`, which makes it a possible match.
+ *
+ * Several candidates from different items go through the look-alike guard:
+ * only the items the incoming row names survive (chargeIdentifiesItem, with
+ * the category not counting for items whose category cannot tell them apart,
+ * judged over every active item in `items`). If that leaves exactly one item,
+ * it is that item; otherwise the items still standing (all of them, when the
+ * row names none) are listed and the match is ambiguous. Within one item (weekly occurrences in one period, or
+ * two periods' paychecks whose windows overlap) the nearest date wins - that
+ * is which occurrence, not which bill.
+ *
+ * One incoming row, one posted row: rows are taken in date order, each pairs
+ * with the nearest candidate still free, and an ambiguous row holds that
+ * nearest one too, so two identical incoming rows and one posted row flag only
+ * one of them. `incoming` is one batch; rows already in the ledger are never
+ * counted against it.
+ */
+export function planPostedDuplicates(input: {
+  incoming: readonly IncomingEntry[];
+  posted: readonly PostedEntry[];
+  items: readonly MatchableItem[];
+  rates: RateTable;
+}): Map<string, PostedDuplicate> {
+  const ambiguousCategory = itemsWithAmbiguousCategory(input.items);
+  const incoming = [...input.incoming].sort(
+    (a, b) => a.date.getTime() - b.date.getTime() || a.key.localeCompare(b.key),
+  );
+  const taken = new Set<string>();
+  const result = new Map<string, PostedDuplicate>();
+
+  for (const entry of incoming) {
+    const eligible = input.posted.filter(
+      (posted) =>
+        !taken.has(posted.id) &&
+        posted.accountId === entry.accountId &&
+        posted.type === entry.type &&
+        entry.date.getTime() >= posted.window.start.getTime() &&
+        entry.date.getTime() <= posted.window.end.getTime(),
+    );
+    let pool = eligible.filter(
+      (posted) => posted.currency === entry.currency && Math.abs(posted.amount - entry.amount) <= AMOUNT_MATCH_TOLERANCE,
+    );
+    const possible = pool.length === 0;
+    if (possible) {
+      pool = eligible.filter((posted) => {
+        if (posted.currency === entry.currency) return false;
+        const converted = convert(posted.amount, posted.currency, entry.currency, input.rates);
+        return converted > 0 && Math.abs(entry.amount - converted) <= CROSS_CURRENCY_MATCH_TOLERANCE * converted;
+      });
+    }
+    if (pool.length === 0) continue;
+
+    if (new Set(pool.map(seriesOf)).size > 1) {
+      const named = pool.filter(
+        (posted) => posted.item !== null && chargeIdentifiesItem(posted.item, entry, ambiguousCategory.has(posted.item.id)),
+      );
+      // Named items win; when the row names none of them, all stay listed.
+      if (named.length > 0) pool = named;
+    }
+
+    const distance = (posted: PostedEntry) => Math.abs(posted.date.getTime() - entry.date.getTime());
+    const ordered = [...pool].sort(
+      (a, b) => distance(a) - distance(b) || a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id),
+    );
+    const seen = new Set<string>();
+    const nearestPerSeries = ordered.filter((posted) => {
+      const series = seriesOf(posted);
+      if (seen.has(series)) return false;
+      seen.add(series);
+      return true;
+    });
+    const primary = nearestPerSeries[0];
+    taken.add(primary.id);
+    result.set(entry.key, {
+      postedId: primary.id,
+      candidateIds: nearestPerSeries.map((posted) => posted.id),
+      possible,
+      ambiguous: nearestPerSeries.length > 1,
+    });
+  }
+  return result;
 }

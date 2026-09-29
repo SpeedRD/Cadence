@@ -1,6 +1,7 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
+import { formatMoney } from "@/lib/currency";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import {
@@ -10,9 +11,10 @@ import {
   stagedEditSchema,
 } from "@/lib/validation";
 
-import { done, fail, revalidateApp, type ActionState } from "./utils";
+import { getAppContext } from "@/lib/data/context";
+import { approveStagedTransaction } from "@/lib/data/staged-approval";
 
-import { Prisma } from "@/generated/prisma/client";
+import { done, fail, revalidateApp, type ActionState } from "./utils";
 
 /** Saves inline edits to a still-pending staged row without approving it. */
 export async function updateStagedAction(
@@ -53,7 +55,10 @@ export async function updateStagedAction(
  * and marks the staged row APPROVED - it is never mutated back to pending.
  * Every Phase 2A source (receipts, invoices, subscriptions, order
  * confirmations) represents money going out, so the transaction type is
- * always EXPENSE; nothing in this pipeline stages income.
+ * always EXPENSE; nothing in this pipeline stages income. A row matching a
+ * charge recurring posting already wrote carries the user's answer in
+ * `resolution` ("posted" or "different") - see approveStagedTransaction in
+ * src/lib/data/staged-approval.ts, which owns the write.
  */
 export async function approveStagedAction(
   _previous: ActionState,
@@ -62,62 +67,41 @@ export async function approveStagedAction(
   await requireAuth();
   const settings = await getSettings();
   const locale = isLocale(settings.language) ? settings.language : "en";
-  const t = getDictionary(locale).review;
+  const dictionary = getDictionary(locale);
+  const t = dictionary.review;
   const parsed = stagedApproveSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
   const { id, date, amount, currency, rawDescription, accountId, categoryId } =
     parsed.data;
+  const rawResolution = String(formData.get("resolution") ?? "");
+  const resolution = rawResolution === "posted" || rawResolution === "different" ? rawResolution : null;
 
-  const staged = await prisma.stagedTransaction.findUnique({ where: { id } });
-  if (!staged) return fail(t.itemNoLongerExists);
-  if (staged.status !== "PENDING") return fail(t.alreadyReviewed);
-
-  const account = await prisma.account.findUnique({
-    where: { id: accountId },
-    select: { id: true },
-  });
-  if (!account) return fail(t.accountNoLongerExists);
-
-  try {
-    await prisma.$transaction([
-      prisma.transaction.create({
-        data: {
-          date,
-          amount,
-          currency,
-          type: "EXPENSE",
-          accountId,
-          categoryId,
-          note: rawDescription,
-          source: staged.source,
-          externalId: staged.externalId,
-        },
-      }),
-      prisma.stagedTransaction.update({
-        where: { id },
-        data: {
-          date,
-          amount,
-          currency,
-          rawDescription,
-          accountId,
-          suggestedCategoryId: categoryId,
-          status: "APPROVED",
-          reviewedAt: new Date(),
-        },
-      }),
-    ]);
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
-      return fail(t.transactionAlreadyExists);
-    }
-    throw error;
+  const result = await approveStagedTransaction(
+    { id, date, amount, currency, rawDescription, accountId, categoryId, resolution },
+    (await getAppContext()).rates,
+  );
+  if (!result.ok) {
+    if (result.reason === "not_found") return fail(t.itemNoLongerExists);
+    if (result.reason === "already_reviewed") return fail(t.alreadyReviewed);
+    if (result.reason === "account_missing") return fail(t.accountNoLongerExists);
+    if (result.reason === "needs_choice") return fail(t.postedMatchNeedsChoice);
+    if (result.reason === "match_gone") return fail(dictionary.transactions.postedMatchGone);
+    if (result.reason === "check_failed") return fail(dictionary.transactions.postedMatchCheckFailed);
+    return fail(t.transactionAlreadyExists);
   }
 
   revalidateApp();
+  if (result.outcome === "kept_posted") {
+    const { match } = result;
+    return done(
+      result.updated && match.rewrite
+        ? t.keptAsPostedUpdated(
+            formatMoney(match.posted.amount, match.posted.currency),
+            formatMoney(match.rewrite.amount, match.rewrite.currency),
+          )
+        : t.keptAsPosted,
+    );
+  }
   return done(t.approvedToast);
 }
 

@@ -1,9 +1,9 @@
 /**
  * Standing double-counting integrity audit.
  *
- * Three pairs of mechanisms in this codebase could, in principle, count the
+ * Four pairs of mechanisms in this codebase could, in principle, count the
  * same financial commitment twice (or, just as bad, drop it). Each was fixed
- * as a one-off in the past; this script checks all three against whatever
+ * as a one-off in the past; this script checks all four against whatever
  * data it is pointed at, by computing each side of every pair independently
  * from the raw rows and comparing it with what the app's own readers report:
  *
@@ -29,6 +29,13 @@
  *           scheduled occurrences plus its GOAL rows, with no estimate on
  *           top, and an unconfirmed period's into schedule plus estimate,
  *           with nothing leaking in from a DRAFT check-in.
+ *   pair 4  a row Cadence wrote itself - an occurrence's RECURRING row, or
+ *           the paycheck a payday check-in recorded - versus a charge or
+ *           deposit brought in for the same money (a CSV row, an approved
+ *           receipt, a manual entry). Existing pairs are found with the
+ *           entry points' own matcher (findPostedDuplicates in
+ *           src/lib/data/posted-duplicates.ts), and no occurrence may be
+ *           both settled by a charge (RecurringSettlement) and posted.
  *
  *   DATABASE_URL="postgres://.../any_db" npx tsx scripts/verify-no-double-counting.ts
  *
@@ -136,9 +143,9 @@ let prisma!: PrismaClient;
 // Reporting
 // ---------------------------------------------------------------------------
 
-type FindingKind = "DOUBLE" | "DROP" | "MISMATCH";
+type FindingKind = "DOUBLE" | "POSSIBLE" | "DROP" | "MISMATCH";
 interface Finding {
-  pair: 1 | 2 | 3;
+  pair: 1 | 2 | 3 | 4;
   kind: FindingKind;
   title: string;
   evidence: string[];
@@ -146,7 +153,7 @@ interface Finding {
 
 const findings: Finding[] = [];
 
-function flag(pair: 1 | 2 | 3, kind: FindingKind, title: string, evidence: string[]) {
+function flag(pair: 1 | 2 | 3 | 4, kind: FindingKind, title: string, evidence: string[]) {
   findings.push({ pair, kind, title, evidence });
   console.log(`  FLAG ${kind.padEnd(8)} ${title}`);
   for (const line of evidence) console.log(`                ${line}`);
@@ -160,7 +167,7 @@ function money(amount: number, currency: string): string {
   return `${round2(amount).toFixed(2)} ${currency}`;
 }
 
-function sectionResult(pair: 1 | 2 | 3) {
+function sectionResult(pair: 1 | 2 | 3 | 4) {
   const own = findings.filter((finding) => finding.pair === pair);
   console.log(own.length === 0 ? "  clean" : `  ${own.length} finding${own.length === 1 ? "" : "s"}`);
 }
@@ -1068,12 +1075,99 @@ async function main(): Promise<number> {
   }
 
   // =========================================================================
+  console.log("\n== pair 4: a charge or deposit brought in vs the row Cadence wrote for it ==");
+  // =========================================================================
+  {
+    const { findPostedDuplicates } = await import("../src/lib/data/posted-duplicates");
+
+    // An occurrence is either posted (its RECURRING row) or settled by a
+    // charge the user entered (RecurringSettlement), never both.
+    const settlements = await prisma.recurringSettlement.findMany({
+      select: { id: true, occurrenceKey: true, transactionId: true, dueDate: true },
+    });
+    const postedForSettled = settlements.length
+      ? await prisma.transaction.findMany({
+          where: { source: "RECURRING", externalId: { in: settlements.map((settlement) => settlement.occurrenceKey) } },
+          select: { id: true, externalId: true, date: true, amount: true, currency: true },
+        })
+      : [];
+    const postedByKey = new Map(postedForSettled.map((row) => [row.externalId as string, row]));
+    let settledAndPosted = 0;
+    for (const settlement of settlements) {
+      const posted = postedByKey.get(settlement.occurrenceKey);
+      if (!posted) continue;
+      settledAndPosted += 1;
+      flag(4, "DOUBLE", `occurrence ${settlement.occurrenceKey} is both settled by a charge and posted`, [
+        `settled:  RecurringSettlement ${settlement.id} -> Transaction ${settlement.transactionId} (due ${toISODate(settlement.dueDate)})`,
+        `posted:   Transaction ${posted.id} (${toISODate(posted.date)}) ${money(num(posted.amount), posted.currency)}`,
+      ]);
+    }
+
+    // Every row brought in, as one batch, against every row Cadence wrote. A
+    // charge a settlement already pairs with an occurrence, and a hand-logged
+    // contribution's own expense (pair 1's twin), are already accounted for
+    // and are not judged again here.
+    const brought = await prisma.transaction.findMany({
+      where: {
+        type: { in: ["EXPENSE", "INCOME"] },
+        source: { notIn: ["RECURRING", "PAYDAY_CHECKIN", "OPENING_BALANCE"] },
+        transferId: null,
+        recurringSettlement: { is: null },
+      },
+      select: { id: true, date: true, amount: true, currency: true, type: true, accountId: true, categoryId: true, note: true, source: true, externalId: true },
+    });
+    const incoming = brought
+      .filter((row) => manualContributionIdFromTransaction(row) === null)
+      .map((row) => ({
+        key: row.id,
+        accountId: row.accountId,
+        type: row.type as "EXPENSE" | "INCOME",
+        date: row.date,
+        amount: num(row.amount),
+        currency: row.currency,
+        categoryId: row.categoryId,
+        note: row.note,
+      }));
+    const byId = new Map(brought.map((row) => [row.id, row]));
+    const pairs = await findPostedDuplicates(incoming, rates, prisma);
+    for (const [id, match] of pairs) {
+      const row = byId.get(id)!;
+      const posted = match.posted;
+      flag(
+        4,
+        match.possible ? "POSSIBLE" : "DOUBLE",
+        `${row.source} ${row.type.toLowerCase()} ${row.id} duplicates the ${posted.kind === "paycheck" ? "paycheck" : `posted charge "${posted.label ?? "?"}"`} ${posted.id}`,
+        [
+          `brought in: Transaction ${row.id} (${row.source}, ${toISODate(row.date)}) ${money(num(row.amount), row.currency)}${row.note ? ` "${row.note}"` : ""}`,
+          `written:    Transaction ${posted.id} (${posted.kind === "paycheck" ? "PAYDAY_CHECKIN" : "RECURRING"}, ${posted.date}) ${money(posted.amount, posted.currency)}`,
+          ...(match.possible ? ["amounts agree only after conversion at the stored rates: a possible match"] : []),
+          ...(match.ambiguous
+            ? [`ambiguous: could also be ${match.others.map((other) => `${other.id} (${other.label ?? "?"}, ${other.date})`).join(", ")}`]
+            : []),
+        ],
+      );
+    }
+    const written = await prisma.transaction.groupBy({
+      by: ["source", "type", "currency"],
+      where: { OR: [{ source: "RECURRING", type: "EXPENSE" }, { source: "PAYDAY_CHECKIN", type: "INCOME" }] },
+      _count: { _all: true },
+    });
+    info(
+      `settled and posted: ${settledAndPosted} of ${settlements.length} settlement${settlements.length === 1 ? "" : "s"} name an occurrence that also has a RECURRING row`,
+    );
+    info(
+      `existing pairs: ${pairs.size} (${[...pairs.values()].filter((match) => !match.possible).length} exact, ${[...pairs.values()].filter((match) => match.possible).length} possible) - ${incoming.length} row${incoming.length === 1 ? "" : "s"} brought in (${brought.length - incoming.length} contribution twin${brought.length - incoming.length === 1 ? "" : "s"} left to pair 1) against ${written.map((group) => `${group._count._all} ${group.source} ${group.currency}`).join(", ") || "no written rows"}`,
+    );
+    sectionResult(4);
+  }
+
+  // =========================================================================
   console.log("\n== summary ==");
   if (findings.length === 0) {
-    console.log("  clean: no double-counted or dropped commitment found in any of the three pairs");
+    console.log("  clean: no double-counted or dropped commitment found in any of the four pairs");
     return 0;
   }
-  for (const pair of [1, 2, 3] as const) {
+  for (const pair of [1, 2, 3, 4] as const) {
     const own = findings.filter((finding) => finding.pair === pair);
     if (own.length === 0) continue;
     console.log(`  pair ${pair}: ${own.length} finding${own.length === 1 ? "" : "s"}`);

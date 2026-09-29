@@ -16,7 +16,10 @@ import {
   type ReimbursedExpenseReference,
 } from "@/lib/shared-expense";
 
-import { findCsvDuplicates } from "@/lib/data/import-duplicates";
+import { findCsvDuplicates, findCsvPostedDuplicates } from "@/lib/data/import-duplicates";
+import { applyPostedMatch, type PostedLookup } from "@/lib/data/posted-duplicates";
+
+import type { RateTable } from "@/lib/currency";
 
 export interface CsvImportRow {
   /** YYYY-MM-DD */
@@ -26,8 +29,14 @@ export interface CsvImportRow {
   transferDirection: "OUT" | "IN" | null;
   note: string | null;
   categoryId: string | null;
-  /** The user reviewed this row as a possible duplicate and chose to import it anyway. */
+  /** The user reviewed this row as a possible duplicate and chose to import it anyway ("It's a different charge", for a posted match). */
   importAnyway: boolean;
+  /**
+   * The user said this row is the posted charge (or the paycheck already
+   * recorded) it matches - see findCsvPostedDuplicates. Nothing is written for
+   * it; the posted row takes its amount and currency where they differ.
+   */
+  postedCharge?: boolean;
   /** The user's own verdict - the review step's, or the file's One-off column. */
   isExtraordinary: boolean;
   /** INCOME only: the file's One-off income column says yes (Transaction.isOneOffIncome). */
@@ -50,8 +59,16 @@ export interface CsvImportInput {
 }
 
 export type CsvImportResult =
-  | { ok: true; count: number; unresolvedReimbursements: number }
-  | { ok: false; reason: "account_missing" | "invalid_date" | "collision" }
+  | {
+      ok: true;
+      count: number;
+      unresolvedReimbursements: number;
+      /** Rows taken as the posted charge or recorded paycheck they matched, so not written. */
+      matchedPosted: number;
+      /** Of those, how many changed the posted row's amount or currency. */
+      updatedPosted: number;
+    }
+  | { ok: false; reason: "account_missing" | "invalid_date" | "collision" | "posted_match_changed" }
   | { ok: false; reason: "duplicates_need_review"; count: number };
 
 function isUniqueViolation(error: unknown): boolean {
@@ -65,6 +82,19 @@ function isUniqueViolation(error: unknown): boolean {
  * it and chose to import it anyway. Every row written carries its
  * fingerprint as externalId, so the next overlapping import finds it.
  *
+ * The same holds for a row matching a row the app wrote itself - an
+ * occurrence recurring posting charged, or a paycheck a check-in recorded
+ * (findCsvPostedDuplicates, with the same rates the review step used): it
+ * needs the user's answer, "a different charge" (importAnyway) or "the posted
+ * charge" (postedCharge), except for a match in another currency, which is
+ * only a warning and imports unless the user says otherwise. A posted-charge
+ * row is not written; the posted row takes its amount and currency, in the
+ * same database transaction as the rest. A posted-charge answer the ledger no
+ * longer supports refuses the whole import rather than guessing. The posted
+ * check fails open: when it throws or times out, nothing is refused for it, a
+ * row the user already called the posted charge is still left out (their
+ * answer stands), and no posted row is changed.
+ *
  * A deposit whose Reimburses cell names a shared expense is linked to it
  * after the rows land. The expense is looked for by the cell's own contents
  * (date, description, amount and currency) first among this batch's own
@@ -75,7 +105,11 @@ function isUniqueViolation(error: unknown): boolean {
  * deposit stays ordinary income rather than being linked to a guess, and
  * the count comes back so the importer can say so.
  */
-export async function importCsvTransactions(input: CsvImportInput): Promise<CsvImportResult> {
+export async function importCsvTransactions(
+  input: CsvImportInput,
+  rates: RateTable,
+  options: { lookup?: PostedLookup; timeoutMs?: number } = {},
+): Promise<CsvImportResult> {
   const account = await prisma.account.findUnique({
     where: { id: input.accountId },
     select: { id: true },
@@ -87,8 +121,29 @@ export async function importCsvTransactions(input: CsvImportInput): Promise<CsvI
     currency: input.currency,
     rows: input.rows.map((row) => ({ date: row.date, amount: row.amount, note: row.note })),
   });
-  const unreviewed = input.rows.filter((row, index) => report.matches.has(index) && !row.importAnyway);
+  const posted = await findCsvPostedDuplicates({
+    accountId: account.id,
+    currency: input.currency,
+    rows: input.rows,
+    skip: new Set(report.matches.keys()),
+    rates,
+    ...options,
+  });
+  if (posted && input.rows.some((row, index) => row.postedCharge && !posted.has(index))) {
+    return { ok: false, reason: "posted_match_changed" };
+  }
+  const unreviewed = input.rows.filter((row, index) => {
+    if (row.importAnyway || row.postedCharge) return false;
+    if (report.matches.has(index)) return true;
+    const match = posted?.get(index);
+    return match !== undefined && !match.possible;
+  });
   if (unreviewed.length > 0) return { ok: false, reason: "duplicates_need_review", count: unreviewed.length };
+  const postedMatches = input.rows.flatMap((row, index) => {
+    const match = posted?.get(index);
+    return row.postedCharge && match ? [match] : [];
+  });
+  const keptAsPosted = input.rows.filter((row) => row.postedCharge).length;
 
   const categories = await prisma.category.findMany({ select: { id: true, name: true } });
   const knownCategoryIds = new Set(categories.map((category) => category.id));
@@ -101,11 +156,13 @@ export async function importCsvTransactions(input: CsvImportInput): Promise<CsvI
   // identical lines in one statement (or a deliberate re-import) each get
   // their own externalId under the (source, externalId) unique index.
   const ordinalByFingerprint = new Map(report.existingCountByFingerprint);
-  const data = input.rows.map((row, index) => {
+  const data = input.rows.flatMap((row, index) => {
+    if (row.postedCharge) return [];
     const fingerprint = report.fingerprints[index];
     const ordinal = (ordinalByFingerprint.get(fingerprint) ?? 0) + 1;
     ordinalByFingerprint.set(fingerprint, ordinal);
-    return {
+    return [{
+      rowIndex: index,
       date: fromISODate(row.date) as Date,
       amount: row.amount,
       currency: input.currency,
@@ -134,8 +191,9 @@ export async function importCsvTransactions(input: CsvImportInput): Promise<CsvI
       isOneOffIncome: row.type === "INCOME" && row.isOneOffIncome === true && row.reimburses === null,
       // A share belongs to an expense only, on the same terms.
       yourShare: row.type === "EXPENSE" ? row.yourShare : null,
-    };
+    }];
   });
+  const dataIndexByRow = new Map(data.map((row, dataIndex) => [row.rowIndex, dataIndex]));
 
   if (data.some((row) => !row.date)) return { ok: false, reason: "invalid_date" };
 
@@ -143,20 +201,25 @@ export async function importCsvTransactions(input: CsvImportInput): Promise<CsvI
   // are the first place it may point at.
   const references: { index: number; reference: ReimbursedExpenseReference | null }[] =
     input.rows.flatMap((row, index) => {
-      if (row.type !== "INCOME" || row.reimburses === null) return [];
-      return [{ index, reference: parseReimbursedExpenseReference(row.reimburses) }];
+      const dataIndex = dataIndexByRow.get(index);
+      if (dataIndex === undefined || row.type !== "INCOME" || row.reimburses === null) return [];
+      return [{ index: dataIndex, reference: parseReimbursedExpenseReference(row.reimburses) }];
     });
   const batchSharedByKey = new Map<string, string[]>();
-  data.forEach((row, index) => {
+  data.forEach((row) => {
     if (row.type !== "EXPENSE" || row.yourShare === null) return;
-    const key = referenceKey(input.rows[index].date, row.note, row.amount, row.currency);
+    const key = referenceKey(input.rows[row.rowIndex].date, row.note, row.amount, row.currency);
     batchSharedByKey.set(key, [...(batchSharedByKey.get(key) ?? []), row.externalId]);
   });
 
   try {
     const outcome = await prisma.$transaction(async (tx) => {
-      const count = (await tx.transaction.createMany({ data })).count;
-      if (references.length === 0) return { count, unresolved: 0 };
+      let updatedPosted = 0;
+      for (const match of postedMatches) {
+        if (await applyPostedMatch(tx, match)) updatedPosted += 1;
+      }
+      const count = (await tx.transaction.createMany({ data: data.map(({ rowIndex: _rowIndex, ...row }) => row) })).count;
+      if (references.length === 0) return { count, unresolved: 0, updatedPosted };
 
       const parsed = references.filter(
         (item): item is { index: number; reference: ReimbursedExpenseReference } =>
@@ -211,9 +274,15 @@ export async function importCsvTransactions(input: CsvImportInput): Promise<CsvI
           data: { reimbursesTransactionId: candidates[0] },
         });
       }
-      return { count, unresolved };
+      return { count, unresolved, updatedPosted };
     });
-    return { ok: true, count: outcome.count, unresolvedReimbursements: outcome.unresolved };
+    return {
+      ok: true,
+      count: outcome.count,
+      unresolvedReimbursements: outcome.unresolved,
+      matchedPosted: keptAsPosted,
+      updatedPosted: outcome.updatedPosted,
+    };
   } catch (error) {
     // Only another import of the same rows landing in between can collide;
     // the user re-runs the check rather than getting half a statement.

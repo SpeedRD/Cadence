@@ -12,6 +12,7 @@ import {
   type Option,
 } from "@/components/form/selects";
 import { ExtraordinaryPrompt } from "@/components/transactions/extraordinary-prompt";
+import { PostedMatchPrompt } from "@/components/transactions/posted-match-prompt";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -29,7 +30,7 @@ import { canBeOneOffIncome, canBeSharedExpense } from "@/lib/transactions";
 import { saveTransactionAction } from "@/server/actions/transactions";
 
 import type { OpenSharedExpense } from "@/lib/data/transactions";
-import type { ActionState, ExtraordinarySuggestion } from "@/server/actions/utils";
+import type { ActionState, ExtraordinarySuggestion, PostedMatchSuggestion } from "@/server/actions/utils";
 
 export interface TransactionFormValues {
   id?: string;
@@ -187,15 +188,36 @@ export function TransactionDialog({
   // saved, so the question is asked after the form has closed and toasted,
   // in its own small dialog; only the "New transaction" instance, which the
   // page keeps mounted, ever receives one - edits are never classified.
+  // A save whose row matches a posted recurring charge or a recorded
+  // paycheck comes back the same way (ActionState.postedMatchSuggestion);
+  // that question goes first, and the one-off question follows only if the
+  // entry is kept.
   const [suggestion, setSuggestion] = useState<ExtraordinarySuggestion | null>(null);
+  const [postedSuggestion, setPostedSuggestion] = useState<PostedMatchSuggestion | null>(null);
   const handleSuccess = useCallback((state: NonNullable<ActionState>) => {
     setSuggestion(state.extraordinarySuggestion ?? null);
+    setPostedSuggestion(state.postedMatchSuggestion ?? null);
   }, []);
   const closeSuggestion = useCallback(() => setSuggestion(null), []);
+  const closePostedSuggestion = useCallback(() => setPostedSuggestion(null), []);
+  const keptPosted = useCallback(() => {
+    setPostedSuggestion(null);
+    setSuggestion(null);
+  }, []);
 
   return (
     <>
-    <ExtraordinaryPrompt suggestion={suggestion} onCloseAction={closeSuggestion} locale={locale} />
+    <PostedMatchPrompt
+      suggestion={postedSuggestion}
+      onCloseAction={closePostedSuggestion}
+      onKeptAction={keptPosted}
+      locale={locale}
+    />
+    <ExtraordinaryPrompt
+      suggestion={postedSuggestion ? null : suggestion}
+      onCloseAction={closeSuggestion}
+      locale={locale}
+    />
     <FormDialog
       title={editing ? t.editTransaction : t.newTransaction}
       description={

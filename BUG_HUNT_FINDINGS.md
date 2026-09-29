@@ -90,6 +90,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** anyone who both auto-posts recurring items and imports statements or approves receipts. That is exactly the workflow the import-review and "looks recurring" features encourage. Expenses (or income) are doubled and balances are off by each duplicate.
 - **Severity / confidence:** High / High. Evidence: DB run; the approve and manual paths by code path.
 - **Fix:** in CSV duplicate detection and in approval, flag a candidate that matches a RECURRING or PAYDAY_CHECKIN row on the same account within the occurrence's period, using the posting matcher. Offer "this is the posted charge" as the resolution, which replaces or links the row instead of adding one.
+- **Status:** fixed. The CSV import, receipt approval and the manual form now run `planPostedDuplicates` (settlement's window, look-alike guard and one-to-one rule, plus a 3% cross-currency "possible match" warning) against RECURRING and PAYDAY_CHECKIN rows on the same account, and a match is written only after the user says whether it is the posted charge (nothing added; a RECURRING row takes the incoming amount and currency) or a different one.
 
 ### B6. The CSV amount parser reads "1,500" as 1.50
 - **What:** `parseAmount` treats any comma after the last dot as a decimal comma. A whole-number amount with a thousands comma becomes a thousandth of itself; nothing warns and the row imports as valid. The typed-amount parser reads the same text correctly.

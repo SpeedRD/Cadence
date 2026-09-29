@@ -14,8 +14,10 @@ import { firstError } from "@/lib/validation";
 import { getAppContext } from "@/lib/data/context";
 import { findExtraordinaryCandidates, type ExtraordinaryCandidate } from "@/lib/data/extraordinary";
 import { importCsvTransactions } from "@/lib/data/import";
-import { findCsvDuplicates } from "@/lib/data/import-duplicates";
+import { findCsvDuplicates, findCsvPostedDuplicates } from "@/lib/data/import-duplicates";
 import { findRecurringSuggestions } from "@/lib/data/recurring-suggestions";
+
+import type { PostedMatch } from "@/lib/data/posted-duplicates";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
@@ -36,8 +38,10 @@ const importPayloadSchema = z.object({
           transferDirection: z.enum(["OUT", "IN"]).nullable(),
           note: z.string().max(500).nullable(),
           categoryId: z.string().nullable(),
-          /** The user reviewed this row as a possible duplicate and chose to import it anyway. */
+          /** The user reviewed this row as a possible duplicate and chose to import it anyway ("It's a different charge", for a posted match). */
           importAnyway: z.boolean().optional().default(false),
+          /** The user said this row is the posted charge or recorded paycheck it matches (see findCsvPostedDuplicates): it is not written. */
+          postedCharge: z.boolean().optional().default(false),
           /** The user reviewed this row as unusually large and marked it a one-off (see src/lib/extraordinary.ts), or the file's One-off column says so. */
           isExtraordinary: z.boolean().optional().default(false),
           /** The file's One-off income column, for an INCOME row (see Transaction.isOneOffIncome). */
@@ -46,6 +50,10 @@ const importPayloadSchema = z.object({
           yourShare: z.number().positive("Enter an amount greater than 0").nullable().optional().default(null),
           /** The file's Reimburses column, for an INCOME row: the shared expense it pays back, by reference. */
           reimburses: z.string().max(700).nullable().optional().default(null),
+        })
+        .refine((row) => !(row.importAnyway && row.postedCharge), {
+          message: "A row is either the posted charge or a different one",
+          path: ["postedCharge"],
         })
         .refine((row) => (row.type === "EXTERNAL_TRANSFER") === (row.transferDirection !== null), {
           message: "External transfer rows need a direction",
@@ -70,19 +78,31 @@ const duplicateCheckSchema = z.object({
         date: isoDay,
         amount: z.number().positive(),
         note: z.string().max(500).nullable(),
+        /** The row's type and category as the import will send them, for the posted-row match. */
+        type: z.enum(["EXPENSE", "INCOME", "EXTERNAL_TRANSFER"]),
+        categoryId: z.string().nullable(),
       }),
     )
     .max(MAX_ROWS),
 });
 
-export interface CsvDuplicateHit {
-  /** Index into the rows the client sent. */
-  index: number;
-  /** The stored row it matches: "YYYY-MM-DD", amount, note. */
-  existingDate: string;
-  existingAmount: number;
-  existingNote: string | null;
-}
+export type CsvDuplicateHit =
+  | {
+      /** Index into the rows the client sent. */
+      index: number;
+      /** A CSV row already imported into this account. */
+      kind: "imported";
+      /** The stored row it matches: "YYYY-MM-DD", amount, note. */
+      existingDate: string;
+      existingAmount: number;
+      existingNote: string | null;
+    }
+  | {
+      index: number;
+      /** A row the app wrote itself: an occurrence recurring posting charged, or a check-in's paycheck. */
+      kind: "posted";
+      match: PostedMatch;
+    };
 
 export type CsvDuplicateCheckResult =
   | { ok: true; duplicates: CsvDuplicateHit[] }
@@ -91,7 +111,10 @@ export type CsvDuplicateCheckResult =
 /**
  * Which of the parsed rows are already in the ledger as CSV imports on this
  * account, so the review step can show them as their own group before
- * anything is written. Same fingerprint the import itself uses.
+ * anything is written. Same fingerprint the import itself uses. A row that is
+ * not a re-import may still be money the ledger holds as a row the app wrote
+ * itself (a posted recurring charge, a recorded paycheck) - the same
+ * findCsvPostedDuplicates the import re-runs, with the same rates.
  */
 export async function detectCsvDuplicatesAction(payload: unknown): Promise<CsvDuplicateCheckResult> {
   await requireAuth();
@@ -108,11 +131,18 @@ export async function detectCsvDuplicatesAction(payload: unknown): Promise<CsvDu
     const first = existing[0];
     duplicates.push({
       index,
+      kind: "imported",
       existingDate: toISODate(first.date),
       existingAmount: first.amount,
       existingNote: first.note,
     });
   }
+  const posted = await findCsvPostedDuplicates({
+    ...parsed.data,
+    skip: new Set(report.matches.keys()),
+    rates: (await getAppContext()).rates,
+  });
+  for (const [index, match] of posted ?? []) duplicates.push({ index, kind: "posted", match });
   duplicates.sort((a, b) => a.index - b.index);
   return { ok: true, duplicates };
 }
@@ -229,11 +259,12 @@ export async function importTransactionsAction(
   const parsed = importPayloadSchema.safeParse(payload);
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
-  const result = await importCsvTransactions(parsed.data);
+  const result = await importCsvTransactions(parsed.data, (await getAppContext()).rates);
   if (!result.ok) {
     if (result.reason === "account_missing") return fail(t.accountNoLongerExists);
     if (result.reason === "duplicates_need_review") return fail(t.duplicatesNeedReview(result.count));
     if (result.reason === "invalid_date") return fail(t.invalidDateRow);
+    if (result.reason === "posted_match_changed") return fail(t.postedMatchChanged);
     return fail(t.importCollision);
   }
 
@@ -248,8 +279,12 @@ export async function importTransactionsAction(
   }
 
   revalidateApp();
-  const message = result.unresolvedReimbursements
-    ? `${t.imported(result.count)} · ${t.reimbursementsUnresolved(result.unresolvedReimbursements)}`
-    : t.imported(result.count);
+  const message = [
+    t.imported(result.count),
+    result.matchedPosted ? t.postedChargesKept(result.matchedPosted, result.updatedPosted) : null,
+    result.unresolvedReimbursements ? t.reimbursementsUnresolved(result.unresolvedReimbursements) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return done(message, { recurringSuggestions });
 }
