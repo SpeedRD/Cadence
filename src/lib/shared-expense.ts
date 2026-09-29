@@ -11,8 +11,9 @@
  * The expense's `amount` is never changed: it is what left the account, so the
  * ledger, the account balance and the current period's spending keep it in
  * full. Only the figures that estimate the *future* read the share instead -
- * the one-off threshold (src/lib/extraordinary.ts) and the two averages of
- * typical spending (getCategorySuggestions, getHistoricalMonthlyAverage) - and
+ * the one-off threshold (src/lib/extraordinary.ts), the two averages of
+ * typical spending (getCategorySuggestions, getHistoricalMonthlyAverage) and
+ * the month in progress's projection (getCurrentMonthPace) - and
  * a linked deposit is left out of every income average (Afford's projections),
  * since it is money coming back rather than earnings. Nothing here projects
  * money not yet received: a share is recovered only when its deposit is a

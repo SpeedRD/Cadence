@@ -3,8 +3,10 @@
  * for its category? A confirmed one-off (Transaction.isExtraordinary) is left
  * out of the two averages that estimate typical spending - the payday
  * planner's category suggestions (getCategorySuggestions) and Reports'
- * monthly average (getHistoricalMonthlyAverage) - so a single big purchase
- * does not inflate what those suggest for the periods after it.
+ * monthly average (getHistoricalMonthlyAverage) - and out of the month in
+ * progress's projection (getCurrentMonthPace), which shows it apart, so a
+ * single big purchase does not inflate what those suggest for the periods
+ * after it.
  *
  * Nothing here decides anything on its own. The threshold only produces a
  * suggestion that the entry point (the transaction form, the CSV review step)

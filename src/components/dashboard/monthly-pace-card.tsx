@@ -21,7 +21,9 @@ export function MonthlyPaceCard({
 }) {
   const { pace, history, comparison } = data;
   const money = (amount: number) => formatMoney(amount, displayCurrency);
-  const totalOutflow = pace.projectedNormalSpending + pace.savingsInvestingSoFar;
+  // The set-aside amount is real money already out, so the total counts it once,
+  // unprojected; it is not part of the projection the comparison reads.
+  const totalOutflow = pace.projectedNormalSpending + pace.savingsInvestingSoFar + pace.setAsideSoFar;
 
   return (
     <Card size="sm">
@@ -54,6 +56,10 @@ export function MonthlyPaceCard({
                     ? t.belowAverage(money(comparison.amount))
                     : t.onPace}
               </p>
+            ) : null}
+
+            {pace.setAsideSoFar > 0 ? (
+              <p className="text-sm text-muted-foreground">{t.setAside(money(pace.setAsideSoFar))}</p>
             ) : null}
 
             <dl className="grid grid-cols-2 gap-3 border-t border-border/70 pt-3 sm:grid-cols-3">

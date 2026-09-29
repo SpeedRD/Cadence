@@ -302,6 +302,8 @@ export const es = {
     aboveAverage: (amount: string) => `${amount} por encima de tu promedio`,
     belowAverage: (amount: string) => `${amount} por debajo de tu promedio`,
     onPace: "Al ritmo de tu promedio",
+    setAside: (amount: string) =>
+      `No proyectado: ${amount} gastados hasta ahora en gastos únicos y en la parte de otras personas en gastos compartidos.`,
     lifestyle: "Estilo de vida",
     committed: "Comprometido",
     savings: "Ahorros e inversión",
@@ -1090,7 +1092,9 @@ export const es = {
     nothingSpentTitle: "Nada gastado este periodo",
     nothingSpentDescription: "Los gastos categorizados aparecen aquí en cuanto los registras.",
     lastNPeriods: (n: number) => `Últimos ${n} periodos de pago`,
-    averagePerPeriod: (amount: string) => `${amount} de promedio por periodo`,
+    averagePerPeriod: (amount: string, n: number) =>
+      `${amount} de promedio en ${n} periodo${n === 1 ? "" : "s"} completado${n === 1 ? "" : "s"}`,
+    periodSoFar: "hasta ahora",
     peakPeriod: "periodo pico",
     thisPeriod: "Este periodo",
     categoriesTouched: (n: number) => `${n} categoría${n === 1 ? "" : "s"} usada${n === 1 ? "" : "s"}`,

@@ -203,15 +203,18 @@ and an "Unusually large" group in the CSV review step. Nothing is decided for yo
 the row lands as normal spending unless you confirm it, and any organic expense can
 be marked or unmarked as a one-off from the row menu at any time. A one-off still
 counts as spending everywhere - balances, period totals, budgets - but is left out
-of the two averages that estimate typical spending: the payday check-in's category
-suggestions and Reports' calendar-month average. Automatically posted recurring
+of the two averages that estimate typical spending - the payday check-in's category
+suggestions and Reports' calendar-month average - and of the Dashboard's monthly pace
+projection, which lists what it left out as its own line (never extrapolated, never
+compared with the average). Automatically posted recurring
 charges are never classified; their amounts are scheduled, not organic.
 
 An expense paid on behalf of several people can be marked as a **shared expense**
 with your own share of it. The transaction keeps the full amount - it is what left
 the account, so the account balance, the period's totals and the budgets all
-count it in full - while the one-off check and the two typical-spending averages
-read your share in its place, so a DOP 2,725 round of movie tickets neither trips
+count it in full - while the one-off check, the two typical-spending averages and the
+monthly pace projection read your share in its place (the rest shows on the pace
+card's "not projected" line), so a DOP 2,725 round of movie tickets neither trips
 the one-off prompt nor drags future suggestions up by money that was never yours.
 As people pay you back, log each deposit as income and pick the expense it
 reimburses: a linked deposit raises the balance like any income but is never
@@ -429,8 +432,12 @@ read-only: nothing it shows feeds the check-in's goal funding.
 Current-period spending by category, a six-pay-period trend, and a calendar-month
 view: average monthly lifestyle spending by category, the last completed months, and
 the averages for committed spending, savings and investing, and total cash outflow.
-The calendar-month average never reaches further back than the month of your first
-recorded activity, and - like Afford's and the payday planner's own pay-period
+The pay-period trend's average is over completed periods only since your first
+activity: the period in progress stays in the chart, marked "so far", and is left
+out of the mean. The calendar-month average starts at your first full month: the
+month of your first recorded activity counts only when that activity started on or
+before its 7th, and an item's scheduled amount fills a month only from the month of
+its first occurrence. And - like Afford's and the payday planner's own pay-period
 averages - an optional **Count income history from** date (Settings) bounds it a
 second way: a completed month ending before that date is left out too, whichever
 boundary is later. A boundary set recently enough to leave fewer than three completed

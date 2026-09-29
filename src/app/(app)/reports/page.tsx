@@ -8,7 +8,7 @@ import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getHistoricalMonthlyAverage } from "@/lib/data/monthly";
 import { getPeriodSummary } from "@/lib/data/period-summary";
-import { getSpendingTrend } from "@/lib/data/reports";
+import { getSpendingTrendSummary } from "@/lib/data/reports";
 import { getDictionary } from "@/lib/i18n";
 
 export const metadata = { title: "Reports - Cadence" };
@@ -19,15 +19,14 @@ export default async function ReportsPage() {
   const context = await getAppContext();
   const dictionary = getDictionary(context.language);
   const t = dictionary.reports;
-  const [summary, trend, monthlyHistory] = await Promise.all([
+  const [summary, { points: trend, average }, monthlyHistory] = await Promise.all([
     getPeriodSummary(context.currentPeriod, context),
-    getSpendingTrend(context, TREND_PERIODS),
+    getSpendingTrendSummary(context, TREND_PERIODS),
     getHistoricalMonthlyAverage(context),
   ]);
 
   const spendingLines = summary.categories.filter((line) => line.spent > 0);
   const trendTotal = trend.reduce((total, point) => total + point.spent, 0);
-  const average = trend.length > 0 ? trendTotal / trend.length : 0;
 
   return (
     <div className="space-y-5">
@@ -61,9 +60,11 @@ export default async function ReportsPage() {
         <Card>
           <CardHeader>
             <CardTitle>{t.lastNPeriods(TREND_PERIODS)}</CardTitle>
-            <CardDescription>
-              {t.averagePerPeriod(formatMoney(average, context.displayCurrency))}
-            </CardDescription>
+            {average ? (
+              <CardDescription>
+                {t.averagePerPeriod(formatMoney(average.average, context.displayCurrency), average.periods)}
+              </CardDescription>
+            ) : null}
           </CardHeader>
           <CardContent>
             <TrendChart

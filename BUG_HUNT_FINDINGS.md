@@ -266,6 +266,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** any one-off or shared expense early in the month. The projection overstates spending by a factor of up to about 30. This contradicts the one-off prompt's promise (`en.ts:527`) that one-offs are kept out of the monthly pace's averages.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** extrapolate only typical spending (`typicalOnly`), then add one-offs and others' shares as a separate, non-extrapolated line.
+- **Status:** fixed. `getCurrentMonthPace` now projects only typical spending (one-offs out, shared expenses at the user's share, the same population the average is made of) and reports the rest as `setAsideSoFar`, which the Dashboard card shows as its own "not projected" line and counts once, unprojected, in its total cash outflow.
 
 ### B21. Carryover is counted in the new plan while the previous period is still spendable (weekend payday)
 - **What:** after a Friday payday, the plan period is the next one, and `getAvailableCarryover` reads the ending period's `safeToSpend`. The dashboard still offers that same money for the remaining weekend days of the ending period.
@@ -371,6 +372,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** users in their first months. The "typical month" is understated, and the pace card reads "above average" too easily.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** skip the first-activity month unless the activity starts in its first few days, or prorate it by days covered.
+- **Status:** fixed. The first-activity month is left out of the average unless the first activity falls on or before day 7 of it (`FIRST_MONTH_MAX_START_DAY`, `firstUsableMonth`), and with fewer than three full months left the card and Reports say there is not enough history yet.
 
 ### B31. A new item's scheduled amount fills months before its first due date
 - **What:** `classifyCompletedMonth` adds an active item's monthly equivalent to any completed month that ended after the item's `createdAt`, even when the first due date is later.
@@ -379,6 +381,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** monthly history and averages. Committed spending is overstated for months before a plan starts (and for skipped items; see B14).
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** gate on the item's first due date (or `nextDate` for an unposted item) rather than `createdAt`, and apply posting's skip reasons.
+- **Status:** fixed. A scheduled amount now enters a completed month only from the month of the item's first occurrence (the earlier of its first posted RECURRING row and its `nextDate`), on top of the existing `createdAt` gate; posting's skip reasons are still not applied, which stays with B14.
 
 ### B32. Insight dismissals never expire and ignore the period
 - **What:** dismissals are keyed by (source, goal or item id) and never expire. Dismissing "behind roadmap" in one period hides it in every later period of that goal. Dismissing a `not_posting` skip hides a later failure of the same item, and dismissing a plan's shortfall hides a new shortfall in a different period.
@@ -395,6 +398,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** display only. Understated early in each period, and before six periods of history exist.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** average completed periods only, or label the current one as partial and leave it out of the mean.
+- **Status:** fixed. The Reports average is over completed periods since the first activity (`getSpendingTrendSummary`), the period in progress stays in the chart labelled "so far" and is left out of the mean, and with no completed period no average is shown.
 
 ### B34. The current unconfirmed period, when it precedes the plan period, gets no goal estimate
 - **What:** after 0ba225e, each goal's window starts at the plan period. From payday to period end, today's period comes before it, so Afford estimates no goal funding for it even when it has no confirmed check-in.

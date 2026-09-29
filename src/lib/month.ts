@@ -59,6 +59,11 @@ export function previousMonth(ref: MonthRef): MonthRef {
   return { year: ref.year, month: ref.month - 1 };
 }
 
+export function nextMonth(ref: MonthRef): MonthRef {
+  if (ref.month === 12) return { year: ref.year + 1, month: 1 };
+  return { year: ref.year, month: ref.month + 1 };
+}
+
 /**
  * Days elapsed in the month containing `date`, counting `date` itself (so the
  * 1st of the month counts as 1 day elapsed, never 0) - this is what the

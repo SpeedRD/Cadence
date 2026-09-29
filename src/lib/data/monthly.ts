@@ -17,12 +17,17 @@
  *                        confirmed extraordinary (Transaction.isExtraordinary),
  *                        and a shared expense counts only the user's own part
  *                        (Transaction.yourShare): the historical average is
- *                        typical spending only.
+ *                        typical spending only. The month in progress is
+ *                        projected from that same typical spending; what it
+ *                        leaves out (a one-off in full, other people's part of
+ *                        a shared expense) is reported apart as setAsideSoFar,
+ *                        never extrapolated and never compared with the average.
  *   committed          = SUBSCRIPTION charges - every RECURRING transaction the
  *                        posting job wrote for one, plus, only for a month with
  *                        no such charge, the item's scheduled monthly-equivalent
- *                        amount (nothing at all for the month in progress; see
- *                        committedStillDueThisMonth).
+ *                        amount, from the month of its first occurrence on (see
+ *                        firstOccurrenceOf) and never for the month in progress
+ *                        (see committedStillDueThisMonth).
  *   savings/investing  = GoalContribution rows with no Transaction standing in
  *                        for them + CONTRIBUTION charges (same actual-or-
  *                        scheduled rule as committed) + EXPENSE transactions
@@ -52,14 +57,14 @@
  * A real charge logged under a different category with no matching note text,
  * or an item whose configured amount has drifted from the real charge, will not
  * be matched by step 2 - the month then falls back to the item's scheduled
- * amount, and only for months the item already existed in. Only currently
+ * amount, and only for months from the item's first occurrence on. Only currently
  * active items are considered for that fallback, since Cadence does not keep a
  * history of when an item was paused.
  */
 import { convert } from "@/lib/currency";
-import { addDays, minDate } from "@/lib/date";
+import { addDays, minDate, startOfDay } from "@/lib/date";
 import { num, round2, sum } from "@/lib/money";
-import { daysElapsedInMonth, monthForDate, monthWindow, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
+import { daysElapsedInMonth, monthForDate, monthWindow, nextMonth, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
 import { monthlyEquivalent, owedOccurrences } from "@/lib/recurring";
 import { chargeMatchesItem, itemsWithAmbiguousCategory } from "@/lib/recurring-settlement";
@@ -72,6 +77,15 @@ import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums
 
 export const MIN_HISTORICAL_MONTHS = 3;
 export const MAX_HISTORICAL_MONTHS = 6;
+
+/**
+ * The month of the first recorded activity is a full month of history only when
+ * that activity starts on or before this day of it (day 7 leaves at least 24 of
+ * the month's 28-31 days covered). Later than that, the month is a partial one
+ * - a first expense on Jun 25 says nothing about what June costs - and the
+ * average starts at the next month instead (see firstUsableMonth).
+ */
+export const FIRST_MONTH_MAX_START_DAY = 7;
 
 /** "On pace" band: within 2% of the average, or $1-equivalent, whichever is larger. */
 const ON_PACE_TOLERANCE_RATIO = 0.02;
@@ -100,6 +114,21 @@ export interface RecurringForMonth extends RecurringForMatch {
   anchorDay: number | null;
   secondAnchorDay: number | null;
   createdAt: Date;
+  /** The date of the earliest RECURRING row posting wrote for the item, or null if it has posted none. */
+  firstPostedDate: Date | null;
+}
+
+type ActiveRecurringItem = Omit<RecurringForMonth, "firstPostedDate">;
+
+/**
+ * When an item's first occurrence fell: the earliest RECURRING row posting wrote
+ * for it, else its nextDate, which is the first occurrence for as long as
+ * nothing has posted (a posted item's nextDate has moved on, so the earlier of
+ * the two is the row). Until then the item owes nothing to a month, so its
+ * scheduled amount must not stand in for one.
+ */
+function firstOccurrenceOf(item: RecurringForMonth): Date {
+  return item.firstPostedDate ? minDate(item.firstPostedDate, item.nextDate) : item.nextDate;
 }
 
 interface MatchableTransaction {
@@ -182,7 +211,7 @@ export function recurringItemIdFromExternalId(externalId: string): string | null
   return separator > 0 ? externalId.slice(0, separator) : null;
 }
 
-async function loadActiveRecurringForMatch(): Promise<RecurringForMonth[]> {
+async function loadActiveRecurringForMatch(): Promise<ActiveRecurringItem[]> {
   const items = await prisma.recurringItem.findMany({
     where: { active: true, kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] } },
     select: {
@@ -202,6 +231,26 @@ async function loadActiveRecurringForMatch(): Promise<RecurringForMonth[]> {
   return items.map((item) => ({ ...item, amount: num(item.amount) }));
 }
 
+/** The same items with the date of the first RECURRING row posted for each (see firstOccurrenceOf). */
+async function withFirstPostedDates(items: ActiveRecurringItem[]): Promise<RecurringForMonth[]> {
+  if (items.length === 0) return [];
+  const rows = await prisma.transaction.findMany({
+    where: {
+      source: "RECURRING",
+      OR: items.map((item) => ({ externalId: { startsWith: `${item.id}:` } })),
+    },
+    select: { externalId: true, date: true },
+  });
+  const earliest = new Map<string, Date>();
+  for (const row of rows) {
+    const itemId = row.externalId ? recurringItemIdFromExternalId(row.externalId) : null;
+    if (!itemId) continue;
+    const seen = earliest.get(itemId);
+    if (!seen || row.date.getTime() < seen.getTime()) earliest.set(itemId, row.date);
+  }
+  return items.map((item) => ({ ...item, firstPostedDate: earliest.get(item.id) ?? null }));
+}
+
 async function loadCategoryMeta(): Promise<CategoryMeta[]> {
   return prisma.category.findMany({
     select: { id: true, name: true, color: true, isSavingsDefault: true },
@@ -218,7 +267,7 @@ async function loadCategoryMeta(): Promise<CategoryMeta[]> {
  * item's scheduled amount, which both deflated the lifestyle average and
  * inflated the committed one.
  */
-async function getFirstActivityDate(): Promise<Date | null> {
+export async function getFirstActivityDate(): Promise<Date | null> {
   const [txMin, goalMin] = await Promise.all([
     prisma.transaction.aggregate({
       _min: { date: true },
@@ -229,6 +278,18 @@ async function getFirstActivityDate(): Promise<Date | null> {
   const dates = [txMin._min.date, goalMin._min.date].filter((d): d is Date => Boolean(d));
   if (dates.length === 0) return null;
   return dates.reduce((earliest, date) => (date.getTime() < earliest.getTime() ? date : earliest));
+}
+
+/**
+ * The first month that counts as a full month of history for a first activity
+ * on `firstActivity`: its own month when the activity starts on or before
+ * FIRST_MONTH_MAX_START_DAY, the next month otherwise. Feeds
+ * computeCompletedMonthWindows as its `firstActivityMonth`.
+ */
+export function firstUsableMonth(firstActivity: Date): MonthRef {
+  const day = startOfDay(firstActivity);
+  const own = monthForDate(day);
+  return day.getUTCDate() <= FIRST_MONTH_MAX_START_DAY ? own : nextMonth(own);
 }
 
 /**
@@ -280,9 +341,10 @@ export function computeCompletedMonthWindows(
 /**
  * Up to `maxCount` completed calendar months, oldest first, ending the month
  * before the current one. See computeCompletedMonthWindows for the boundary
- * rules - this just wires it up to the real first-activity date, "today", and
- * (converted to a month the same way every other date here is) Settings'
- * incomeHistoryStartDate.
+ * rules - this just wires it up to the real first-activity date (through
+ * firstUsableMonth, so a partial first month is not a month of history),
+ * "today", and (converted to a month the same way every other date here is)
+ * Settings' incomeHistoryStartDate.
  */
 export async function getCompletedMonthWindows(
   context: AppContext,
@@ -292,7 +354,7 @@ export async function getCompletedMonthWindows(
   if (!firstActivity) return [];
   return computeCompletedMonthWindows(
     monthForDate(context.today),
-    monthForDate(firstActivity),
+    firstUsableMonth(firstActivity),
     maxCount,
     context.incomeHistoryStartDate ? monthForDate(context.incomeHistoryStartDate) : null,
   );
@@ -300,6 +362,8 @@ export async function getCompletedMonthWindows(
 
 interface MonthActuals {
   lifestyle: number;
+  /** The part of `lifestyle` that is typical spending: one-offs left out, shared expenses at the user's share. */
+  typicalLifestyle: number;
   lifestyleByCategory: CategoryLine[];
   committedActual: number;
   contributionActual: number;
@@ -323,14 +387,16 @@ interface MonthActuals {
  * confirmed as one-offs (Transaction.isExtraordinary, see
  * src/lib/extraordinary.ts) are left out, and a shared expense counts the
  * user's own part rather than the whole amount (Transaction.yourShare, see
- * src/lib/shared-expense.ts). The month in progress keeps both as they are:
- * "spent so far" is a statement of fact about what left the accounts.
+ * src/lib/shared-expense.ts). The month in progress keeps both as they are in
+ * `lifestyle`: "spent so far" is a statement of fact about what left the
+ * accounts. Its `typicalLifestyle` is the same read as typicalOnly, which is
+ * what getCurrentMonthPace projects.
  */
 async function computeMonthActuals(
   window: MonthWindow,
   throughDate: Date,
   context: AppContext,
-  recurringItems: RecurringForMonth[],
+  recurringItems: RecurringForMatch[],
   categories: CategoryMeta[],
   typicalOnly = false,
 ): Promise<MonthActuals> {
@@ -478,6 +544,7 @@ async function computeMonthActuals(
   const categoryById = new Map(categories.map((category) => [category.id, category]));
 
   let lifestyle = 0;
+  let typicalLifestyle = 0;
   let savingsFromCategory = 0;
   const lifestyleByCategoryMap = new Map<
     string | null,
@@ -503,6 +570,7 @@ async function computeMonthActuals(
       continue;
     }
     lifestyle += amount;
+    if (!tx.isExtraordinary) typicalLifestyle += ownCost;
     const key = tx.categoryId;
     const existing = lifestyleByCategoryMap.get(key) ?? {
       name: category?.name ?? "Uncategorized",
@@ -551,6 +619,7 @@ async function computeMonthActuals(
 
   return {
     lifestyle,
+    typicalLifestyle,
     lifestyleByCategory,
     committedActual,
     contributionActual,
@@ -590,10 +659,13 @@ export async function classifyCompletedMonth(
     convert(amount, currency, context.displayCurrency, context.rates);
 
   // An item cannot have cost anything in a month that ended before it existed,
-  // so its scheduled amount must not stand in for one. Without this a new
-  // subscription rewrote every month of history behind it.
+  // nor before its first occurrence (an installment plan created in August
+  // whose first payment is October 1 owes August nothing), so its scheduled
+  // amount must not stand in for one. Without this a new subscription rewrote
+  // every month of history behind it.
   const existedIn = (item: RecurringForMonth) =>
-    item.createdAt.getTime() <= window.end.getTime();
+    item.createdAt.getTime() <= window.end.getTime() &&
+    firstOccurrenceOf(item).getTime() <= window.end.getTime();
 
   let committed = actuals.committedActual;
   for (const item of recurringItems) {
@@ -661,7 +733,8 @@ export async function getHistoricalMonthlyAverage(context: AppContext): Promise<
   const windows = await getCompletedMonthWindows(context);
   if (windows.length < MIN_HISTORICAL_MONTHS) return emptyHistoricalAverage(windows.length);
 
-  const [recurringItems, categories] = await Promise.all([loadActiveRecurringForMatch(), loadCategoryMeta()]);
+  const [activeItems, categories] = await Promise.all([loadActiveRecurringForMatch(), loadCategoryMeta()]);
+  const recurringItems = await withFirstPostedDates(activeItems);
   const months = await Promise.all(
     windows.map((window) => classifyCompletedMonth(window, context, recurringItems, categories)),
   );
@@ -712,7 +785,16 @@ export async function getHistoricalMonthlyAverage(context: AppContext): Promise<
 export interface MonthlyPace {
   window: MonthWindow;
   daysElapsed: number;
+  /** Everything that left the accounts as lifestyle spending so far - one-offs and other people's shares included. */
   lifestyleSpentSoFar: number;
+  /** The typical part of it (what the historical average is made of): the only part that is projected. */
+  typicalLifestyleSoFar: number;
+  /**
+   * The rest of lifestyleSpentSoFar: confirmed one-offs in full and other
+   * people's part of shared expenses. Real money already spent, but neither
+   * projected nor compared with the average.
+   */
+  setAsideSoFar: number;
   projectedLifestyle: number;
   committedSpentSoFar: number;
   committedStillDueThisMonth: number;
@@ -721,9 +803,12 @@ export interface MonthlyPace {
 }
 
 /**
- * The month in progress: actual spending so far, projected out to the full
+ * The month in progress: typical spending so far, projected out to the full
  * month using days-elapsed / days-in-month, plus committed subscription
- * charges still ahead this month. Savings/investing is never projected - only
+ * charges still ahead this month. Only typical spending is projected, the
+ * population the historical average is made of: a one-off or other people's
+ * share of a shared expense is real money but not a daily rate, so it is
+ * reported apart (setAsideSoFar). Savings/investing is never projected - only
  * what has actually happened so far (see module doc comment).
  */
 export async function getCurrentMonthPace(context: AppContext): Promise<MonthlyPace> {
@@ -735,7 +820,7 @@ export async function getCurrentMonthPace(context: AppContext): Promise<MonthlyP
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
 
-  const projectedLifestyle = round2((actuals.lifestyle / Math.max(daysElapsed, 1)) * window.totalDays);
+  const projectedLifestyle = round2((actuals.typicalLifestyle / Math.max(daysElapsed, 1)) * window.totalDays);
 
   // Every occurrence still ahead this month, not just the next one: a weekly
   // subscription owes the rest of its month, and an item that has already been
@@ -767,6 +852,8 @@ export async function getCurrentMonthPace(context: AppContext): Promise<MonthlyP
     window,
     daysElapsed,
     lifestyleSpentSoFar: round2(actuals.lifestyle),
+    typicalLifestyleSoFar: round2(actuals.typicalLifestyle),
+    setAsideSoFar: round2(actuals.lifestyle - actuals.typicalLifestyle),
     projectedLifestyle,
     committedSpentSoFar,
     committedStillDueThisMonth,

@@ -12,6 +12,9 @@ import type { Dictionary } from "@/lib/i18n";
  * A phone has no hover, so there each bar also prints its whole-unit figure
  * above itself, and the axis names each period by its start day ("Aug 16")
  * because "Aug 16-31" wraps in a 45px column.
+ *
+ * The period in progress is drawn with what has happened so far and says so
+ * ("so far"); the page's average leaves it out.
  */
 export function TrendChart({
   points,
@@ -56,7 +59,7 @@ export function TrendChart({
               key={point.period.key}
               className="group relative flex h-full flex-1 flex-col justify-end"
               tabIndex={0}
-              aria-label={`${point.period.longLabel}: ${t.tooltipOut(formatMoney(point.spent, currency))}`}
+              aria-label={`${point.period.longLabel}${point.partial ? ` (${t.periodSoFar})` : ""}: ${t.tooltipOut(formatMoney(point.spent, currency))}`}
             >
               {/* Capped and edge-anchored: a centred w-max tooltip on the first
                   or last bar reaches past the card, which clips it (Card is
@@ -68,7 +71,10 @@ export function TrendChart({
                   "group-first:left-0 group-first:translate-x-0 group-last:right-0 group-last:left-auto group-last:translate-x-0",
                 )}
               >
-                <p className="font-medium">{point.period.label}</p>
+                <p className="font-medium">
+                  {point.period.label}
+                  {point.partial ? ` · ${t.periodSoFar}` : ""}
+                </p>
                 <p className="figure figure-sm text-muted-foreground">
                   {t.tooltipOut(formatMoney(point.spent, currency))}
                 </p>
@@ -117,6 +123,7 @@ export function TrendChart({
           >
             <span className="sm:hidden">{formatDayMonth(point.period.start)}</span>
             <span className="max-sm:hidden">{point.period.label}</span>
+            {point.partial ? <span className="block">{t.periodSoFar}</span> : null}
           </div>
         ))}
       </div>

@@ -1045,6 +1045,7 @@ async function main() {
     classifyCompletedMonth,
     compareToAverage,
     computeCompletedMonthWindows,
+    firstUsableMonth,
     getCompletedMonthWindows,
     getCurrentMonthPace,
     getHistoricalMonthlyAverage,
@@ -1149,10 +1150,13 @@ async function main() {
   });
 
   const monthlyContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 7, 31), currentPeriod: periodForDate(civilDate(2026, 7, 31)) };
+  // These three have run since before July (their next dates are August's), so
+  // the scheduled-amount fallback below still stands in for July: what B31 stops
+  // is an item with no first occurrence yet, which its own section covers.
   const recurringForMatch = (await prisma.recurringItem.findMany({
     where: { active: true, kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] }, name: { startsWith: "Verify" } },
     select: { id: true, name: true, amount: true, currency: true, categoryId: true, kind: true, frequency: true, nextDate: true, anchorDay: true, secondAnchorDay: true, createdAt: true },
-  })).map((item) => ({ ...item, amount: Number(item.amount) }));
+  })).map((item) => ({ ...item, amount: Number(item.amount), firstPostedDate: civilDate(2026, 6, 25) }));
   const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
 
   const julyBreakdown = await classifyCompletedMonth(julyWindow, monthlyContext, recurringForMatch, categoryMeta);
@@ -1265,11 +1269,11 @@ async function main() {
   const actualFirstActivity = await prisma.transaction.aggregate({ _min: { date: true } });
   const expectedWindows = computeCompletedMonthWindows(
     monthForDate(wiringContext.today),
-    actualFirstActivity._min.date ? monthForDate(actualFirstActivity._min.date) : null,
+    actualFirstActivity._min.date ? firstUsableMonth(actualFirstActivity._min.date) : null,
   );
   const wiredWindows = await getCompletedMonthWindows(wiringContext);
   eq(
-    "getCompletedMonthWindows applies the same boundary logic to the real first-activity date",
+    "getCompletedMonthWindows applies the same boundary logic to the real first-activity date (through firstUsableMonth since B30: a partial first month is not a month of history)",
     wiredWindows.map((w) => w.key).join(","),
     expectedWindows.map((w) => w.key).join(","),
   );
@@ -1283,7 +1287,7 @@ async function main() {
   const boundedContext = { ...wiringContext, incomeHistoryStartDate: civilDate(2026, 7, 1) };
   const expectedBoundedWindows = computeCompletedMonthWindows(
     monthForDate(wiringContext.today),
-    actualFirstActivity._min.date ? monthForDate(actualFirstActivity._min.date) : null,
+    actualFirstActivity._min.date ? firstUsableMonth(actualFirstActivity._min.date) : null,
     MAX_HISTORICAL_MONTHS,
     monthForDate(civilDate(2026, 7, 1)),
   );
@@ -1298,6 +1302,160 @@ async function main() {
   eq("an explicit null on the context is the same as leaving it unset", nullDateWindows.map((w) => w.key).join(","), wiredWindows.map((w) => w.key).join(","));
   const boundedAverage = await getHistoricalMonthlyAverage(boundedContext);
   eq("the average's own monthsUsed and sufficiency follow the bounded window count, unmodified by getHistoricalMonthlyAverage itself", `${boundedAverage.monthsUsed}:${boundedAverage.sufficient}`, `${expectedBoundedWindows.length}:${expectedBoundedWindows.length >= MIN_HISTORICAL_MONTHS}`);
+
+  console.log("\n== monthly pace and averages: one-offs, a partial first month, items not started, a partial period (B20 B30 B31 B33) ==");
+  {
+    const {
+      FIRST_MONTH_MAX_START_DAY,
+      firstUsableMonth,
+      getHistoricalMonthlyAverage: historyFor,
+      getCurrentMonthPace: paceFor,
+      getMonthlyPace: monthlyPaceFor,
+    } = await import("../src/lib/data/monthly");
+    const { getSpendingTrendSummary: trendSummaryFor } = await import("../src/lib/data/reports");
+    const { monthKey } = await import("../src/lib/month");
+
+    // Every date here is in 2025, so these rows are the earliest activity in the
+    // database whatever the earlier sections left behind (asserted below), and
+    // any recurring item another section left has a createdAt after every
+    // window read here.
+    const account = await prisma.account.create({ data: { name: "Verify Pace 2025 Account", currency: "USD", type: "CHECKING" } });
+    const contextOn = (today: Date) => ({
+      displayCurrency: "USD" as const,
+      language: "en" as const,
+      rates,
+      today,
+      currentPeriod: periodForDate(today),
+    });
+    const spend = (date: Date, amount: number, extra: { isExtraordinary?: boolean; yourShare?: number } = {}) =>
+      prisma.transaction.create({
+        data: { date, amount, currency: "USD", type: "EXPENSE", accountId: account.id, source: "MANUAL", ...extra },
+      });
+    const clearRows = () => prisma.transaction.deleteMany({ where: { accountId: account.id } });
+    const key = (window: { key: string }) => window.key;
+
+    const strayRows =
+      (await prisma.transaction.count({ where: { date: { lt: civilDate(2026, 1, 1) }, accountId: { not: account.id }, type: { in: ["EXPENSE", "INCOME"] } } })) +
+      (await prisma.goalContribution.count({ where: { date: { lt: civilDate(2026, 1, 1) } } }));
+    eq("fixture isolation: nothing else in the database predates 2026, so these rows set the first-activity date", strayRows, 0);
+
+    console.log("-- B30: the first month counts only when activity starts in its first days (pure) --");
+    eq("the cut-off is documented as a constant, starting at day 7", FIRST_MONTH_MAX_START_DAY, 7);
+    eq("a first activity on the 1st keeps its month", monthKey(firstUsableMonth(civilDate(2025, 6, 1))), "2025-06");
+    eq("day 7 is the last day that keeps it", monthKey(firstUsableMonth(civilDate(2025, 6, FIRST_MONTH_MAX_START_DAY))), "2025-06");
+    eq("day 8 moves the first usable month to the next", monthKey(firstUsableMonth(civilDate(2025, 6, FIRST_MONTH_MAX_START_DAY + 1))), "2025-07");
+    eq("the last day of December rolls into January of the next year", monthKey(firstUsableMonth(civilDate(2025, 12, 31))), "2026-01");
+
+    console.log("-- B30 (database): first expense on Jun 25 for 6,000, then 30,000 a month --");
+    const seedHistory = async (firstDate: Date, months: number[]) => {
+      await clearRows();
+      await spend(firstDate, 6000);
+      for (const month of months) await spend(civilDate(2025, month, 12), 30000);
+    };
+    await seedHistory(civilDate(2025, 6, 25), [7, 8]);
+    const juneThenTwo = await historyFor(contextOn(civilDate(2025, 9, 15)));
+    eq("the finding's own case (Jun 25, Jul, Aug): only Jul and Aug are full months, so no average yet (it read 22,000)", `${juneThenTwo.sufficient}:${juneThenTwo.monthsUsed}`, "false:2");
+    await seedHistory(civilDate(2025, 6, 25), [7, 8, 9]);
+    const juneExcluded = await historyFor(contextOn(civilDate(2025, 10, 5)));
+    eq("with a third full month the average is 30,000 over Jul-Sep (it read 24,000 over four)", `${juneExcluded.averageLifestyle}:${juneExcluded.monthsUsed}`, "30000:3");
+    eq("...and June is not among the months", juneExcluded.months.map((m) => key(m.window)).join(","), "2025-07,2025-08,2025-09");
+    await seedHistory(civilDate(2025, 6, FIRST_MONTH_MAX_START_DAY), [7, 8, 9]);
+    const dayCutoff = await historyFor(contextOn(civilDate(2025, 10, 5)));
+    eq("first expense on day 7: June stays, (6,000 + 3 x 30,000) / 4", `${dayCutoff.averageLifestyle}:${dayCutoff.monthsUsed}`, "24000:4");
+    await seedHistory(civilDate(2025, 6, FIRST_MONTH_MAX_START_DAY + 1), [7, 8, 9]);
+    const dayAfterCutoff = await historyFor(contextOn(civilDate(2025, 10, 5)));
+    eq("first expense on day 8: June is out, 30,000 over three", `${dayAfterCutoff.averageLifestyle}:${dayAfterCutoff.monthsUsed}`, "30000:3");
+    const noneLeft = await historyFor(contextOn(civilDate(2025, 7, 20)));
+    eq("only the partial month has ended: not enough history, never a number", `${noneLeft.sufficient}:${noneLeft.monthsUsed}:${noneLeft.averageNormalSpending}`, "false:0:0");
+
+    console.log("-- B20: the projection extrapolates typical spending only --");
+    const seedBase = async () => {
+      await clearRows();
+      for (const month of [6, 7, 8]) await spend(civilDate(2025, month, 5), 30000);
+    };
+    await seedBase();
+    await spend(civilDate(2025, 9, 1), 3000);
+    await spend(civilDate(2025, 9, 3), 30000, { isExtraordinary: true });
+    const septemberThird = contextOn(civilDate(2025, 9, 3));
+    const oneOffPace = await paceFor(septemberThird);
+    eq("Sep 3: what left the accounts is still 33,000 (a statement of fact)", oneOffPace.lifestyleSpentSoFar, 33000);
+    eq("the projection is the typical 3,000 over 3 days, times 30: 30,000 (it read 330,000)", oneOffPace.projectedLifestyle, 30000);
+    eq("the 30,000 laptop is shown apart, not extrapolated", oneOffPace.setAsideSoFar, 30000);
+    const oneOffCard = await monthlyPaceFor(septemberThird);
+    eq("the average it is compared with is the typical 30,000", oneOffCard.history.averageNormalSpending, 30000);
+    eq("the card compares typical with typical: on pace (it read 300,000 above)", `${oneOffCard.comparison?.direction}:${oneOffCard.comparison?.amount}`, "onPace:0");
+    eq("the projected normal spending the card compares leaves the set-aside amount out", oneOffCard.pace.projectedNormalSpending, 30000);
+
+    await seedBase();
+    await spend(civilDate(2025, 9, 1), 2000);
+    await spend(civilDate(2025, 9, 2), 10000, { yourShare: 4000 });
+    const sharedPace = await paceFor(septemberThird);
+    eq("a shared expense: spent so far is the 12,000 that left", sharedPace.lifestyleSpentSoFar, 12000);
+    eq("...its typical part is 2,000 + 4,000, projected: 60,000 (it read 120,000)", sharedPace.projectedLifestyle, 60000);
+    eq("...and the other people's 6,000 is shown apart", sharedPace.setAsideSoFar, 6000);
+
+    await seedBase();
+    await spend(civilDate(2025, 9, 2), 9000, { yourShare: 3000, isExtraordinary: true });
+    const sharedOneOff = await paceFor(septemberThird);
+    eq("a shared one-off is set aside whole, its own share included, and projects nothing", `${sharedOneOff.projectedLifestyle}:${sharedOneOff.setAsideSoFar}`, "0:9000");
+
+    await seedBase();
+    await spend(civilDate(2025, 9, 1), 3000);
+    const plainPace = await paceFor(septemberThird);
+    eq("no one-offs and no shares: nothing set aside, the projection as it always was", `${plainPace.setAsideSoFar}:${plainPace.projectedLifestyle}`, "0:30000");
+
+    console.log("-- B31: an item enters a month from its first occurrence, never before --");
+    await seedBase();
+    for (const month of [9, 10]) await spend(civilDate(2025, month, 5), 30000);
+    const planItem = await prisma.recurringItem.create({
+      data: { name: "Verify Pace 2025 Afford plan", amount: 5000, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2025, 10, 1), createdAt: civilDate(2025, 8, 20), fromAfford: true, remainingOccurrences: 12, accountId: account.id },
+    });
+    const contributionItem = await prisma.recurringItem.create({
+      data: { name: "Verify Pace 2025 Contribution", amount: 100, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2025, 10, 1), createdAt: civilDate(2025, 8, 20), accountId: account.id },
+    });
+    const runningItem = await prisma.recurringItem.create({
+      data: { name: "Verify Pace 2025 Running", amount: 100, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2025, 9, 10), createdAt: civilDate(2025, 6, 1), accountId: account.id },
+    });
+    for (const [month, day] of [[7, 10], [8, 10]]) {
+      await prisma.transaction.create({
+        data: { date: civilDate(2025, month, day), amount: 100, currency: "USD", type: "EXPENSE", accountId: account.id, source: "RECURRING", externalId: `${runningItem.id}:${toISODate(civilDate(2025, month, day))}` },
+      });
+    }
+    const started = await historyFor(contextOn(civilDate(2025, 11, 5)));
+    const monthOf = (monthKeyValue: string) => started.months.find((m) => m.window.key === monthKeyValue)!;
+    eq("Afford plan created Aug 20, first payment Oct 1: Aug committed is only the running item's posted 100 (it read 5,100)", monthOf("2025-08").committed, 100);
+    eq("...Sep is the running item's scheduled 100 and nothing of the plan (it read 5,100)", monthOf("2025-09").committed, 100);
+    eq("...from Oct the plan counts: 5,000 + 100", monthOf("2025-10").committed, 5100);
+    eq("a running item is not counted before its first posted row: June 0 (it read 100)", monthOf("2025-06").committed, 0);
+    eq("...months that hold its posted rows are unchanged: Jul 100", monthOf("2025-07").committed, 100);
+    eq("a CONTRIBUTION item follows the same rule: 0 in Aug and Sep (it read 100), 100 in Oct", `${monthOf("2025-08").savingsInvesting}:${monthOf("2025-09").savingsInvesting}:${monthOf("2025-10").savingsInvesting}`, "0:0:100");
+    await prisma.recurringItem.deleteMany({ where: { id: { in: [planItem.id, contributionItem.id, runningItem.id] } } });
+
+    console.log("-- B33: the Reports average is over completed periods only --");
+    const reportsToday = contextOn(civilDate(2025, 9, 17));
+    const trendCase = async (rows: Array<[Date, number]>) => {
+      await clearRows();
+      for (const [date, amount] of rows) await spend(date, amount);
+      return trendSummaryFor(reportsToday, 6);
+    };
+    const fivePlusPartial = await trendCase([
+      [civilDate(2025, 7, 3), 1000], [civilDate(2025, 7, 20), 1000], [civilDate(2025, 8, 3), 1000],
+      [civilDate(2025, 8, 20), 1000], [civilDate(2025, 9, 3), 1000], [civilDate(2025, 9, 16), 50],
+    ]);
+    eq("five periods at 1,000 plus 50 so far in Sep 16-30: the average is 1,000 over 5 (it read 841.67)", `${fivePlusPartial.average?.average}:${fivePlusPartial.average?.periods}`, "1000:5");
+    eq("only the period in progress is partial", fivePlusPartial.points.map((p) => p.partial).join(","), "false,false,false,false,false,true");
+    eq("the partial period stays in the chart with its figure", fivePlusPartial.points[5].spent, 50);
+    const twoPeriods = await trendCase([[civilDate(2025, 8, 20), 1000], [civilDate(2025, 9, 3), 1000], [civilDate(2025, 9, 16), 50]]);
+    eq("a two-period history divides by 2, not 6 (it read 341.67)", `${twoPeriods.average?.average}:${twoPeriods.average?.periods}`, "1000:2");
+    const quietPeriods = await trendCase([[civilDate(2025, 7, 3), 1000], [civilDate(2025, 9, 16), 50]]);
+    eq("periods with nothing after the first activity count as zero: 1,000 over 5 = 200", `${quietPeriods.average?.average}:${quietPeriods.average?.periods}`, "200:5");
+    const noCompleted = await trendCase([[civilDate(2025, 9, 16), 50]]);
+    eq("no completed period yet: no average at all (it read 8.33)", noCompleted.average, null);
+
+    await clearRows();
+    await prisma.account.delete({ where: { id: account.id } });
+    console.log("  ok   monthly pace 2025 fixtures removed");
+  }
 
   console.log("\n== payday planner (pure) ==");
   // Sep 2026: the 15th is a Tuesday and the 30th a Wednesday, so neither
@@ -4286,7 +4444,7 @@ async function main() {
     // leave the total unchanged: the actual replaces the scheduled amount.
     const augustWindow = monthWindow({ year: 2026, month: 8 });
     const augustContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 8, 31), currentPeriod: periodForDate(civilDate(2026, 8, 31)) };
-    const contributionForMatch = [{ ...contribution, amount: num(contribution.amount) }];
+    const contributionForMatch = [{ ...contribution, amount: num(contribution.amount), firstPostedDate: null }];
     const augustSavingsBefore = (await classifyCompletedMonth(augustWindow, augustContext, contributionForMatch, categoryMeta)).savingsInvesting;
 
     const firstRun = await postDueRecurringItems(postingToday);
@@ -4839,7 +4997,7 @@ async function main() {
     const augustContext = { displayCurrency: "USD" as const, language: "en" as const, rates, today: civilDate(2026, 8, 31), currentPeriod: periodForDate(civilDate(2026, 8, 31)) };
     const spentBefore = (await getPeriodSummary(augustB, augustContext)).spent;
     const augustWindow = monthWindow({ year: 2026, month: 8 });
-    const autoForMatch = [{ ...auto, amount: num(auto.amount) }];
+    const autoForMatch = [{ ...auto, amount: num(auto.amount), firstPostedDate: null }];
     const savingsBefore = (await classifyCompletedMonth(augustWindow, augustContext, autoForMatch, categoryMeta)).savingsInvesting;
     await settleRun(civilDate(2026, 8, 20));
     const fundContribution = await prisma.goalContribution.findFirst({ where: { goalId: goal.id } });
