@@ -924,21 +924,52 @@ async function main(): Promise<number> {
       // Independent scheduled commitments per period: the same walk Afford
       // documents (every active item due by the horizon, an achieved goal's
       // contribution left out, an overdue date filed under the current period).
+      // The current period is counted in full: the occurrences already behind
+      // today are read straight from the ledger - its RECURRING rows and the
+      // charges that settled an occurrence (RecurringSettlement), each
+      // occurrence key once - and an owed date whose key is among them is not
+      // counted again.
       const scheduledTotal = new Map<string, number>();
       const scheduledByAccount = new Map<string, Map<string, number>>();
+      const addScheduled = (key: string, amount: number, currency: string, accountId: string | null) => {
+        scheduledTotal.set(key, (scheduledTotal.get(key) ?? 0) + toDisplay(amount, currency));
+        const account = accountId ? activeAccounts.find((candidate) => candidate.id === accountId) : undefined;
+        if (account) {
+          const byAccount = scheduledByAccount.get(key) ?? new Map<string, number>();
+          byAccount.set(account.id, (byAccount.get(account.id) ?? 0) + convert(amount, currency, account.currency, rates));
+          scheduledByAccount.set(key, byAccount);
+        }
+      };
+      const currentKey = context.currentPeriod.key;
+      const behindToday = new Set<string>();
+      const [currentPosted, currentSettled] = await Promise.all([
+        prisma.transaction.findMany({
+          where: { source: "RECURRING", type: "EXPENSE", date: periodRange(context.currentPeriod) },
+          select: { externalId: true, amount: true, currency: true, accountId: true },
+        }),
+        prisma.recurringSettlement.findMany({
+          where: { dueDate: periodRange(context.currentPeriod) },
+          select: { occurrenceKey: true, transaction: { select: { amount: true, currency: true, accountId: true } } },
+        }),
+      ]);
+      for (const row of currentPosted) {
+        if (row.externalId && behindToday.has(row.externalId)) continue;
+        if (row.externalId) behindToday.add(row.externalId);
+        addScheduled(currentKey, num(row.amount), row.currency, row.accountId);
+      }
+      for (const settlement of currentSettled) {
+        if (behindToday.has(settlement.occurrenceKey)) continue;
+        behindToday.add(settlement.occurrenceKey);
+        addScheduled(currentKey, num(settlement.transaction.amount), settlement.transaction.currency, settlement.transaction.accountId);
+      }
       for (const item of allItems) {
         if (!item.active || item.nextDate.getTime() > horizonEnd.getTime()) continue;
         if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) continue;
         for (const due of owedOccurrences(item, today, horizonEnd)) {
-          const key = due.getTime() < today.getTime() ? context.currentPeriod.key : periodForDate(due).key;
+          const key = due.getTime() < today.getTime() ? currentKey : periodForDate(due).key;
           if (!refsByKey.has(key)) continue;
-          scheduledTotal.set(key, (scheduledTotal.get(key) ?? 0) + toDisplay(num(item.amount), item.currency));
-          const account = item.accountId ? activeAccounts.find((candidate) => candidate.id === item.accountId) : undefined;
-          if (account) {
-            const byAccount = scheduledByAccount.get(key) ?? new Map<string, number>();
-            byAccount.set(account.id, (byAccount.get(account.id) ?? 0) + convert(num(item.amount), item.currency, account.currency, rates));
-            scheduledByAccount.set(key, byAccount);
-          }
+          if (behindToday.has(`${item.id}:${toISODate(due)}`)) continue;
+          addScheduled(key, num(item.amount), item.currency, item.accountId);
         }
       }
 
@@ -1022,7 +1053,7 @@ async function main(): Promise<number> {
         if (Math.abs(residual) >= 0.01) {
           const draftHint = draftRows.length > 0 && sameCents(residual, draftRowsTotal) ? ` - exactly the ${money(draftRowsTotal, displayCurrency)} of GOAL rows on a non-confirmed check-in, which must not count` : "";
           flag(3, residual > 0 ? "DOUBLE" : "DROP", `${key}: period-wide committed ${money(anyProjection.flexible.committed, displayCurrency)} does not decompose into schedule + confirmed GOAL rows + estimate`, [
-            `schedule (owedOccurrences over active items): ${money(scheduled, displayCurrency)}; confirmed GOAL rows: ${money(goalRowsTotal, displayCurrency)}; estimate: ${money(estimate, displayCurrency)}; unexplained: ${money(residual, displayCurrency)}${draftHint}`,
+            `schedule (owedOccurrences over active items, plus the current period's RECURRING rows and settled charges): ${money(scheduled, displayCurrency)}; confirmed GOAL rows: ${money(goalRowsTotal, displayCurrency)}; estimate: ${money(estimate, displayCurrency)}; unexplained: ${money(residual, displayCurrency)}${draftHint}`,
           ]);
         }
 

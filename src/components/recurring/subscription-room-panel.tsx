@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { MIN_INCOME_HISTORY_PERIODS } from "@/lib/afford";
 import { formatMoney } from "@/lib/currency";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -54,8 +55,11 @@ export function SubscriptionRoomPanel({
       <div className="space-y-1">
         <p className="font-medium">{t.roomHeading}</p>
         <p className="text-xs text-muted-foreground">
-          {t.roomDescription(threshold, room.period.label, room.historyPeriods)}
+          {t.roomDescription(threshold, room.period.label, room.incomePeriods)}
         </p>
+        {room.incomePeriods > 0 && room.incomePeriods < MIN_INCOME_HISTORY_PERIODS ? (
+          <p className="text-xs text-[var(--warning)]">{t.roomLowHistory(room.incomePeriods)}</p>
+        ) : null}
         {room.occurrences > 1 ? (
           <p className="text-xs text-muted-foreground">
             {t.roomChargesTogether(room.occurrences, formatMoney(room.charge, room.currency))}

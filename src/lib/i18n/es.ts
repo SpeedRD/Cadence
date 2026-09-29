@@ -1,5 +1,17 @@
 import type { Dictionary } from "./en";
 
+/** "1 período de pago comparable", "4 períodos de pago comparables". */
+function comparablePeriodsEs(count: number): string {
+  return count === 1 ? "1 período de pago comparable" : `${count} períodos de pago comparables`;
+}
+
+/** Cómo se llegó a un ingreso proyectado, para una frase que dice "...se proyecta como <esto>". */
+function incomeBasisEs(periods: number): string {
+  return periods === 0
+    ? "cero, porque ningún período de pago comparable tiene ingresos todavía"
+    : `el promedio de ${comparablePeriodsEs(periods)}`;
+}
+
 /** "del día 16", o "del último día del mes" para un ancla de 31 (recortada en meses más cortos). */
 function dayOfMonthEs(day: number): string {
   return day >= 31 ? "del último día del mes" : `del día ${day}`;
@@ -786,7 +798,9 @@ export const es = {
     paymentsLeft: (n: number) => (n === 1 ? "1 pago restante" : `${n} pagos restantes`),
     roomHeading: "¿Qué cuenta puede con esto?",
     roomDescription: (threshold: string, period: string, periods: number) =>
-      `Una suscripción de ${threshold} o más se comprueba como ¿Me alcanza? comprueba una compra: el ingreso de cada cuenta para ${period} se proyecta con tus últimos ${periods} períodos de pago comparables, se restan sus otros elementos recurrentes que vencen entonces y se reserva su colchón protegido. Que haya margen significa que el margen habitual de la cuenta cubre el cobro, no una garantía para todos los períodos. Esto nunca impide guardar.`,
+      `Una suscripción de ${threshold} o más se comprueba como ¿Me alcanza? comprueba una compra: el ingreso de cada cuenta para ${period} se proyecta como ${incomeBasisEs(periods)} (la misma mitad del mes), se restan sus otros elementos recurrentes que vencen entonces y su parte de tus categorías fijas esenciales, y se reserva su colchón protegido. Que haya margen significa que el margen habitual de la cuenta cubre el cobro, no una garantía para todos los períodos. Esto nunca impide guardar.`,
+    roomLowHistory: (periods: number) =>
+      `Solo ${comparablePeriodsEs(periods)} de historial de ingresos ${periods === 1 ? "respalda" : "respaldan"} estas cifras, así que tómalas como aproximadas hasta que pasen más períodos de pago.`,
     roomChecking: "Comprobando qué cuenta tiene margen...",
     roomChargesTogether: (count: number, charge: string) =>
       `${count} cobros caen en este período y se comprueban juntos (${charge}).`,
@@ -911,15 +925,30 @@ export const es = {
     flexibleShortfall: (period: string, amount: string) =>
       `${period}: al período le faltarían ${amount} para sus categorías flexibles.`,
     projectionHeading: "Cómo se proyectan estas cifras",
-    projectionDescription: (periods: number, account: string) =>
-      `Todavía no existe un check-in de pago para estos períodos. El ingreso de ${account} se proyecta con el promedio de tus últimos ${periods} períodos comparables (la misma mitad del mes). Sus compromisos son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí, más lo que un check-in de pago confirmado haya planificado hacia tus metas para ese período. Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo. El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
+    projectionDescription: (account: string, periods: number | null) =>
+      `Todavía no existe un check-in de pago para estos períodos. El ingreso se proyecta como ${periods === null ? "el promedio de los períodos de pago comparables indicados bajo cada período" : incomeBasisEs(periods)} (la misma mitad del mes), contado en todas las cuentas desde el primer período con ingresos en cualquiera de ellas, así que un pago que pasó de una cuenta a otra no se cuenta en ambas. Si tus ingresos cambiaron (un trabajo nuevo, por ejemplo), "Contar historial de ingresos desde" en Ajustes define dónde empieza ese historial. Los compromisos de ${account} son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí y, en el período actual, lo que ya se registró además de lo que falta, más lo que un check-in de pago confirmado haya planificado hacia tus metas para ese período. Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo. El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
     projectionAccountColumns: (account: string) => `${account} (proyectado)`,
     projectionPeriodColumns: "Todas las cuentas (proyectado)",
     projectionIncome: "Ingreso",
     projectionCommitted: "Compromisos",
     projectionBuffer: "Colchón",
+    projectionIncomePeriods: (periods: number) => (periods === 1 ? "ingreso: 1 período" : `ingreso: ${periods} períodos`),
+    lowIncomeHistory: (periods: number) =>
+      `Solo ${comparablePeriodsEs(periods)} de historial de ingresos ${periods === 1 ? "respalda" : "respaldan"} esta proyección, así que toma su ingreso como aproximado hasta que pasen más períodos de pago.`,
+    projectionEssential: "Fijos esenciales",
+    noEssentialFixed: "No hay presupuestos fijos esenciales definidos, así que no se asume ninguno en ninguna comprobación.",
+    essentialFixedLine: (periods: string[]) =>
+      `Las categorías fijas esenciales se restan en ambas comprobaciones, como las resta el check-in de pago: ${periods.join("; ")}. Cada cuenta asume la parte que su ingreso proyectado representa del período.`,
+    essentialFixedPeriod: (period: string, amount: string, basis: "budget" | "suggestion" | "none") =>
+      basis === "budget"
+        ? `${period} ${amount}, los presupuestos ya definidos para él`
+        : basis === "suggestion"
+          ? `${period} ${amount}, lo que el check-in sugeriría según tus últimos presupuestos o tu gasto promedio`
+          : `${period} no se asume nada, porque todavía no se ha presupuestado ni gastado nada en ellas`,
     noHistoryForAccount: (account: string, periods: number) =>
-      `${account} no recibió ingresos en los últimos ${periods} períodos comparables, así que su ingreso proyectado es cero y solo aplica el mínimo del colchón.`,
+      periods === 0
+        ? `Ningún período de pago comparable cae después de tu fecha de "Contar historial de ingresos desde", así que el ingreso proyectado de ${account} es cero y solo aplica el mínimo del colchón.`
+        : `${account} no recibió ingresos en los últimos ${comparablePeriodsEs(periods)}, así que su ingreso proyectado es cero y solo aplica el mínimo del colchón.`,
     estimatedInCommitments: "incluye un aporte estimado a metas *",
     estimatedGoalItem: (amount: string, goal: string) => `${amount} hacia ${goal}`,
     estimatedGoalFunding: (period: string, goals: string[]) =>

@@ -41,6 +41,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** anyone evaluating a purchase, or adding a large subscription, whose first charge lands in the current period after that period's bills have posted. Afford overstates room by everything already charged this period, typically rent and most subscriptions.
 - **Severity / confidence:** High / High. Evidence: DB run.
 - **Fix:** for the current period, count every occurrence due from the period's start, whether posted or still owed. Build the income side on the same basis. Alternatively, for the current period, use the real ledger: income received this period, minus charges posted, minus what is still owed.
+- **Status:** fixed. The current period now counts every occurrence due in it: the RECURRING rows already posted and the charges that settled an occurrence (RecurringSettlement), plus what is still owed from today, each occurrence key once. The same code covers a confirmed current period, the subscription room check and the tracker's re-check, whose excluded plan keeps its own posted installments counted.
 
 ### B2. One logged charge cancels several occurrences of a recurring item (posting and check-in)
 - **What:** posting's "already logged" test reloads every non-RECURRING charge in the occurrence's pay period on each run. Its `consumed` set lives for one run only. A charge that already paid for one occurrence therefore pays for the next occurrence in the same period on the next run.
@@ -116,6 +117,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** users who keep rent or fixed bills as essential category budgets rather than recurring items. Afford overstates room by the essential total.
 - **Severity / confidence:** High / High. Evidence: pure run.
 - **Fix:** project essential fixed spending per period, from the essential categories' last budget or suggestion (`getCategorySuggestions`), and subtract it in both checks. At minimum, change the label and copy so the figure is not presented as the check-in's.
+- **Status:** fixed. Both checks subtract the essential fixed categories as the check-in fills them (the period's budget, else a confirmed allocation, else `getCategorySuggestions`). Each account carries its share of projected income, and the results page shows the amount and its basis, or says nothing is assumed when there is no data.
 
 ### B8. A salary that moved between accounts is projected in both
 - **What:** `averageSinceFirstActivity` runs per account, from each account's own oldest non-zero period. When pay moves from account A to account B, A keeps averaging its old pay over six periods while B averages its new pay over one.
@@ -126,6 +128,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** anyone who changes the account their pay lands in and keeps the old account open. Afford's period-wide check, the goal estimate's headroom and the goal forecast all overstate income by up to about 5/6 of a paycheck, decaying over six comparable periods (about six months).
 - **Severity / confidence:** High / High. Evidence: DB run.
 - **Fix:** start every account's divisor at the oldest period with income in any account (a global first-activity index) rather than per account. A zero in an account that used to be paid is then a real zero. Mention "count income history from" as the manual override.
+- **Status:** fixed. `incomeHistoryDepth` counts every account from the oldest comparable period with income in any account, and the income copy names "Count income history from" as the manual override.
 
 ---
 
@@ -284,6 +287,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** every Afford result. The copy overstates how much history backs the projection. It is worst for new users and after a job change, which is exactly when a single period should be flagged.
 - **Severity / confidence:** Medium / High. Evidence: DB run plus render path.
 - **Fix:** return each account's `income.periods` in the projection and render it, e.g. "average of 1 comparable pay period", and warn when it is below a minimum.
+- **Status:** fixed. The projection returns the divisor (`incomePeriods`) and the results page, `noHistoryForAccount` and the subscription-room description render it, with a low-history note below `MIN_INCOME_HISTORY_PERIODS` (3). The `HISTORY_PERIODS` prop that fed the copy is gone.
 
 ---
 
@@ -399,6 +403,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** only a purchase dated in those 1–3 days, when that period's own check-in was never confirmed. Room is overstated by the pace. In practice it is usually the confirmed period, so the effect is small.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** estimate the pace for an unconfirmed current period too, or accept it and document it. The pay for it has landed, so the user is planning the next one.
+- **Status:** fixed. From payday to period end, an unconfirmed current period is added to each dated goal's window, except a goal whose target date falls before the plan period ends, whose whole balance stays in the plan period alone.
 
 ### B35. Category suggestions average an in-progress comparable period when planning two or more periods ahead
 - **What:** `getCategorySuggestions` starts at `previousComparablePeriod(planRef)` without the "has ended" rule that Afford's `comparableHistory` applies. The Budgets page can open the wizard for any future period.

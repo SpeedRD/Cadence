@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { MIN_INCOME_HISTORY_PERIODS, showsEssentialFixed } from "@/lib/afford";
 import { formatMoney } from "@/lib/currency";
 import { formatDate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -212,7 +213,6 @@ export function AffordResults({
   verdict,
   recorded,
   accountName,
-  historyPeriods,
   stale,
   acknowledged,
   onAcknowledgedChange,
@@ -225,7 +225,6 @@ export function AffordResults({
   verdict: AffordVerdict;
   recorded: AffordRecordedPlan;
   accountName: string;
-  historyPeriods: number;
   /** The inputs changed since this verdict was computed - shown, but nothing can be recorded from it. */
   stale: boolean;
   acknowledged: boolean;
@@ -244,6 +243,19 @@ export function AffordResults({
   // under the projection, goal by goal, so the estimate is never mistaken for
   // a confirmed figure.
   const periodsWithEstimate = verdict.periods.filter((period) => period.estimatedGoals.length > 0);
+  // How many comparable periods each period's income averages. Usually one
+  // count for the whole purchase, said once in the description; when periods
+  // draw on different history (a confirmed check-in joins one half of the
+  // month only) each row says its own.
+  const incomePeriodCounts = [...new Set(verdict.periods.map((period) => period.flexible.incomePeriods))];
+  const sharedIncomePeriods = incomePeriodCounts.length === 1 ? incomePeriodCounts[0] : null;
+  const fewestIncomePeriods = Math.min(...incomePeriodCounts.filter((count) => count > 0));
+  const lowIncomeHistory = Number.isFinite(fewestIncomePeriods) && fewestIncomePeriods < MIN_INCOME_HISTORY_PERIODS;
+  // How far back an account with no income at all was checked.
+  const periodsCheckedWithoutHistory = Math.max(0, ...periodsWithoutHistory.map((period) => period.historyPeriods));
+  // The essential fixed column and line appear once any period assumes an
+  // amount; among them, a period with nothing to go on shows a dash, not 0.
+  const showEssential = showsEssentialFixed(verdict.periods);
   const accountCurrency = verdict.periods[0]?.account.currency ?? recorded.currency;
   const displayCurrency = verdict.periods[0]?.flexible.currency ?? recorded.currency;
   const recordProps = {
@@ -511,7 +523,7 @@ export function AffordResults({
       <Card size="sm" className="max-sm:mb-0">
         <CardHeader>
           <CardTitle>{t.projectionHeading}</CardTitle>
-          <CardDescription>{t.projectionDescription(historyPeriods, accountName)}</CardDescription>
+          <CardDescription>{t.projectionDescription(accountName, sharedIncomePeriods)}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <ScrollFade>
@@ -519,10 +531,10 @@ export function AffordResults({
               <TableHeader>
                 <TableRow>
                   <TableHead>{t.columnPeriod}</TableHead>
-                  <TableHead colSpan={3} className="text-right">
+                  <TableHead colSpan={showEssential ? 4 : 3} className="text-right">
                     {t.projectionAccountColumns(accountName)} · {accountCurrency}
                   </TableHead>
-                  <TableHead colSpan={3} className="text-right">
+                  <TableHead colSpan={showEssential ? 4 : 3} className="text-right">
                     {t.projectionPeriodColumns} · {displayCurrency}
                   </TableHead>
                 </TableRow>
@@ -534,6 +546,11 @@ export function AffordResults({
                   <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionCommitted}
                   </TableHead>
+                  {showEssential ? (
+                    <TableHead className="text-right text-badge font-normal text-muted-foreground">
+                      {t.projectionEssential}
+                    </TableHead>
+                  ) : null}
                   <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionBuffer}
                   </TableHead>
@@ -543,6 +560,11 @@ export function AffordResults({
                   <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionCommitted}
                   </TableHead>
+                  {showEssential ? (
+                    <TableHead className="text-right text-badge font-normal text-muted-foreground">
+                      {t.projectionEssential}
+                    </TableHead>
+                  ) : null}
                   <TableHead className="text-right text-badge font-normal text-muted-foreground">
                     {t.projectionBuffer}
                   </TableHead>
@@ -551,7 +573,14 @@ export function AffordResults({
               <TableBody>
                 {verdict.periods.map((period) => (
                   <TableRow key={period.key}>
-                    <TableCell>{period.period.label}</TableCell>
+                    <TableCell>
+                      {period.period.label}
+                      {sharedIncomePeriods === null ? (
+                        <span className="block text-badge text-muted-foreground">
+                          {t.projectionIncomePeriods(period.flexible.incomePeriods)}
+                        </span>
+                      ) : null}
+                    </TableCell>
                     <TableCell className="figure text-right">
                       {formatMoney(period.account.income, period.account.currency)}
                     </TableCell>
@@ -559,6 +588,13 @@ export function AffordResults({
                       {formatMoney(period.account.committed, period.account.currency)}
                       {period.estimatedGoals.length > 0 ? <span className="text-muted-foreground"> *</span> : null}
                     </TableCell>
+                    {showEssential ? (
+                      <TableCell className="figure text-right">
+                        {period.essentialFixedBasis === "none"
+                          ? "-"
+                          : formatMoney(period.account.essentialFixed, period.account.currency)}
+                      </TableCell>
+                    ) : null}
                     <TableCell className="figure text-right">
                       {formatMoney(period.account.buffer, period.account.currency)}
                     </TableCell>
@@ -569,6 +605,13 @@ export function AffordResults({
                       {formatMoney(period.flexible.committed, period.flexible.currency)}
                       {period.estimatedGoals.length > 0 ? <span className="text-muted-foreground"> *</span> : null}
                     </TableCell>
+                    {showEssential ? (
+                      <TableCell className="figure text-right">
+                        {period.essentialFixedBasis === "none"
+                          ? "-"
+                          : formatMoney(period.flexible.essentialFixed, period.flexible.currency)}
+                      </TableCell>
+                    ) : null}
                     <TableCell className="figure text-right">
                       {formatMoney(period.flexible.buffer, period.flexible.currency)}
                     </TableCell>
@@ -591,9 +634,27 @@ export function AffordResults({
               ))}
             </ul>
           ) : null}
+          {showEssential ? (
+            <p className="text-xs text-muted-foreground">
+              {t.essentialFixedLine(
+                verdict.periods.map((period) =>
+                  t.essentialFixedPeriod(
+                    period.period.label,
+                    formatMoney(period.flexible.essentialFixed, period.flexible.currency),
+                    period.essentialFixedBasis === "unset" ? "none" : period.essentialFixedBasis,
+                  ),
+                ),
+              )}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">{t.noEssentialFixed}</p>
+          )}
+          {lowIncomeHistory ? (
+            <p className="text-xs text-[var(--warning)]">{t.lowIncomeHistory(fewestIncomePeriods)}</p>
+          ) : null}
           {periodsWithoutHistory.length > 0 ? (
             <p className="text-xs text-[var(--warning)]">
-              {t.noHistoryForAccount(accountName, historyPeriods)}
+              {t.noHistoryForAccount(accountName, periodsCheckedWithoutHistory)}
             </p>
           ) : null}
         </CardContent>

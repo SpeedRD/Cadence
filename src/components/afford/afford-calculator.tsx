@@ -48,14 +48,12 @@ export function AffordCalculator({
   accounts,
   defaultCurrency,
   today,
-  historyPeriods,
   locale,
 }: {
   accounts: Option[];
   defaultCurrency: string;
   /** "YYYY-MM-DD" in the app's timezone - the default first payment date. */
   today: string;
-  historyPeriods: number;
   locale: Locale;
 }) {
   const t = getDictionary(locale).afford;
@@ -337,7 +335,6 @@ export function AffordCalculator({
             verdict={evaluated.verdict}
             recorded={evaluated.recorded}
             accountName={account.name}
-            historyPeriods={historyPeriods}
             stale={stale}
             acknowledged={acknowledged}
             onAcknowledgedChange={setAcknowledged}

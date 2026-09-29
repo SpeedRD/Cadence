@@ -11,14 +11,15 @@
  * no confirmed payday check-in for a period that has not happened yet:
  *
  *   account buffer   the chosen account's projected income, less what its
- *                    recurring items owe in the period, less this purchase's
+ *                    recurring items owe in the period, less its share of the
+ *                    period's essential fixed spending, less this purchase's
  *                    installment(s) due in the period, must stay at or above
  *                    that account's own protected buffer (the same
  *                    defaultProtectedBuffer() the check-in applies per account).
  *   flexible room    the period's projected available-for-flexible - income
  *                    across every active account, less every recurring item
- *                    due in the period and every account's buffer, the app's
- *                    own definition in
+ *                    due in the period, the essential fixed categories and
+ *                    every account's buffer, the app's own definition in
  *                    availableForFlexibleCategories() - less the installment(s),
  *                    must stay non-negative.
  *
@@ -148,6 +149,31 @@ export interface ProjectedGoalPlan {
   draws: GoalFundingDraw[];
 }
 
+/**
+ * Below this many comparable pay periods of income history, the income figure
+ * is an average of too little to lean on - one paycheck, or two - and the
+ * results page and the Recurring form's room check say so beside it. Three is
+ * the smallest count where one unusual period (a late paycheck, a bonus) no
+ * longer decides the average on its own: it moves it by a third at most.
+ */
+export const MIN_INCOME_HISTORY_PERIODS = 3;
+
+/**
+ * Where a period's essential fixed figure came from, the way the payday
+ * check-in would fill its essential categories for that period:
+ *   budget       every essential category has a budget already saved for the
+ *                period (or a confirmed check-in's allocation for it)
+ *   suggestion   at least one comes from getCategorySuggestions() - the last
+ *                comparable budget, or average spending - carried from the
+ *                most recent period whose history is known
+ *   none         essential categories exist but nothing was ever budgeted or
+ *                spent in them, so nothing is assumed; the copy says so
+ *                rather than presenting 0 as a known figure
+ *   unset        no category is marked essential fixed: nothing to project,
+ *                and the period is exactly what it was before
+ */
+export type EssentialFixedBasis = "budget" | "suggestion" | "none" | "unset";
+
 /** Everything a period's two checks need, as projected by src/lib/data/afford.ts. */
 export interface PeriodProjection {
   period: PeriodInfo;
@@ -167,8 +193,23 @@ export interface PeriodProjection {
     committed: number;
     /** defaultProtectedBuffer() over `income`. */
     buffer: number;
+    /**
+     * This account's share of the period's essential fixed spending
+     * (`flexible.essentialFixed`), in its own currency: the check-in keeps
+     * essential categories period-wide, with no account, so each account
+     * carries them in proportion to its part of the period's projected
+     * income - the money they are paid from. 0 when nothing is essential.
+     */
+    essentialFixed: number;
     /** "none" when no comparable period had any income for this account - the projection is then a floor, not an average. */
     basis: "average" | "none";
+    /**
+     * How many comparable periods `income` is the average of: the divisor,
+     * counted from the oldest period with income in any account (see
+     * incomeHistoryDepth in src/lib/data/afford.ts), so it is the same for
+     * every account in one period. 0 when no account has any income history.
+     */
+    incomePeriods: number;
     /**
      * The part of `committed` that is only an estimate: this account's share
      * of every dated goal's current pace, for a period with no confirmed
@@ -187,7 +228,13 @@ export interface PeriodProjection {
     buffer: number;
     /** The estimated part of `committed`: `estimatedGoals` summed. 0 for a period with a confirmed check-in. */
     estimatedGoalFunding: number;
+    /** The essential fixed categories' figure for the period, what the check-in's Step 4 subtracts as essentialFixed - see `essentialFixedBasis`. */
+    essentialFixed: number;
+    /** The divisor behind `income` - the same one every account's average used (see account.incomePeriods). */
+    incomePeriods: number;
   };
+  /** Where `flexible.essentialFixed` came from, so the results page can say what was assumed. */
+  essentialFixedBasis: EssentialFixedBasis;
   /**
    * What the period is estimated to put toward each dated goal, one entry per
    * goal with a positive amount, in the order the check-in funds them (oldest
@@ -210,10 +257,11 @@ export interface PeriodProjection {
    */
   goalPlans: ProjectedGoalPlan[];
   /**
-   * How many comparable periods were actually averaged - up to HISTORY_PERIODS,
-   * fewer when Settings' "count income history from" date drops some of them
-   * (see comparableHistory in src/lib/data/afford.ts). The newest has the most
-   * weight only in that it is guaranteed to be included.
+   * How many comparable periods were looked at - up to HISTORY_PERIODS, fewer
+   * when Settings' "count income history from" date drops some of them (see
+   * comparableHistory in src/lib/data/afford.ts). Not the divisor
+   * (`flexible.incomePeriods` is): the results page reads it only to say how
+   * far back an account with no income at all was checked.
    */
   historyPeriods: number;
 }
@@ -225,10 +273,14 @@ export interface AccountCheck {
   income: number;
   committed: number;
   buffer: number;
+  /** This account's share of the period's essential fixed spending - see PeriodProjection.account.essentialFixed. */
+  essentialFixed: number;
   basis: "average" | "none";
+  /** The divisor behind `income` - see PeriodProjection.account.incomePeriods. */
+  incomePeriods: number;
   /** The estimated part of `committed` - see PeriodProjection.account.estimatedGoalFunding. */
   estimatedGoalFunding: number;
-  /** income - committed - buffer: the room above the buffer before this purchase. */
+  /** income - committed - essentialFixed - buffer: the room above the buffer before this purchase. */
   headroomBefore: number;
   /** This purchase's installment(s) due in the period, in the account's currency. */
   installment: number;
@@ -245,6 +297,10 @@ export interface FlexibleCheck {
   buffer: number;
   /** The estimated part of `committed` - see PeriodProjection.flexible.estimatedGoalFunding. */
   estimatedGoalFunding: number;
+  /** The essential fixed categories' figure - see PeriodProjection.flexible.essentialFixed. */
+  essentialFixed: number;
+  /** The divisor behind `income` - see PeriodProjection.flexible.incomePeriods. */
+  incomePeriods: number;
   availableBefore: number;
   /** In the display currency. */
   installment: number;
@@ -264,6 +320,10 @@ export interface PeriodVerdict {
   flexible: FlexibleCheck;
   /** PeriodProjection.estimatedGoals as projected: the goals whose pace both checks' commitments include as an estimate. */
   estimatedGoals: EstimatedGoalFunding[];
+  /** PeriodProjection.essentialFixedBasis as projected. */
+  essentialFixedBasis: EssentialFixedBasis;
+  /** PeriodProjection.historyPeriods as projected. */
+  historyPeriods: number;
   passes: boolean;
 }
 
@@ -279,6 +339,16 @@ export interface AffordVerdict {
   periods: PeriodVerdict[];
   /** The periods that fail either check, earliest first. */
   failing: PeriodVerdict[];
+}
+
+/**
+ * Whether the results page gives essential fixed spending its own column and
+ * per-period lines: only when at least one projected period assumes an amount
+ * above zero. Otherwise every cell would read "-", so the page says once that
+ * none are assumed instead.
+ */
+export function showsEssentialFixed(periods: { flexible: { essentialFixed: number } }[]): boolean {
+  return periods.some((period) => period.flexible.essentialFixed > 0);
 }
 
 /** Sum of each period's installments, keyed by period; a period with none is absent. */
@@ -318,7 +388,10 @@ export function evaluateAffordability(input: {
       convert(installmentTotal, currency, projection.account.currency, rates),
     );
     const headroomBefore = round2(
-      projection.account.income - projection.account.committed - projection.account.buffer,
+      projection.account.income -
+        projection.account.committed -
+        projection.account.essentialFixed -
+        projection.account.buffer,
     );
     const headroomAfter = round2(headroomBefore - accountInstallment);
     const account: AccountCheck = {
@@ -328,7 +401,9 @@ export function evaluateAffordability(input: {
       income: projection.account.income,
       committed: projection.account.committed,
       buffer: projection.account.buffer,
+      essentialFixed: projection.account.essentialFixed,
       basis: projection.account.basis,
+      incomePeriods: projection.account.incomePeriods,
       estimatedGoalFunding: projection.account.estimatedGoalFunding,
       headroomBefore,
       installment: accountInstallment,
@@ -337,17 +412,19 @@ export function evaluateAffordability(input: {
       shortfall: headroomAfter < 0 ? round2(-headroomAfter) : 0,
     };
 
-    // The check-in's own formula. Carryover, goal plans and essential
-    // categories are chosen at check-in time and are not commitments the
-    // period already carries, so they enter as zero; what history can
-    // predict - income, scheduled charges, the buffer - is what is projected.
+    // The check-in's own formula. Carryover is chosen at check-in time and
+    // is not money the period already has, so it enters as zero; goal
+    // funding is inside `committed` (the confirmed plan's, or the estimate);
+    // the essential fixed categories are projected the way the check-in
+    // fills them, and the rest - income, scheduled charges, the buffer - is
+    // what history and the schedules predict.
     const availableBefore = availableForFlexibleCategories({
       income: projection.flexible.income,
       includedCarryover: 0,
       subscriptions: projection.flexible.committed,
       recurringContributions: 0,
       goalPlan: 0,
-      essentialFixed: 0,
+      essentialFixed: projection.flexible.essentialFixed,
       buffer: projection.flexible.buffer,
     });
     const flexibleInstallment = round2(
@@ -360,6 +437,8 @@ export function evaluateAffordability(input: {
       committed: projection.flexible.committed,
       buffer: projection.flexible.buffer,
       estimatedGoalFunding: projection.flexible.estimatedGoalFunding,
+      essentialFixed: projection.flexible.essentialFixed,
+      incomePeriods: projection.flexible.incomePeriods,
       availableBefore,
       installment: flexibleInstallment,
       availableAfter,
@@ -375,6 +454,8 @@ export function evaluateAffordability(input: {
       account,
       flexible,
       estimatedGoals: projection.estimatedGoals,
+      essentialFixedBasis: projection.essentialFixedBasis,
+      historyPeriods: projection.historyPeriods,
       passes: account.passes && flexible.passes,
     };
   });

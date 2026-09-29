@@ -5965,9 +5965,14 @@ async function main() {
       const junkStart = prefs.safeParse({ ...prefsForm, incomeHistoryStartDate: "June" });
       eq("an unparseable start date is refused", junkStart.success ? "accepted" : junkStart.error.issues[0]?.message, "Enter a valid date");
     }
-    eq("averages run from the oldest period with activity, like category suggestions", JSON.stringify(affordData.averageSinceFirstActivity([100, 100, 0, 0, 0, 0])), JSON.stringify({ amount: 100, periods: 2 }));
-    eq("zeros inside the active stretch still dilute", affordData.averageSinceFirstActivity([100, 0, 100, 0, 0, 0]).amount, 66.67);
-    eq("no activity at all projects zero over zero periods", JSON.stringify(affordData.averageSinceFirstActivity([0, 0, 0])), JSON.stringify({ amount: 0, periods: 0 }));
+    // Reworked for B8: the divisor is taken once per walk, from the oldest
+    // period with income in any account, instead of per account.
+    const incomeWalk = (...periods: Record<string, number>[]) => periods.map((byAccount) => new Map(Object.entries(byAccount)));
+    eq("averages run from the oldest period with activity, like category suggestions", JSON.stringify(affordData.averageOverHistory([100, 100, 0, 0, 0, 0], affordData.incomeHistoryDepth(incomeWalk({ a: 100 }, { a: 100 }, {}, {}, {}, {})))), JSON.stringify({ amount: 100, periods: 2 }));
+    eq("zeros inside the active stretch still dilute", affordData.averageOverHistory([100, 0, 100, 0, 0, 0], affordData.incomeHistoryDepth(incomeWalk({ a: 100 }, {}, { a: 100 }))).amount, 66.67);
+    eq("no activity at all projects zero over zero periods", JSON.stringify(affordData.averageOverHistory([0, 0, 0], affordData.incomeHistoryDepth(incomeWalk({}, {}, {})))), JSON.stringify({ amount: 0, periods: 0 }));
+    eq("the depth is the oldest period with income in any account: pay that moved accounts sets it for both", affordData.incomeHistoryDepth(incomeWalk({ newBank: 2000 }, { oldBank: 2000 }, { oldBank: 2000 }, {}, {})), 3);
+    eq("so the new account's single paycheck is one of three periods, and the old account's empty newest period is a real zero", `${affordData.averageOverHistory([2000, 0, 0], 3).amount}:${affordData.averageOverHistory([0, 2000, 2000], 3).amount}`, "666.67:1333.33");
 
     console.log("\n-- viability engine (pure) --");
     const projectionFor = (
@@ -5978,8 +5983,9 @@ async function main() {
       const info = periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" });
       return [key, {
         period: info,
-        account: { accountId: "acc", name: "Checking", currency: account.currency ?? "USD", income: account.income, committed: account.committed, buffer: account.buffer, basis: "average" as const, estimatedGoalFunding: 0 },
-        flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0 },
+        account: { accountId: "acc", name: "Checking", currency: account.currency ?? "USD", income: account.income, committed: account.committed, buffer: account.buffer, essentialFixed: 0, basis: "average" as const, incomePeriods: 6, estimatedGoalFunding: 0 },
+        flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0, essentialFixed: 0, incomePeriods: 6 },
+        essentialFixedBasis: "unset" as const,
         estimatedGoals: [] as import("../src/lib/afford").EstimatedGoalFunding[],
         goalPlans: [] as import("../src/lib/afford").ProjectedGoalPlan[],
         historyPeriods: 6,
@@ -6157,7 +6163,10 @@ async function main() {
       const nullBounded = await projectRaise(null);
       eq("a null start date is no boundary at all - same account and period-wide figures", `${nullBounded.account.income}:${nullBounded.flexible.income}`, `${unbounded.account.income}:${unbounded.flexible.income}`);
       const fromJune = await projectRaise(civilDate(2026, 6, 1));
-      eq("from June 1 only Jun, Jul and Aug count; the empty June sits before the first activity that remains, so the average is over the two paid periods", `${fromJune.account.income}:${fromJune.account.basis}`, "8000:average");
+      // Flipped for B8: this was 8,000 (the empty June skipped because it
+      // preceded this account's own first pay). The steady account was paid
+      // in June, so June is inside the history for every account now.
+      eq("from June 1 only Jun, Jul and Aug count, and the empty June is a real zero - the steady account was paid in it (B8): 16,000 / 3", `${fromJune.account.income}:${fromJune.account.basis}:${fromJune.account.incomePeriods}`, "5333.33:average:3");
       eq("historyPeriods reports 3, not the HISTORY_PERIODS constant, once the boundary trims Mar/Apr/May out - what the Afford results copy reads", fromJune.historyPeriods, 3);
       const fromMay = await projectRaise(civilDate(2026, 5, 1));
       eq("from May 1 the empty June is inside the active stretch and dilutes, as averageSinceFirstActivity always did: 21,000 / 4", fromMay.account.income, 5250);
@@ -6622,7 +6631,12 @@ async function main() {
       const freshCheckin = await prisma.paydayCheckin.findFirstOrThrow({ where: { year: currentRef.year, month: currentRef.month, period: currentRef.period } });
       eq("today is still inside the period just confirmed", `${currentRef.key}:${affordContext.today.getTime() <= currentRef.end.getTime()}`, "2026-09-A:true");
       const afterConfirm = await affordData.projectPeriods(octoberRefs, freshAccount, accountsWithFresh, affordContext);
-      eq("Oct 1-15 now projects the confirmed Sep 1-15 income, averaged over that one period", `${afterConfirm.get("2026-10-A")!.account.income}:${afterConfirm.get("2026-10-A")!.account.basis}`, "30000:average");
+      // Flipped for B8: this was 30,000 over one period. The other accounts
+      // were paid in the five comparable periods before Sep 1-15, so every
+      // account divides by six - the fresh account included.
+      eq("Oct 1-15 now reads the confirmed Sep 1-15 income, over the six periods since any account was first paid (B8): 30,000 / 6", `${afterConfirm.get("2026-10-A")!.account.income}:${afterConfirm.get("2026-10-A")!.account.basis}:${afterConfirm.get("2026-10-A")!.account.incomePeriods}`, "5000:average:6");
+      const freshFromSeptember = await affordData.projectPeriods(octoberRefs, freshAccount, accountsWithFresh, { ...affordContext, incomeHistoryStartDate: civilDate(2026, 9, 1) });
+      eq("with \"count income history from\" set to Sep 1, the manual override, it is that one period again: 30,000 / 1", `${freshFromSeptember.get("2026-10-A")!.account.income}:${freshFromSeptember.get("2026-10-A")!.account.incomePeriods}`, "30000:1");
       // The confirmed check-in recorded nothing for the older account, and that
       // zero is real: it heads the window and dilutes the average like any
       // other period the account lived through (five of 10,000 plus it).
@@ -6630,7 +6644,7 @@ async function main() {
       eq("Oct 16-31, whose history has no confirmed check-in, still has not enough history", `${afterConfirm.get("2026-10-B")!.account.income}:${afterConfirm.get("2026-10-B")!.account.basis}`, "0:none");
       const freshPurchase = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Fresh Purchase", accountId: freshAccount.id, firstDate: civilDate(2026, 10, 5), totalAmount: 100, installments: 1 }), affordContext);
       if (!freshPurchase.ok) throw new Error("fresh purchase evaluation refused");
-      eq("the purchase evaluation reads the same projection", `${freshPurchase.verdict.periods[0].key}:${freshPurchase.verdict.periods[0].account.income}:${freshPurchase.verdict.periods[0].account.basis}`, "2026-10-A:30000:average");
+      eq("the purchase evaluation reads the same projection (flipped with the check above)", `${freshPurchase.verdict.periods[0].key}:${freshPurchase.verdict.periods[0].account.income}:${freshPurchase.verdict.periods[0].account.basis}`, "2026-10-A:5000:average");
       await prisma.paydayCheckin.update({ where: { id: freshCheckin.id }, data: { status: "DRAFT" } });
       const draftAgain = await affordData.projectPeriods(octoberRefs, freshAccount, accountsWithFresh, affordContext);
       eq("a draft check-in does not make the period history", `${draftAgain.get("2026-10-A")!.account.income}:${draftAgain.get("2026-10-A")!.account.basis}`, "0:none");
@@ -6819,7 +6833,10 @@ async function main() {
       eq("ranking converts to the display currency (-50 USD for Small)", `${bigRow.headroomAfterDisplay}:${smallRow.headroomAfterDisplay}`, "1300:-50");
       eq("Big is recommended: the account with the most room among those that keep their buffer", split.recommendedAccountId === bigAccount.id, true);
       eq("the older account, already over-committed for Oct 1-15, is listed but short", rowOf(split, affordAccount.id)?.passes, false);
-      eq("history depth is Afford's", split.historyPeriods, (await import("../src/lib/data/payday")).HISTORY_PERIODS);
+      // Flipped for B22: this used to assert the HISTORY_PERIODS constant. The
+      // description now reads the projection's own divisor; here every account
+      // has income back to Mar, so it happens to be 6.
+      eq("the income divisor the description reads is the projection's own (6 comparable periods here)", split.incomePeriods, (await affordData.projectPeriods([split.period], chosenForAfford, activeForAfford.concat([bigAccount, smallAccount]), affordContext)).get(split.period.key)!.flexible.incomePeriods);
 
       const bothFit = await roomData.checkSubscriptionRoom(roomInput({ amount: 200 }), affordContext);
       if (!bothFit.large) throw new Error("200 USD subscription was not checked");
@@ -6873,6 +6890,261 @@ async function main() {
     await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
     await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Afford" } } });
     await prisma.account.deleteMany({ where: { id: { in: [affordAccount.id, emptyAccount.id] } } });
+  }
+
+  console.log("\n== afford projection: the current period, essential fixed, income across accounts, the history basis (B1 B7 B8 B22 B34) ==");
+  {
+    // Public APIs only, and new fields read as plain properties, so this block
+    // also runs (and fails where the findings said) against the code before
+    // the fix. Every other active item is paused while it runs - the posting
+    // runs below would post a leftover linked item, and the period-wide
+    // commitments would count it - and every category marked essential fixed
+    // is unmarked, so each finding's figures are its own. Both are restored.
+    const affordLib = await import("../src/lib/afford");
+    const affordData = await import("../src/lib/data/afford");
+    const roomData = await import("../src/lib/data/subscription-room");
+    const { postDueRecurringItems: postForProjection } = await import("../src/lib/recurring-posting");
+    const payday = await import("../src/lib/data/payday");
+    const { en: enDictionary } = await import("../src/lib/i18n/en");
+    const { recurringExternalId: occurrenceKeyOf } = await import("../src/lib/recurring-settlement");
+
+    const pausedForProjection = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((item) => item.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForProjection } }, data: { active: false } });
+    const essentialBefore = (await prisma.category.findMany({ where: { isEssentialFixed: true }, select: { id: true } })).map((category) => category.id);
+    await prisma.category.updateMany({ where: { id: { in: essentialBefore } }, data: { isEssentialFixed: false } });
+
+    const contextOn = (today: Date, displayCurrency: "DOP" | "USD" = "DOP") => ({
+      displayCurrency,
+      language: "en" as const,
+      rates,
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    });
+    const sep28 = contextOn(civilDate(2026, 9, 28));
+    const sepB = { year: 2026, month: 9, period: "B" as const };
+    const octA = { year: 2026, month: 10, period: "A" as const };
+    const octB = { year: 2026, month: 10, period: "B" as const };
+    const novB = { year: 2026, month: 11, period: "B" as const };
+    const accountOf = (account: { id: string; name: string; currency: string }) => ({ id: account.id, name: account.name, currency: account.currency });
+    const payHistory = async (accountId: string, currency: string, amount: number, day: number, months: number[]) => {
+      for (const month of months) {
+        await prisma.transaction.create({ data: { date: civilDate(2026, month, day), amount, currency, type: "INCOME", accountId, source: "MANUAL", note: "Verify Proj pay" } });
+      }
+    };
+
+    try {
+      console.log("\n-- B1: the current period counts what already posted, not only what is still owed --");
+      // The finding's repro: 60,000 DOP in every comparable B period, rent of
+      // 30,000 on the 16th posted by the real posting run on 2026-09-16, and
+      // on 09-28 a 30,000 purchase dated 09-28.
+      const salary = await prisma.account.create({ data: { name: "Verify Proj Salary", currency: "DOP", type: "CHECKING" } });
+      await payHistory(salary.id, "DOP", 60000, 20, [3, 4, 5, 6, 7, 8]);
+      const rent = await prisma.recurringItem.create({
+        data: { name: "Verify Proj Rent", amount: 30000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 9, 16), anchorDay: 16, accountId: salary.id },
+      });
+      await postForProjection(civilDate(2026, 9, 16));
+      const rentRow = await prisma.transaction.findFirst({ where: { source: "RECURRING", externalId: occurrenceKeyOf(rent.id, civilDate(2026, 9, 16)) } });
+      eq("posting wrote the rent on Sep 16 and moved the item on to Oct 16", `${rentRow ? num(rentRow.amount) : "none"}:${toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: rent.id } })).nextDate)}`, "30000:2026-10-16");
+
+      const salaryAccount = accountOf(salary);
+      const purchaseOn28 = affordLib.buildInstallments([civilDate(2026, 9, 28)], 30000);
+      const sepProjection = (await affordData.projectPeriods([sepB], salaryAccount, [salaryAccount], sep28)).get("2026-09-B")!;
+      const sepVerdict = affordLib.evaluateAffordability({ installments: purchaseOn28, currency: "DOP", projections: new Map([["2026-09-B", sepProjection]]), rates }).periods[0];
+      eq("B1: Sep 16-30 commits the rent posted on the 16th: income 60,000, committed 30,000, buffer 6,000", `${sepVerdict.account.income}:${sepVerdict.account.committed}:${sepVerdict.account.buffer}`, "60000:30000:6000");
+      eq("B1: so the 30,000 purchase on 09-28 ends at -6,000 room and is not viable (was 54,000 before and 24,000 after, viable)", `${sepVerdict.account.headroomBefore}:${sepVerdict.account.headroomAfter}:${sepVerdict.passes}`, "24000:-6000:false");
+      const octProjection = (await affordData.projectPeriods([octB], salaryAccount, [salaryAccount], sep28)).get("2026-10-B")!;
+      eq("B1: the same purchase in Oct 16-31, with the rent still ahead, gets the same answer - both periods on one basis", affordLib.evaluateAffordability({ installments: affordLib.buildInstallments([civilDate(2026, 10, 28)], 30000), currency: "DOP", projections: new Map([["2026-10-B", octProjection]]), rates }).periods[0].account.headroomAfter, -6000);
+      const fullRequest = await affordData.evaluateAffordRequest({ name: "Verify Proj Sofa", currency: "DOP", frequency: "MONTHLY", firstDate: civilDate(2026, 9, 28), accountId: salary.id, totalAmount: 30000, installments: 1, acknowledged: false }, sep28);
+      eq("B1: the calculator itself (every active account) says not viable, the account 6,000 short", fullRequest.ok ? `${fullRequest.verdict.viable}:${fullRequest.verdict.periods[0].account.shortfall}` : fullRequest.reason, "false:6000");
+
+      // The same period seen by the Recurring form's room check and by the
+      // tracker's re-check of a plan whose installment is still ahead in it.
+      const room = await roomData.checkSubscriptionRoom({ amount: 30000, currency: "DOP", frequency: "MONTHLY", nextDate: civilDate(2026, 9, 29) }, sep28);
+      const salaryRoom = room.large ? room.accounts.find((account) => account.accountId === salary.id) : undefined;
+      eq("B1: the room check for a 30,000 subscription due 09-29 counts the posted rent too: -6,000 (was 24,000)", `${salaryRoom?.committed}:${salaryRoom?.headroomAfter}:${salaryRoom?.passes}`, "30000:-6000:false");
+      const trackedPlan = await prisma.recurringItem.create({
+        data: { name: "Verify Proj Plan", amount: 30000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 9, 30), anchorDay: 30, accountId: salary.id, remainingOccurrences: 1, fromAfford: true },
+      });
+      const recheck = await affordData.recheckAffordItem(trackedPlan.id, sep28);
+      eq("B1: the tracker's re-check of a plan's Sep 30 installment counts the posted rent: -6,000, not viable (was 24,000, viable)", recheck.ok ? `${recheck.verdict.periods[0].key}:${recheck.verdict.periods[0].account.headroomAfter}:${recheck.verdict.viable}` : recheck.reason, "2026-09-B:-6000:false");
+      await prisma.recurringItem.delete({ where: { id: trackedPlan.id } });
+
+      // A charge the user entered that settled an occurrence, a weekly item
+      // with two posted dates and one still ahead, and that item's nextDate
+      // moved back onto a posted day: each occurrence counts exactly once.
+      const second = await prisma.account.create({ data: { name: "Verify Proj Second", currency: "DOP", type: "CHECKING" } });
+      await payHistory(second.id, "DOP", 60000, 20, [3, 4, 5, 6, 7, 8]);
+      const internet = await prisma.recurringItem.create({
+        data: { name: "Verify Proj Internet", amount: 3000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 9, 20), anchorDay: 20, accountId: second.id },
+      });
+      const gym = await prisma.recurringItem.create({
+        data: { name: "Verify Proj Gym", amount: 500, currency: "DOP", frequency: "WEEKLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 9, 16), anchorDay: 16, accountId: second.id },
+      });
+      await prisma.transaction.create({ data: { date: civilDate(2026, 9, 19), amount: 3000, currency: "DOP", type: "EXPENSE", accountId: second.id, source: "MANUAL", note: "Verify Proj Internet" } });
+      await postForProjection(civilDate(2026, 9, 16));
+      await postForProjection(civilDate(2026, 9, 20));
+      await postForProjection(civilDate(2026, 9, 23));
+      eq("posting settled the internet with the charge entered on the 19th and posted the gym on the 16th and 23rd", `${await prisma.recurringSettlement.count({ where: { recurringItemId: internet.id } })}:${await prisma.transaction.count({ where: { source: "RECURRING", accountId: second.id } })}:${toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: gym.id } })).nextDate)}`, "1:2:2026-09-30");
+      const secondAccount = accountOf(second);
+      const committedOnSecond = async () => (await affordData.projectPeriods([sepB], secondAccount, [secondAccount], sep28)).get("2026-09-B")!.account.committed;
+      eq("B1: the settled internet (3,000 charge) plus the gym's two posted dates and the one still ahead (3 x 500)", await committedOnSecond(), 4500);
+      await prisma.recurringItem.update({ where: { id: gym.id }, data: { nextDate: civilDate(2026, 9, 23) } });
+      eq("B1: a nextDate moved back onto the posted Sep 23 does not count that occurrence twice", await committedOnSecond(), 4500);
+      await prisma.recurringItem.update({ where: { id: gym.id }, data: { active: false } });
+      eq("B1: the gym paused since still charged this period: its posted dates count, the one ahead does not", await committedOnSecond(), 4000);
+
+      // A current period with a confirmed check-in had the same defect (its
+      // scheduled part was walked from today) and is fixed the same way; its
+      // planned goal funding is added on top as before.
+      const activeNow = await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } });
+      eq("no check-in exists for Sep 16-30 beforehand", await prisma.paydayCheckin.count({ where: { ...sepB } }), 0);
+      const budgetsBefore = new Set((await prisma.budget.findMany({ where: { ...sepB }, select: { id: true } })).map((budget) => budget.id));
+      const confirmedSep = await payday.confirmPaydayCheckin(
+        { ...sepB, accounts: activeNow.map((account) => ({ accountId: account.id, reportedBalance: 0, incomeEntered: 0, incomeNote: null })), goals: [], essentialCategories: [], flexibleCategories: [], includedCarryover: 0, acknowledgedDeficit: true, acknowledgedZeroBuffer: true },
+        sep28,
+      );
+      check("a check-in confirms for the current period", confirmedSep.ok === true, confirmedSep);
+      eq("B1: with Sep 16-30 confirmed, its commitments still include the rent posted on the 16th", (await affordData.projectPeriods([sepB], salaryAccount, [salaryAccount], sep28)).get("2026-09-B")!.account.committed, 30000);
+      await prisma.budget.deleteMany({ where: { ...sepB, id: { notIn: [...budgetsBefore] } } });
+      await prisma.paydayCheckin.deleteMany({ where: { ...sepB } });
+      // The B1 items would sit in every later period's period-wide figures.
+      await prisma.recurringItem.deleteMany({ where: { id: { in: [rent.id, internet.id, gym.id] } } });
+
+      console.log("\n-- B7: essential fixed categories are subtracted in both checks --");
+      {
+        // The finding's pure repro: income 60,000, committed 3,000, buffer
+        // 6,000 and essential fixed 30,000, the account the only one.
+        const info = periodInfo(octA);
+        const pure = new Map([["2026-10-A", {
+          period: info,
+          account: { accountId: "acc", name: "Checking", currency: "DOP", income: 60000, committed: 3000, buffer: 6000, essentialFixed: 30000, basis: "average" as const, incomePeriods: 6, estimatedGoalFunding: 0 },
+          flexible: { currency: "DOP", income: 60000, committed: 3000, buffer: 6000, estimatedGoalFunding: 0, essentialFixed: 30000, incomePeriods: 6 },
+          essentialFixedBasis: "budget" as const,
+          estimatedGoals: [] as import("../src/lib/afford").EstimatedGoalFunding[],
+          goalPlans: [] as import("../src/lib/afford").ProjectedGoalPlan[],
+          historyPeriods: 6,
+        }]]);
+        const judge = (amount: number) => affordLib.evaluateAffordability({ installments: affordLib.buildInstallments([civilDate(2026, 10, 5)], amount), currency: "DOP", projections: pure, rates }).periods[0];
+        const twenty = judge(20000);
+        eq("B7: available for flexible categories is the check-in's own figure: 21,000 before, 1,000 after a 20,000 purchase (was 51,000 / 31,000)", `${twenty.flexible.availableBefore}:${twenty.flexible.availableAfter}:${twenty.flexible.passes}`, "21000:1000:true");
+        eq("B7: the account check subtracts its share too: 21,000 before, 1,000 after", `${twenty.account.headroomBefore}:${twenty.account.headroomAfter}`, "21000:1000");
+        const twentyFive = judge(25000);
+        eq("B7: a 25,000 purchase leaves the plan 4,000 short and fails (it passed with 26,000 left)", `${twentyFive.flexible.availableAfter}:${twentyFive.passes}`, "-4000:false");
+        eq("B7: the pure repro matches the check-in's formula", twenty.flexible.availableBefore, availableForFlexibleCategories({ income: 60000, includedCarryover: 0, subscriptions: 3000, recurringContributions: 0, goalPlan: 0, essentialFixed: 30000, buffer: 6000 }));
+      }
+      const essentialAccount = await prisma.account.create({ data: { name: "Verify Proj Essential", currency: "DOP", type: "CHECKING" } });
+      await payHistory(essentialAccount.id, "DOP", 60000, 20, [3, 4, 5, 6, 7, 8]);
+      const essentialOnly = [accountOf(essentialAccount)];
+      const project = async (refs: { year: number; month: number; period: "A" | "B" }[], accounts = essentialOnly) => affordData.projectPeriods(refs, accounts[0], accounts, sep28);
+      const unmarked = (await project([octB])).get("2026-10-B")!;
+      eq("B7: with no category marked essential fixed, nothing is subtracted and the period is what it was", `${unmarked.flexible.essentialFixed}:${unmarked.account.essentialFixed}:${unmarked.essentialFixedBasis}:${affordLib.evaluateAffordability({ installments: affordLib.buildInstallments([civilDate(2026, 10, 20)], 20000), currency: "DOP", projections: new Map([["2026-10-B", unmarked]]), rates }).periods[0].account.headroomBefore}`, "0:0:unset:54000");
+      const rentCategory = await prisma.category.create({ data: { name: "Verify Proj Rent Cat", kind: "EXPENSE", color: "#888888", isEssentialFixed: true } });
+      const markedNothing = (await project([octB])).get("2026-10-B")!;
+      eq("B7: a category marked essential with nothing budgeted or spent assumes nothing, and says so (basis none)", `${markedNothing.flexible.essentialFixed}:${markedNothing.essentialFixedBasis}`, "0:none");
+      // Rent kept as an essential budget rather than a recurring item: 30,000
+      // budgeted for Oct 16-31, and 28,000 spent in Jul and Aug.
+      await prisma.budget.create({ data: { ...octB, categoryId: rentCategory.id, amount: 30000, currency: "DOP" } });
+      for (const month of [7, 8]) {
+        await prisma.transaction.create({ data: { date: civilDate(2026, month, 17), amount: 28000, currency: "DOP", type: "EXPENSE", accountId: essentialAccount.id, categoryId: rentCategory.id, source: "MANUAL", note: "Verify Proj landlord" } });
+      }
+      const withEssential = await project([sepB, octB, novB]);
+      eq("B7: Oct 16-31 uses the budget already set for it (30,000); Nov 16-30, with none, what the check-in would suggest (28,000, the average)", ["2026-09-B", "2026-10-B", "2026-11-B"].map((key) => `${withEssential.get(key)!.flexible.essentialFixed}:${withEssential.get(key)!.essentialFixedBasis}`).join(","), "28000:suggestion,30000:budget,28000:suggestion");
+      // Whether the results page renders the essential fixed column and its
+      // per-period lines, or one note that none are assumed instead.
+      const shows = (affordLib as Record<string, unknown>).showsEssentialFixed as ((periods: { flexible: { essentialFixed: number } }[]) => boolean) | undefined;
+      eq("B7: no period with an essential amount above zero - no column, the note instead (unmarked and marked-but-empty alike)", typeof shows === "function" ? `${shows([unmarked, markedNothing])}:${shows([{ flexible: { essentialFixed: 0 } }, { flexible: { essentialFixed: 0 } }])}` : "missing", "false:false");
+      eq("B7: any period with an amount keeps the column, even when another period's is empty", typeof shows === "function" ? `${shows([withEssential.get("2026-10-B")!])}:${shows([{ flexible: { essentialFixed: 0 } }, { flexible: { essentialFixed: 30000 } }])}` : "missing", "true:true");
+      const draftFor = async (ref: { year: number; month: number; period: "A" | "B" }) => (await payday.getPaydayCheckinDraft(sep28, ref)).essentialCategories.find((category) => category.categoryId === rentCategory.id)?.plannedAmount;
+      eq("B7: each figure is the payday check-in's own essential line for that period (read, not re-derived)", `${await draftFor(sepB)}:${await draftFor(octB)}`, "28000:30000");
+      const octEssential = affordLib.evaluateAffordability({ installments: affordLib.buildInstallments([civilDate(2026, 10, 20)], 20000), currency: "DOP", projections: new Map([["2026-10-B", withEssential.get("2026-10-B")!]]), rates }).periods[0];
+      eq("B7: a 20,000 purchase in Oct 16-31 is judged after the rent budget in both checks: 24,000 before, 4,000 after (was 54,000 / 34,000)", `${octEssential.account.headroomBefore}:${octEssential.account.headroomAfter}:${octEssential.flexible.availableBefore}:${octEssential.flexible.availableAfter}`, "24000:4000:24000:4000");
+      // Two accounts: each carries the share of the essential figure that its
+      // projected income is of the period's (60,000 of 120,000 each here).
+      const bothAccounts = [accountOf(essentialAccount), accountOf(second)];
+      const shared = (await project([octB], bothAccounts)).get("2026-10-B")!;
+      eq("B7: with two equally paid accounts, each carries half of the 30,000 and the period all of it", `${shared.account.essentialFixed}:${shared.flexible.essentialFixed}`, "15000:30000");
+      eq("B7: the goal estimate's room is Step 3's and is left alone (no goal, nothing estimated)", shared.flexible.estimatedGoalFunding, 0);
+      await prisma.transaction.deleteMany({ where: { categoryId: rentCategory.id } });
+      await prisma.budget.deleteMany({ where: { categoryId: rentCategory.id } });
+      await prisma.category.delete({ where: { id: rentCategory.id } });
+
+      console.log("\n-- B8: pay that moved between accounts is not projected in both --");
+      const usd28 = contextOn(civilDate(2026, 9, 28), "USD");
+      const oldBank = await prisma.account.create({ data: { name: "Verify Proj Old Bank", currency: "USD", type: "CHECKING" } });
+      const newBank = await prisma.account.create({ data: { name: "Verify Proj New Bank", currency: "USD", type: "CHECKING" } });
+      await payHistory(oldBank.id, "USD", 2000, 5, [4, 5, 6, 7, 8]);
+      await payHistory(newBank.id, "USD", 2000, 5, [9]);
+      const banks = [accountOf(oldBank), accountOf(newBank)];
+      const moved = (await affordData.projectPeriods([octA], banks[1], banks, usd28)).get("2026-10-A")!;
+      eq("B8: Oct 1-15's period-wide income is the 2,000 actually paid, not 3,666.67", moved.flexible.income, 2000);
+      eq("B8: every account divides by the six periods since the first pay anywhere - New Bank 333.33, Old Bank 1,666.67", `${moved.account.income}:${moved.account.incomePeriods}:${(await affordData.projectPeriods([octA], banks[0], banks, usd28)).get("2026-10-A")!.account.income}`, "333.33:6:1666.67");
+      const overridden = (await affordData.projectPeriods([octA], banks[1], banks, { ...usd28, incomeHistoryStartDate: civilDate(2026, 9, 1) })).get("2026-10-A")!;
+      eq("B8: \"count income history from\" Sep 1, the manual override, gives New Bank its full 2,000 and the period still 2,000", `${overridden.account.income}:${overridden.flexible.income}:${overridden.account.incomePeriods}`, "2000:2000:1");
+
+      console.log("\n-- B22: the history basis is the real divisor, not the constant --");
+      const fresh = await prisma.account.create({ data: { name: "Verify Proj Fresh", currency: "USD", type: "CHECKING" } });
+      await payHistory(fresh.id, "USD", 2000, 5, [9]);
+      const freshOnly = [accountOf(fresh)];
+      const newUser = (await affordData.projectPeriods([octA], freshOnly[0], freshOnly, usd28)).get("2026-10-A")!;
+      eq("B22: one period of history reports 1, not 6, for the account and the period", `${newUser.account.income}:${newUser.account.incomePeriods}:${newUser.flexible.incomePeriods}`, "2000:1:1");
+      const verdictOf = affordLib.evaluateAffordability({ installments: affordLib.buildInstallments([civilDate(2026, 10, 5)], 100), currency: "USD", projections: new Map([["2026-10-A", newUser]]), rates }).periods[0];
+      eq("B22: the verdict carries the divisor through to the results page", `${verdictOf.account.incomePeriods}:${verdictOf.flexible.incomePeriods}`, "1:1");
+      const t = enDictionary.afford as Record<string, unknown>;
+      const describe = t.projectionDescription as (...args: unknown[]) => string;
+      check("B22: the results copy says \"the average of 1 comparable pay period\", never 6", describe("Verify Proj Fresh", verdictOf.flexible.incomePeriods).includes("the average of 1 comparable pay period ("), describe("Verify Proj Fresh", verdictOf.flexible.incomePeriods));
+      check("B22: the income basis names \"Count income history from\" as the manual override", describe("Verify Proj Fresh", 1).includes("\"Count income history from\""));
+      const minimum = (affordLib as Record<string, unknown>).MIN_INCOME_HISTORY_PERIODS;
+      eq("B22: below the documented minimum of 3 periods the low-history note applies", `${minimum}:${typeof minimum === "number" && verdictOf.flexible.incomePeriods < minimum}`, "3:true");
+      const lowNote = t.lowIncomeHistory as ((periods: number) => string) | undefined;
+      check("B22: the low-history note says how few periods back the figure", typeof lowNote === "function" && lowNote(1).startsWith("Only 1 comparable pay period of income history backs"), typeof lowNote === "function" ? lowNote(1) : "missing");
+      const noHistory = t.noHistoryForAccount as (account: string, periods: number) => string;
+      eq("B22: an account with no income says how many periods were checked, in the same words", noHistory("Verify Proj Fresh", 6).includes("in the last 6 comparable pay periods"), true);
+      check("B22: when the boundary leaves no period at all, it says so instead of \"the last 0\"", !noHistory("Verify Proj Fresh", 0).includes("last 0"), noHistory("Verify Proj Fresh", 0));
+      const freshRoom = await roomData.checkSubscriptionRoom({ amount: 500, currency: "USD", frequency: "MONTHLY", nextDate: civilDate(2026, 10, 5) }, usd28);
+      const roomPeriods = freshRoom.large ? (freshRoom as Record<string, unknown>).incomePeriods : "not large";
+      const allActive = await prisma.account.findMany({ where: { status: "ACTIVE" }, orderBy: { name: "asc" }, select: { id: true, name: true, currency: true } });
+      const projectedPeriods = (await affordData.projectPeriods([octA], allActive[0], allActive, usd28)).get("2026-10-A")!.flexible.incomePeriods;
+      check("B22: the room check reports the projection's own divisor for its period, not the constant", typeof roomPeriods === "number" && roomPeriods === projectedPeriods, `room ${String(roomPeriods)}, projection ${String(projectedPeriods)}`);
+      const roomDescription = enDictionary.recurring.roomDescription as (...args: unknown[]) => string;
+      check("B22: the room description renders that divisor", roomDescription("DOP 10,000", "Oct 1-15", 1).includes("the average of 1 comparable pay period ("), roomDescription("DOP 10,000", "Oct 1-15", 1));
+
+      console.log("\n-- B34: from payday to period end, the unconfirmed current period keeps its goal estimate --");
+      const pace = await prisma.account.create({ data: { name: "Verify Proj Pace", currency: "USD", type: "CHECKING" } });
+      await payHistory(pace.id, "USD", 10000, 5, [3, 4, 5, 6, 7, 8]);
+      await payHistory(pace.id, "USD", 10000, 20, [3, 4, 5, 6, 7, 8]);
+      const paceOnly = [accountOf(pace)];
+      const goal = await prisma.goal.create({ data: { name: "Verify Proj Goal", targetAmount: 3000, currency: "USD", targetDate: civilDate(2027, 3, 31) } });
+      const sepA = { year: 2026, month: 9, period: "A" as const };
+      const sep14 = contextOn(civilDate(2026, 9, 14), "USD");
+      const sep15 = contextOn(civilDate(2026, 9, 15), "USD");
+      const estimateIn = async (context: ReturnType<typeof contextOn>, ref: typeof sepA | typeof sepB) =>
+        (await affordData.projectPeriods([ref], paceOnly[0], paceOnly, context)).get(periodInfo(ref).key)!.estimatedGoals.find((estimate) => estimate.goalId === goal.id)?.amount ?? 0;
+      const paceOn15 = await payday.getGoalRoadmapAmount(goal.id, payday.planPeriodRef(sep15), sep15);
+      eq("the goal's pace as of the Sep 15 payday is 3,000 over the 13 periods from Sep 16-30 to Mar 31", paceOn15, 230.77);
+      eq("on Sep 14, before payday, Sep 1-15 is the plan period and carries the goal's pace (3,000 over 14: 214.29)", await estimateIn(sep14, sepA), 214.29);
+      eq("B34: on the Sep 15 payday, Sep 1-15 (unconfirmed, before the plan period) keeps an estimate at the pace: 230.77, not 0", await estimateIn(sep15, sepA), 230.77);
+      eq("B34: the plan period after it is estimated as before", await estimateIn(sep15, sepB), 230.77);
+      const pastDue = await prisma.goal.create({ data: { name: "Verify Proj Goal Past", targetAmount: 500, currency: "USD", targetDate: civilDate(2026, 9, 10) } });
+      const pastIn = async (ref: typeof sepA | typeof sepB) => (await affordData.projectPeriods([ref], paceOnly[0], paceOnly, sep15)).get(periodInfo(ref).key)!.estimatedGoals.find((estimate) => estimate.goalId === pastDue.id)?.amount ?? 0;
+      eq("B34: a goal already past its date asks its whole balance of the plan period only, never of today's period too", `${await pastIn(sepA)}:${await pastIn(sepB)}`, "0:500");
+      await prisma.goal.deleteMany({ where: { id: { in: [goal.id, pastDue.id] } } });
+    } finally {
+      await prisma.recurringSettlement.deleteMany({ where: { recurringItem: { name: { startsWith: "Verify Proj" } } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Proj" } } });
+      const projectionAccounts = await prisma.account.findMany({ where: { name: { startsWith: "Verify Proj" } }, select: { id: true } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: projectionAccounts.map((account) => account.id) } } });
+      await prisma.account.deleteMany({ where: { id: { in: projectionAccounts.map((account) => account.id) } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Proj" } } });
+      await prisma.budget.deleteMany({ where: { category: { name: { startsWith: "Verify Proj" } } } });
+      await prisma.category.deleteMany({ where: { name: { startsWith: "Verify Proj" } } });
+      await prisma.paydayCheckin.deleteMany({ where: { ...sepB } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForProjection } }, data: { active: true } });
+      await prisma.category.updateMany({ where: { id: { in: essentialBefore } }, data: { isEssentialFixed: true } });
+      console.log("  ok   afford projection fixtures removed, paused items and essential flags restored");
+    }
   }
 
   console.log("\n== manual goal contributions move real money ==");
@@ -9131,8 +9403,9 @@ async function main() {
       const info = periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" });
       return [key, {
         period: info,
-        account: { accountId: "acc", name: "Checking", currency: "USD", income: account.income, committed: account.committed, buffer: account.buffer, basis: "average" as const, estimatedGoalFunding: 0 },
-        flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0 },
+        account: { accountId: "acc", name: "Checking", currency: "USD", income: account.income, committed: account.committed, buffer: account.buffer, essentialFixed: 0, basis: "average" as const, incomePeriods: 6, estimatedGoalFunding: 0 },
+        flexible: { currency: "USD", income: flexible.income, committed: flexible.committed, buffer: flexible.buffer, estimatedGoalFunding: 0, essentialFixed: 0, incomePeriods: 6 },
+        essentialFixedBasis: "unset" as const,
         estimatedGoals: [] as import("../src/lib/afford").EstimatedGoalFunding[],
         goalPlans: [] as import("../src/lib/afford").ProjectedGoalPlan[],
         historyPeriods: 6,

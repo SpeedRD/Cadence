@@ -309,8 +309,8 @@ A **large subscription** — DOP 10,000 or more a charge, converted if entered i
 currency — gets an advisory room check right in the form, recomputed as the amount,
 currency, frequency or due date changes. It reuses Afford's projection for the one pay
 period the "Next due" date lands in: each active account's income averaged from its
-comparable periods, its other recurring items due then, and its protected buffer, then
-this charge on top. The panel lists every account's headroom before and after, marks
+comparable periods, its other recurring items due then, its share of the essential
+fixed categories, and its protected buffer, then this charge on top. The panel lists every account's headroom before and after, marks
 which keep their buffer, and names the one with the most room; if none does it says so
 and suggests two smaller subscriptions on different accounts, since a subscription is
 always charged to a single account. It never blocks saving, and a contribution is never
@@ -355,16 +355,24 @@ Type in a purchase, its price, how many installments, how often, the first payme
 date, and the account each installment is charged to. Cadence splits the price into
 equal parts, places each on the pay period it lands in, and runs two checks per
 period: the chosen account stays at or above its own protected buffer, and the
-period's available-for-flexible figure stays out of deficit. Installments landing in
+period's available-for-flexible figure (the payday check-in's own formula, essential
+fixed categories included) stays out of deficit. Installments landing in
 the same period are checked together. Installments dated before today count as already
 paid: the schedule marks them, the checks leave them out, and "I bought this" records
 only the payments still ahead (a plan with none ahead is refused). Because those periods haven't happened yet,
 income is projected from the average of your comparable periods (same half of the
 month) — up to the last six, fewer if a **Count income history from** date (Settings)
-has trimmed some of them off — while commitments are exact: every active recurring
-item's occurrences in that period, including installment plans already recorded here,
-plus whatever a confirmed payday check-in already planned toward your goals for that
-period. A period with no confirmed check-in yet instead carries an *estimate* of that
+has trimmed some of them off. Every account divides by the same count, from the first
+of those periods with income in any account, so pay that moved from one account to
+another is not projected in both; the results say how many periods back the figure
+and warn when it is fewer than three. Commitments are exact: every active recurring
+item's occurrences in that period, including installment plans already recorded here
+and, for the period you are in, what already posted in it as well as what is still
+ahead, plus whatever a confirmed payday check-in already planned toward your goals for
+that period. Essential fixed categories are subtracted in both checks, filled the way
+the check-in fills them (the period's budget, else its suggestion from your last
+budgets or average spending); each account carries the share its projected income is
+of the period's. A period with no confirmed check-in yet instead carries an *estimate* of that
 goal funding — each dated goal's current pace (the same remaining-over-periods-left
 figure the Goals page shows), spread over the accounts by the room each has left, the
 way the check-in itself recommends it — because you most likely will keep funding

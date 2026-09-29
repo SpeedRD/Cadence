@@ -14,7 +14,11 @@
  *               per-account income for the period rather than the check-in
  *               day's transaction - minus deposits that pay back a shared
  *               expense, which are not earnings, and income the user marked
- *               as one-off, which is not expected again; see loadPeriodIncome)
+ *               as one-off, which is not expected again; see loadPeriodIncome).
+ *               Every account divides by the same count: the comparable
+ *               periods since the oldest one with income in any account
+ *               (incomeHistoryDepth), so pay that moved from one account to
+ *               another is a real zero in the old one, not a gap to skip.
  *   committed   known exactly, not estimated: every active RecurringItem has a
  *               schedule, so its occurrences in the period are enumerated with
  *               owedOccurrences() - the walk getPeriodSummary's committed
@@ -24,7 +28,11 @@
  *               reached its target is left out, exactly as posting skips it.
  *               This is what lets a purchase recorded here a minute ago count
  *               against the next one before a single installment of it has
- *               posted. A period that already has a confirmed check-in adds
+ *               posted. The period containing today is counted in full, like
+ *               the income set against it: what already posted in it (its
+ *               RECURRING rows) or was paid by a charge the user entered (its
+ *               RecurringSettlement rows), plus what is still owed from
+ *               today. A period that already has a confirmed check-in adds
  *               the goal funding that check-in planned: money the user has
  *               committed to move toward a goal but may not have logged yet.
  *   goals       a period with no confirmed check-in has no such plan, but
@@ -46,6 +54,12 @@
  *               estimated nothing (see projectPeriods).
  *   buffer      defaultProtectedBuffer() over the projected income, per
  *               account, as the check-in's per-account buffer card does
+ *   essential   the essential fixed categories, filled the way the check-in
+ *               fills them for the period: its saved budget, else a confirmed
+ *               check-in's allocation, else getCategorySuggestions() (see
+ *               loadEssentialFixed). The check-in keeps them period-wide; each
+ *               account carries the share its projected income is of the
+ *               period's.
  *
  * Installments dated before today are already paid: they are set aside before
  * anything is checked (evaluateAffordRequest) and never recorded.
@@ -63,6 +77,7 @@ import {
   installmentDates,
   splitPaidInstallments,
   type AffordVerdict,
+  type EssentialFixedBasis,
   type EstimatedGoalFunding,
   type PeriodProjection,
   type ProjectedGoalPlan,
@@ -75,22 +90,26 @@ import { num, round2 } from "@/lib/money";
 import { countsInIncomeHistory, defaultProtectedBuffer, planGoalFunding } from "@/lib/payday";
 import {
   goalWindow,
+  nextPeriod,
   parsePeriodKey,
   periodForDate,
   periodInfo,
   periodRange,
+  periodsRemaining,
   previousComparablePeriod,
   type PeriodInfo,
   type PeriodRef,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { owedOccurrences } from "@/lib/recurring";
+import { recurringExternalId } from "@/lib/recurring-settlement";
 import { reimbursedExpenseIdFromTransaction } from "@/lib/transactions";
 import type { affordInputSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAppContext } from "@/lib/data/context";
 import {
+  getCategorySuggestions,
   getGoalRoadmapAmounts,
   HISTORY_PERIODS,
   planPeriodRef,
@@ -122,11 +141,11 @@ interface ActiveAccount {
  * only dilute the average with zeros, so they are walked past.
  *
  * `incomeHistoryStartDate` (Settings, "count income history from") is a
- * second lower bound of the same kind as an account's first activity: a
- * period that ended before it is dropped from the walk rather than counted as
- * zero, so averageSinceFirstActivity averages over whatever periods remain
- * exactly as it does for an account that did not exist yet. Null or absent
- * leaves the walk untouched.
+ * second lower bound of the same kind as the first activity: a period that
+ * ended before it is dropped from the walk rather than counted as zero, so
+ * incomeHistoryDepth counts over whatever periods remain exactly as it does
+ * before the oldest income ever recorded. Null or absent leaves the walk
+ * untouched.
  */
 export function comparableHistory(
   ref: PeriodRef,
@@ -152,20 +171,30 @@ export function comparableHistory(
 }
 
 /**
- * The same denominator rule as getCategorySuggestions: average from the oldest
- * comparable period with any activity forward, so periods before an account
- * (or a subscription) existed do not drag the figure toward zero. `values`
- * runs newest first. Returns 0 over 0 periods when nothing was ever recorded.
+ * How many of the walked comparable periods an income average divides by:
+ * from the oldest one with income in *any* account forward - the same "since
+ * first activity" rule as getCategorySuggestions, taken once for the whole
+ * walk rather than per account. Periods before the user had any income at all
+ * (a new user, or a boundary set in "count income history from") do not drag
+ * the figure toward zero. Periods after it do, in every account: when pay
+ * moves from one account to another, the old account's empty periods since
+ * are real zeros, not gaps, so its old pay fades out as the new account's
+ * fades in and the period-wide total stays what the user is actually paid.
+ * `incomes` runs newest first. 0 when no account received anything.
  */
-export function averageSinceFirstActivity(values: number[]): { amount: number; periods: number } {
+export function incomeHistoryDepth(incomes: ReadonlyMap<string, number>[]): number {
   let oldest = -1;
-  values.forEach((value, index) => {
-    if (value > 0) oldest = index;
+  incomes.forEach((byAccount, index) => {
+    if ([...byAccount.values()].some((value) => value > 0)) oldest = index;
   });
-  if (oldest === -1) return { amount: 0, periods: 0 };
-  const periods = oldest + 1;
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return { amount: round2(total / periods), periods };
+  return oldest + 1;
+}
+
+/** `values` (newest first) averaged over the newest `depth` of them; 0 over 0 periods. */
+export function averageOverHistory(values: number[], depth: number): { amount: number; periods: number } {
+  if (depth <= 0) return { amount: 0, periods: 0 };
+  const total = values.slice(0, depth).reduce((sum, value) => sum + value, 0);
+  return { amount: round2(total / depth), periods: depth };
 }
 
 /**
@@ -268,6 +297,20 @@ interface ScheduledCommitments {
  * in src/lib/recurring-posting.ts, the same condition as here), so it never
  * posts and never advances until the goal's target is raised again.
  *
+ * The period containing today is counted in full, not from today: its
+ * income is a whole-period average, so its commitments must be too, or rent
+ * posted on the 16th would vanish from a purchase judged on the 28th. The
+ * occurrences already behind today are not re-derived from schedules (a
+ * schedule only knows what is still ahead); they are read from what posting
+ * left - each RECURRING row dated in the period, on the account it charged,
+ * and each RecurringSettlement whose occurrence falls in it, at the charge
+ * the user entered for it, on that charge's account. Both carry the
+ * occurrence's key (recurringExternalId), and the walk skips an owed date
+ * whose key is already counted, so no occurrence is counted twice. They are
+ * ledger facts, so they count whatever the item's state now: paused,
+ * finished, deleted or its goal since achieved, the money still left in this
+ * period.
+ *
  * A period that already has a CONFIRMED check-in also owes the goal funding
  * that check-in planned - its GOAL allocation rows, one per goal and account
  * in that account's currency. Confirming commits the money; logging the
@@ -282,7 +325,11 @@ interface ScheduledCommitments {
  * `excludeItemId` leaves one item out of the walk: the tracker's re-check of
  * a recorded plan judges that plan's own installments, which are by then
  * among the active items and would otherwise be counted as a commitment and
- * subtracted again on top. Absent for an ordinary evaluation.
+ * subtracted again on top. Only the walk: an installment of it already
+ * posted in the current period is not among the ones re-judged (those start
+ * at its nextDate), so it stays counted here, as the posted charge it is -
+ * which keeps the re-check's period total what the confirmed verdict judged.
+ * Absent for an ordinary evaluation.
  */
 async function loadScheduledCommitments(
   periods: PeriodInfo[],
@@ -308,7 +355,8 @@ async function loadScheduledCommitments(
     }
   };
 
-  const [items, checkins] = await Promise.all([
+  const current = periods.find((period) => period.key === context.currentPeriod.key);
+  const [items, checkins, postedRows, settlements] = await Promise.all([
     prisma.recurringItem.findMany({
       where: {
         active: true,
@@ -316,6 +364,7 @@ async function loadScheduledCommitments(
         ...(excludeItemId ? { id: { not: excludeItemId } } : {}),
       },
       select: {
+        id: true,
         amount: true,
         currency: true,
         frequency: true,
@@ -343,7 +392,40 @@ async function loadScheduledCommitments(
         },
       },
     }),
+    current
+      ? prisma.transaction.findMany({
+          where: { source: "RECURRING", type: "EXPENSE", date: periodRange(current) },
+          select: { externalId: true, amount: true, currency: true, accountId: true },
+        })
+      : [],
+    current
+      ? prisma.recurringSettlement.findMany({
+          where: { dueDate: periodRange(current) },
+          select: {
+            occurrenceKey: true,
+            transaction: { select: { amount: true, currency: true, accountId: true } },
+          },
+        })
+      : [],
   ]);
+  // The current period's occurrences already behind us, each once by its key.
+  const counted = new Set<string>();
+  const currentBucket = current ? result.get(current.key) : undefined;
+  if (currentBucket) {
+    for (const row of postedRows) {
+      if (row.externalId) {
+        if (counted.has(row.externalId)) continue;
+        counted.add(row.externalId);
+      }
+      add(currentBucket, num(row.amount), row.currency, row.accountId);
+    }
+    for (const settlement of settlements) {
+      if (counted.has(settlement.occurrenceKey)) continue;
+      counted.add(settlement.occurrenceKey);
+      const charge = settlement.transaction;
+      add(currentBucket, num(charge.amount), charge.currency, charge.accountId);
+    }
+  }
   for (const item of items) {
     if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) continue;
     const amount = num(item.amount);
@@ -352,6 +434,7 @@ async function loadScheduledCommitments(
         due.getTime() < context.today.getTime() ? context.currentPeriod.key : periodForDate(due).key;
       const bucket = result.get(key);
       if (!bucket) continue;
+      if (counted.has(recurringExternalId(item.id, due))) continue;
       add(bucket, amount, item.currency, item.accountId);
     }
   }
@@ -366,13 +449,136 @@ async function loadScheduledCommitments(
   return result;
 }
 
+/** One evaluated period's essential fixed figure, in the display currency, and where it came from. */
+interface EssentialFixed {
+  amount: number;
+  basis: EssentialFixedBasis;
+}
+
+/**
+ * What each evaluated period's essential fixed categories come to - the
+ * check-in's essentialFixed, filled the way getPaydayCheckinDraft fills its
+ * essential rows for a period (same categories, same precedence), read here
+ * rather than re-derived:
+ *   1. the budget already saved for the period (the Budgets page, a copy
+ *      forward, or a confirmed check-in's own write);
+ *   2. else the confirmed check-in's ESSENTIAL_CATEGORY allocation;
+ *   3. else getCategorySuggestions() - the last comparable budget, or the
+ *      average spending since the category's first activity.
+ * The suggestion is asked for `suggestionRefFor`'s period, not always for the
+ * evaluated one: for a period a year out, the comparable periods the
+ * suggestion would read have not happened, and averaging them in as zeros
+ * would suggest nothing. The period whose own history is complete - the one
+ * right after the newest complete comparable period, the same line
+ * comparableHistory draws for income - stands in, exactly as income is
+ * carried forward from it. For the plan period and the one after, that is
+ * the evaluated period itself, so the figure is what the check-in would show.
+ *
+ * With no essential categories at all, every period is "unset" at 0 and the
+ * checks are what they were without this.
+ */
+async function loadEssentialFixed(
+  periods: PeriodInfo[],
+  suggestionRefFor: Map<string, PeriodRef>,
+  context: AffordContext,
+): Promise<Map<string, EssentialFixed>> {
+  const result = new Map<string, EssentialFixed>(
+    periods.map((period) => [period.key, { amount: 0, basis: "unset" as const }]),
+  );
+  if (periods.length === 0) return result;
+  const categories = await prisma.category.findMany({
+    where: { kind: "EXPENSE", isEssentialFixed: true, isSubscriptionDefault: false, isSavingsDefault: false },
+    select: { id: true },
+  });
+  if (categories.length === 0) return result;
+  const categoryIds = categories.map((category) => category.id);
+  const periodFilter = periods.map((period) => ({ year: period.year, month: period.month, period: period.period }));
+  const [budgets, checkins] = await Promise.all([
+    prisma.budget.findMany({
+      where: { OR: periodFilter, categoryId: { in: categoryIds } },
+      select: { year: true, month: true, period: true, categoryId: true, amount: true, currency: true },
+    }),
+    prisma.paydayCheckin.findMany({
+      where: { status: "CONFIRMED", OR: periodFilter },
+      select: {
+        year: true,
+        month: true,
+        period: true,
+        allocations: {
+          where: { type: "ESSENTIAL_CATEGORY", categoryId: { in: categoryIds } },
+          select: { categoryId: true, plannedAmount: true, currency: true },
+        },
+      },
+    }),
+  ]);
+  const toDisplay = (amount: number, currency: string) =>
+    round2(convert(amount, currency, context.displayCurrency, context.rates));
+  // "<period key>:<category id>" -> the period's own figure for the category.
+  const own = new Map<string, number>();
+  for (const checkin of checkins) {
+    const key = periodInfo(checkin).key;
+    for (const allocation of checkin.allocations) {
+      own.set(`${key}:${allocation.categoryId}`, toDisplay(num(allocation.plannedAmount), allocation.currency));
+    }
+  }
+  // A budget wins over the allocation, as it does in the draft.
+  for (const budget of budgets) {
+    own.set(`${periodInfo(budget).key}:${budget.categoryId}`, toDisplay(num(budget.amount), budget.currency));
+  }
+
+  // Only the periods that still miss a category need a suggestion, and
+  // periods sharing a stand-in share one call.
+  const refsNeeded = new Map<string, PeriodRef>();
+  for (const period of periods) {
+    if (categoryIds.some((id) => !own.has(`${period.key}:${id}`))) {
+      const ref = suggestionRefFor.get(period.key) ?? period;
+      refsNeeded.set(periodInfo(ref).key, ref);
+    }
+  }
+  const suggestions = new Map(
+    await Promise.all(
+      [...refsNeeded.entries()].map(
+        async ([key, ref]) => [key, await getCategorySuggestions(ref, categories, context)] as const,
+      ),
+    ),
+  );
+
+  for (const period of periods) {
+    const ref = suggestionRefFor.get(period.key) ?? period;
+    const suggested = suggestions.get(periodInfo(ref).key);
+    let amount = 0;
+    let fromSuggestion = false;
+    let anyKnown = false;
+    for (const id of categoryIds) {
+      const figure = own.get(`${period.key}:${id}`);
+      if (figure !== undefined) {
+        amount += figure;
+        anyKnown = true;
+        continue;
+      }
+      const suggestion = suggested?.get(id);
+      if (suggestion && suggestion.basis !== "none") {
+        amount += suggestion.amount;
+        fromSuggestion = true;
+        anyKnown = true;
+      }
+    }
+    result.set(period.key, {
+      amount: round2(amount),
+      basis: fromSuggestion ? "suggestion" : anyKnown ? "budget" : "none",
+    });
+  }
+  return result;
+}
+
 /**
  * Projects every period in `refs` for a purchase charged to `chosen`.
  *
  * Income is averaged from history; periods that resolve to the same history
  * window (every future A period does, as does every future B period) share
- * one set of queries, and each account's average runs from its own first
- * activity. A period confirmed today counts as history from this moment (see
+ * one set of queries, and every account's average divides by the same count
+ * of periods, from the oldest with income in any account (incomeHistoryDepth).
+ * A period confirmed today counts as history from this moment (see
  * comparableHistory), so a purchase evaluated right after a check-in reads
  * the income that check-in just recorded. Commitments are enumerated from the recurring items' schedules in
  * one pass over the whole horizon, leaving out `options.excludeItemId` if
@@ -389,7 +595,14 @@ async function loadScheduledCommitments(
  * commitments and the total joins the period's, both also reported apart as
  * `estimatedGoalFunding`, with the goals named in `estimatedGoals`. A period
  * whose check-in is confirmed already counts the funding it planned and gets
- * no estimate on top.
+ * no estimate on top. From payday to the end of its period, today's period
+ * comes before the plan period; when it has no confirmed check-in either, it
+ * is estimated like any other such period (see goalPaces below).
+ *
+ * The essential fixed categories (loadEssentialFixed) are subtracted in both
+ * checks, as the check-in's Step 4 subtracts them - but not from the room the
+ * goal estimate is spread over, which is Step 3's room (income, scheduled
+ * commitments, buffer) and never counted them.
  */
 export async function projectPeriods(
   refs: PeriodRef[],
@@ -401,6 +614,11 @@ export async function projectPeriods(
   const confirmedOpen = await loadConfirmedOpenPeriodKeys(context.today);
   const histories = new Map<string, PeriodInfo[]>();
   const historyKeyFor = new Map<string, string>();
+  // The period whose essential-category suggestion stands in for each
+  // evaluated one: the one right after its newest complete comparable period
+  // (see loadEssentialFixed). Taken before the "count income history from"
+  // boundary, which trims the income walk, not where it starts.
+  const suggestionRefFor = new Map<string, PeriodRef>();
   for (const ref of refs) {
     const history = comparableHistory(ref, context.today, confirmedOpen, context.incomeHistoryStartDate);
     // A "count income history from" date past every comparable period leaves
@@ -409,11 +627,14 @@ export async function projectPeriods(
     const key = history[0]?.key ?? "";
     historyKeyFor.set(periodInfo(ref).key, key);
     if (!histories.has(key)) histories.set(key, history);
+    const newest = comparableHistory(ref, context.today, confirmedOpen)[0];
+    suggestionRefFor.set(periodInfo(ref).key, nextPeriod(nextPeriod(newest)));
   }
 
   const incomeByHistory = new Map<string, PeriodIncome[]>();
-  const [scheduled, allPaces] = await Promise.all([
+  const [scheduled, essentials, allPaces] = await Promise.all([
     loadScheduledCommitments(refs.map(periodInfo), accounts, context, options.excludeItemId),
+    loadEssentialFixed(refs.map(periodInfo), suggestionRefFor, context),
     getGoalRoadmapAmounts(planPeriodRef(context), context),
     ...[...histories.entries()].map(async ([key, history]) => {
       const incomes = await Promise.all(
@@ -435,12 +656,26 @@ export async function projectPeriods(
   // the periods from the plan period up to its target date, counted exactly
   // as the roadmap counts them (goalWindow). Each pace carries the keys of
   // its window, and a period past it is estimated nothing for that goal.
-  const planStart = periodInfo(planPeriodRef(context)).start;
-  const goalPaces = allPaces.flatMap((pace) =>
-    pace.targetDate
-      ? [{ ...pace, window: new Set(goalWindow(planStart, pace.targetDate).map((period) => period.key)) }]
-      : [],
-  );
+  //
+  // From payday to the end of its period, today's period precedes the plan
+  // period. Its pay has landed and the check-in now plans the next one, but
+  // if this period's own check-in was never confirmed, nothing real says
+  // what it puts toward the goal either - so the window starts at today's
+  // period instead, and it is estimated the same pace as the periods after
+  // it (the loop below still skips it once it is confirmed). Not for a goal
+  // whose target date falls before the plan period ends: its roadmap figure
+  // is then the whole remaining balance, due in the plan period alone, and
+  // estimating it in today's period as well would commit the balance twice.
+  const plan = periodInfo(planPeriodRef(context));
+  const currentPrecedesPlan = plan.key !== context.currentPeriod.key;
+  const goalPaces = allPaces.flatMap((pace) => {
+    if (!pace.targetDate) return [];
+    const window = new Set(goalWindow(plan.start, pace.targetDate).map((period) => period.key));
+    if (currentPrecedesPlan && periodsRemaining(plan.start, pace.targetDate) > 0) {
+      window.add(context.currentPeriod.key);
+    }
+    return [{ ...pace, window }];
+  });
 
   const floorFor = (account: ActiveAccount) =>
     round2(convert(context.bufferFloorAmount, context.bufferFloorCurrency, account.currency, context.rates));
@@ -451,13 +686,31 @@ export async function projectPeriods(
     const historyKey = historyKeyFor.get(period.key) as string;
     const incomes = incomeByHistory.get(historyKey) ?? [];
     const commitments = scheduled.get(period.key);
+    const essential = essentials.get(period.key) ?? { amount: 0, basis: "unset" as const };
+    const depth = incomeHistoryDepth(incomes);
 
     const figures = accounts.map((account) => {
-      const income = averageSinceFirstActivity(incomes.map((byAccount) => byAccount.get(account.id) ?? 0));
+      const values = incomes.map((byAccount) => byAccount.get(account.id) ?? 0);
+      const income = averageOverHistory(values, depth);
+      const hasIncome = values.some((value) => value > 0);
       const scheduledCommitted = round2(commitments?.byAccount.get(account.id) ?? 0);
       const buffer = defaultProtectedBuffer(income.amount, context.bufferPercent, floorFor(account));
-      return { account, income, scheduledCommitted, buffer };
+      return { account, income, hasIncome, scheduledCommitted, buffer };
     });
+
+    // Each account's share of the essential fixed figure: its part of the
+    // period's projected income, the money essentials are paid from. With no
+    // income projected anywhere there is nothing to share by, and the chosen
+    // account - the one being judged - carries all of it.
+    const incomeInDisplay = figures.map(({ account, income }) =>
+      convert(income.amount, account.currency, context.displayCurrency, context.rates),
+    );
+    const totalIncomeInDisplay = incomeInDisplay.reduce((sum, value) => sum + value, 0);
+    const essentialShareFor = (index: number, account: ActiveAccount) => {
+      const share =
+        totalIncomeInDisplay > 0 ? incomeInDisplay[index] / totalIncomeInDisplay : account.id === chosen.id ? 1 : 0;
+      return round2(convert(essential.amount * share, context.displayCurrency, account.currency, context.rates));
+    };
 
     // The goal estimate, for a period with no confirmed check-in: each dated
     // goal's pace, drawn from the accounts by their projected headroom - what
@@ -511,7 +764,7 @@ export async function projectPeriods(
     let periodIncome = 0;
     let periodBuffer = 0;
     let own: PeriodProjection["account"] | null = null;
-    for (const { account, income, scheduledCommitted, buffer } of figures) {
+    for (const [index, { account, income, hasIncome, scheduledCommitted, buffer }] of figures.entries()) {
       const estimatedGoalFunding = estimatedByAccount.get(account.id) ?? 0;
       periodIncome += convert(income.amount, account.currency, context.displayCurrency, context.rates);
       // Only an account that receives income keeps a buffer out of it - the
@@ -530,7 +783,9 @@ export async function projectPeriods(
           income: income.amount,
           committed: round2(scheduledCommitted + estimatedGoalFunding),
           buffer,
-          basis: income.periods > 0 ? "average" : "none",
+          essentialFixed: essentialShareFor(index, account),
+          basis: hasIncome ? "average" : "none",
+          incomePeriods: income.periods,
           estimatedGoalFunding,
         };
       }
@@ -546,15 +801,17 @@ export async function projectPeriods(
         committed: round2((commitments?.total ?? 0) + periodEstimated),
         buffer: round2(periodBuffer),
         estimatedGoalFunding: periodEstimated,
+        essentialFixed: essential.amount,
+        incomePeriods: depth,
       },
+      essentialFixedBasis: essential.basis,
       estimatedGoals,
       goalPlans,
       // The comparable periods actually walked for this projection - `incomes`
       // is built by mapping over the (possibly boundary-filtered) `history`
       // array above, so this is HISTORY_PERIODS unless "count income history
-      // from" trimmed it, never the constant regardless of the boundary. What
-      // the results page's copy ("average of your last N comparable pay
-      // periods") reads, so it stays accurate whichever way the boundary lands.
+      // from" trimmed it. Not the divisor (that is `depth`): the results page
+      // reads it only for how far back an account with no income was checked.
       historyPeriods: incomes.length,
     });
   }

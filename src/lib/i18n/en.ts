@@ -6,6 +6,18 @@ function ordinalEn(day: number): string {
   return `${day}${suffix}`;
 }
 
+/** "1 comparable pay period", "4 comparable pay periods". */
+function comparablePeriodsEn(count: number): string {
+  return count === 1 ? "1 comparable pay period" : `${count} comparable pay periods`;
+}
+
+/** How a projected income figure was reached, for a sentence that reads "...projected as <this>". */
+function incomeBasisEn(periods: number): string {
+  return periods === 0
+    ? "zero, since no comparable pay period has any income yet"
+    : `the average of ${comparablePeriodsEn(periods)}`;
+}
+
 /** "the 16th", or "the last day of the month" for an anchor of 31 (clamped in shorter months). */
 function dayOfMonthEn(day: number): string {
   return day >= 31 ? "the last day of the month" : `the ${ordinalEn(day)}`;
@@ -795,7 +807,9 @@ export const en = {
     paymentsLeft: (n: number) => (n === 1 ? "1 payment left" : `${n} payments left`),
     roomHeading: "Which account can carry this?",
     roomDescription: (threshold: string, period: string, periods: number) =>
-      `A subscription of ${threshold} or more is checked the way Afford checks a purchase: each account's income for ${period} is projected from your last ${periods} comparable pay periods, its other recurring items due then are subtracted, and its protected buffer is kept back. Room means the account's typical margin covers the charge - not a guarantee for every period. Saving is never blocked by this.`,
+      `A subscription of ${threshold} or more is checked the way Afford checks a purchase: each account's income for ${period} is projected as ${incomeBasisEn(periods)} (same half of the month), its other recurring items due then and its share of your essential fixed categories are subtracted, and its protected buffer is kept back. Room means the account's typical margin covers the charge - not a guarantee for every period. Saving is never blocked by this.`,
+    roomLowHistory: (periods: number) =>
+      `Only ${comparablePeriodsEn(periods)} of income history ${periods === 1 ? "backs" : "back"} these figures, so treat them as rough until more pay periods have passed.`,
     roomChecking: "Checking which account has room...",
     roomChargesTogether: (count: number, charge: string) =>
       `${count} charges land in this period and are checked together (${charge}).`,
@@ -921,15 +935,30 @@ export const en = {
     flexibleShortfall: (period: string, amount: string) =>
       `${period}: the period would be ${amount} short for its flexible categories.`,
     projectionHeading: "How these figures are projected",
-    projectionDescription: (periods: number, account: string) =>
-      `No payday check-in exists for these periods yet. ${account}'s income is projected from the average of your last ${periods} comparable pay periods (same half of the month). Its commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here - plus whatever a confirmed payday check-in planned toward your goals for that period. Where no check-in is confirmed yet, an estimate stands in for that goal funding: what you would keep putting toward each goal at its current pace, marked * and spelled out below. The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
+    projectionDescription: (account: string, periods: number | null) =>
+      `No payday check-in exists for these periods yet. Income is projected as ${periods === null ? "the average of the comparable pay periods noted under each period" : incomeBasisEn(periods)} (same half of the month), counted in every account from the first period with income in any of them, so pay that moved from one account to another is not counted in both. If your income changed - a new job, for example - Settings' "Count income history from" sets where that history starts. ${account}'s commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here, and, in the current period, what already posted as well as what is still ahead - plus whatever a confirmed payday check-in planned toward your goals for that period. Where no check-in is confirmed yet, an estimate stands in for that goal funding: what you would keep putting toward each goal at its current pace, marked * and spelled out below. The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
+    projectionIncomePeriods: (periods: number) => (periods === 1 ? "income: 1 period" : `income: ${periods} periods`),
+    lowIncomeHistory: (periods: number) =>
+      `Only ${comparablePeriodsEn(periods)} of income history ${periods === 1 ? "backs" : "back"} this projection, so treat its income as rough until more pay periods have passed.`,
+    projectionEssential: "Essential fixed",
+    noEssentialFixed: "No essential fixed budgets are set, so none are assumed in either check.",
+    essentialFixedLine: (periods: string[]) =>
+      `Essential fixed categories are subtracted in both checks, as the payday check-in subtracts them: ${periods.join("; ")}. Each account carries the share of it that its projected income is of the period's.`,
+    essentialFixedPeriod: (period: string, amount: string, basis: "budget" | "suggestion" | "none") =>
+      basis === "budget"
+        ? `${period} ${amount}, the budgets already set for it`
+        : basis === "suggestion"
+          ? `${period} ${amount}, what the check-in would suggest from your last budgets or average spending`
+          : `${period} none assumed, since nothing has been budgeted or spent in them yet`,
     projectionAccountColumns: (account: string) => `${account} (projected)`,
     projectionPeriodColumns: "All accounts (projected)",
     projectionIncome: "Income",
     projectionCommitted: "Commitments",
     projectionBuffer: "Buffer",
     noHistoryForAccount: (account: string, periods: number) =>
-      `${account} received no income in the last ${periods} comparable periods, so its projected income is zero and only the buffer floor applies.`,
+      periods === 0
+        ? `No comparable pay period falls after your "Count income history from" date yet, so ${account}'s projected income is zero and only the buffer floor applies.`
+        : `${account} received no income in the last ${comparablePeriodsEn(periods)}, so its projected income is zero and only the buffer floor applies.`,
     estimatedInCommitments: "includes an estimated goal contribution *",
     estimatedGoalItem: (amount: string, goal: string) => `${amount} toward ${goal}`,
     estimatedGoalFunding: (period: string, goals: string[]) =>

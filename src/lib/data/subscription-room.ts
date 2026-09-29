@@ -33,7 +33,6 @@ import { owedOccurrences } from "@/lib/recurring";
 import { isLargeSubscription } from "@/lib/subscription-room";
 
 import { projectPeriods, type AffordContext } from "@/lib/data/afford";
-import { HISTORY_PERIODS } from "@/lib/data/payday";
 
 import type { RecurringFrequency } from "@/generated/prisma/enums";
 
@@ -72,7 +71,12 @@ export type SubscriptionRoom =
       accounts: AccountRoom[];
       /** The account with the most room among those that keep their buffer; null when none does. */
       recommendedAccountId: string | null;
-      historyPeriods: number;
+      /**
+       * How many comparable pay periods the income figures average - the
+       * projection's own divisor (PeriodProjection.flexible.incomePeriods),
+       * one count for every account. 0 when no account has income history.
+       */
+      incomePeriods: number;
     };
 
 /**
@@ -145,7 +149,7 @@ export async function checkSubscriptionRoom(
     displayCurrency: context.displayCurrency,
     accounts: rooms,
     recommendedAccountId: fitting[0]?.accountId ?? null,
-    historyPeriods: HISTORY_PERIODS,
+    incomePeriods: projections[0]?.get(period.key)?.flexible.incomePeriods ?? 0,
   };
 }
 

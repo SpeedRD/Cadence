@@ -3,7 +3,6 @@ import { ExploratoryBadge } from "@/components/exploratory-badge";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/stat";
 import { getAppContext } from "@/lib/data/context";
-import { HISTORY_PERIODS } from "@/lib/data/payday";
 import { toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
@@ -36,7 +35,6 @@ export default async function AffordPage() {
           accounts={accounts}
           defaultCurrency={context.displayCurrency}
           today={toISODate(context.today)}
-          historyPeriods={HISTORY_PERIODS}
           locale={context.language}
         />
       )}
