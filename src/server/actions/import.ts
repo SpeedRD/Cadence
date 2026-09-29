@@ -262,6 +262,7 @@ export async function importTransactionsAction(
   const result = await importCsvTransactions(parsed.data, (await getAppContext()).rates);
   if (!result.ok) {
     if (result.reason === "account_missing") return fail(t.accountNoLongerExists);
+    if (result.reason === "account_not_active") return fail(t.accountNoLongerActive);
     if (result.reason === "duplicates_need_review") return fail(t.duplicatesNeedReview(result.count));
     if (result.reason === "invalid_date") return fail(t.invalidDateRow);
     if (result.reason === "posted_match_changed") return fail(t.postedMatchChanged);

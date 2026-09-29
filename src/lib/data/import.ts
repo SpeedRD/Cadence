@@ -68,7 +68,7 @@ export type CsvImportResult =
       /** Of those, how many changed the posted row's amount or currency. */
       updatedPosted: number;
     }
-  | { ok: false; reason: "account_missing" | "invalid_date" | "collision" | "posted_match_changed" }
+  | { ok: false; reason: "account_missing" | "account_not_active" | "invalid_date" | "collision" | "posted_match_changed" }
   | { ok: false; reason: "duplicates_need_review"; count: number };
 
 function isUniqueViolation(error: unknown): boolean {
@@ -112,9 +112,10 @@ export async function importCsvTransactions(
 ): Promise<CsvImportResult> {
   const account = await prisma.account.findUnique({
     where: { id: input.accountId },
-    select: { id: true },
+    select: { id: true, status: true },
   });
   if (!account) return { ok: false, reason: "account_missing" };
+  if (account.status !== "ACTIVE") return { ok: false, reason: "account_not_active" };
 
   const report = await findCsvDuplicates({
     accountId: account.id,

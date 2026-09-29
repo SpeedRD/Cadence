@@ -62,7 +62,7 @@
  * history of when an item was paused.
  */
 import { convert } from "@/lib/currency";
-import { addDays, minDate, startOfDay } from "@/lib/date";
+import { addDays, appTimeZone, civilDateInZone, minDate, startOfDay } from "@/lib/date";
 import { num, round2, sum } from "@/lib/money";
 import { daysElapsedInMonth, monthForDate, monthWindow, nextMonth, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
@@ -663,8 +663,14 @@ export async function classifyCompletedMonth(
   // whose first payment is October 1 owes August nothing), so its scheduled
   // amount must not stand in for one. Without this a new subscription rewrote
   // every month of history behind it.
+  //
+  // Created on or before the month's last day, which is to say before the start
+  // of the day after it: the instant is read as the calendar day it fell on in
+  // the app's timezone, so an item made during the last day (or after 8pm local
+  // on it, already the next UTC day) counts for that month rather than being
+  // compared with the month end at UTC midnight.
   const existedIn = (item: RecurringForMonth) =>
-    item.createdAt.getTime() <= window.end.getTime() &&
+    civilDateInZone(item.createdAt, appTimeZone()).getTime() <= window.end.getTime() &&
     firstOccurrenceOf(item).getTime() <= window.end.getTime();
 
   let committed = actuals.committedActual;

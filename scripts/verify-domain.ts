@@ -6949,9 +6949,9 @@ async function main() {
       const roomLib = await import("../src/lib/subscription-room");
       const roomData = await import("../src/lib/data/subscription-room");
       eq("the threshold is DOP 10,000", `${roomLib.LARGE_SUBSCRIPTION_THRESHOLD.amount}:${roomLib.LARGE_SUBSCRIPTION_THRESHOLD.currency}`, "10000:DOP");
-      eq("DOP 9,999 is not large; DOP 10,000 is", `${roomLib.isLargeSubscription(9999, "DOP", rates)}:${roomLib.isLargeSubscription(10000, "DOP", rates)}`, "false:true");
-      eq("another currency is converted first: USD 166 is under, USD 166.67 is over", `${roomLib.isLargeSubscription(166, "USD", rates)}:${roomLib.isLargeSubscription(166.67, "USD", rates)}`, "false:true");
-      eq("EUR converts through USD", roomLib.isLargeSubscription(100, "EUR", rates), true);
+      eq("DOP 9,999 is not large; DOP 10,000 is", `${roomLib.isLargeSubscription(9999, "DOP", "MONTHLY", rates)}:${roomLib.isLargeSubscription(10000, "DOP", "MONTHLY", rates)}`, "false:true");
+      eq("another currency is converted first: USD 166 is under, USD 166.67 is over", `${roomLib.isLargeSubscription(166, "USD", "MONTHLY", rates)}:${roomLib.isLargeSubscription(166.67, "USD", "MONTHLY", rates)}`, "false:true");
+      eq("EUR converts through USD", roomLib.isLargeSubscription(100, "EUR", "MONTHLY", rates), true);
 
       // Two fresh accounts with clean history for Oct 1-15: Big receives 3,000
       // USD a period, Small 90,000 DOP (1,500 USD). Neither has any recurring
@@ -7656,21 +7656,25 @@ async function main() {
     eq("the subscriptions default can't be deleted, naming safe-to-spend's dependency", protectedSubs.ok ? "deleted" : `${protectedSubs.reason}:${protectedSubs.reason === "protected" ? protectedSubs.protectedBy : ""}`, "protected:subscription");
     const protectedSavings = await categoriesLib.deleteCategoryIfUnused(savings.id);
     eq("the savings default can't be deleted either", protectedSavings.ok ? "deleted" : `${protectedSavings.reason}:${protectedSavings.reason === "protected" ? protectedSavings.protectedBy : ""}`, "protected:savings");
-    const protectedReassign = await categoriesLib.reassignAndDeleteCategory(subscriptions.id, target.id);
+    const protectedReassign = await categoriesLib.reassignAndDeleteCategory(subscriptions.id, target.id, rates);
     eq("nor removed through the reassignment step", protectedReassign.ok ? "deleted" : protectedReassign.reason, "protected");
     eq("protectedCategoryReason is what the list shows as the badge", `${protectedCategoryReason(subscriptions)}:${protectedCategoryReason(savings)}:${protectedCategoryReason(petsRow)}`, "subscription:savings:null");
 
     const incomeCategory = await prisma.category.findFirstOrThrow({ where: { kind: "INCOME" } });
-    eq("moving rows to a category of another kind is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, incomeCategory.id)).ok ? "moved" : (await categoriesLib.reassignAndDeleteCategory(petsId, incomeCategory.id) as { reason: string }).reason, "kind_mismatch");
-    eq("moving rows onto the category being removed is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, petsId) as { ok: boolean; reason?: string }).reason, "same_category");
-    eq("moving rows to a category that no longer exists is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, "missing_category") as { ok: boolean; reason?: string }).reason, "target_not_found");
+    eq("moving rows to a category of another kind is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, incomeCategory.id, rates)).ok ? "moved" : (await categoriesLib.reassignAndDeleteCategory(petsId, incomeCategory.id, rates) as { reason: string }).reason, "kind_mismatch");
+    eq("moving rows onto the category being removed is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, petsId, rates) as { ok: boolean; reason?: string }).reason, "same_category");
+    eq("moving rows to a category that no longer exists is refused", (await categoriesLib.reassignAndDeleteCategory(petsId, "missing_category", rates) as { ok: boolean; reason?: string }).reason, "target_not_found");
     eq("none of the refusals touched anything", `${await prisma.transaction.count({ where: { categoryId: petsId } })}:${await prisma.recurringItem.count({ where: { categoryId: petsId } })}:${await prisma.budget.count({ where: { id: catBudget.id } })}`, "2:1:1");
 
-    const moved = await categoriesLib.reassignAndDeleteCategory(petsId, target.id);
-    eq("the reassignment step moves the rows, clears the budgets and removes the category, reporting the counts", moved.ok ? `${moved.moved.transactions}:${moved.moved.recurringItems}:${moved.moved.budgets}` : moved.reason, "2:1:1");
+    const moved = await categoriesLib.reassignAndDeleteCategory(petsId, target.id, rates);
+    eq("the reassignment step moves the rows and carries the budgets over, removes the category and reports the counts", moved.ok ? `${moved.moved.transactions}:${moved.moved.recurringItems}:${moved.moved.budgets}` : moved.reason, "2:1:1");
     eq("every transaction now sits under the target", await prisma.transaction.count({ where: { accountId: catAccount.id, categoryId: target.id } }), 2);
     eq("the recurring item now sits under the target", (await prisma.recurringItem.findUniqueOrThrow({ where: { id: catItem.id } })).categoryId, target.id);
-    eq("the removed category's budget is gone rather than moved", await prisma.budget.count({ where: { id: catBudget.id } }), 0);
+    // Flipped for B28: this used to assert the budget was deleted with the category.
+    const carriedBudget = await prisma.budget.findUniqueOrThrow({ where: { id: catBudget.id } });
+    eq("the removed category's budget moved to the target, since the target had none that period", `${carriedBudget.categoryId === target.id}:${Number(carriedBudget.amount)} ${carriedBudget.currency}`, "true:100 USD");
+    // The carried budget now belongs to the target, which a plain delete later in this block expects to be unused.
+    await prisma.budget.delete({ where: { id: catBudget.id } });
     eq("and the category itself is gone", await prisma.category.count({ where: { id: petsId } }), 0);
     eq("the target keeps its own name and kind", (await prisma.category.findUniqueOrThrow({ where: { id: target.id } })).name, "Verify Target");
     eq("a pending staged suggestion of the removed category now suggests the target, not nothing", await stagedSuggestion(stagedPets.id), target.id);
@@ -10565,6 +10569,305 @@ async function main() {
       await prisma.insightDismissal.deleteMany({ where: { source: "posting_run_failed" } });
       await prisma.emailConnection.deleteMany({ where: { emailAddress: { startsWith: "verify-ingest" } } });
       await prisma.stagedTransaction.deleteMany({ where: { source: "GMAIL", externalId: { startsWith: "<verify-ingest-" } } });
+    }
+  }
+
+  console.log("\n== bug-hunt fixes: category merge budgets, semi-monthly dates and anchors, month-end createdAt, archived approval, room threshold, Next 7 days (B28 B41 B48.3 B48.7 B49.3-5) ==");
+  {
+    // Public APIs only, so this whole section also runs (and fails where the
+    // findings said) against the code before the fixes. Fixtures are named
+    // `Verify Fix%` and removed in the finally.
+    const { reassignAndDeleteCategory: mergeCategory } = await import("../src/lib/data/categories");
+    const { getPeriodSummary: fixPeriodSummary } = await import("../src/lib/data/period-summary");
+    const { getDictionary: fixDictionary } = await import("../src/lib/i18n");
+    const { detectRecurringPatterns: fixDetect } = await import("../src/lib/recurring-detection");
+    const { advanceDate: fixAdvance } = await import("../src/lib/recurring");
+    const { recurringSchema: fixRecurringSchema, firstError: fixFirstError } = await import("../src/lib/validation");
+    const { monthWindow: fixMonthWindow } = await import("../src/lib/month");
+    const { approveStagedTransaction: fixApprove } = await import("../src/lib/data/staged-approval");
+    const { checkSubscriptionRoom: fixCheckRoom } = await import("../src/lib/data/subscription-room");
+    const { getDashboardData: fixDashboard } = await import("../src/lib/data/dashboard");
+    const fixContext = (today: Date) => ({ ...context, today, currentPeriod: periodForDate(today) });
+    const savedTimezone = process.env.APP_TIMEZONE;
+    try {
+      console.log("-- B28: merging a category carries its budgets over --");
+      {
+        const mergeAccount = await prisma.account.create({ data: { name: "Verify Fix Merge Account", currency: "USD", type: "CHECKING" } });
+        const mk = (name: string) => prisma.category.create({ data: { name: `Verify Fix ${name}`, kind: "EXPENSE", color: "#334455" } });
+        const [dining, restaurants, dining2, restaurants2] = [await mk("Dining"), await mk("Restaurants"), await mk("Dining Two"), await mk("Restaurants Two")];
+        const march = fixContext(civilDate(2027, 3, 10));
+        const budget = (categoryId: string, period: "A" | "B", amount: number, currency: string) =>
+          prisma.budget.create({ data: { year: 2027, month: 3, period, categoryId, amount, currency } });
+        const budgetOf = async (categoryId: string, period: "A" | "B") => {
+          const row = await prisma.budget.findFirst({ where: { year: 2027, month: 3, period, categoryId } });
+          return row ? `${Number(row.amount)} ${row.currency}` : "none";
+        };
+        // Restaurants (3,000) is merged into Dining (5,000), 2,000 spent in each.
+        await budget(dining.id, "A", 5000, "USD");
+        await budget(restaurants.id, "A", 3000, "USD");
+        for (const category of [dining, restaurants]) {
+          await prisma.transaction.create({ data: { date: civilDate(2027, 3, 5), amount: 2000, currency: "USD", type: "EXPENSE", accountId: mergeAccount.id, categoryId: category.id, source: "MANUAL", note: "Verify Fix merge spend" } });
+        }
+        const before = await fixPeriodSummary(march.currentPeriod, march);
+        eq("before the merge: 8,000 budgeted, 4,000 spent, 4,000 safe to spend", `${before.periodBudget}:${before.spent}:${before.safeToSpend}`, "8000:4000:4000");
+        const merged = await mergeCategory(restaurants.id, dining.id, rates);
+        eq("the merge reports the one budget it carried over", merged.ok ? `${merged.moved.transactions}:${merged.moved.recurringItems}:${merged.moved.budgets}` : merged.reason, "1:0:1");
+        const after = await fixPeriodSummary(march.currentPeriod, march);
+        eq("after the merge the period budget is 8,000 and safe to spend is still 4,000 (it was 1,000)", `${after.periodBudget}:${after.spent}:${after.safeToSpend}`, "8000:4000:4000");
+        eq("the target's budget is its own 5,000 plus the merged 3,000", await budgetOf(dining.id, "A"), "8000 USD");
+        eq("the merged category is gone", await prisma.category.count({ where: { id: restaurants.id } }), 0);
+
+        // Currencies differ: 100 USD merged into a 300,000 DOP budget, and a
+        // second period where the target has no budget at all.
+        await budget(dining2.id, "A", 300000, "DOP");
+        await budget(restaurants2.id, "A", 100, "USD");
+        await budget(restaurants2.id, "B", 50, "USD");
+        const mixed = await mergeCategory(restaurants2.id, dining2.id, rates);
+        eq("two budgets are reported: one summed, one moved", mixed.ok ? mixed.moved.budgets : mixed.reason, 2);
+        eq("the target keeps its currency: 300,000 DOP + 100 USD at 60 = 306,000 DOP", await budgetOf(dining2.id, "A"), "306000 DOP");
+        eq("a period where the target had no budget receives the merged one as it was", await budgetOf(dining2.id, "B"), "50 USD");
+        eq("no budget is left on the removed category", await prisma.budget.count({ where: { categoryId: restaurants2.id } }), 0);
+        const en = fixDictionary("en").settingsPage.categoryReassigned;
+        const es = fixDictionary("es").settingsPage.categoryReassigned;
+        check("the English toast names the merged budgets", /2 budgets/.test(en("Restaurants", 3, 2)) && /1 budget\b/.test(en("Restaurants", 3, 1)), en("Restaurants", 3, 2));
+        check("the Spanish toast names them too", /2 presupuestos/.test(es("Restaurantes", 3, 2)) && /1 presupuesto\b/.test(es("Restaurantes", 3, 1)), es("Restaurantes", 3, 2));
+        await prisma.transaction.deleteMany({ where: { accountId: mergeAccount.id } });
+        await prisma.budget.deleteMany({ where: { year: 2027, month: 3 } });
+        await prisma.category.deleteMany({ where: { id: { in: [dining.id, dining2.id] } } });
+        await prisma.account.delete({ where: { id: mergeAccount.id } });
+      }
+
+      console.log("-- B41: a semi-monthly suggestion steps the way posting does --");
+      {
+        const series = [
+          civilDate(2026, 6, 1), civilDate(2026, 6, 16), civilDate(2026, 7, 1), civilDate(2026, 7, 16),
+          civilDate(2026, 7, 31), civilDate(2026, 8, 14), civilDate(2026, 9, 1), civilDate(2026, 9, 16),
+          civilDate(2026, 10, 1), civilDate(2026, 10, 16),
+        ].map((date, index) => ({
+          id: `fix-semi-${index}`, date, amount: 25, currency: "USD", type: "EXPENSE" as const, source: "CSV" as const,
+          accountId: "acct-a", categoryId: null, note: "FIX GYM 1234", externalId: null, isExtraordinary: false,
+        }));
+        const [candidate] = fixDetect({ transactions: series, trackedItems: [], dismissed: [], today: civilDate(2026, 10, 17) });
+        const posting = toISODate(fixAdvance(civilDate(2026, 10, 16), "SEMI_MONTHLY", 1, 16));
+        eq("posting's rule from Oct 16 with anchors 1/16 reaches Oct 30 (Nov 1 is a Sunday)", posting, "2026-10-30");
+        eq("the suggestion's due dates are the anchors' own weekend-shifted next dates", candidate?.nextDates.map(toISODate).join(","), "2026-10-30,2026-11-16");
+        eq("the earlier one is the date posting itself would reach", candidate ? toISODate([...candidate.nextDates].sort((a, b) => a.getTime() - b.getTime())[0]) : "no candidate", posting);
+      }
+
+      console.log("-- B49.3: the form refuses anchor pairs posting would collapse --");
+      {
+        const form = (first: number, second: number) => ({
+          name: "Verify Fix Semi", amount: "10", currency: "USD", frequency: "SEMI_MONTHLY", kind: "SUBSCRIPTION",
+          nextDate: `2026-10-${String(first).padStart(2, "0")}`, categoryId: "none", note: "", active: "true", accountId: "acc_1", secondAnchorDay: String(second),
+        });
+        const verdict = (first: number, second: number) => {
+          const parsed = fixRecurringSchema.safeParse(form(first, second));
+          return parsed.success ? "accepted" : fixFirstError(parsed.error);
+        };
+        const collision = verdict(30, 31);
+        check("30 and 31 are refused with a message that names the problem", collision !== "accepted" && /same date/.test(collision), collision);
+        const collisionEs = fixRecurringSchema.safeParse(form(30, 31));
+        check("... and the message is translated", !collisionEs.success && /misma fecha/.test(fixFirstError(collisionEs.error, "es")), collisionEs.success ? "accepted" : fixFirstError(collisionEs.error, "es"));
+        eq("1 and 16 are accepted", verdict(1, 16), "accepted");
+        eq("15 and 31 are accepted", verdict(15, 31), "accepted");
+        // Independent of the rule inside the validator: walk posting's own
+        // advanceDate over 2001-2098 for each anchor alone (a pair of the same
+        // day walks that anchor's own weekend-shifted dates) and call two
+        // anchors colliding when any date is on both walks.
+        const walkOf = (day: number) => {
+          const dates = new Set<number>();
+          let cursor = civilDate(2001, 1, 1);
+          while (cursor.getUTCFullYear() < 2099) {
+            cursor = fixAdvance(cursor, "SEMI_MONTHLY", day, day);
+            dates.add(cursor.getTime());
+          }
+          return dates;
+        };
+        const walks = new Map<number, Set<number>>();
+        for (let day = 1; day <= 31; day += 1) walks.set(day, walkOf(day));
+        let disagreements = 0;
+        let refused = 0;
+        let refusedNear = 0;
+        for (let a = 1; a <= 31; a += 1) {
+          for (let b = a + 1; b <= 31; b += 1) {
+            const collides = [...(walks.get(a) as Set<number>)].some((time) => (walks.get(b) as Set<number>).has(time));
+            const refusedByForm = verdict(a, b) !== "accepted";
+            if (collides !== refusedByForm) disagreements += 1;
+            if (refusedByForm) {
+              refused += 1;
+              if (b - a <= 2) refusedNear += 1;
+            }
+          }
+        }
+        eq("for all 465 pairs the form refuses exactly the pairs whose walks share a date", disagreements, 0);
+        eq("74 pairs are refused: every pair 1-2 days apart (59) and 15 more that a weekend or a short month brings together", `${refused}:${refusedNear}`, "74:59");
+        eq("an edit that leaves the date alone keeps the stored pair (existing items are not rewritten)", fixRecurringSchema.safeParse({ ...form(30, 31), id: "item_1", originalNextDate: "2026-10-30" }).success, true);
+      }
+
+      console.log("-- B49.4: an item created on a month's last day counts for that month --");
+      {
+        const meta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
+        const { classifyCompletedMonth: classifyFix } = await import("../src/lib/data/monthly");
+        const item = (createdAt: Date) => ({
+          id: "fix-created", name: "Verify Fix Created", amount: 40, currency: "USD", categoryId: null, kind: "SUBSCRIPTION" as const,
+          frequency: "MONTHLY" as const, nextDate: civilDate(2026, 8, 7), anchorDay: 7, secondAnchorDay: null, createdAt,
+          firstPostedDate: civilDate(2026, 6, 25),
+        });
+        const july = fixMonthWindow({ year: 2026, month: 7 });
+        const committedFor = async (createdAt: Date) => (await classifyFix(july, fixContext(civilDate(2026, 7, 31)), [item(createdAt)], meta)).committed;
+        process.env.APP_TIMEZONE = "UTC";
+        eq("created at 10:00 UTC on Jul 31, July owes 40 (it was 0)", await committedFor(new Date("2026-07-31T10:00:00.000Z")), 40);
+        eq("created at 23:59 UTC on Jul 31 still counts", await committedFor(new Date("2026-07-31T23:59:00.000Z")), 40);
+        eq("created at 00:00 UTC on Aug 1 does not", await committedFor(new Date("2026-08-01T00:00:00.000Z")), 0);
+        process.env.APP_TIMEZONE = "America/Santo_Domingo";
+        eq("created 9pm Jul 31 in Santo Domingo (01:00 UTC Aug 1) counts for July", await committedFor(new Date("2026-08-01T01:00:00.000Z")), 40);
+        eq("created 00:30 Aug 1 in Santo Domingo (04:30 UTC) does not", await committedFor(new Date("2026-08-01T04:30:00.000Z")), 0);
+        if (savedTimezone === undefined) delete process.env.APP_TIMEZONE;
+        else process.env.APP_TIMEZONE = savedTimezone;
+      }
+
+      console.log("-- B49.5: approving a staged email needs an active account --");
+      {
+        const archived = await prisma.account.create({ data: { name: "Verify Fix Archived", currency: "USD", type: "CHECKING", status: "ARCHIVED", archivedAt: new Date() } });
+        const live = await prisma.account.create({ data: { name: "Verify Fix Live", currency: "USD", type: "CHECKING" } });
+        const staged = (externalId: string) => prisma.stagedTransaction.create({
+          data: { date: civilDate(2026, 11, 3), amount: 19.5, currency: "USD", rawDescription: `Verify Fix receipt ${externalId}`, source: "GMAIL", externalId: `verify-fix-${externalId}` },
+        });
+        const input = (row: { id: string; rawDescription: string }, accountId: string) => ({
+          id: row.id, date: civilDate(2026, 11, 3), amount: 19.5, currency: "USD", rawDescription: row.rawDescription, accountId, categoryId: null, resolution: null,
+        });
+        const first = await staged("archived");
+        const refused = await fixApprove(input(first, archived.id), rates);
+        eq("an archived account is refused", refused.ok ? "approved" : refused.reason, "account_not_active");
+        eq("... nothing was written to it", await prisma.transaction.count({ where: { accountId: archived.id } }), 0);
+        eq("... and the staged row is still pending", (await prisma.stagedTransaction.findUniqueOrThrow({ where: { id: first.id } })).status, "PENDING");
+        const second = await staged("live");
+        const accepted = await fixApprove(input(second, live.id), rates);
+        eq("an active account is accepted", accepted.ok ? accepted.outcome : accepted.reason, "approved");
+        eq("... and the expense is on it", await prisma.transaction.count({ where: { accountId: live.id, source: "GMAIL" } }), 1);
+        eq("the message exists in both languages", `${fixDictionary("en").review.accountNoLongerActive}|${fixDictionary("es").review.accountNoLongerActive}`, "That account is archived - pick an active one|Esa cuenta está archivada; elige una activa");
+        await prisma.transaction.deleteMany({ where: { accountId: { in: [archived.id, live.id] } } });
+        await prisma.stagedTransaction.deleteMany({ where: { externalId: { startsWith: "verify-fix-" } } });
+        await prisma.account.deleteMany({ where: { id: { in: [archived.id, live.id] } } });
+      }
+
+      console.log("-- B48.3: the subscription room threshold is judged on the monthly equivalent --");
+      {
+        const roomAccount = await prisma.account.create({ data: { name: "Verify Fix Room", currency: "USD", type: "CHECKING" } });
+        for (let month = 3; month <= 8; month += 1) {
+          await prisma.transaction.create({ data: { date: civilDate(2026, month, 5), amount: 3000, currency: "USD", type: "INCOME", accountId: roomAccount.id, source: "MANUAL", note: "Verify Fix Room pay" } });
+        }
+        const roomToday = civilDate(2026, 9, 28);
+        const roomContext = { ...fixContext(roomToday), bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP" };
+        const room = (amount: number, frequency: "WEEKLY" | "MONTHLY" | "YEARLY" | "SEMI_MONTHLY") =>
+          fixCheckRoom({ amount, currency: "DOP", frequency, nextDate: civilDate(2026, 10, 5) }, roomContext);
+        const summary = (result: Awaited<ReturnType<typeof room>>) => (result.large ? `checked:${result.occurrences}:${result.charge}` : "unchecked");
+        eq("a weekly DOP 3,000 item (13,000 a month) is checked: Oct 5 and 12 land in Oct 1-15, 6,000 together", summary(await room(3000, "WEEKLY")), "checked:2:6000");
+        eq("weekly DOP 2,300 (9,966.67 a month) is under the threshold", summary(await room(2300, "WEEKLY")), "unchecked");
+        eq("weekly DOP 2,310 (10,010 a month) is over it", summary(await room(2310, "WEEKLY")), "checked:2:4620");
+        eq("a monthly DOP 10,000 item is checked and DOP 9,999 is not (unchanged)", `${summary(await room(10000, "MONTHLY"))}|${summary(await room(9999, "MONTHLY"))}`, "checked:1:10000|unchecked");
+        // Flipped for the follow-up: a single charge that reaches the threshold is checked too, so a yearly 119,999 is checked again.
+        eq("a yearly DOP 120,000 item (10,000 a month) and DOP 119,999 (a single charge over 10,000) are both checked", `${summary(await room(120000, "YEARLY"))}|${summary(await room(119999, "YEARLY"))}`, "checked:1:120000|checked:1:119999");
+        eq("a yearly DOP 9,999 is under both readings", summary(await room(9999, "YEARLY")), "unchecked");
+        eq("a SEMI_MONTHLY item stays unchecked whatever the amount", summary(await room(50000, "SEMI_MONTHLY")), "unchecked");
+        await prisma.transaction.deleteMany({ where: { accountId: roomAccount.id } });
+        await prisma.account.delete({ where: { id: roomAccount.id } });
+      }
+
+      console.log("-- B48.7: Next 7 days is seven days, and still shows what is overdue --");
+      {
+        const today = civilDate(2026, 8, 20);
+        const dashboardContext = fixContext(today);
+        const make = (name: string, offset: number) =>
+          prisma.recurringItem.create({
+            data: { name: `Verify Fix Due ${name}`, amount: 5, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: addDays(today, offset), anchorDay: 1 },
+          });
+        const items = { overdue: await make("overdue", -3), today: await make("today", 0), six: await make("six", 6), seven: await make("seven", 7), eight: await make("eight", 8) };
+        const { upcoming } = await fixDashboard(dashboardContext);
+        const listed = (id: string) => upcoming.some((row) => row.id === id);
+        eq("today and the following six days are listed", `${listed(items.today.id)}:${listed(items.six.id)}`, "true:true");
+        eq("an item due in 7 days is the eighth day, so it is not listed (it was)", listed(items.seven.id), false);
+        eq("an item due in 8 days is not listed", listed(items.eight.id), false);
+        eq("an overdue item is still listed, flagged overdue", `${listed(items.overdue.id)}:${upcoming.find((row) => row.id === items.overdue.id)?.overdue}`, "true:true");
+        check("the empty-state copy only shows when nothing is listed, so it cannot hide an overdue item", fixDictionary("en").dashboard.nothingDue === "Nothing due in the next week.");
+        await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Fix Due" } } });
+      }
+    } finally {
+      if (savedTimezone === undefined) delete process.env.APP_TIMEZONE;
+      else process.env.APP_TIMEZONE = savedTimezone;
+      await prisma.budget.deleteMany({ where: { year: 2027, month: 3 } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Fix" } } });
+      await prisma.transaction.deleteMany({ where: { account: { name: { startsWith: "Verify Fix" } } } });
+      await prisma.stagedTransaction.deleteMany({ where: { externalId: { startsWith: "verify-fix-" } } });
+      await prisma.account.deleteMany({ where: { name: { startsWith: "Verify Fix" } } });
+      await prisma.category.deleteMany({ where: { name: { startsWith: "Verify Fix" } } });
+    }
+  }
+
+  console.log("\n== bug-hunt follow-ups: room threshold on a single charge, anchor collisions on edit, CSV import needs an active account (B48.3 B49.3 B49.5) ==");
+  {
+    const { checkSubscriptionRoom: followRoom } = await import("../src/lib/data/subscription-room");
+    const { semiMonthlyEditCollides } = await import("../src/lib/data/recurring");
+    const { importCsvTransactions: followImport } = await import("../src/lib/data/import");
+    const followContext = (today: Date) => ({ ...context, today, currentPeriod: periodForDate(today) });
+    try {
+      console.log("-- B48.3: checked when one charge OR the monthly equivalent reaches the threshold --");
+      {
+        const roomAccount = await prisma.account.create({ data: { name: "Verify Follow Room", currency: "USD", type: "CHECKING" } });
+        for (let month = 3; month <= 8; month += 1) {
+          await prisma.transaction.create({ data: { date: civilDate(2026, month, 5), amount: 3000, currency: "USD", type: "INCOME", accountId: roomAccount.id, source: "MANUAL", note: "Verify Follow pay" } });
+        }
+        const roomContext = { ...followContext(civilDate(2026, 9, 28)), bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP" };
+        const verdict = async (amount: number, frequency: "WEEKLY" | "MONTHLY" | "YEARLY" | "SEMI_MONTHLY") =>
+          (await followRoom({ amount, currency: "DOP", frequency, nextDate: civilDate(2026, 10, 5) }, roomContext)).large ? "checked" : "not checked";
+        eq("weekly 3,000 (13,000 a month) is checked", await verdict(3000, "WEEKLY"), "checked");
+        eq("weekly 2,300 (9,967 a month, one charge 2,300) is not", await verdict(2300, "WEEKLY"), "not checked");
+        eq("yearly 119,999 (one charge over 10,000) is checked again", await verdict(119999, "YEARLY"), "checked");
+        eq("monthly 9,999 is not", await verdict(9999, "MONTHLY"), "not checked");
+        eq("a SEMI_MONTHLY item stays unchecked even at a 50,000 charge", await verdict(50000, "SEMI_MONTHLY"), "not checked");
+        await prisma.transaction.deleteMany({ where: { accountId: roomAccount.id } });
+        await prisma.account.delete({ where: { id: roomAccount.id } });
+      }
+
+      console.log("-- B49.3: an edit that changes only the second day is judged too --");
+      {
+        const make = (name: string, anchorDay: number, secondAnchorDay: number) =>
+          prisma.recurringItem.create({
+            data: { name: `Verify Follow ${name}`, amount: 10, currency: "USD", frequency: "SEMI_MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, anchorDay), anchorDay, secondAnchorDay },
+          });
+        const sound = await make("Pair", 1, 16);
+        const saved = await make("Colliding", 1, 2);
+        const edit = (id: string, second: number | null, frequency: "SEMI_MONTHLY" | "MONTHLY" = "SEMI_MONTHLY") =>
+          semiMonthlyEditCollides(id, { frequency, anchorDay: undefined, secondAnchorDay: second });
+        eq("changing only the second day of 1/16 to 2 (1 and 2 land on one date) is refused", await edit(sound.id, 2), true);
+        eq("... to 15 (1/15 never collide) is not", await edit(sound.id, 15), false);
+        eq("saving the pair it already has, colliding or not, is not refused (existing items are not rewritten)", `${await edit(saved.id, 2)}:${await edit(sound.id, 16)}`, "false:false");
+        eq("changing a colliding item to another second day that also collides is refused", await edit(saved.id, 3), true);
+        eq("a non-semi-monthly edit is never judged", await edit(sound.id, 2, "MONTHLY"), false);
+        const monthly = await prisma.recurringItem.create({
+          data: { name: "Verify Follow Monthly", amount: 10, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 30), anchorDay: 30 },
+        });
+        eq("switching a monthly item on the 30th to twice a month with 31 is refused (the stored anchor is used)", await edit(monthly.id, 31), true);
+        await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Follow" } } });
+      }
+
+      console.log("-- B49.5: a CSV import needs an active account --");
+      {
+        const archived = await prisma.account.create({ data: { name: "Verify Follow Archived", currency: "USD", type: "CHECKING", status: "ARCHIVED", archivedAt: new Date() } });
+        const live = await prisma.account.create({ data: { name: "Verify Follow Live", currency: "USD", type: "CHECKING" } });
+        const row = { date: "2026-10-15", amount: 12.5, type: "EXPENSE" as const, transferDirection: null, note: "Verify Follow CSV row", categoryId: null, importAnyway: false, isExtraordinary: false, yourShare: null, reimburses: null };
+        const refused = await followImport({ accountId: archived.id, currency: "USD", rows: [row] }, rates);
+        eq("an archived account is refused", refused.ok ? "imported" : refused.reason, "account_not_active");
+        eq("... and nothing is written to it", await prisma.transaction.count({ where: { accountId: archived.id } }), 0);
+        const accepted = await followImport({ accountId: live.id, currency: "USD", rows: [row] }, rates);
+        eq("an active account is accepted", accepted.ok ? accepted.count : accepted.reason, 1);
+        await prisma.transaction.deleteMany({ where: { accountId: { in: [archived.id, live.id] } } });
+        await prisma.account.deleteMany({ where: { id: { in: [archived.id, live.id] } } });
+      }
+    } finally {
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Follow" } } });
+      await prisma.transaction.deleteMany({ where: { account: { name: { startsWith: "Verify Follow" } } } });
+      await prisma.account.deleteMany({ where: { name: { startsWith: "Verify Follow" } } });
     }
   }
 

@@ -9,6 +9,7 @@ import {
 } from "@/lib/data/categories";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
+import { getRateTable } from "@/lib/rates";
 import { categorySchema, firstError, formObject, reassignCategorySchema } from "@/lib/validation";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
@@ -94,7 +95,7 @@ export async function reassignCategoryAction(
   });
   if (!category) return fail(t.categoryNoLongerExists);
 
-  const result = await reassignAndDeleteCategory(parsed.data.id, parsed.data.moveToId);
+  const result = await reassignAndDeleteCategory(parsed.data.id, parsed.data.moveToId, await getRateTable());
   if (!result.ok) {
     switch (result.reason) {
       case "not_found":
@@ -116,6 +117,10 @@ export async function reassignCategoryAction(
 
   revalidateApp();
   return done(
-    t.categoryReassigned(category.name, result.moved.transactions + result.moved.recurringItems),
+    t.categoryReassigned(
+      category.name,
+      result.moved.transactions + result.moved.recurringItems,
+      result.moved.budgets,
+    ),
   );
 }

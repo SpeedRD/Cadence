@@ -355,6 +355,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** anyone tidying categories. Safe to spend drops, including for past periods and the "last budget" suggestions built on them.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** add the merged category's budget into the target's for each period (converting currency), and name the change in the toast.
+- **Status:** fixed. Merging adds each of the merged category's budgets to the target's for the same period (in the target's currency, converted at the merge), moves the budget where the target has none, and the toast counts the budgets merged in; the merge dialog's hint and badge now say the same.
 
 ### B29. A goal the confirmed plan funded with 0 is never flagged, while the empty Inbox says every goal is on its roadmap
 - **What:** confirm drops a GOAL row whose recommended and planned amounts are both 0, so the goal's status has `planned = null`. `detectGoalsBehind` skips `planned = null`, and the forecast skips confirmed periods. Planning 1 instead of 0 would flag the goal as 199 behind.
@@ -471,6 +472,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** accepted semi-monthly suggestions. The first occurrence lands in the next pay period.
 - **Severity / confidence:** Low / High. Evidence: pure run.
 - **Fix:** step with `advanceDate(…, "SEMI_MONTHLY", a, b)` from the last realization.
+- **Status:** fixed. A suggestion's next date for each anchor is stepped with posting's own SEMI_MONTHLY rule, so anchors 1 and 16 after Oct 16 2026 suggest Oct 30.
 
 ### B42. An overdue installment plan counts as 3 payments in commitments and 5 in the tracker
 - **What:** `owedOccurrences` counts a backlog once (documented), while `remainingInstallments` files every overdue installment in the current period. Posting will charge all of them.
@@ -550,6 +552,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Repro:** each string was read against its computation, as cited.
 - **Severity / confidence:** Low / High. Evidence: code path.
 - **Fix:** one wording pass driven by the computations. Item 3's threshold should be checked on the monthly equivalent.
+- **Status:** items 3 (behavior only) and 7 fixed. The room check runs when one charge or the monthly equivalent reaches the threshold (SEMI_MONTHLY stays unchecked), and "Next 7 days" covers today and the following six; the copy in item 3 and the other items is still open.
 
 ---
 
@@ -564,7 +567,8 @@ Confidence is about whether the defect is real, not how often it happens.
   5. **Email approval:** approving a staged email checks only that the account exists, not that it is ACTIVE (`review.ts:74-78`), so it can post to an archived account.
 - **Severity / confidence:** Very low / High. Evidence: pure runs for items 1–3, code path for items 4 and 5.
 - **Fix:** 1: reject a leading-zero comma group. 2: clamp at 0 and give the remainder to the largest positive row. 3: refuse anchor pairs that collide. 4: compare against the day after the month end. 5: require ACTIVE.
-- **Status:** item 1 fixed (only item 1). A comma group counts as thousands only after a 1-3 digit leading group that is not a lone 0, so "0,125" and "0,500" are rejected as too many decimals like "0.125"; items 2-5 are still open.
+- **Status:** item 1 fixed (only item 1). A comma group counts as thousands only after a 1-3 digit leading group that is not a lone 0, so "0,125" and "0,500" are rejected as too many decimals like "0.125".
+- **Status:** items 3, 4 and 5 fixed (only those). The form refuses a SEMI_MONTHLY pair whose weekend-shifted dates can coincide in some month of 2000-2099 (74 of 465 pairs), an item created on a month's last day counts for that month, and approving a staged email or importing a CSV needs an ACTIVE account; an edit that changes only the second day is refused too, while saving a pair an item already has is not; item 2 is still open.
 
 ---
 

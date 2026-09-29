@@ -2,7 +2,7 @@ import { convert } from "@/lib/currency";
 import { today as todayInAppZone } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
-import { firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, skipReasonFor } from "@/lib/recurring";
+import { firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, semiMonthlyAnchorsCollide, skipReasonFor } from "@/lib/recurring";
 
 import type { AppContext } from "@/lib/data/context";
 import type { Prisma } from "@/generated/prisma/client";
@@ -337,6 +337,36 @@ export async function updateRecurringItem(
     data: { ...values, nextDate },
   });
   return written.count;
+}
+
+/**
+ * Whether saving an edit of item `id` would store a SEMI_MONTHLY pair of due
+ * days that posting collapses into one charge in some month (see
+ * semiMonthlyAnchorsCollide). The form's schema judges the pair when the due
+ * date is picked, because the anchor is then the date's day; an edit that
+ * leaves the date alone carries no anchor, so the stored one stands in for it
+ * here - which is what catches a change to only the second day, or to
+ * SEMI_MONTHLY from another frequency. Saving the pair the item already has is
+ * never refused: an item already saved is not rewritten by being saved again.
+ */
+export async function semiMonthlyEditCollides(
+  id: string,
+  values: { frequency: RecurringFrequency; anchorDay?: number | null; secondAnchorDay?: number | null },
+): Promise<boolean> {
+  const { secondAnchorDay } = values;
+  if (values.frequency !== "SEMI_MONTHLY" || typeof secondAnchorDay !== "number") return false;
+  const before = await prisma.recurringItem.findUnique({
+    where: { id },
+    select: { frequency: true, anchorDay: true, secondAnchorDay: true, nextDate: true },
+  });
+  if (!before) return false;
+  const anchorDay =
+    typeof values.anchorDay === "number" ? values.anchorDay : before.anchorDay ?? before.nextDate.getUTCDate();
+  const unchanged =
+    before.frequency === "SEMI_MONTHLY" &&
+    before.secondAnchorDay === secondAnchorDay &&
+    (before.anchorDay ?? before.nextDate.getUTCDate()) === anchorDay;
+  return !unchanged && semiMonthlyAnchorsCollide(anchorDay, secondAnchorDay);
 }
 
 /**

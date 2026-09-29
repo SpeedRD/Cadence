@@ -87,7 +87,7 @@ export async function checkSubscriptionRoom(
   input: SubscriptionRoomInput,
   context: AffordContext,
 ): Promise<SubscriptionRoom> {
-  if (!isLargeSubscription(input.amount, input.currency, context.rates)) return { large: false };
+  if (!isLargeSubscription(input.amount, input.currency, input.frequency, context.rates)) return { large: false };
 
   const accounts = await prisma.account.findMany({
     where: { status: "ACTIVE" },

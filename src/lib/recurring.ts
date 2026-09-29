@@ -29,12 +29,48 @@ function occurrenceAfter(date: Date, months: number, anchorDay: number): Date {
  * handling resolves that correctly, the same way it resolves anchorDay 31
  * clamped to a short month.
  */
-function semiMonthlyRealization(date: Date, monthsAhead: number, anchor: number): Date {
+export function semiMonthlyRealization(date: Date, monthsAhead: number, anchor: number): Date {
   const monthIndex = date.getUTCMonth() + monthsAhead;
   const year = date.getUTCFullYear() + Math.floor(monthIndex / 12);
   const month = (((monthIndex % 12) + 12) % 12) + 1;
   const rawDay = Math.min(anchor, daysInMonth(year, month));
   return civilDate(year, month, payDayOfMonth(year, month, rawDay));
+}
+
+const ANCHOR_COLLISION_FROM_YEAR = 2000;
+const ANCHOR_COLLISION_TO_YEAR = 2099;
+const anchorCollisions = new Map<number, boolean>();
+
+/**
+ * Whether two SEMI_MONTHLY anchors can resolve to the same date in some month,
+ * in which case posting (which advances to the sooner of the two realizations,
+ * strictly after the last) posts one charge for that month instead of two.
+ * Judged with semiMonthlyRealization itself over every month of 2000-2099,
+ * which holds every leap year and every alignment of weekday and day of the
+ * month (the Gregorian calendar repeats every 400 years, and the 28-year
+ * weekday cycle runs unbroken through 2001-2099). Realizations can spill into
+ * the neighbouring month (an anchor of 1 on a Saturday lands on the last day of
+ * the month before), so the two anchors' dates are compared as a whole, not
+ * month by month.
+ */
+export function semiMonthlyAnchorsCollide(anchor: number, secondAnchor: number): boolean {
+  const key = Math.min(anchor, secondAnchor) * 100 + Math.max(anchor, secondAnchor);
+  const known = anchorCollisions.get(key);
+  if (known !== undefined) return known;
+  const first = new Set<number>();
+  for (let year = ANCHOR_COLLISION_FROM_YEAR; year <= ANCHOR_COLLISION_TO_YEAR; year += 1) {
+    for (let month = 1; month <= 12; month += 1) {
+      first.add(semiMonthlyRealization(civilDate(year, month, 1), 0, anchor).getTime());
+    }
+  }
+  let collide = false;
+  for (let year = ANCHOR_COLLISION_FROM_YEAR; year <= ANCHOR_COLLISION_TO_YEAR && !collide; year += 1) {
+    for (let month = 1; month <= 12 && !collide; month += 1) {
+      collide = first.has(semiMonthlyRealization(civilDate(year, month, 1), 0, secondAnchor).getTime());
+    }
+  }
+  anchorCollisions.set(key, collide);
+  return collide;
 }
 
 /**

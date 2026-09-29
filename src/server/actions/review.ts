@@ -84,6 +84,7 @@ export async function approveStagedAction(
     if (result.reason === "not_found") return fail(t.itemNoLongerExists);
     if (result.reason === "already_reviewed") return fail(t.alreadyReviewed);
     if (result.reason === "account_missing") return fail(t.accountNoLongerExists);
+    if (result.reason === "account_not_active") return fail(t.accountNoLongerActive);
     if (result.reason === "needs_choice") return fail(t.postedMatchNeedsChoice);
     if (result.reason === "match_gone") return fail(dictionary.transactions.postedMatchGone);
     if (result.reason === "check_failed") return fail(dictionary.transactions.postedMatchCheckFailed);

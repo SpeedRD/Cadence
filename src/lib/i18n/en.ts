@@ -1260,14 +1260,16 @@ export const en = {
       "These rows still point at it. Pick where they go; the category is removed once they've moved.",
     willMove: "moves",
     willBeCleared: "cleared",
-    budgetsClearedHint: "Budgets are a decision about this category, so they're cleared rather than moved.",
+    budgetsMergedHint: "Each budget is added to the budget of the category you move to, for the same period.",
     moveTo: "Move to",
     moveAndRemove: "Move and remove",
     categoryCreated: (name: string) => `Added ${name}`,
     categoryUpdated: (name: string) => `Updated ${name}`,
     categoryDeleted: (name: string) => `Removed ${name}`,
-    categoryReassigned: (name: string, rows: number) =>
-      `Moved ${rows} row${rows === 1 ? "" : "s"} and removed ${name}`,
+    categoryReassigned: (name: string, rows: number, budgets: number) =>
+      budgets > 0
+        ? `Moved ${rows} row${rows === 1 ? "" : "s"}, merged in ${budgets} budget${budgets === 1 ? "" : "s"} and removed ${name}`
+        : `Moved ${rows} row${rows === 1 ? "" : "s"} and removed ${name}`,
     categoryNameTaken: "A category with that name already exists",
     categoryKindInUse: (n: number) =>
       `Kind can't change while ${n} transaction${n === 1 ? " is" : "s are"} filed under this category`,
@@ -1321,6 +1323,7 @@ export const en = {
     itemNoLongerExists: "That item no longer exists",
     alreadyReviewed: "This item was already reviewed",
     accountNoLongerExists: "That account no longer exists",
+    accountNoLongerActive: "That account is archived - pick an active one",
     transactionAlreadyExists: "This transaction already exists",
     nothingToReject: "Nothing to reject",
     postedMatchNeedsChoice: "This matches a charge already in the ledger - say whether it's the posted charge or a different one",

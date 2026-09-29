@@ -6,6 +6,8 @@ import {
   type CategoryUsage,
   type ProtectedCategoryReason,
 } from "@/lib/categories";
+import { convert, type RateTable } from "@/lib/currency";
+import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 
 import type { CategoryKind } from "@/generated/prisma/enums";
@@ -228,14 +230,21 @@ export type CategoryReassignResult =
 
 /**
  * The reassignment step: every Transaction and RecurringItem filed under the
- * category moves to `moveToId`, the category's own per-period Budget rows are
- * cleared (a budget is a decision about that category, not about the one
- * absorbing it), and then the category is deleted - all in one database
- * transaction, so a failure part-way leaves everything where it was.
+ * category moves to `moveToId`, each of the category's per-period Budget rows
+ * is carried over with it, and then the category is deleted - all in one
+ * database transaction, so a failure part-way leaves everything where it was.
+ *
+ * A budget is carried over because the spending it covered moves too: dropping
+ * it would shrink the period's budget while the spending moved in. Where the
+ * target already has a budget for that period the two are added, in the
+ * target's currency, converted at `rates` as of the merge; where it has none,
+ * the merged budget moves to it as it was, currency included.
+ * `moved.budgets` counts the budgets carried over either way.
  */
 export async function reassignAndDeleteCategory(
   categoryId: string,
   moveToId: string,
+  rates: RateTable,
 ): Promise<CategoryReassignResult> {
   if (categoryId === moveToId) return { ok: false, reason: "same_category" };
   const [category, target] = await Promise.all([
@@ -268,12 +277,30 @@ export async function reassignAndDeleteCategory(
       where: { suggestedCategoryId: categoryId },
       data: { suggestedCategoryId: moveToId },
     });
-    const budgets = await tx.budget.deleteMany({ where: { categoryId } });
+    const mergedBudgets = await tx.budget.findMany({ where: { categoryId } });
+    for (const budget of mergedBudgets) {
+      const targetBudget = await tx.budget.findFirst({
+        where: { year: budget.year, month: budget.month, period: budget.period, categoryId: moveToId },
+      });
+      if (!targetBudget) {
+        await tx.budget.update({ where: { id: budget.id }, data: { categoryId: moveToId } });
+        continue;
+      }
+      await tx.budget.update({
+        where: { id: targetBudget.id },
+        data: {
+          amount: round2(
+            num(targetBudget.amount) + convert(num(budget.amount), budget.currency, targetBudget.currency, rates),
+          ),
+        },
+      });
+      await tx.budget.delete({ where: { id: budget.id } });
+    }
     await tx.category.delete({ where: { id: categoryId } });
     return {
       transactions: transactions.count,
       recurringItems: recurringItems.count,
-      budgets: budgets.count,
+      budgets: mergedBudgets.length,
     };
   });
   return { ok: true, moved };

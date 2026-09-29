@@ -535,8 +535,11 @@ function nextDatesFor(fit: CadenceFit, days: readonly Date[], today: Date): Date
     case "BIWEEKLY":
       return [firstDueDate(last, today, (date) => advanceDate(date, fit.cadence as "WEEKLY" | "BIWEEKLY"))];
     case "SEMI_MONTHLY":
+      // Posting's own rule, one anchor at a time: a pair of the same day walks
+      // that anchor's realizations alone, weekend-shifted (Nov 1 2026 is a
+      // Sunday, so an anchor of 1 is due Oct 30), never a plain monthly step.
       return fit.anchorDays.map((anchor) =>
-        firstDueDate(lastAnchorBase(days, anchor), today, (date) => advanceDate(date, "MONTHLY", anchor)),
+        firstDueDate(lastAnchorBase(days, anchor), today, (date) => advanceDate(date, "SEMI_MONTHLY", anchor, anchor)),
       );
     case "YEARLY":
     case "MONTHLY":

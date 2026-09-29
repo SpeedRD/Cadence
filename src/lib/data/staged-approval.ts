@@ -36,7 +36,7 @@ export interface StagedApprovalInput {
 export type StagedApprovalResult =
   | { ok: true; outcome: "approved" }
   | { ok: true; outcome: "kept_posted"; match: PostedMatch; updated: boolean }
-  | { ok: false; reason: "not_found" | "already_reviewed" | "account_missing" | "exists" | "match_gone" | "check_failed" }
+  | { ok: false; reason: "not_found" | "already_reviewed" | "account_missing" | "account_not_active" | "exists" | "match_gone" | "check_failed" }
   | { ok: false; reason: "needs_choice"; match: PostedMatch };
 
 /** The staged values as the row it would become, for the matcher. */
@@ -75,8 +75,9 @@ export async function approveStagedTransaction(
   if (!staged) return { ok: false, reason: "not_found" };
   if (staged.status !== "PENDING") return { ok: false, reason: "already_reviewed" };
 
-  const account = await prisma.account.findUnique({ where: { id: input.accountId }, select: { id: true } });
+  const account = await prisma.account.findUnique({ where: { id: input.accountId }, select: { id: true, status: true } });
   if (!account) return { ok: false, reason: "account_missing" };
+  if (account.status !== "ACTIVE") return { ok: false, reason: "account_not_active" };
 
   const found = await lookUpPostedDuplicates([incomingFor(input, staged.id)], rates, options);
   if (!found && input.resolution === "posted") return { ok: false, reason: "check_failed" };

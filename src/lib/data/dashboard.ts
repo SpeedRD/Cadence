@@ -41,7 +41,9 @@ export async function getDashboardData(
     prisma.recurringItem.findMany({
       where: {
         active: true,
-        nextDate: { lte: addDays(context.today, UPCOMING_WINDOW_DAYS) },
+        // Today and the following days up to the window's length: 7 days is
+        // today plus six, not today plus seven.
+        nextDate: { lte: addDays(context.today, UPCOMING_WINDOW_DAYS - 1) },
       },
       include: { category: { select: { name: true } } },
       orderBy: { nextDate: "asc" },

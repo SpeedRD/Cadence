@@ -6,6 +6,7 @@ import { daysInMonth, fromISODate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
 import { INSIGHT_SOURCES } from "@/lib/insights";
 import { AMOUNT_MAX, parseAmountInput, round2, type ParsedAmount } from "@/lib/money";
+import { semiMonthlyAnchorsCollide } from "@/lib/recurring";
 import { yourShareIssue } from "@/lib/shared-expense";
 import {
   ACCOUNT_TYPES,
@@ -344,6 +345,8 @@ const REMAINING_OCCURRENCES_MESSAGE = `Leave payments left blank, or use between
 const SECOND_ANCHOR_DAY_REQUIRED_MESSAGE = "Pick the second due day";
 const SECOND_ANCHOR_DAY_RANGE_MESSAGE = "Use a day from 1 to 31";
 const SECOND_ANCHOR_DAY_DISTINCT_MESSAGE = "Pick two different days";
+export const SECOND_ANCHOR_DAYS_COLLIDE_MESSAGE =
+  "These two days can land on the same date in some months, so a charge would be skipped - pick two other days";
 
 export const recurringSchema = z
   .object({
@@ -485,6 +488,13 @@ export const recurringSchema = z
       }
       if (value.secondAnchorDay === value.nextDate.getUTCDate()) {
         ctx.addIssue({ code: "custom", message: SECOND_ANCHOR_DAY_DISTINCT_MESSAGE, path: ["secondAnchorDay"] });
+        return z.NEVER;
+      }
+      // Judged on the anchor the item will be stored with. An edit that
+      // leaves the date alone has none here (the stored one stays), so an
+      // existing pair is never refused just for being saved again.
+      if (anchorDay !== undefined && semiMonthlyAnchorsCollide(anchorDay, value.secondAnchorDay)) {
+        ctx.addIssue({ code: "custom", message: SECOND_ANCHOR_DAYS_COLLIDE_MESSAGE, path: ["secondAnchorDay"] });
         return z.NEVER;
       }
       secondAnchorDay = value.secondAnchorDay;
@@ -827,6 +837,8 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Pick the second due day": "Elige el segundo día de vencimiento",
   "Use a day from 1 to 31": "Usa un día del 1 al 31",
   "Pick two different days": "Elige dos días diferentes",
+  "These two days can land on the same date in some months, so a charge would be skipped - pick two other days":
+    "Estos dos días pueden caer en la misma fecha en algunos meses y se omitiría un cobro: elige otros dos días",
   "That price is too small to split into that many installments":
     "Ese precio es demasiado pequeño para dividirlo en tantas cuotas",
   "Enter your share": "Ingresa tu parte",

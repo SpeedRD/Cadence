@@ -1253,14 +1253,16 @@ export const es = {
       "Estas filas todavía apuntan a ella. Elige a dónde van; la categoría se elimina una vez movidas.",
     willMove: "se mueven",
     willBeCleared: "se borran",
-    budgetsClearedHint: "Los presupuestos son una decisión sobre esta categoría, así que se borran en vez de moverse.",
+    budgetsMergedHint: "Cada presupuesto se suma al de la categoría a la que muevas, del mismo período.",
     moveTo: "Mover a",
     moveAndRemove: "Mover y eliminar",
     categoryCreated: (name: string) => `${name} agregada`,
     categoryUpdated: (name: string) => `${name} actualizada`,
     categoryDeleted: (name: string) => `${name} eliminada`,
-    categoryReassigned: (name: string, rows: number) =>
-      `${rows} fila${rows === 1 ? "" : "s"} movida${rows === 1 ? "" : "s"} y ${name} eliminada`,
+    categoryReassigned: (name: string, rows: number, budgets: number) =>
+      `${rows} fila${rows === 1 ? "" : "s"} movida${rows === 1 ? "" : "s"}${
+        budgets > 0 ? `, ${budgets} presupuesto${budgets === 1 ? "" : "s"} sumado${budgets === 1 ? "" : "s"}` : ""
+      } y ${name} eliminada`,
     categoryNameTaken: "Ya existe una categoría con ese nombre",
     categoryKindInUse: (n: number) =>
       `El tipo no puede cambiar mientras ${n} transacci${n === 1 ? "ón está" : "ones están"} archivada${n === 1 ? "" : "s"} en esta categoría`,
@@ -1314,6 +1316,7 @@ export const es = {
     itemNoLongerExists: "Ese elemento ya no existe",
     alreadyReviewed: "Este elemento ya fue revisado",
     accountNoLongerExists: "Esa cuenta ya no existe",
+    accountNoLongerActive: "Esa cuenta está archivada; elige una activa",
     transactionAlreadyExists: "Esta transacción ya existe",
     nothingToReject: "Nada que rechazar",
     postedMatchNeedsChoice: "Esto coincide con un cargo que ya está en el libro: indica si es el cargo registrado u otro",

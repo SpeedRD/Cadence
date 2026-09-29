@@ -82,7 +82,7 @@ export function CategoryDeleteDialog({
   const lines = [
     { key: "transactions", count: usage.transactions, label: t.usageTransactions(usage.transactions), moves: true },
     { key: "recurring", count: usage.recurringItems, label: t.usageRecurringItems(usage.recurringItems), moves: true },
-    { key: "budgets", count: usage.budgets, label: t.usageBudgets(usage.budgets), moves: false },
+    { key: "budgets", count: usage.budgets, label: t.usageBudgets(usage.budgets), moves: true },
   ].filter((line) => line.count > 0);
   const error = reassigning ? reassignState?.error : deleteState?.error;
   const pending = reassigning ? reassignPending : deletePending;
@@ -122,7 +122,7 @@ export function CategoryDeleteDialog({
                   </div>
                 ))}
                 {usage.budgets > 0 ? (
-                  <p className="text-xs text-muted-foreground">{t.budgetsClearedHint}</p>
+                  <p className="text-xs text-muted-foreground">{t.budgetsMergedHint}</p>
                 ) : null}
               </div>
 

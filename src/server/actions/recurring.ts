@@ -6,8 +6,10 @@ import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { num } from "@/lib/money";
 import {
+  SECOND_ANCHOR_DAYS_COLLIDE_MESSAGE,
   firstError,
   formObject,
+  localizeValidationMessage,
   recurringAccountSchema,
   recurringSchema,
   subscriptionRoomSchema,
@@ -19,6 +21,7 @@ import {
   checkRecurringReferences,
   createRecurringItem,
   markRecurringItemPaidOff,
+  semiMonthlyEditCollides,
   setRecurringItemActive,
   setRecurringItemAccount,
   updateRecurringItem,
@@ -48,6 +51,9 @@ export async function saveRecurringAction(
   if (id) {
     const problem = await checkRecurringReferences(values);
     if (problem) return fail(referenceProblemMessage(problem, t));
+    if (await semiMonthlyEditCollides(id, values)) {
+      return fail(localizeValidationMessage(SECOND_ANCHOR_DAYS_COLLIDE_MESSAGE, locale));
+    }
     // This form posts every field, including ones it only read. If something
     // else changed the item while the form was open - the payday wizard
     // reassigning its account in another tab is the case that bites - saving
