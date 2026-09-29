@@ -48,5 +48,13 @@ export async function syncNowAction(
 
   const result = await runIngestion();
   revalidateApp();
-  return done(t.syncedResult(result.accountsSynced, result.staged));
+  const message = t.syncedResult(
+    result.accountsSynced,
+    result.staged,
+    result.accountsFailed,
+    result.messagesFailed,
+  );
+  // A sync that lost a connection or a message is not a success: it shows as
+  // an error, with the same counts, so it is not mistaken for a clean one.
+  return result.accountsFailed > 0 || result.messagesFailed > 0 ? fail(message) : done(message);
 }

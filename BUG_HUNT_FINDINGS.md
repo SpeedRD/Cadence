@@ -248,6 +248,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** Gmail and Outlook users, during any API outage. Every receipt in the window is omitted for good, with no signal.
 - **Severity / confidence:** Medium / High. Evidence: offline run plus code path.
 - **Fix:** return a distinct failure from the parser. On any failure, do not advance the cursor past the oldest failed message, and report the failure count.
+- **Status:** fixed. `parseTransactionEmail` now returns parsed, "not a transaction" or failed (with a reason), a sync holds `lastSyncedAt` at the oldest failed message (or the cap or truncation boundary if that is earlier), skips messages already staged by their key before any LLM call, and reports the failure count in the sync result, the "Sync now" message and the cron's 500 response and logs.
 
 ### B19. An account balance re-converts every foreign-currency row at today's rate
 - **What:** `getAccountBalances` converts each row into the account's currency with the current rate table. A USD subscription posted to a DOP account (posting keeps the item's currency) changes the DOP balance whenever the rate moves.
@@ -507,6 +508,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** the operator. Failures stay hidden, which feeds B18.
 - **Severity / confidence:** Low / High. Evidence: code path.
 - **Fix:** count failed connections separately; return 5xx (or a `failed` count the monitor reads) on partial failure; surface a posting-run failure as its own insight.
+- **Status:** fixed. A posting run that throws is carried in the context as `recurringPostingFailure` and shown as a critical, non-dismissible Inbox insight; ingestion counts `accountsFailed` beside `accountsSynced`; `/api/cron/recurring` and `/api/cron/ingest` answer 500 on a failed item, connection, message or run; and the BPD cron (still 200 by design) now says whether it stored a fresh rate, kept the stored one from a given date, or failed, and warns when the stored rate is past the freshness window.
 
 ### B46. Copy claims recurring items and committed outflows reduce safe to spend; they don't
 - **What:** `safeToSpend = periodBudget − spent`. RECURRING rows are excluded from `spent`, and committed outflows are never subtracted. They are only reflected if a check-in lowered the budget. The following strings claim otherwise:

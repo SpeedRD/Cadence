@@ -51,9 +51,17 @@ function systemPrompt(defaultCurrency: string, categoryNames: string[]): string 
 }
 
 /**
- * Returns null both on a confident "not a transaction" verdict and on any
- * parsing/API failure - the caller treats both the same way: skip this email.
+ * What reading one email came to. "not_transaction" is the model's verdict
+ * (or an answer too incomplete to stage) and is final: the email is done with.
+ * "failed" means no verdict was reached - the API refused, was unreachable or
+ * returned nothing usable - so the email must be looked at again later, and
+ * the caller must not treat it as dealt with.
  */
+export type ParseOutcome =
+  | { status: "parsed"; transaction: ParsedTransactionEmail }
+  | { status: "not_transaction" }
+  | { status: "failed"; reason: string };
+
 export async function parseTransactionEmail(input: {
   subject: string;
   from: string;
@@ -61,7 +69,7 @@ export async function parseTransactionEmail(input: {
   bodyText: string;
   defaultCurrency: string;
   categoryNames: string[];
-}): Promise<ParsedTransactionEmail | null> {
+}): Promise<ParseOutcome> {
   try {
     const response = await anthropic().messages.parse({
       model: MODEL,
@@ -86,22 +94,27 @@ export async function parseTransactionEmail(input: {
     });
 
     const parsed = response.parsed_output;
-    if (!parsed || !parsed.isTransaction) return null;
-    if (!parsed.date || parsed.amount === null || parsed.amount <= 0) return null;
-    if (!parsed.currency || !parsed.rawDescription) return null;
+    if (!parsed) {
+      return { status: "failed", reason: `no structured answer (stop reason: ${response.stop_reason ?? "unknown"})` };
+    }
+    if (!parsed.isTransaction) return { status: "not_transaction" };
+    if (!parsed.date || parsed.amount === null || parsed.amount <= 0) return { status: "not_transaction" };
+    if (!parsed.currency || !parsed.rawDescription) return { status: "not_transaction" };
 
     const date = fromISODate(parsed.date);
-    if (!date) return null;
+    if (!date) return { status: "not_transaction" };
 
     return {
-      date,
-      amount: Math.round(parsed.amount * 100) / 100,
-      currency: parsed.currency,
-      rawDescription: parsed.rawDescription.slice(0, 200),
-      suggestedCategoryName: parsed.suggestedCategoryName,
+      status: "parsed",
+      transaction: {
+        date,
+        amount: Math.round(parsed.amount * 100) / 100,
+        currency: parsed.currency,
+        rawDescription: parsed.rawDescription.slice(0, 200),
+        suggestedCategoryName: parsed.suggestedCategoryName,
+      },
     };
   } catch (error) {
-    console.error("Email parse failed, skipping message:", error);
-    return null;
+    return { status: "failed", reason: error instanceof Error ? error.message : String(error) };
   }
 }

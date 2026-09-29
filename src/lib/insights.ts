@@ -41,6 +41,7 @@ import { round2 } from "@/lib/money";
 import type { RecurringSuggestion } from "@/lib/recurring-detection";
 import type { RecurringPostingSummary, RecurringSkipReason } from "@/lib/recurring-posting";
 
+import type { RecurringPostingFailure } from "@/lib/data/context";
 import type { GoalRoadmapStatus } from "@/lib/data/payday";
 
 /**
@@ -49,6 +50,7 @@ import type { GoalRoadmapStatus } from "@/lib/data/payday";
  */
 export const INSIGHT_SOURCES = [
   "not_posting",
+  "posting_run_failed",
   "afford_viability",
   "recurring_suggestion",
   "goal_behind",
@@ -101,6 +103,7 @@ export function insightId(ref: InsightRef): string {
 /**
  * Everything the detectors read, already computed by each signal's own code:
  *   recurringPosting     this request's catch-up posting run (AppContext.recurringPosting)
+ *   recurringPostingFailure  why that run threw, when it did (AppContext.recurringPostingFailure)
  *   affordRechecks       the Afford tracker's re-check of every recorded plan (recheckAffordItems)
  *   recurringSuggestions the pattern detector's current suggestions (findRecurringSuggestions)
  *   goalRoadmaps         every goal's roadmap pace beside its confirmed plan (getGoalRoadmapStatuses)
@@ -113,6 +116,7 @@ export interface InsightContext {
   /** What the goal roadmap figures are in (AppContext.displayCurrency). */
   displayCurrency: string;
   recurringPosting: RecurringPostingSummary | null;
+  recurringPostingFailure: RecurringPostingFailure | null;
   affordRechecks: AffordTrackedItem[];
   recurringSuggestions: RecurringSuggestion[];
   goalRoadmaps: GoalRoadmapStatus[];
@@ -170,6 +174,32 @@ export const detectNotPosting: InsightDetector = ({ dictionary, recurringPosting
         },
       ]),
     ),
+  ];
+};
+
+/**
+ * The posting run itself threw, so nothing was posted and no per-item list
+ * exists to show (detectNotPosting has none to read). Critical, and not
+ * dismissible: it is not a condition the user resolves but a fact about the
+ * last run, and it goes away by itself when a later run succeeds.
+ */
+export const detectPostingRunFailed: InsightDetector = ({ dictionary, recurringPostingFailure }) => {
+  if (!recurringPostingFailure) return [];
+  const t = dictionary.inbox;
+  return [
+    {
+      id: insightId({ source: "posting_run_failed", key: "run" }),
+      source: "posting_run_failed",
+      key: "run",
+      severity: "critical",
+      title: t.postingRunFailedTitle,
+      evidence: [
+        { kind: "text", label: t.notPostingReason, value: recurringPostingFailure.reason },
+        { kind: "text", label: t.postingRunFailedEffect, value: t.postingRunFailedEffectValue },
+      ],
+      actionHref: "/recurring",
+      dismissible: false,
+    } satisfies Insight,
   ];
 };
 
@@ -382,6 +412,7 @@ export const detectGoalForecastRisk: InsightDetector = ({ dictionary, goalForeca
  */
 export const INSIGHT_DETECTORS: readonly InsightDetector[] = [
   detectNotPosting,
+  detectPostingRunFailed,
   detectAffordViability,
   detectRecurringSuggestions,
   detectGoalsBehind,
@@ -402,8 +433,12 @@ export function detectInsights(context: InsightContext): Insight[] {
     .map(({ insight }) => insight);
 }
 
-/** `insights` without the ones in `dismissed` - what the Inbox shows and the nav badge counts. */
+/**
+ * `insights` without the ones in `dismissed` - what the Inbox shows and the
+ * nav badge counts. An insight that is not dismissible stays whatever the
+ * dismissals say.
+ */
 export function withoutDismissed(insights: Insight[], dismissed: InsightRef[]): Insight[] {
   const gone = new Set(dismissed.map(insightId));
-  return insights.filter((insight) => !gone.has(insight.id));
+  return insights.filter((insight) => !insight.dismissible || !gone.has(insight.id));
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { postingFailureReason } from "@/lib/data/context";
 import { today } from "@/lib/date";
 import {
   describeRecurringPosting,
@@ -18,6 +19,10 @@ import {
  * only guard, so it must be set in production. Opening the app runs the very
  * same function as a catch-up (getAppContext), so a missed cron day is never
  * lost and the two can't double-post.
+ *
+ * Answers 500 when the run threw or any item failed to post (itemsFailed is in
+ * the body), 200 otherwise. Items that did post stay posted; a failed one is
+ * retried by the next run.
  */
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -31,8 +36,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await postDueRecurringItems(today());
+  let result;
+  try {
+    result = await postDueRecurringItems(today());
+  } catch (error) {
+    console.error("[recurring] posting run failed", error);
+    return NextResponse.json({ ok: false, error: postingFailureReason(error) }, { status: 500 });
+  }
   const message = describeRecurringPosting(result);
-  console.log(message);
-  return NextResponse.json({ ...result, message });
+  const failed = result.itemsFailed > 0;
+  if (failed) console.error(message);
+  else console.log(message);
+  return NextResponse.json({ ok: !failed, ...result, message }, { status: failed ? 500 : 200 });
 }

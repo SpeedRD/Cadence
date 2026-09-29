@@ -9526,6 +9526,7 @@ async function main() {
       dictionary: en,
       displayCurrency: "USD",
       recurringPosting: null,
+      recurringPostingFailure: null,
       affordRechecks: [],
       recurringSuggestions: [],
       goalRoadmaps: [],
@@ -10059,6 +10060,452 @@ async function main() {
 
     await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Debt" } } });
     console.log("  ok   debt fixtures removed");
+  }
+
+  console.log("\n== failures are reported, not hidden: ingestion, the posting run and the crons (B18 B45) ==");
+  {
+    const { NextRequest } = await import("next/server");
+    const { encrypt } = await import("../src/lib/crypto");
+    const { BPD_RATES_API_URL } = await import("../src/lib/bpd-rate-payload");
+    const ingestion = await import("../src/lib/ingestion");
+    const { parseTransactionEmail } = await import("../src/lib/llm/parse-transaction-email");
+    const { GET: ingestCronGet } = await import("../src/app/api/cron/ingest/route");
+    const { GET: recurringCronGet } = await import("../src/app/api/cron/recurring/route");
+    const { GET: bpdRateCronGet } = await import("../src/app/api/cron/bpd-rate/route");
+    const { prisma: libPrisma } = await import("../src/lib/prisma");
+    const insights = await import("../src/lib/insights");
+    const { collectInsights } = await import("../src/lib/data/insights");
+    const { getAppContext } = await import("../src/lib/data/context");
+    const { today: appToday } = await import("../src/lib/date");
+    const { getDictionary } = await import("../src/lib/i18n");
+
+    // A check that throws on the old code's shapes still reports as a failed
+    // check (and lets the section clean up) instead of aborting the run.
+    const attempt = async <T>(label: string, fn: () => Promise<T> | T): Promise<T | undefined> => {
+      try {
+        return await fn();
+      } catch (error) {
+        check(`${label} (threw: ${error instanceof Error ? error.message : String(error)})`, false);
+        return undefined;
+      }
+    };
+
+    console.log("-- the network is stubbed at the HTTP boundary: Gmail, the LLM API and the bank's feed; nothing else leaves the process --");
+    const realFetch = globalThis.fetch;
+    const realWarn = console.warn;
+    const previousKey = process.env.ANTHROPIC_API_KEY;
+    const previousSecret = process.env.CRON_SECRET;
+    process.env.ANTHROPIC_API_KEY = "verify-stub-key";
+    process.env.CRON_SECRET = "verify-cron-secret";
+    type MailStub = { id: string; messageId: string; at: Date; subject: string; from: string };
+    let mailbox: MailStub[] = [];
+    let llmVerdict: (subject: string) => "transaction" | "not_transaction" | "unauthorized" | "unreachable" = () => "transaction";
+    let bankFeed: "published" | "blocked" = "blocked";
+    const llmCalls: string[] = [];
+    const warnings: string[] = [];
+    const jsonResponse = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith("https://gmail.googleapis.com/gmail/v1/users/me/messages?")) {
+        const after = Number(new URL(url).searchParams.get("q")?.replace("after:", ""));
+        const visible = mailbox.filter((m) => m.at.getTime() / 1000 > after).sort((a, b) => b.at.getTime() - a.at.getTime());
+        return jsonResponse({ messages: visible.map((m) => ({ id: m.id })) });
+      }
+      const gmailMessage = /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/messages\/([^?]+)\?/.exec(url);
+      if (gmailMessage) {
+        const m = mailbox.find((candidate) => candidate.id === gmailMessage[1]);
+        if (!m) return jsonResponse({}, 404);
+        return jsonResponse({
+          id: m.id,
+          internalDate: String(m.at.getTime()),
+          payload: {
+            mimeType: "text/plain",
+            headers: [
+              { name: "Message-ID", value: m.messageId },
+              { name: "Subject", value: m.subject },
+              { name: "From", value: m.from },
+            ],
+            body: { data: Buffer.from("Total: 12.50 USD").toString("base64url") },
+          },
+        });
+      }
+      if (url.startsWith("https://api.anthropic.com/v1/messages")) {
+        const request = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+        const subject = /Subject: (.*)/.exec(request.messages[0].content)?.[1] ?? "";
+        llmCalls.push(subject);
+        const verdict = llmVerdict(subject);
+        if (verdict === "unreachable") throw new TypeError("fetch failed");
+        if (verdict === "unauthorized") {
+          return jsonResponse({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, 401);
+        }
+        const parsed =
+          verdict === "transaction"
+            ? { isTransaction: true, date: "2026-09-20", amount: 12.5, currency: "USD", rawDescription: `Verify ${subject}`, suggestedCategoryName: null }
+            : { isTransaction: false, date: null, amount: null, currency: null, rawDescription: null, suggestedCategoryName: null };
+        return jsonResponse({
+          id: "msg_verify",
+          type: "message",
+          role: "assistant",
+          model: "claude-opus-5",
+          content: [{ type: "text", text: JSON.stringify(parsed) }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        });
+      }
+      if (url === BPD_RATES_API_URL) {
+        if (bankFeed === "blocked") return new Response("Request unsuccessful. Incapsula incident", { status: 403 });
+        return jsonResponse({ d: { results: [{ DollarSellRate: 61.2, EuroSellRate: 72.1, BuySellRatesAsOf: new Date().toISOString() }] } });
+      }
+      throw new Error(`verify: blocked request to ${url}`);
+    }) as typeof fetch;
+
+    const statusOf = (outcome: unknown) =>
+      outcome && typeof outcome === "object" && "status" in outcome ? String((outcome as { status: unknown }).status) : String(outcome);
+    const mailInput = { subject: "Your receipt #1", from: "Store <orders@example.com>", receivedAt: new Date(), bodyText: "Total: 12.50 USD", defaultCurrency: "USD", categoryNames: [] as string[] };
+
+    try {
+      console.log("-- the parser tells three outcomes apart (B18) --");
+      llmVerdict = () => "transaction";
+      eq("a receipt is a parsed transaction", statusOf(await attempt("parse a receipt", () => parseTransactionEmail(mailInput))), "parsed");
+      llmVerdict = () => "not_transaction";
+      eq("a confident 'not a transaction' is its own outcome", statusOf(await attempt("parse a newsletter", () => parseTransactionEmail(mailInput))), "not_transaction");
+      llmVerdict = () => "unauthorized";
+      const badKey = await attempt("parse with a bad key", () => parseTransactionEmail(mailInput));
+      eq("a rejected key is a failure, not 'not a transaction'", statusOf(badKey), "failed");
+      check("... and it says why", typeof (badKey as { reason?: unknown } | null)?.reason === "string" && String((badKey as { reason: string }).reason).length > 0, badKey);
+      llmVerdict = () => "unreachable";
+      eq("an unreachable API is a failure too", statusOf(await attempt("parse while unreachable", () => parseTransactionEmail(mailInput))), "failed");
+      llmVerdict = () => "transaction";
+
+      console.log("-- a sync where the parser fails for one message (B18) --");
+      const T0 = new Date("2026-09-20T00:00:00.000Z");
+      const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
+      const receipt = (n: number) => `Your receipt #${n}`;
+      const mail = (tag: string, specs: { subject: string; minutes: number }[]): MailStub[] =>
+        specs.map((spec, i) => ({
+          id: `${tag}-${i}`,
+          messageId: `<verify-ingest-${tag}-${i}@example.com>`,
+          at: at(spec.minutes),
+          subject: spec.subject,
+          from: "Store <orders@example.com>",
+        }));
+      const receipts = (tag: string, count: number) => mail(tag, Array.from({ length: count }, (_, i) => ({ subject: receipt(i + 1), minutes: i + 1 })));
+
+      if ((await prisma.emailConnection.count()) !== 0) {
+        check("the scratch database holds no email connections (this section syncs every connection it finds)", false);
+      } else {
+        const gmail = await prisma.emailConnection.create({
+          data: {
+            provider: "GMAIL",
+            emailAddress: "verify-ingest@example.com",
+            accessTokenEnc: encrypt("verify-access-token"),
+            refreshTokenEnc: encrypt("verify-refresh-token"),
+            accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+            lastSyncedAt: T0,
+          },
+        });
+        const stagedWhere = { source: "GMAIL" as const, externalId: { startsWith: "<verify-ingest-" } };
+        const reset = async (messages: MailStub[]) => {
+          await prisma.stagedTransaction.deleteMany({ where: stagedWhere });
+          await prisma.emailConnection.update({ where: { id: gmail.id }, data: { lastSyncedAt: T0 } });
+          mailbox = messages;
+          llmCalls.length = 0;
+          llmVerdict = () => "transaction";
+        };
+        const cursor = async () => (await prisma.emailConnection.findUnique({ where: { id: gmail.id } }))!.lastSyncedAt;
+        const cursorIs = async (expected: Date) => (await cursor())?.toISOString() === expected.toISOString();
+        const stagedIds = async () => (await prisma.stagedTransaction.findMany({ where: stagedWhere, select: { externalId: true } })).map((row) => row.externalId as string).sort();
+        const run = async () => (await ingestion.runIngestion()) as unknown as Record<string, number>;
+        const idOf = (messages: MailStub[], indexes: number[]) => indexes.map((i) => messages[i].messageId).sort();
+
+        const first = mail("a", [1, 2, 3, 4].map((n, i) => ({ subject: receipt(n), minutes: (i + 1) * 60 })));
+        await reset(first);
+        llmVerdict = (subject) => (subject === receipt(2) ? "unauthorized" : "transaction");
+        const firstRun = (await attempt("first sync", run)) ?? {};
+        eq("the failure is counted in the sync result", firstRun.messagesFailed, 1);
+        eq("the three messages that parsed are staged", firstRun.staged, 3);
+        eq("only the failed message is missing from staging", (await stagedIds()).join("|"), idOf(first, [0, 2, 3]).join("|"));
+        check("the cursor stays at the failed message, not at now", await cursorIs(first[1].at), await cursor());
+
+        llmCalls.length = 0;
+        llmVerdict = () => "transaction";
+        const secondRun = (await attempt("second sync", run)) ?? {};
+        eq("the next sync parses only the failed message (the staged ones are skipped by their key)", llmCalls.join("|"), receipt(2));
+        eq("... and stages exactly that one", secondRun.staged, 1);
+        eq("... so all four are staged once", (await stagedIds()).join("|"), idOf(first, [0, 1, 2, 3]).join("|"));
+        check("... and the cursor is free to move on to now", ((await cursor())?.getTime() ?? 0) > first[3].at.getTime() + 86_400_000);
+
+        console.log("-- re-reading a window is safe: nothing is parsed or staged twice --");
+        await prisma.emailConnection.update({ where: { id: gmail.id }, data: { lastSyncedAt: T0 } });
+        llmCalls.length = 0;
+        const rereadRun = (await attempt("re-read the whole window", run)) ?? {};
+        eq("no staged message goes back to the LLM", llmCalls.length, 0);
+        eq("nothing new is staged", rereadRun.staged, 0);
+        eq("the four rows are still four rows", await prisma.stagedTransaction.count({ where: stagedWhere }), 4);
+
+        console.log("-- 'not a transaction' is not a failure --");
+        await reset(mail("b", [{ subject: receipt(9), minutes: 60 }]));
+        llmVerdict = () => "not_transaction";
+        const notTransactionRun = (await attempt("sync a newsletter", run)) ?? {};
+        eq("no failure is counted", notTransactionRun.messagesFailed, 0);
+        eq("nothing is staged", notTransactionRun.staged, 0);
+        check("the cursor moves on to now, as it always did", ((await cursor())?.getTime() ?? 0) > at(60).getTime() + 86_400_000);
+
+        console.log("-- the cap and the provider's truncation still bound the cursor; a failure can only hold it earlier (B18) --");
+        const capped = receipts("c", 22);
+        await reset(capped);
+        const cappedRun = (await attempt("capped sync, no failure", run)) ?? {};
+        eq("the cap parses 20 of 22", cappedRun.staged, 20);
+        check("with no failure the cursor is the newest parsed message (the old rule)", await cursorIs(at(20)), await cursor());
+
+        await reset(capped);
+        llmVerdict = (subject) => (subject === receipt(5) ? "unauthorized" : "transaction");
+        const cappedFailRun = (await attempt("capped sync, failure at #5", run)) ?? {};
+        eq("19 staged, 1 failed", `${cappedFailRun.staged}:${cappedFailRun.messagesFailed}`, "19:1");
+        check("the cursor holds at the failed #5, earlier than the cap's boundary #20", await cursorIs(at(5)), await cursor());
+        llmCalls.length = 0;
+        llmVerdict = () => "transaction";
+        const cappedRetry = (await attempt("capped retry", run)) ?? {};
+        eq("the retry parses the failed #5 and the two the cap had left over, nothing else", llmCalls.slice().sort().join("|"), [receipt(21), receipt(22), receipt(5)].sort().join("|"));
+        eq("... and all 22 are staged once", `${cappedRetry.staged}:${await prisma.stagedTransaction.count({ where: stagedWhere })}`, "3:22");
+
+        await reset(capped);
+        llmVerdict = (subject) => (subject === receipt(20) ? "unauthorized" : "transaction");
+        await attempt("capped sync, failure at the boundary", run);
+        check("a failure at the cap's own boundary lands on the same instant", await cursorIs(at(20)), await cursor());
+
+        // 45 messages, the provider hands back the oldest 40 (GMAIL_FETCH_CAP) and says
+        // it truncated; only #3, #10 and #30 look transactional, so the account cap is not in play.
+        const truncated = mail("d", Array.from({ length: 45 }, (_, i) => ({ subject: [3, 10, 30].includes(i + 1) ? receipt(i + 1) : "Hello there", minutes: i + 1 })));
+        await reset(truncated);
+        await attempt("truncated sync, no failure", run);
+        check("with no failure the cursor is the newest message the provider returned (the old rule)", await cursorIs(at(40)), await cursor());
+        await reset(truncated);
+        llmVerdict = (subject) => (subject === receipt(10) ? "unauthorized" : "transaction");
+        await attempt("truncated sync, failure at #10", run);
+        check("a failure inside a truncated window holds the cursor there", await cursorIs(at(10)), await cursor());
+
+        console.log("-- a connection that throws is counted apart from the ones that synced (B45) --");
+        await reset(receipts("e", 2));
+        const outlook = await prisma.emailConnection.create({
+          data: {
+            provider: "OUTLOOK",
+            emailAddress: "verify-ingest-broken@example.com",
+            accessTokenEnc: "not-a-ciphertext",
+            refreshTokenEnc: "not-a-ciphertext",
+            accessTokenExpiresAt: new Date(Date.now() - 3_600_000),
+          },
+        });
+        const brokenRun = (await attempt("sync with a broken connection", run)) ?? {};
+        eq("the healthy connection is counted as synced, the broken one is not", brokenRun.accountsSynced, 1);
+        eq("the broken one is counted as failed", brokenRun.accountsFailed, 1);
+        eq("the healthy one still staged its messages", brokenRun.staged, 2);
+        eq("the broken one's cursor was not touched", (await prisma.emailConnection.findUnique({ where: { id: outlook.id } }))?.lastSyncedAt, null);
+
+        console.log("-- /api/cron/ingest answers 500 when a connection or a message failed, 200 otherwise (B45) --");
+        const ingestRequest = () =>
+          new NextRequest("http://localhost/api/cron/ingest", { headers: { authorization: "Bearer verify-cron-secret" } });
+        await reset(receipts("f", 2));
+        const brokenCron = await attempt("ingest cron with a broken connection", () => ingestCronGet(ingestRequest()));
+        eq("a failed connection is a 500", brokenCron?.status, 500);
+        eq("... whose body carries the counts", JSON.stringify(await brokenCron?.json().then((b: Record<string, number>) => ({ synced: b.accountsSynced, failed: b.accountsFailed, messages: b.messagesFailed }))), '{"synced":1,"failed":1,"messages":0}');
+        await prisma.emailConnection.delete({ where: { id: outlook.id } });
+        await reset(receipts("g", 3));
+        llmVerdict = (subject) => (subject === receipt(2) ? "unauthorized" : "transaction");
+        const messageCron = await attempt("ingest cron with a failed message", () => ingestCronGet(ingestRequest()));
+        eq("a message that failed to parse is a 500", messageCron?.status, 500);
+        eq("... with the failure count in the body", (await messageCron?.json())?.messagesFailed, 1);
+        await reset(receipts("h", 3));
+        const cleanCron = await attempt("clean ingest cron", () => ingestCronGet(ingestRequest()));
+        eq("a clean run is a 200", cleanCron?.status, 200);
+        eq("... reporting zero failures", JSON.stringify(await cleanCron?.json().then((b: Record<string, number>) => [b.accountsFailed, b.messagesFailed])), "[0,0]");
+
+        await prisma.stagedTransaction.deleteMany({ where: stagedWhere });
+        await prisma.emailConnection.deleteMany({ where: { emailAddress: { startsWith: "verify-ingest" } } });
+        console.log("  ok   ingestion fixtures removed");
+      }
+
+      console.log("-- \"Synced N\" says what failed, in both languages (B45) --");
+      const enSettings = getDictionary("en").settingsPage;
+      const esSettings = getDictionary("es").settingsPage;
+      const syncedResult = (t: typeof enSettings, ...args: number[]) => (t.syncedResult as unknown as (...a: number[]) => string)(...args);
+      eq("en: a clean sync reads as it always did", syncedResult(enSettings, 2, 3, 0, 0), "Synced 2 accounts - 3 new items staged");
+      eq("en: failures are named after the counts", syncedResult(enSettings, 1, 3, 1, 2), "Synced 1 account - 3 new items staged. 1 account failed to sync. 2 emails could not be read and will be retried on the next sync.");
+      eq("en: singular email", syncedResult(enSettings, 1, 0, 0, 1), "Synced 1 account - 0 new items staged. 1 email could not be read and will be retried on the next sync.");
+      eq("es: a clean sync reads as it always did", syncedResult(esSettings, 2, 3, 0, 0), "Se sincronizaron 2 cuentas - 3 elementos nuevos en revisión");
+      eq("es: failures are named after the counts", syncedResult(esSettings, 1, 3, 1, 2), "Se sincronizó 1 cuenta - 3 elementos nuevos en revisión. 1 cuenta no se pudo sincronizar. 2 correos no se pudieron leer y se reintentarán en la próxima sincronización.");
+
+      console.log("-- a posting run that throws is a failure the context carries and the Inbox shows (B45) --");
+      const insightContext = (recurringPostingFailure: { reason: string } | null): import("../src/lib/insights").InsightContext => ({
+        dictionary: getDictionary("en"),
+        displayCurrency: "USD",
+        recurringPosting: null,
+        recurringPostingFailure,
+        affordRechecks: [],
+        recurringSuggestions: [],
+        goalRoadmaps: [],
+        goalForecasts: [],
+      });
+      const detectFailed = (insights as unknown as Record<string, unknown>).detectPostingRunFailed as undefined | ((c: import("../src/lib/insights").InsightContext) => import("../src/lib/insights").Insight[]);
+      eq("the registry exports the detector", typeof detectFailed, "function");
+      const failedInsights = (await attempt("run the detector", () => detectFailed!(insightContext({ reason: "connection terminated unexpectedly" })))) ?? [];
+      eq("a failed run is one insight, keyed by its source", failedInsights.map((i) => i.id).join(","), "posting_run_failed:run");
+      eq("it is critical and cannot be dismissed", `${failedInsights[0]?.severity}:${failedInsights[0]?.dismissible}`, "critical:false");
+      eq("it points at the Recurring page", failedInsights[0]?.actionHref, "/recurring");
+      eq("its title says the run failed", failedInsights[0]?.title, "The last recurring posting run failed");
+      eq("its evidence carries the reason text, then says nothing is posting", JSON.stringify(failedInsights[0]?.evidence), JSON.stringify([
+        { kind: "text", label: "Why", value: "connection terminated unexpectedly" },
+        { kind: "text", label: "Effect", value: "Recurring items are not being posted until a run succeeds." },
+      ]));
+      const failedEs = (await attempt("run the detector in Spanish", () => detectFailed!({ ...insightContext({ reason: "boom" }), dictionary: getDictionary("es") }))) ?? [];
+      eq("the Spanish copy is its own", failedEs[0]?.title, "La última ejecución de registro de recurrentes falló");
+      eq("... and carries the same reason", JSON.stringify(failedEs[0]?.evidence[0]), JSON.stringify({ kind: "text", label: "Motivo", value: "boom" }));
+      eq("no failure, no insight", ((await attempt("detector without a failure", () => detectFailed!(insightContext(null)))) ?? [{}]).length, 0);
+      check("the registry runs it: detectInsights lists it first among the critical ones", insights.detectInsights(insightContext({ reason: "x" })).some((i) => i.id === "posting_run_failed:run"));
+      eq("dismissing it changes nothing at the engine: withoutDismissed keeps it", insights.withoutDismissed(failedInsights, [{ source: "posting_run_failed", key: "run" }]).length, 1);
+
+      const { postingFailureReason } = await import("../src/lib/data/context");
+      eq("a database error's long message is reduced to its cause line", postingFailureReason(new Error("\nInvalid `prisma.goalContribution.groupBy()` invocation in\n/app/.next/chunk.js:12:34\n\n  12 | const x = await prisma\n\nThe column `GoalContribution.currency` does not exist in the current database.")), "The column `GoalContribution.currency` does not exist in the current database.");
+      eq("a one-line error is shown as it is", postingFailureReason(new Error("simulated posting outage")), "simulated posting outage");
+      eq("a non-Error is stringified and a long reason is capped at 300", postingFailureReason("x".repeat(500)).length, 300);
+
+      console.log("-- end to end: force the run to throw, read it through the context and the Inbox's collector --");
+      const originalFindMany = libPrisma.recurringItem.findMany;
+      // @ts-expect-error - deliberately broken to make the whole posting run throw
+      libPrisma.recurringItem.findMany = async () => {
+        throw new Error("simulated posting outage");
+      };
+      let brokenContext: Awaited<ReturnType<typeof getAppContext>> | undefined;
+      try {
+        brokenContext = await attempt("build the app context while posting is down", () => getAppContext());
+      } finally {
+        libPrisma.recurringItem.findMany = originalFindMany;
+      }
+      const failureIn = (context: unknown) => (context as { recurringPostingFailure?: { reason: string } | null } | undefined)?.recurringPostingFailure;
+      check("the context carries the failure with its reason", failureIn(brokenContext)?.reason?.includes("simulated posting outage") === true, failureIn(brokenContext));
+      eq("... and no summary", brokenContext?.recurringPosting, null);
+      const collect = (context: NonNullable<typeof brokenContext>) =>
+        collectInsights({ ...context, bufferPercent: 10, bufferFloorAmount: 0, bufferFloorCurrency: "USD" });
+      const collectedBroken = brokenContext ? await attempt("collect the Inbox", () => collect(brokenContext!)) : undefined;
+      check("the Inbox collector lists the failure", (collectedBroken ?? []).some((i) => i.id === "posting_run_failed:run"));
+      await prisma.insightDismissal.upsert({
+        where: { source_key: { source: "posting_run_failed", key: "run" } },
+        create: { source: "posting_run_failed", key: "run" },
+        update: {},
+      });
+      const collectedAfterDismissRow = brokenContext ? await attempt("collect the Inbox after a dismissal row exists", () => collect(brokenContext!)) : undefined;
+      check("... and even a dismissal row written behind its back does not hide it", (collectedAfterDismissRow ?? []).some((i) => i.id === "posting_run_failed:run"));
+      await prisma.insightDismissal.deleteMany({ where: { source: "posting_run_failed" } });
+      const healthyContext = await attempt("build the app context once posting works", () => getAppContext());
+      check("a later run that succeeds leaves no failure in the context", !failureIn(healthyContext));
+      const collectedHealthy = healthyContext ? await attempt("collect the Inbox once posting works", () => collect(healthyContext)) : undefined;
+      check("... and the insight is gone", collectedHealthy !== undefined && !collectedHealthy.some((i) => i.id === "posting_run_failed:run"));
+
+      console.log("-- /api/cron/recurring answers 500 when an item failed or the run threw, 200 otherwise (B45) --");
+      const cronAccount = await prisma.account.create({ data: { name: "Verify Ingest Recurring Account", currency: "USD", type: "CHECKING" } });
+      const cronItem = await prisma.recurringItem.create({
+        data: { name: "Verify Ingest Recurring Item", amount: 11, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: addDays(appToday(), -1), active: true, accountId: cronAccount.id },
+      });
+      const recurringRequest = () =>
+        new NextRequest("http://localhost/api/cron/recurring", { headers: { authorization: "Bearer verify-cron-secret" } });
+      const originalTransaction = libPrisma.$transaction;
+      // Deliberately broken so one item's posting throws while the run carries on.
+      libPrisma.$transaction = (async () => {
+        throw new Error("simulated item failure");
+      }) as unknown as typeof libPrisma.$transaction;
+      let itemFailedCron: Response | undefined;
+      try {
+        itemFailedCron = await attempt("recurring cron with a failing item", () => recurringCronGet(recurringRequest()));
+      } finally {
+        libPrisma.$transaction = originalTransaction;
+      }
+      eq("an item that failed to post is a 500", itemFailedCron?.status, 500);
+      check("... with itemsFailed in the body", ((await itemFailedCron?.json()) ?? {}).itemsFailed >= 1);
+      // @ts-expect-error - deliberately broken to make the whole run throw
+      libPrisma.recurringItem.findMany = async () => {
+        throw new Error("simulated posting outage");
+      };
+      let runThrewCron: Response | undefined;
+      try {
+        runThrewCron = await attempt("recurring cron when the run throws", () => recurringCronGet(recurringRequest()));
+      } finally {
+        libPrisma.recurringItem.findMany = originalFindMany;
+      }
+      eq("a run that threw is a 500", runThrewCron?.status, 500);
+      const runThrewBody = ((await runThrewCron?.json()) ?? {}) as { ok?: boolean; error?: string };
+      check("... whose body says the run failed and why", runThrewBody.ok === false && String(runThrewBody.error).includes("simulated posting outage"), runThrewBody);
+      const cleanRecurring = await attempt("clean recurring cron", () => recurringCronGet(recurringRequest()));
+      eq("a clean run is a 200", cleanRecurring?.status, 200);
+      eq("... with no failed items", ((await cleanRecurring?.json()) ?? {}).itemsFailed, 0);
+      await prisma.transaction.deleteMany({ where: { accountId: cronAccount.id } });
+      await prisma.recurringItem.deleteMany({ where: { id: cronItem.id } });
+      await prisma.account.deleteMany({ where: { id: cronAccount.id } });
+      console.log("  ok   recurring cron fixtures removed");
+
+      console.log("-- /api/cron/bpd-rate says what it did, and stays 200 (B45) --");
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.map(String).join(" "));
+      };
+      const bpdRequest = () => new NextRequest("http://localhost/api/cron/bpd-rate", { headers: { authorization: "Bearer verify-cron-secret" } });
+      const seedBpd = async (ageDays: number) => {
+        await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+        const asOf = new Date(Date.now() - ageDays * 86_400_000);
+        const entries = toRateTableEntries({ dollarSellRate: 61.1, euroSellRate: 71.9, asOf });
+        for (const [targetCurrency, rate] of Object.entries(entries)) {
+          await prisma.exchangeRate.create({ data: { baseCurrency: "USD", targetCurrency, source: BPD_SOURCE, rate, fetchedAt: asOf, asOf } });
+        }
+        return asOf.toISOString().slice(0, 10);
+      };
+      const bpdBody = async (response: Response | undefined) => ((await response?.json()) ?? {}) as { cached?: boolean; outcome?: string; storedAsOf?: string | null; message?: string };
+
+      await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+      resetBpdFailureBackoffForTests();
+      bankFeed = "published";
+      const storedResponse = await attempt("bpd cron, the feed answers", () => bpdRateCronGet(bpdRequest()));
+      const storedBody = await bpdBody(storedResponse);
+      eq("a fetch that stored a rate is a 200 with outcome 'stored'", `${storedResponse?.status}:${storedBody.outcome}:${storedBody.cached}`, "200:stored:true");
+      check("... and the message says a fresh rate was stored", storedBody.message?.includes("stored a fresh rate") === true, storedBody.message);
+
+      const keptDate = await seedBpd(5);
+      resetBpdFailureBackoffForTests();
+      bankFeed = "blocked";
+      const keptResponse = await attempt("bpd cron, a 5-day-old stored rate", () => bpdRateCronGet(bpdRequest()));
+      const keptBody = await bpdBody(keptResponse);
+      eq("a stored rate kept as it was is a 200 with outcome 'kept'", `${keptResponse?.status}:${keptBody.outcome}:${keptBody.cached}`, "200:kept:true");
+      eq("... and the body names the stored rate's date", keptBody.storedAsOf, keptDate);
+      check("... the message says it kept the stored rate from that date, not that it cached today's", keptBody.message?.includes(`kept the stored rate from ${keptDate}`) === true && keptBody.message?.includes("today's") === false, keptBody.message);
+
+      warnings.length = 0;
+      const staleDate = await seedBpd(9);
+      resetBpdFailureBackoffForTests();
+      const failedResponse = await attempt("bpd cron, a 9-day-old stored rate and a blocked feed", () => bpdRateCronGet(bpdRequest()));
+      const failedBody = await bpdBody(failedResponse);
+      eq("a failed fetch is still a 200 (the bank blocks the server by design; a GitHub Action feeds the rate)", failedResponse?.status, 200);
+      eq("... with outcome 'failed' and nothing usable cached", `${failedBody.outcome}:${failedBody.cached}`, "failed:false");
+      check("... the message says the fetch failed and names the stored rate's date and age", failedBody.message?.includes("fetch failed") === true && failedBody.message?.includes(staleDate) === true && failedBody.message?.includes("9 days") === true, failedBody.message);
+      check("a warning is logged that the stored rate is older than the freshness window", warnings.some((w) => w.includes("older than") && w.includes(staleDate)), warnings);
+
+      warnings.length = 0;
+      await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+      resetBpdFailureBackoffForTests();
+      const emptyResponse = await attempt("bpd cron, nothing stored and a blocked feed", () => bpdRateCronGet(bpdRequest()));
+      const emptyBody = await bpdBody(emptyResponse);
+      eq("nothing stored and a blocked feed is a 200 too", `${emptyResponse?.status}:${emptyBody.outcome}:${emptyBody.storedAsOf}`, "200:failed:null");
+      check("... saying there is no stored rate", emptyBody.message?.includes("no stored rate") === true, emptyBody.message);
+      await prisma.exchangeRate.deleteMany({ where: { baseCurrency: "USD" } });
+    } finally {
+      globalThis.fetch = realFetch;
+      console.warn = realWarn;
+      if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousKey;
+      if (previousSecret === undefined) delete process.env.CRON_SECRET;
+      else process.env.CRON_SECRET = previousSecret;
+      await prisma.insightDismissal.deleteMany({ where: { source: "posting_run_failed" } });
+      await prisma.emailConnection.deleteMany({ where: { emailAddress: { startsWith: "verify-ingest" } } });
+      await prisma.stagedTransaction.deleteMany({ where: { source: "GMAIL", externalId: { startsWith: "<verify-ingest-" } } });
+    }
   }
 
   console.log("\n== cleanup ==");

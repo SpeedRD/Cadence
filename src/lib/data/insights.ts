@@ -57,6 +57,7 @@ export async function loadInsightContext(
     dictionary: getDictionary(context.language),
     displayCurrency: context.displayCurrency,
     recurringPosting: context.recurringPosting ?? null,
+    recurringPostingFailure: context.recurringPostingFailure ?? null,
     affordRechecks: tracked,
     recurringSuggestions,
     goalRoadmaps,

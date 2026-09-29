@@ -36,9 +36,18 @@ const PARSE_CONCURRENCY = 4;
 const STUCK_CURSOR_STEP_MS = 2_000;
 
 export interface IngestionResult {
+  /** Connections whose sync ran to the end. Some of their messages may still have failed: see messagesFailed. */
   accountsSynced: number;
+  /** Connections that threw (revoked token, provider outage). Their cursor did not move. */
+  accountsFailed: number;
   scanned: number;
   staged: number;
+  /**
+   * Messages the parser could not reach a verdict on (API error, rate limit,
+   * unreachable). Each holds its connection's cursor at or before it, so the
+   * next sync reads it again.
+   */
+  messagesFailed: number;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -78,7 +87,7 @@ async function fetchCandidates(
  * Returns null when the run learned nothing it can safely act on, in which case
  * the caller leaves `lastSyncedAt` alone and retries the same window.
  */
-function nextWindowStart(input: {
+function windowBoundary(input: {
   now: Date;
   since: Date;
   /** Everything the provider returned, oldest first. */
@@ -130,11 +139,30 @@ function nextWindowStart(input: {
   return new Date(since.getTime() + STUCK_CURSOR_STEP_MS);
 }
 
+/**
+ * The cursor for the next run: windowBoundary(), held back to the oldest
+ * message the parser failed on. A failed message is not dealt with, so the
+ * cursor may not pass it; it only ever moves to the earliest of the candidates,
+ * and never behind where this window started. The failed message itself stays
+ * inside the next window (both providers filter inclusively), and everything
+ * staged since is skipped by its key when read again.
+ */
+function nextWindowStart(input: Parameters<typeof windowBoundary>[0] & {
+  /** When the oldest message the parser failed on was received; null when none failed. */
+  earliestFailedAt: Date | null;
+}): Date | null {
+  const boundary = windowBoundary(input);
+  if (!boundary || !input.earliestFailedAt) return boundary;
+  return new Date(
+    Math.max(input.since.getTime(), Math.min(boundary.getTime(), input.earliestFailedAt.getTime())),
+  );
+}
+
 async function syncConnection(
   connection: EmailConnection,
   defaultCurrency: string,
   categoryNames: string[],
-): Promise<{ scanned: number; staged: number }> {
+): Promise<{ scanned: number; staged: number; messagesFailed: number }> {
   const now = new Date();
   const since =
     connection.lastSyncedAt ??
@@ -148,8 +176,24 @@ async function syncConnection(
     (a, b) => a.receivedAt.getTime() - b.receivedAt.getTime(),
   );
 
-  const allTransactional = candidates.filter((candidate) =>
-    isTransactionalEmail(candidate.subject, candidate.from),
+  // A message staged by an earlier run is done with: it is neither parsed
+  // again nor counted against the cap. This is what makes it safe (and cheap)
+  // to read a window twice, which a held cursor does on purpose.
+  const alreadyStaged = new Set(
+    (
+      await prisma.stagedTransaction.findMany({
+        where: {
+          source: connection.provider,
+          externalId: { in: candidates.map((candidate) => candidate.externalId) },
+        },
+        select: { externalId: true },
+      })
+    ).map((row) => row.externalId),
+  );
+  const allTransactional = candidates.filter(
+    (candidate) =>
+      !alreadyStaged.has(candidate.externalId) &&
+      isTransactionalEmail(candidate.subject, candidate.from),
   );
   // Oldest first, so the ones the cap leaves behind are newer than everything
   // parsed here and stay inside the next run's window rather than falling out
@@ -161,7 +205,7 @@ async function syncConnection(
     transactional,
     PARSE_CONCURRENCY,
     async (candidate) => {
-      const parsed = await parseTransactionEmail({
+      const outcome = await parseTransactionEmail({
         subject: candidate.subject,
         from: candidate.from,
         receivedAt: candidate.receivedAt,
@@ -169,9 +213,18 @@ async function syncConnection(
         defaultCurrency,
         categoryNames,
       });
-      return parsed ? { candidate, parsed } : null;
+      return { candidate, outcome };
     },
   );
+
+  const failures = parsedRows.flatMap(({ candidate, outcome }) =>
+    outcome.status === "failed" ? [{ candidate, reason: outcome.reason }] : [],
+  );
+  if (failures.length > 0) {
+    console.error(
+      `Sync for ${connection.provider} ${connection.emailAddress}: ${failures.length} of ${transactional.length} message(s) could not be parsed and will be read again next sync (first: ${failures[0].reason})`,
+    );
+  }
 
   const categoryIdByName = new Map(
     (
@@ -179,21 +232,26 @@ async function syncConnection(
     ).map((category) => [category.name.toLowerCase(), category.id]),
   );
 
-  const rows: Prisma.StagedTransactionCreateManyInput[] = parsedRows
-    .filter((row): row is NonNullable<typeof row> => row !== null)
-    .map(({ candidate, parsed }) => ({
-      date: parsed.date,
-      amount: parsed.amount,
-      currency: parsed.currency,
-      rawDescription: parsed.rawDescription,
-      suggestedCategoryId: parsed.suggestedCategoryName
-        ? (categoryIdByName.get(parsed.suggestedCategoryName.toLowerCase()) ?? null)
-        : null,
-      source: connection.provider,
-      externalId: candidate.externalId,
-      status: "PENDING",
-      parsedAt: now,
-    }));
+  const rows: Prisma.StagedTransactionCreateManyInput[] = parsedRows.flatMap(
+    ({ candidate, outcome }) =>
+      outcome.status === "parsed"
+        ? [
+            {
+              date: outcome.transaction.date,
+              amount: outcome.transaction.amount,
+              currency: outcome.transaction.currency,
+              rawDescription: outcome.transaction.rawDescription,
+              suggestedCategoryId: outcome.transaction.suggestedCategoryName
+                ? (categoryIdByName.get(outcome.transaction.suggestedCategoryName.toLowerCase()) ?? null)
+                : null,
+              source: connection.provider,
+              externalId: candidate.externalId,
+              status: "PENDING" as const,
+              parsedAt: now,
+            },
+          ]
+        : [],
+  );
 
   // skipDuplicates covers re-fetching the same email across syncs (the date
   // window overlaps `since` by design) via the (source, externalId) index.
@@ -208,6 +266,11 @@ async function syncConnection(
     processed: transactional,
     cappedByAccountLimit,
     providerTruncated: batch.truncated,
+    earliestFailedAt: failures.reduce<Date | null>(
+      (earliest, { candidate }) =>
+        !earliest || candidate.receivedAt.getTime() < earliest.getTime() ? candidate.receivedAt : earliest,
+      null,
+    ),
   });
   if (windowStart) {
     await prisma.emailConnection.update({
@@ -216,7 +279,7 @@ async function syncConnection(
     });
   }
 
-  return { scanned: transactional.length, staged: result.count };
+  return { scanned: transactional.length, staged: result.count, messagesFailed: failures.length };
 }
 
 /**
@@ -233,19 +296,26 @@ export async function runIngestion(): Promise<IngestionResult> {
   const defaultCurrency = toCurrency(settings?.displayCurrency);
   const categoryNames = categories.map((category) => category.name);
 
+  let accountsSynced = 0;
+  let accountsFailed = 0;
   let scanned = 0;
   let staged = 0;
+  let messagesFailed = 0;
   for (const connection of connections) {
     try {
       const result = await syncConnection(connection, defaultCurrency, categoryNames);
+      accountsSynced += 1;
       scanned += result.scanned;
       staged += result.staged;
+      messagesFailed += result.messagesFailed;
     } catch (error) {
       // One broken connection (revoked token, provider outage) shouldn't
-      // block the others from syncing.
+      // block the others from syncing. It is counted, not hidden: the caller
+      // reports it.
+      accountsFailed += 1;
       console.error(`Sync failed for ${connection.provider} ${connection.emailAddress}:`, error);
     }
   }
 
-  return { accountsSynced: connections.length, scanned, staged };
+  return { accountsSynced, accountsFailed, scanned, staged, messagesFailed };
 }

@@ -1194,8 +1194,15 @@ export const en = {
     connectionNoLongerExists: "That connection no longer exists",
     disconnected: (email: string) => `Disconnected ${email}`,
     connectFirst: "Connect a Gmail or Outlook account first",
-    syncedResult: (accounts: number, staged: number) =>
-      `Synced ${accounts} account${accounts === 1 ? "" : "s"} - ${staged} new item${staged === 1 ? "" : "s"} staged`,
+    syncedResult: (accounts: number, staged: number, accountsFailed = 0, messagesFailed = 0) =>
+      `Synced ${accounts} account${accounts === 1 ? "" : "s"} - ${staged} new item${staged === 1 ? "" : "s"} staged` +
+      (accountsFailed > 0
+        ? `. ${accountsFailed} account${accountsFailed === 1 ? "" : "s"} failed to sync`
+        : "") +
+      (messagesFailed > 0
+        ? `. ${messagesFailed} email${messagesFailed === 1 ? "" : "s"} could not be read and will be retried on the next sync`
+        : "") +
+      (accountsFailed > 0 || messagesFailed > 0 ? "." : ""),
     planningPreferencesTitle: "Planning preferences",
     planningPreferencesDescription:
       "How the payday planner sizes your protected buffer and carries money forward.",
@@ -1345,6 +1352,7 @@ export const en = {
     dismissUnknown: "That item is no longer in the Inbox",
     /** The link each insight carries to the surface that can resolve it. */
     openRecurring: "Fix on the recurring page",
+    openRecurringPage: "Open the recurring page",
     openFromAfford: "See it on the recurring page",
     openSuggestion: "Review on the recurring page",
     openGoal: "Open the goal",
@@ -1356,6 +1364,9 @@ export const en = {
     notPostingKind: "Kind",
     notPostingKindSubscription: "Subscription",
     notPostingKindContribution: "Goal contribution",
+    postingRunFailedTitle: "The last recurring posting run failed",
+    postingRunFailedEffect: "Effect",
+    postingRunFailedEffectValue: "Recurring items are not being posted until a run succeeds.",
     affordTitle: (name: string) => `${name} from Afford no longer fits`,
     affordShortfall: "Short by",
     affordPeriod: "In",

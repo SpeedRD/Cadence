@@ -1187,8 +1187,15 @@ export const es = {
     connectionNoLongerExists: "Esa conexión ya no existe",
     disconnected: (email: string) => `${email} desconectado`,
     connectFirst: "Conecta primero una cuenta de Gmail o Outlook",
-    syncedResult: (accounts: number, staged: number) =>
-      `Se ${accounts === 1 ? "sincronizó" : "sincronizaron"} ${accounts} cuenta${accounts === 1 ? "" : "s"} - ${staged} elemento${staged === 1 ? "" : "s"} nuevo${staged === 1 ? "" : "s"} en revisión`,
+    syncedResult: (accounts: number, staged: number, accountsFailed = 0, messagesFailed = 0) =>
+      `Se ${accounts === 1 ? "sincronizó" : "sincronizaron"} ${accounts} cuenta${accounts === 1 ? "" : "s"} - ${staged} elemento${staged === 1 ? "" : "s"} nuevo${staged === 1 ? "" : "s"} en revisión` +
+      (accountsFailed > 0
+        ? `. ${accountsFailed} cuenta${accountsFailed === 1 ? " no se pudo" : "s no se pudieron"} sincronizar`
+        : "") +
+      (messagesFailed > 0
+        ? `. ${messagesFailed} correo${messagesFailed === 1 ? " no se pudo leer y se reintentará" : "s no se pudieron leer y se reintentarán"} en la próxima sincronización`
+        : "") +
+      (accountsFailed > 0 || messagesFailed > 0 ? "." : ""),
     planningPreferencesTitle: "Preferencias de planificación",
     planningPreferencesDescription:
       "Cómo el planificador de pago calcula tu colchón protegido y traslada dinero de un periodo a otro.",
@@ -1336,6 +1343,7 @@ export const es = {
     dismissed: "Descartado. No volverá a la bandeja.",
     dismissUnknown: "Ese elemento ya no está en la bandeja",
     openRecurring: "Arreglar en la página de recurrentes",
+    openRecurringPage: "Abrir la página de recurrentes",
     openFromAfford: "Verlo en la página de recurrentes",
     openSuggestion: "Revisar en la página de recurrentes",
     openGoal: "Abrir la meta",
@@ -1345,6 +1353,9 @@ export const es = {
     notPostingKind: "Tipo",
     notPostingKindSubscription: "Suscripción",
     notPostingKindContribution: "Aporte a meta",
+    postingRunFailedTitle: "La última ejecución de registro de recurrentes falló",
+    postingRunFailedEffect: "Efecto",
+    postingRunFailedEffectValue: "Los elementos recurrentes no se están registrando hasta que una ejecución se complete con éxito.",
     affordTitle: (name: string) => `${name} desde Cuotas ya no encaja`,
     affordShortfall: "Faltan",
     affordPeriod: "En",

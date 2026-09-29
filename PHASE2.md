@@ -105,6 +105,12 @@ automatically. Adjust the cron expressions there if you want a different
 cadence; **Sync now** on `/settings/connections` runs the same code on demand
 in between.
 
+The ingest route answers **500** when a connection failed to sync or an email
+could not be parsed (the counts are in the JSON body: `accountsFailed`,
+`messagesFailed`), and 200 otherwise; **Sync now** shows the same counts as an
+error message. `/api/cron/recurring` likewise answers 500 when the posting run
+threw or any item failed to post (`itemsFailed`).
+
 ## How it works
 
 1. For each connected mailbox, fetch messages since `lastSyncedAt` (or the
@@ -116,12 +122,19 @@ in between.
 3. Send each candidate's subject/sender/date/body to Claude
    (`src/lib/llm/parse-transaction-email.ts`), which returns structured
    fields or "not a transaction" - the prompt instructs it to skip anything
-   ambiguous rather than guess.
+   ambiguous rather than guess. A call that fails (rate limit, outage, bad
+   key) is a third outcome, "failed", never treated as "not a transaction".
 4. Write a `StagedTransaction` row (`status = PENDING`, `source` = `gmail` or
    `outlook`, `externalId` = the email's Message-ID / internetMessageId).
    Re-fetching the same email on a later sync is a no-op - the
    `(source, externalId)` unique index makes the insert a silent skip.
-5. Update the mailbox's `lastSyncedAt`.
+5. Update the mailbox's `lastSyncedAt` - to the moment the run started, or no
+   further than the earliest of: the 20-email cap's boundary, the provider's
+   truncation boundary and the oldest email whose parse failed. A failed email
+   is therefore read again on the next sync; emails already staged are skipped
+   by their key before any Claude call, so the re-read costs nothing for them.
+   A permanently failing email (say, one the model always refuses) holds the
+   cursor there until it is fixed, and every sync reports it.
 
 Review each item on `/review`: pick an account (required), optionally adjust
 the category, then **Approve** (creates the real `Transaction`, carrying the

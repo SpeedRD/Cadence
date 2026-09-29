@@ -18,6 +18,7 @@ type InboxDictionary = ReturnType<typeof getDictionary>["inbox"];
 /** Which surface each source's link opens, in the Inbox's words. */
 const OPEN_LABEL: Record<InsightSource, (t: InboxDictionary) => string> = {
   not_posting: (t) => t.openRecurring,
+  posting_run_failed: (t) => t.openRecurringPage,
   afford_viability: (t) => t.openFromAfford,
   recurring_suggestion: (t) => t.openSuggestion,
   goal_behind: (t) => t.openGoal,
@@ -27,6 +28,7 @@ const OPEN_LABEL: Record<InsightSource, (t: InboxDictionary) => string> = {
 /** Where the insight came from - the surface it still appears on (the goal forecast has no other: Afford's projection computes it for the Inbox alone). */
 const SOURCE_LABEL: Record<InsightSource, (t: InboxDictionary) => string> = {
   not_posting: (t) => t.sourceNotPosting,
+  posting_run_failed: (t) => t.sourceNotPosting,
   afford_viability: (t) => t.sourceAffordViability,
   recurring_suggestion: (t) => t.sourceRecurringSuggestion,
   goal_behind: (t) => t.sourceGoalBehind,

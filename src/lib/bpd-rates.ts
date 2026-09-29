@@ -131,6 +131,24 @@ export async function storeBpdRates(
 }
 
 /**
+ * When the stored Banco Popular USD sell row was published (`asOf`) and last
+ * written (`fetchedAt`), or null when there is none. For reporting what
+ * getBpdRates() did - it decides what is usable, this decides nothing.
+ */
+export async function readStoredBpdRateDates(): Promise<{ asOf: Date; fetchedAt: Date } | null> {
+  const row = await prisma.exchangeRate.findUnique({
+    where: {
+      baseCurrency_targetCurrency_source: {
+        baseCurrency: BASE_CURRENCY,
+        targetCurrency: "DOP",
+        source: BPD_SOURCE,
+      },
+    },
+  });
+  return row?.asOf ? { asOf: row.asOf, fetchedAt: row.fetchedAt } : null;
+}
+
+/**
  * BPD-sourced DOP/USD and DOP/EUR sell rates, cached in ExchangeRate under
  * source="bpd" alongside (not overwriting) the open.er-api.com rows. The
  * bank republishes roughly once per business day but can go several days

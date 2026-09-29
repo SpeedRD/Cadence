@@ -15,6 +15,11 @@ export const maxDuration = 60;
  *
  * Not session-gated (Vercel Cron sends no session cookie) - CRON_SECRET is the
  * only guard, so it must be set in production.
+ *
+ * Answers 500 when any connection failed to sync or any message could not be
+ * parsed (the counts are in the body), so a monitor sees a partial sync. The
+ * work that did succeed is kept either way, and the next run reads what failed
+ * again.
  */
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -29,5 +34,9 @@ export async function GET(request: NextRequest) {
   }
 
   const result = await runIngestion();
-  return NextResponse.json(result);
+  const failed = result.accountsFailed > 0 || result.messagesFailed > 0;
+  const summary = `[ingest] ${result.accountsSynced} account(s) synced, ${result.accountsFailed} failed; ${result.staged} staged; ${result.messagesFailed} message(s) could not be parsed`;
+  if (failed) console.error(summary);
+  else console.log(summary);
+  return NextResponse.json({ ok: !failed, ...result }, { status: failed ? 500 : 200 });
 }
