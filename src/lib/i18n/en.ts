@@ -286,6 +286,8 @@ export const en = {
     setPeriodBudget: "Set this period's budget",
     recommendedBudget: (amount: string) =>
       `Recommended: ${amount} - what your payday check-in leaves for flexible categories.`,
+    recommendedUnallocated: (available: string, unallocated: string) =>
+      `Recommended: ${available} - what your payday check-in leaves for flexible categories. ${unallocated} of it is in no budget yet: budget it here, or it carries to the next period.`,
     recommendedShortfall: (amount: string) =>
       `Your payday check-in leaves ${amount} for flexible categories - the plan is over-committed, so there is nothing to budget yet.`,
     spent: "Spent",
@@ -954,8 +956,13 @@ export const en = {
       coverage: "all" | "none" | "some" = "none",
       confirmedPeriods: string[] = [],
     ) =>
-      `${coverage === "none" ? "No payday check-in exists for these periods yet. " : coverage === "some" ? `A payday check-in is confirmed for ${confirmedPeriods.join(", ")}, but not for the other periods. ` : ""}Income is projected as ${periods === null ? "the average of the comparable pay periods noted under each period" : incomeBasisEn(periods)} (same half of the month), counted in every account from the first period with income in any of them, so pay that moved from one account to another is not counted in both. If your income changed - a new job, for example - Settings' "Count income history from" sets where that history starts. ${account}'s commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here, and, in the current period, what already posted as well as what is still ahead - plus whatever a confirmed payday check-in planned toward your goals for that period.${coverage === "all" ? "" : " Where no check-in is confirmed yet, an estimate stands in for that goal funding: what you would keep putting toward each goal at its current pace, marked * and spelled out below."} The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
+      `${coverage === "none" ? "No payday check-in exists for these periods yet. " : coverage === "some" ? `A payday check-in is confirmed for ${confirmedPeriods.join(", ")}, but not for the other periods. ` : ""}${coverage === "none" ? "" : `For ${confirmedPeriods.join(", ")} the figures are what the check-in confirmed - the paycheck you recorded, the buffer it kept, its carryover, essentials and goal funding - so the room is the same "Available for flexible categories" the check-in shows. `}${coverage === "all" ? "Elsewhere, income is projected as" : "Income is projected as"} ${periods === null ? "the average of the comparable pay periods noted under each period" : incomeBasisEn(periods)} (same half of the month), counted in every account from the first period with income in any of them, so pay that moved from one account to another is not counted in both. If your income changed - a new job, for example - Settings' "Count income history from" sets where that history starts. ${account}'s commitments are exact: every active recurring item charged to it that falls due in the period, walked forward from its own schedule - including any installment plan already recorded here, and, in the current period, what already posted as well as what is still ahead - plus whatever a confirmed payday check-in planned toward your goals for that period.${coverage === "all" ? "" : " Where no check-in is confirmed yet, an estimate stands in for that goal funding: what you would keep putting toward each goal at its current pace, marked * and spelled out below."} The buffer is the same formula the payday check-in applies per account, and the period-wide figures add every active account up.`,
     projectionIncomePeriods: (periods: number) => (periods === 1 ? "income: 1 period" : `income: ${periods} periods`),
+    projectionConfirmed: "confirmed check-in",
+    confirmedCarryoverLine: (period: string, amount: string) =>
+      `${period} also counts ${amount} of carryover, as its check-in does.`,
+    confirmedCapLine: (period: string, amount: string) =>
+      `${period} takes ${amount} off for accounts that were below zero before the pay, as its check-in does.`,
     lowIncomeHistory: (periods: number) =>
       `Only ${comparablePeriodsEn(periods)} of income history ${periods === 1 ? "backs" : "back"} this projection, so treat its income as rough until more pay periods have passed.`,
     projectionEssential: "Essential fixed",
@@ -1558,9 +1565,14 @@ export const en = {
     carryoverAvailable: (amount: string) => `${amount} unspent from last period's budget`,
     carryoverUnavailable:
       "No prior period budget to measure carryover against - this plan is funded by income only.",
+    carryoverProvisional: (amount: string) =>
+      `${amount} unspent so far from last period's budget. Last period has not ended yet, so this is provisional: the plan counts none of it now, and counts what that period really leaves once it is over.`,
     carryoverIncluded: "Include in this plan",
     summaryIncome: "Income",
     summaryCarryover: "Included carryover",
+    summaryCarryoverProvisional: (amount: string) => `${amount} provisional - counted once last period ends`,
+    summaryCushion: "Already in your accounts",
+    summaryCushionHint: "What your accounts held before this pay. Kept as a cushion - not counted in this plan.",
     summarySubscriptions: "Subscriptions",
     summaryContributions: "Recurring contributions",
     summaryGoals: "Goal plan",
@@ -1580,8 +1592,11 @@ export const en = {
     basisNone: "not enough history",
     flexibleAllocated: "Allocated",
     flexibleUnallocated: "Unallocated",
+    flexibleUnallocatedCarries:
+      "Not written as a budget. What stays unallocated, and whatever the budgets leave unspent, carries to the next period's check-in.",
+    flexibleDeficitNote:
+      "This plan leaves nothing for flexible categories, so every suggestion is scaled to 0. Free up money in step 3, or leave these at 0.",
     flexibleOverallocated: (amount: string) => `${amount} overallocated`,
-    safeToSpendPerDayEstimate: "Estimated safe to spend per day",
     noFlexibleCategoriesConfigured:
       "No flexible categories available - every expense category is either essential fixed or excluded.",
     acknowledgeDeficitLabel:
@@ -1590,8 +1605,20 @@ export const en = {
     step5Title: "Confirm your plan",
     confirmSnapshotsNote:
       "Balance snapshots are recorded for audit only - they never change account balances.",
-    confirmIncomeNote: (count: number, amount: string) =>
-      `${count} income transaction${count === 1 ? "" : "s"} totalling ${amount} will be created.`,
+    confirmIncomeNote: (counts: { created: number; updated: number; removed: number }, amount: string) => {
+      const parts = [
+        counts.created > 0 ? `${counts.created} created` : null,
+        counts.updated > 0 ? `${counts.updated} updated` : null,
+        counts.removed > 0 ? `${counts.removed} removed` : null,
+      ].filter((part): part is string => part !== null);
+      if (parts.length === 0) return "No income transaction is created or changed.";
+      const changed = counts.created + counts.updated + counts.removed;
+      return `Income transactions, ${amount} in total: ${parts.join(", ")}${changed === counts.created ? "" : " - the ones this check-in recorded before are changed in place, not added again"}.`;
+    },
+    confirmUnallocatedNote: (amount: string) =>
+      `${amount} stays unallocated: it is not written as a budget, and it carries to the next period's check-in with whatever the budgets leave unspent.`,
+    confirmCushionNote: (amount: string) =>
+      `${amount} was already in your accounts before this pay. It stays there as a cushion and is not counted in this plan.`,
     confirmBudgetsNote: (count: number) =>
       `${count} category budget${count === 1 ? "" : "s"} will be created or updated for this period.`,
     confirmReservedNote:
@@ -1611,6 +1638,8 @@ export const en = {
     couldNotReadPlan: "Could not read the plan - try again",
     noActiveAccounts: "Add at least one active account before checking in",
     acknowledgeDeficitFirst: "Acknowledge the deficit/overallocation warning before confirming",
+    confirmedMeanwhile:
+      "This check-in was confirmed from another window or a second tap while this one was being saved, so nothing was saved this time. Close the check-in and open it again to see the plan that was saved.",
     acknowledgeZeroBufferFirst: "Acknowledge the zero-buffer warning before confirming",
   },
 };

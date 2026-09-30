@@ -8,8 +8,10 @@ import { formatMoney } from "@/lib/currency";
 import type { Dictionary } from "@/lib/i18n";
 
 export function StepConfirm({
-  incomeTransactionCount,
+  incomeChanges,
   totalIncome,
+  unallocated,
+  cushion,
   budgetCount,
   allocatedCategoryCount,
   displayCurrency,
@@ -23,8 +25,13 @@ export function StepConfirm({
   formError,
   t,
 }: {
-  incomeTransactionCount: number;
+  /** What confirming does to the paycheck rows: new ones, ones this check-in recorded before updated, or removed at 0. */
+  incomeChanges: { created: number; updated: number; removed: number };
   totalIncome: number;
+  /** Available less the flexible rows: not written as a budget, carried to the next period. */
+  unallocated: number;
+  /** K4's cushion: what the accounts held before this pay, not counted in the plan. */
+  cushion: number;
   budgetCount: number;
   /** Categories with a planned amount above zero - when none, say where budgets can be set later. */
   allocatedCategoryCount: number;
@@ -49,8 +56,10 @@ export function StepConfirm({
       <Card size="sm">
         <CardContent className="space-y-1.5 text-sm text-muted-foreground">
           <p>{t.confirmSnapshotsNote}</p>
-          <p>{t.confirmIncomeNote(incomeTransactionCount, formatMoney(totalIncome, displayCurrency))}</p>
+          <p>{t.confirmIncomeNote(incomeChanges, formatMoney(totalIncome, displayCurrency))}</p>
           <p>{t.confirmBudgetsNote(budgetCount)}</p>
+          {unallocated > 0 ? <p>{t.confirmUnallocatedNote(formatMoney(unallocated, displayCurrency))}</p> : null}
+          {cushion > 0 ? <p>{t.confirmCushionNote(formatMoney(cushion, displayCurrency))}</p> : null}
           {budgetCount > 0 && allocatedCategoryCount === 0 ? (
             <p>{t.confirmNoAllocationsNote}</p>
           ) : null}

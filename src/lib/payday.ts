@@ -6,6 +6,7 @@
  * exactly what gets written.
  */
 import { convert, type RateTable } from "@/lib/currency";
+import { cushionFrom, flexibleRoomFrom, type FlexibleRoom } from "@/lib/flexible-room";
 import { round2 } from "@/lib/money";
 import type { PeriodInfo } from "@/lib/period";
 
@@ -40,42 +41,7 @@ export function defaultProtectedBuffer(
   return round2(Math.max(percentOfIncome, floorAmount));
 }
 
-export interface FlexibleInput {
-  income: number;
-  includedCarryover: number;
-  subscriptions: number;
-  recurringContributions: number;
-  goalPlan: number;
-  essentialFixed: number;
-  buffer: number;
-  /**
-   * AccountBufferBreakdown.reconciliationGap: how much less the accounts
-   * really support than their income projects (see AccountBufferPlan
-   * .reportedGap), in the display currency. A ceiling applied after the
-   * seven-input formula - it only ever lowers the result, and 0 or absent
-   * leaves it exactly as the formula had it.
-   */
-  reconciliationGap?: number;
-}
-
-/**
- * availableForFlexibleCategories = income + carryover - subscriptions -
- * recurringContributions - goalPlan - essentialFixed - buffer, then capped by
- * the reconciliation gap when there is one. Can be negative - callers must
- * show that as a deficit, never clamp it to zero.
- */
-export function availableForFlexibleCategories(input: FlexibleInput): number {
-  const projected = round2(
-    input.income +
-      input.includedCarryover -
-      input.subscriptions -
-      input.recurringContributions -
-      input.goalPlan -
-      input.essentialFixed -
-      input.buffer,
-  );
-  return round2(projected - Math.max(0, input.reconciliationGap ?? 0));
-}
+export { availableForFlexibleCategories, type FlexibleInput } from "@/lib/flexible-room";
 
 /** A reached goal's confirmed draws as planGoalFunding input: held on the accounts they came from, so the goals after it share what is left. */
 export function reachedGoalFunding(
@@ -100,6 +66,8 @@ export interface PaydayDraftSummary {
   available: number;
   /** The reconciliation gap that capped `available` (draftAccountBuffers().reconciliationGap); 0 when nothing did. */
   reconciliationGap: number;
+  /** K4 over the draft ("projected": the plan being drafted), every line of it. */
+  room: FlexibleRoom;
 }
 
 /**
@@ -157,11 +125,55 @@ export function draftAccountBuffers(
 }
 
 /**
- * The headline figures for a check-in draft, in draft.displayCurrency. This is
- * the single place that turns a PaydayCheckinDraft into "available for
- * flexible categories": the Dashboard's confirmed check-in summary line and
- * the period hero's recommended overall budget both read it from here, so the
- * two can never disagree.
+ * K4 over a check-in being drafted (src/lib/flexible-room.ts, "projected"):
+ * the income typed in Step 2, the carryover switched on in Step 3, the
+ * period's whole commitments, the goal and essential rows as they stand, the
+ * per-account buffers and the reconciliation cap Step 3 shows, and Step 1's
+ * reported balances as the cushion. A carryover from a period that has not
+ * ended yet is shown as provisional and counted as 0 (decision 3): the
+ * wizard's Step 3 and summarizePaydayDraft both read it here, so the figure
+ * on screen is the figure confirm measures.
+ */
+export function draftFlexibleRoom(input: {
+  totalIncome: number;
+  includedCarryover: number;
+  carryoverProvisional: boolean;
+  availableCarryover: number;
+  subscriptionsTotal: number;
+  contributionsTotal: number;
+  goalPlanTotal: number;
+  essentialFixedTotal: number;
+  buffers: Pick<AccountBufferBreakdown, "total" | "reconciliationGap">;
+  accounts: readonly { reportedBalance: number; currency: string }[];
+  displayCurrency: string;
+  rates: RateTable;
+}): FlexibleRoom {
+  const included = input.includedCarryover > 0;
+  const cap = input.buffers.reconciliationGap;
+  return flexibleRoomFrom("projected", {
+    income: input.totalIncome,
+    carryover: input.carryoverProvisional ? 0 : input.includedCarryover,
+    provisionalCarryover: input.carryoverProvisional && included ? input.availableCarryover : 0,
+    subscriptions: input.subscriptionsTotal,
+    contributions: input.contributionsTotal,
+    goalPlan: input.goalPlanTotal,
+    essential: input.essentialFixedTotal,
+    buffer: input.buffers.total,
+    cap,
+    cushion: cushionFrom(
+      input.accounts.map((account) => convert(account.reportedBalance, account.currency, input.displayCurrency, input.rates)),
+      cap,
+    ),
+  });
+}
+
+/**
+ * The headline figures for a check-in draft, in draft.displayCurrency: K4
+ * over the draft as it stands (draftFlexibleRoom), so the figures are the
+ * ones Step 3 shows for it before anything is edited. The confirmed card and
+ * the Dashboard's "Recommended" read a confirmed period's room instead
+ * (src/lib/data/flexible-room.ts), which re-reading this draft once agrees
+ * with while the settings and rates are those it was confirmed with.
  */
 export function summarizePaydayDraft(draft: PaydayCheckinDraft, rates: RateTable): PaydayDraftSummary {
   const totalIncome = round2(
@@ -180,23 +192,38 @@ export function summarizePaydayDraft(draft: PaydayCheckinDraft, rates: RateTable
   const essentialFixedTotal = round2(
     draft.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0),
   );
-  const reconciliationGap = draftAccountBuffers(draft, rates).reconciliationGap;
-  const available = availableForFlexibleCategories({
-    income: totalIncome,
+  const buffers = draftAccountBuffers(draft, rates);
+  const room = draftFlexibleRoom({
+    totalIncome,
     includedCarryover: draft.includedCarryover,
-    subscriptions: draft.subscriptionsTotal,
-    recurringContributions: draft.contributionsTotal,
-    goalPlan: goalPlanTotal,
-    essentialFixed: essentialFixedTotal,
-    buffer: draft.plannedBuffer,
-    reconciliationGap,
+    carryoverProvisional: draft.carryoverProvisional ?? false,
+    availableCarryover: draft.availableCarryover,
+    subscriptionsTotal: draft.subscriptionsTotal,
+    contributionsTotal: draft.contributionsTotal,
+    goalPlanTotal,
+    essentialFixedTotal,
+    // The draft's own buffer figure, as it always was: a hand-built draft
+    // may carry one that differs from its accounts' recomputed total.
+    buffers: { total: draft.plannedBuffer, reconciliationGap: buffers.reconciliationGap },
+    accounts: draft.accounts,
+    displayCurrency: draft.displayCurrency,
+    rates,
   });
+  const available = room.available;
   // The flexible rows as the wizard would show them: an unheld row's planned
   // amount is the suggestion scaled to this same available figure.
   const flexibleTotal = round2(
     resolveFlexibleCategories(draft.flexibleCategories, available).reduce((sum, c) => sum + c.plannedAmount, 0),
   );
-  return { totalIncome, goalPlanTotal, essentialFixedTotal, flexibleTotal, available, reconciliationGap };
+  return {
+    totalIncome,
+    goalPlanTotal,
+    essentialFixedTotal,
+    flexibleTotal,
+    available,
+    reconciliationGap: buffers.reconciliationGap,
+    room,
+  };
 }
 
 export interface FlexibleSuggestion {
@@ -238,7 +265,26 @@ export function scaleFlexibleSuggestions(
   );
   const others = scaled.reduce((sum, value, index) => (index === largest ? sum : sum + value), 0);
   scaled[largest] = round2(available - others);
-  return suggestions.map((s, index) => ({ ...s, scaled: scaled[index] }));
+  if (scaled[largest] >= 0) return suggestions.map((s, index) => ({ ...s, scaled: scaled[index] }));
+  // The other rows' rounding took more than there is (ten suggestions of 1
+  // against 0.05 each round up to 0.01): the largest row would go negative,
+  // and a negative budget can never be confirmed. Share the cents instead:
+  // every row rounded down, and the cents left go one each to the rows that
+  // lost the most to rounding, larger suggestions first on a tie - never
+  // below 0, and summing to exactly `available`.
+  const cents = Math.round(available * 100);
+  const exact = suggestions.map((s) => (s.suggested * cents) / total);
+  const floored = exact.map((value) => Math.floor(value + 1e-9));
+  let left = cents - floored.reduce((sum, value) => sum + value, 0);
+  const order = suggestions
+    .map((s, index) => ({ index, fraction: exact[index] - floored[index], suggested: s.suggested }))
+    .sort((a, b) => b.fraction - a.fraction || b.suggested - a.suggested || a.index - b.index);
+  for (const entry of order) {
+    if (left <= 0) break;
+    floored[entry.index] += 1;
+    left -= 1;
+  }
+  return suggestions.map((s, index) => ({ ...s, scaled: floored[index] / 100 }));
 }
 
 export interface FlexibleCategoryRow {
@@ -278,6 +324,23 @@ export function resolveFlexibleCategories<T extends FlexibleCategoryRow>(
       plannedAmount: category.held ? category.plannedAmount : suggestedAmount,
     };
   });
+}
+
+/**
+ * Which note Step 4 opens with (B40): "no_history" when no category has a
+ * suggestion at all, "deficit" when there is history but the plan has no
+ * room, so every suggestion scaled to 0 - telling a user in deficit they
+ * have no history would be false - and none otherwise.
+ */
+export function flexibleStepNote(
+  raw: readonly Pick<FlexibleCategoryRow, "suggestedAmount">[],
+  resolved: readonly Pick<FlexibleCategoryRow, "suggestedAmount">[],
+  available: number,
+): "no_history" | "deficit" | null {
+  if (raw.length === 0) return null;
+  if (!raw.some((row) => row.suggestedAmount > 0)) return "no_history";
+  if (available <= 0 && !resolved.some((row) => row.suggestedAmount > 0)) return "deficit";
+  return null;
 }
 
 export interface AccountBufferAccount {

@@ -25,31 +25,59 @@ export function PaydayCheckinCard({
   rates,
   locale,
   shouldAutoOpen,
+  room = null,
 }: {
   draft: PaydayCheckinDraft;
   rates: RateTable;
   locale: Locale;
   shouldAutoOpen: boolean;
+  /**
+   * The confirmed period's flexible room (K4, src/lib/data/flexible-room.ts):
+   * what was confirmed - its paycheck, buffer, carryover, goal plan and
+   * essentials - against the period's whole commitments, in the display
+   * currency. Null falls back to the draft's own figures.
+   */
+  room?: {
+    income: number;
+    buffer: number;
+    available: number;
+    flexibleBudgeted: number;
+    essential: number;
+    unallocated: number;
+    cushion: number;
+  } | null;
 }) {
   const t = getDictionary(locale).payday;
   const [open, setOpen] = useState(shouldAutoOpen);
 
   if (draft.isEditingConfirmed) {
-    const { totalIncome, essentialFixedTotal, flexibleTotal, available } = summarizePaydayDraft(draft, rates);
+    const drafted = room ? null : summarizePaydayDraft(draft, rates);
+    const figures = room ?? {
+      income: drafted!.totalIncome,
+      buffer: draft.plannedBuffer,
+      available: drafted!.available,
+      flexibleBudgeted: drafted!.flexibleTotal,
+      essential: drafted!.essentialFixedTotal,
+      unallocated: Math.max(0, drafted!.available - drafted!.flexibleTotal),
+      cushion: drafted!.room.cushion,
+    };
+    const money = (amount: number) => formatMoney(amount, draft.displayCurrency);
 
     return (
       <Card size="sm">
         <CardHeader>
           <CardTitle>{t.wizardTitle(draft.periodLabel)}</CardTitle>
           <CardDescription>
-            {t.summaryIncome}: {formatMoney(totalIncome, draft.displayCurrency)} · {t.summaryBuffer}:{" "}
-            {formatMoney(draft.plannedBuffer, draft.displayCurrency)} · {t.summaryAvailable}:{" "}
-            {formatMoney(available, draft.displayCurrency)} · {t.flexibleAllocated}:{" "}
-            {formatMoney(flexibleTotal, draft.displayCurrency)}
+            {t.summaryIncome}: {money(figures.income)} · {t.summaryBuffer}: {money(figures.buffer)} ·{" "}
+            {t.summaryAvailable}: {money(figures.available)} · {t.flexibleAllocated}: {money(figures.flexibleBudgeted)}
+            {figures.unallocated > 0 ? ` · ${t.flexibleUnallocated}: ${money(figures.unallocated)}` : ""}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {flexibleTotal === 0 && essentialFixedTotal === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {t.summaryCushion}: <span className="figure">{money(figures.cushion)}</span> - {t.summaryCushionHint}
+          </p>
+          {figures.flexibleBudgeted === 0 && figures.essential === 0 ? (
             <p className="text-xs text-muted-foreground">
               {t.noAllocationsSavedNote}{" "}
               <Link href="/budgets" className="underline underline-offset-3 hover:text-foreground">

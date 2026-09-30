@@ -16,6 +16,7 @@ import {
   inUnbudgetedCategory,
   isContributionTwin,
   ownCost,
+  periodBudgetFrom,
   spendingLineKey,
 } from "@/lib/budget-spending";
 
@@ -220,21 +221,9 @@ export async function getPeriodSummary(
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, displayCurrency, rates);
 
-  const overallBudgetRow = budgets.find((budget) => budget.categoryId === null);
-  const overallBudget = overallBudgetRow
-    ? round2(toDisplay(num(overallBudgetRow.amount), overallBudgetRow.currency))
-    : null;
-
-  const budgetByCategory = new Map<string, number>();
-  for (const budget of budgets) {
-    if (!budget.categoryId) continue;
-    budgetByCategory.set(
-      budget.categoryId,
-      round2(toDisplay(num(budget.amount), budget.currency)),
-    );
-  }
-  const categoryBudgetTotal = round2(
-    [...budgetByCategory.values()].reduce((total, value) => total + value, 0),
+  const { overallBudget, byCategory: budgetByCategory, categoryBudgetTotal, periodBudget, hasBudget } = periodBudgetFrom(
+    budgets.map((row) => ({ categoryId: row.categoryId, amount: num(row.amount), currency: row.currency })),
+    toDisplay,
   );
 
   const categoryById = new Map(categories.map((category) => [category.id, category]));
@@ -270,8 +259,6 @@ export async function getPeriodSummary(
   );
   const wontPostItems = wontPostItemsFrom(commitments, context);
 
-  const periodBudget = overallBudget ?? categoryBudgetTotal;
-  const hasBudget = overallBudget !== null || categoryBudgetTotal > 0;
   const daysRemaining = daysRemainingInPeriod(context.today, period);
   const safeToSpend = round2(periodBudget - budget.total);
   const safeToSpendPerDay = round2(

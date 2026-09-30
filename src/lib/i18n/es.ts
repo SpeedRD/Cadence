@@ -275,6 +275,8 @@ export const es = {
     setPeriodBudget: "Definir el presupuesto de este periodo",
     recommendedBudget: (amount: string) =>
       `Recomendado: ${amount} - lo que tu revisión de día de pago deja para categorías flexibles.`,
+    recommendedUnallocated: (available: string, unallocated: string) =>
+      `Recomendado: ${available} - lo que tu revisión de día de pago deja para categorías flexibles. ${unallocated} aún no está en ningún presupuesto: presupuéstalo aquí o pasará al próximo periodo.`,
     recommendedShortfall: (amount: string) =>
       `Tu revisión de día de pago deja ${amount} para categorías flexibles - el plan está sobrecomprometido, así que aún no hay nada que presupuestar.`,
     spent: "Gastado",
@@ -944,13 +946,18 @@ export const es = {
       coverage: "all" | "none" | "some" = "none",
       confirmedPeriods: string[] = [],
     ) =>
-      `${coverage === "none" ? "Todavía no existe un check-in de pago para estos períodos. " : coverage === "some" ? `Hay un check-in de pago confirmado para ${confirmedPeriods.join(", ")}, pero no para los demás períodos. ` : ""}El ingreso se proyecta como ${periods === null ? "el promedio de los períodos de pago comparables indicados bajo cada período" : incomeBasisEs(periods)} (la misma mitad del mes), contado en todas las cuentas desde el primer período con ingresos en cualquiera de ellas, así que un pago que pasó de una cuenta a otra no se cuenta en ambas. Si tus ingresos cambiaron (un trabajo nuevo, por ejemplo), "Contar historial de ingresos desde" en Ajustes define dónde empieza ese historial. Los compromisos de ${account} son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí y, en el período actual, lo que ya se registró además de lo que falta, más lo que un check-in de pago confirmado haya planificado hacia tus metas para ese período.${coverage === "all" ? "" : " Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo."} El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
+      `${coverage === "none" ? "Todavía no existe un check-in de pago para estos períodos. " : coverage === "some" ? `Hay un check-in de pago confirmado para ${confirmedPeriods.join(", ")}, pero no para los demás períodos. ` : ""}${coverage === "none" ? "" : `Para ${confirmedPeriods.join(", ")} las cifras son las que confirmó el check-in (el pago que registraste, el colchón que guardó, su remanente, sus esenciales y su aporte a metas), así que el margen es el mismo "Disponible para categorías flexibles" que muestra el check-in. `}${coverage === "all" ? "En los demás, el ingreso se proyecta como" : "El ingreso se proyecta como"} ${periods === null ? "el promedio de los períodos de pago comparables indicados bajo cada período" : incomeBasisEs(periods)} (la misma mitad del mes), contado en todas las cuentas desde el primer período con ingresos en cualquiera de ellas, así que un pago que pasó de una cuenta a otra no se cuenta en ambas. Si tus ingresos cambiaron (un trabajo nuevo, por ejemplo), "Contar historial de ingresos desde" en Ajustes define dónde empieza ese historial. Los compromisos de ${account} son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí y, en el período actual, lo que ya se registró además de lo que falta, más lo que un check-in de pago confirmado haya planificado hacia tus metas para ese período.${coverage === "all" ? "" : " Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo."} El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
     projectionAccountColumns: (account: string) => `${account} (proyectado)`,
     projectionPeriodColumns: "Todas las cuentas (proyectado)",
     projectionIncome: "Ingreso",
     projectionCommitted: "Compromisos",
     projectionBuffer: "Colchón",
     projectionIncomePeriods: (periods: number) => (periods === 1 ? "ingreso: 1 período" : `ingreso: ${periods} períodos`),
+    projectionConfirmed: "check-in confirmado",
+    confirmedCarryoverLine: (period: string, amount: string) =>
+      `${period} también cuenta ${amount} de remanente, como lo hace su check-in.`,
+    confirmedCapLine: (period: string, amount: string) =>
+      `${period} descuenta ${amount} por cuentas que estaban por debajo de cero antes del pago, como lo hace su check-in.`,
     lowIncomeHistory: (periods: number) =>
       `Solo ${comparablePeriodsEs(periods)} de historial de ingresos ${periods === 1 ? "respalda" : "respaldan"} esta proyección, así que toma su ingreso como aproximado hasta que pasen más períodos de pago.`,
     projectionEssential: "Fijos esenciales",
@@ -1545,9 +1552,14 @@ export const es = {
     carryoverAvailable: (amount: string) => `${amount} sin gastar del presupuesto anterior`,
     carryoverUnavailable:
       "No hay presupuesto del periodo anterior para medir el remanente - este plan se financia solo con el ingreso.",
+    carryoverProvisional: (amount: string) =>
+      `${amount} sin gastar hasta ahora del presupuesto anterior. El periodo anterior aún no termina, así que es provisional: el plan no cuenta nada de esto ahora y cuenta lo que ese periodo realmente deje cuando termine.`,
     carryoverIncluded: "Incluir en este plan",
     summaryIncome: "Ingreso",
     summaryCarryover: "Remanente incluido",
+    summaryCarryoverProvisional: (amount: string) => `${amount} provisional - se cuenta cuando termine el periodo anterior`,
+    summaryCushion: "Ya en tus cuentas",
+    summaryCushionHint: "Lo que tus cuentas tenían antes de este pago. Se guarda como reserva: no cuenta en este plan.",
     summarySubscriptions: "Suscripciones",
     summaryContributions: "Aportes recurrentes",
     summaryGoals: "Plan de metas",
@@ -1567,8 +1579,11 @@ export const es = {
     basisNone: "sin historial suficiente",
     flexibleAllocated: "Asignado",
     flexibleUnallocated: "Sin asignar",
+    flexibleUnallocatedCarries:
+      "No se guarda como presupuesto. Lo que quede sin asignar, y lo que los presupuestos no gasten, pasa al chequeo del próximo periodo.",
+    flexibleDeficitNote:
+      "Este plan no deja nada para categorías flexibles, así que cada sugerencia queda en 0. Libera dinero en el paso 3 o déjalas en 0.",
     flexibleOverallocated: (amount: string) => `${amount} sobreasignado`,
-    safeToSpendPerDayEstimate: "Disponible para gastar por día",
     noFlexibleCategoriesConfigured:
       "No hay categorías flexibles disponibles - cada categoría de gasto es fija esencial o está excluida.",
     acknowledgeDeficitLabel:
@@ -1577,8 +1592,20 @@ export const es = {
     step5Title: "Confirma tu plan",
     confirmSnapshotsNote:
       "Los saldos reportados se registran solo para auditoría - nunca cambian el saldo de la cuenta.",
-    confirmIncomeNote: (count: number, amount: string) =>
-      `Se ${count === 1 ? "creará" : "crearán"} ${count} transacción${count === 1 ? "" : "es"} de ingreso por un total de ${amount}.`,
+    confirmIncomeNote: (counts: { created: number; updated: number; removed: number }, amount: string) => {
+      const parts = [
+        counts.created > 0 ? `${counts.created} ${counts.created === 1 ? "se crea" : "se crean"}` : null,
+        counts.updated > 0 ? `${counts.updated} ${counts.updated === 1 ? "se actualiza" : "se actualizan"}` : null,
+        counts.removed > 0 ? `${counts.removed} ${counts.removed === 1 ? "se elimina" : "se eliminan"}` : null,
+      ].filter((part): part is string => part !== null);
+      if (parts.length === 0) return "No se crea ni cambia ninguna transacción de ingreso.";
+      const changed = counts.created + counts.updated + counts.removed;
+      return `Transacciones de ingreso, ${amount} en total: ${parts.join(", ")}${changed === counts.created ? "" : " - las que este chequeo ya había registrado se cambian en su lugar, no se agregan de nuevo"}.`;
+    },
+    confirmUnallocatedNote: (amount: string) =>
+      `${amount} queda sin asignar: no se guarda como presupuesto y pasa al chequeo del próximo periodo junto con lo que los presupuestos no gasten.`,
+    confirmCushionNote: (amount: string) =>
+      `${amount} ya estaba en tus cuentas antes de este pago. Se queda ahí como reserva y no cuenta en este plan.`,
     confirmBudgetsNote: (count: number) =>
       `Se ${count === 1 ? "creará o actualizará" : "crearán o actualizarán"} ${count} presupuesto${count === 1 ? "" : "s"} de categoría para este periodo.`,
     confirmReservedNote:
@@ -1598,6 +1625,8 @@ export const es = {
     couldNotReadPlan: "No se pudo leer el plan - intenta de nuevo",
     noActiveAccounts: "Agrega al menos una cuenta activa antes de hacer el chequeo",
     acknowledgeDeficitFirst: "Reconoce la advertencia de déficit o sobreasignación antes de confirmar",
+    confirmedMeanwhile:
+      "Este chequeo se confirmó desde otra ventana o con un segundo toque mientras se guardaba este, así que esta vez no se guardó nada. Cierra el chequeo y ábrelo de nuevo para ver el plan que quedó guardado.",
     acknowledgeZeroBufferFirst: "Reconoce la advertencia de colchón en cero antes de confirmar",
   },
 } as const satisfies Dictionary;

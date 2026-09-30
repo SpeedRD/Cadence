@@ -63,9 +63,17 @@
  * Installments dated before today are already paid: they are set aside before
  * anything is checked (evaluateAffordRequest) and never recorded.
  *
- * Nothing here reads a check-in for the periods being evaluated, and nothing
- * here writes until confirmAffordPurchase() - the calculator is a pure read
- * until "I bought this".
+ * A period whose payday check-in is confirmed is not projected: its figures
+ * are what the check-in confirmed (K4, src/lib/data/flexible-room.ts) - the
+ * paycheck recorded on each account, the buffer it kept, its essentials,
+ * carryover, reconciliation cap and GOAL rows - against the period's whole
+ * commitments, so Afford's "Available for flexible categories" is the one
+ * the check-in and the Dashboard show. For the others, the buffer is kept
+ * only on accounts the latest confirmed check-in recorded pay on (D19).
+ *
+ * Nothing here writes until confirmAffordPurchase() - the calculator is a
+ * pure read until "I bought this" (reading a confirmed room may settle a
+ * provisional carryover, which src/lib/data/flexible-room.ts owns).
  */
 import { cache } from "react";
 
@@ -103,6 +111,7 @@ import type { z } from "zod";
 
 import { getAppContext } from "@/lib/data/context";
 import { loadGoalPeriodPlans } from "@/lib/data/goal-plan";
+import { loadConfirmedRooms, type ConfirmedRoom } from "@/lib/data/flexible-room";
 import { loadCommitments } from "@/lib/data/period-commitments";
 import { loadPeriodIncome } from "@/lib/data/period-income";
 import {
@@ -245,6 +254,10 @@ async function loadHistoryIncome(
 interface ScheduledCommitments {
   byAccount: Map<string, number>;
   total: number;
+  /** The recurring contributions' part of `total`. */
+  contributions: number;
+  /** The confirmed GOAL rows' part of `total`. */
+  goals: number;
   /** A CONFIRMED check-in exists for the period, so its goal funding (GOAL rows, or none) is in the figures above and is the real thing - nothing is to be estimated for it. */
   confirmed: boolean;
 }
@@ -288,9 +301,13 @@ async function loadScheduledCommitments(
   accounts: ActiveAccount[],
   context: AffordContext,
   commitmentsByPeriod: Map<string, CommitmentOccurrence[]>,
+  ignoreCheckins = false,
 ): Promise<Map<string, ScheduledCommitments>> {
   const result = new Map<string, ScheduledCommitments>(
-    periods.map((period) => [period.key, { byAccount: new Map<string, number>(), total: 0, confirmed: false }]),
+    periods.map((period) => [
+      period.key,
+      { byAccount: new Map<string, number>(), total: 0, contributions: 0, goals: 0, confirmed: false },
+    ]),
   );
   if (periods.length === 0) return result;
   const currencyByAccount = new Map(accounts.map((account) => [account.id, account.currency]));
@@ -308,7 +325,9 @@ async function loadScheduledCommitments(
 
   const [commitments, checkins] = await Promise.all([
     commitmentsByPeriod,
-    prisma.paydayCheckin.findMany({
+    ignoreCheckins
+      ? []
+      : prisma.paydayCheckin.findMany({
       where: {
         status: "CONFIRMED",
         OR: periods.map((period) => ({ year: period.year, month: period.month, period: period.period })),
@@ -327,7 +346,12 @@ async function loadScheduledCommitments(
   for (const [key, occurrences] of commitments) {
     const bucket = result.get(key);
     if (!bucket) continue;
-    for (const occurrence of whole(occurrences)) add(bucket, occurrence.amount, occurrence.currency, occurrence.accountId);
+    for (const occurrence of whole(occurrences)) {
+      add(bucket, occurrence.amount, occurrence.currency, occurrence.accountId);
+      if (occurrence.kind === "CONTRIBUTION") {
+        bucket.contributions += convert(occurrence.amount, occurrence.currency, context.displayCurrency, context.rates);
+      }
+    }
   }
   for (const checkin of checkins) {
     const bucket = result.get(periodInfo(checkin).key);
@@ -335,6 +359,7 @@ async function loadScheduledCommitments(
     bucket.confirmed = true;
     for (const allocation of checkin.allocations) {
       add(bucket, num(allocation.plannedAmount), allocation.currency, allocation.accountId);
+      bucket.goals += convert(num(allocation.plannedAmount), allocation.currency, context.displayCurrency, context.rates);
     }
   }
   return result;
@@ -463,6 +488,21 @@ async function loadEssentialFixed(
 }
 
 /**
+ * The accounts a check-in keeps a buffer on (D19): those the latest
+ * confirmed check-in recorded pay on. Null when the user has never
+ * confirmed one - there is then no check-in to agree with, and every
+ * account with projected income keeps its buffer, as it always did.
+ */
+async function loadCheckinBufferAccounts(): Promise<Set<string> | null> {
+  const latest = await prisma.paydayCheckin.findFirst({
+    where: { status: "CONFIRMED" },
+    orderBy: [{ year: "desc" }, { month: "desc" }, { period: "desc" }],
+    select: { snapshots: { where: { incomeEntered: { gt: 0 } }, select: { accountId: true } } },
+  });
+  return latest ? new Set(latest.snapshots.map((snapshot) => snapshot.accountId)) : null;
+}
+
+/**
  * Projects every period in `refs` for a purchase charged to `chosen`.
  *
  * Income is averaged from history; periods that resolve to the same history
@@ -500,7 +540,7 @@ export async function projectPeriods(
   chosen: ActiveAccount,
   accounts: ActiveAccount[],
   context: AffordContext,
-  options: { excludeItemId?: string } = {},
+  options: { excludeItemId?: string; ignoreCheckins?: boolean } = {},
 ): Promise<Map<string, PeriodProjection>> {
   const confirmedOpen = await loadConfirmedOpenPeriodKeys(context.today);
   const histories = new Map<string, PeriodInfo[]>();
@@ -525,10 +565,14 @@ export async function projectPeriods(
   const incomeByHistory = new Map<string, PeriodIncome[]>();
   const periods = refs.map(periodInfo);
   const commitmentsByPeriod = await loadCommitments(periods, context, { excludeItemId: options.excludeItemId });
-  const [scheduled, essentials, goalPlans] = await Promise.all([
-    loadScheduledCommitments(periods, accounts, context, commitmentsByPeriod),
+  const [scheduled, essentials, goalPlans, confirmedRooms, bufferAccounts] = await Promise.all([
+    loadScheduledCommitments(periods, accounts, context, commitmentsByPeriod, options.ignoreCheckins),
     loadEssentialFixed(periods, suggestionRefFor, context),
     loadGoalPeriodPlans(periods, context, { commitments: commitmentsByPeriod }),
+    options.ignoreCheckins
+      ? new Map<string, ConfirmedRoom>()
+      : loadConfirmedRooms(periods, context, { commitments: commitmentsByPeriod }),
+    loadCheckinBufferAccounts(),
     ...[...histories.entries()].map(async ([key, history]) => {
       incomeByHistory.set(key, await loadHistoryIncome(history, accounts, context));
     }),
@@ -565,14 +609,36 @@ export async function projectPeriods(
     const historyKey = historyKeyFor.get(period.key) as string;
     const incomes = incomeByHistory.get(historyKey) ?? [];
     const commitments = scheduled.get(period.key);
-    const essential = essentials.get(period.key) ?? { amount: 0, basis: "unset" as const };
     const depth = incomeHistoryDepth(incomes);
+    // A period whose check-in is confirmed is judged by what was confirmed
+    // (K4, src/lib/data/flexible-room.ts): each account's recorded paycheck
+    // and the buffer the plan kept on it, the plan's essentials, carryover
+    // and cap. History only projects a period nobody has checked in for.
+    const room = confirmedRooms.get(period.key) ?? null;
+    const loadedEssential = essentials.get(period.key) ?? { amount: 0, basis: "unset" as const };
+    const essential = room
+      ? { amount: room.essential, basis: loadedEssential.basis === "unset" && room.essential === 0 ? ("unset" as const) : ("budget" as const) }
+      : loadedEssential;
+    const confirmedAccount = new Map((room?.accounts ?? []).map((account) => [account.accountId, account]));
 
     const figures = accounts.map((account) => {
+      const scheduledCommitted = round2(commitments?.byAccount.get(account.id) ?? 0);
+      if (room) {
+        const recorded = confirmedAccount.get(account.id);
+        const amount = recorded?.income ?? 0;
+        return {
+          account,
+          income: { amount, periods: depth },
+          hasIncome: true,
+          scheduledCommitted,
+          // The buffer the check-in stored on this account (its BUFFER row):
+          // one it recorded no pay on kept none, so no floor is taken here.
+          buffer: recorded?.buffer ?? 0,
+        };
+      }
       const values = incomes.map((byAccount) => byAccount.get(account.id) ?? 0);
       const income = averageOverHistory(values, depth);
       const hasIncome = values.some((value) => value > 0);
-      const scheduledCommitted = round2(commitments?.byAccount.get(account.id) ?? 0);
       const buffer = defaultProtectedBuffer(income.amount, context.bufferPercent, floorFor(account));
       return { account, income, hasIncome, scheduledCommitted, buffer };
     });
@@ -651,8 +717,12 @@ export async function projectPeriods(
       const estimatedGoalFunding = estimatedByAccount.get(account.id) ?? 0;
       periodIncome += convert(income.amount, account.currency, context.displayCurrency, context.rates);
       // Only an account that receives income keeps a buffer out of it - the
-      // check-in's planAccountBuffers rule for the period-wide total.
-      if (income.amount > 0) {
+      // check-in's planAccountBuffers rule for the period-wide total - and,
+      // once the user checks in, only an account the check-in records pay
+      // on (D19): interest landing in a savings account is income, but no
+      // check-in keeps a buffer on it, so projecting one here would reserve
+      // a floor the check-in never will.
+      if (income.amount > 0 && (bufferAccounts === null || bufferAccounts.has(account.id))) {
         periodBuffer += convert(buffer, account.currency, context.displayCurrency, context.rates);
       }
       if (account.id === chosen.id) {
@@ -667,7 +737,7 @@ export async function projectPeriods(
           committed: round2(scheduledCommitted + estimatedGoalFunding),
           buffer,
           essentialFixed: essentialShareFor(index, account),
-          basis: hasIncome ? "average" : "none",
+          basis: room ? "confirmed" : hasIncome ? "average" : "none",
           incomePeriods: income.periods,
           estimatedGoalFunding,
         };
@@ -679,15 +749,31 @@ export async function projectPeriods(
       period,
       confirmed: commitments?.confirmed ?? false,
       account: own,
-      flexible: {
-        currency: context.displayCurrency,
-        income: round2(periodIncome),
-        committed: round2((commitments?.total ?? 0) + periodEstimated),
-        buffer: round2(periodBuffer),
-        estimatedGoalFunding: periodEstimated,
-        essentialFixed: essential.amount,
-        incomePeriods: depth,
-      },
+      flexible: room
+        ? {
+            currency: context.displayCurrency,
+            income: room.income,
+            committed: round2(room.commitments + room.goalPlan),
+            buffer: room.buffer,
+            estimatedGoalFunding: 0,
+            essentialFixed: room.essential,
+            incomePeriods: depth,
+            contributions: room.contributions,
+            goalPlan: room.goalPlan,
+            carryover: room.carryover,
+            cap: room.cap,
+          }
+        : {
+            currency: context.displayCurrency,
+            income: round2(periodIncome),
+            committed: round2((commitments?.total ?? 0) + periodEstimated),
+            buffer: round2(periodBuffer),
+            estimatedGoalFunding: periodEstimated,
+            essentialFixed: essential.amount,
+            incomePeriods: depth,
+            contributions: round2(commitments?.contributions ?? 0),
+            goalPlan: round2((commitments?.goals ?? 0) + periodEstimated),
+          },
       essentialFixedBasis: essential.basis,
       estimatedGoals,
       goalPlans: projectedGoalPlans,

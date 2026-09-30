@@ -27,8 +27,8 @@ import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
 import { oneOffIncomeIssue } from "@/lib/period-income";
 import {
-  availableForFlexibleCategories,
   draftAccountBuffers,
+  draftFlexibleRoom,
   planGoalFunding,
   reachedGoalFunding,
   resolveFlexibleCategories,
@@ -195,19 +195,25 @@ export function PaydayCheckinDialog({
       plan.reachedGoals.reduce((sum, goal) => sum + goal.plannedAmount, 0),
   );
   const essentialFixedTotal = round2(plan.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
-  const available = availableForFlexibleCategories({
-    income: totalIncome,
+  // K4 over the plan being drafted (src/lib/flexible-room.ts): what the
+  // accounts really support caps it (AccountBufferBreakdown.reconciliationGap,
+  // 0 when Step 1 flagged nothing), a carryover from a period still running
+  // is shown but not counted, and Step 1's balances are the cushion beside it.
+  const room = draftFlexibleRoom({
+    totalIncome,
     includedCarryover: plan.includedCarryover,
-    subscriptions: plan.subscriptionsTotal,
-    recurringContributions: plan.contributionsTotal,
-    goalPlan: goalPlanTotal,
-    essentialFixed: essentialFixedTotal,
-    buffer: plannedBuffer,
-    // What the accounts really support caps the plan (see
-    // AccountBufferBreakdown.reconciliationGap) - 0 when Step 1 flagged
-    // nothing, so a plan with no gap reads exactly as before.
-    reconciliationGap: bufferPlan.reconciliationGap,
+    carryoverProvisional: plan.carryoverProvisional,
+    availableCarryover: plan.availableCarryover,
+    subscriptionsTotal: plan.subscriptionsTotal,
+    contributionsTotal: plan.contributionsTotal,
+    goalPlanTotal,
+    essentialFixedTotal,
+    buffers: bufferPlan,
+    accounts: plan.accounts,
+    displayCurrency: plan.displayCurrency,
+    rates,
   });
+  const available = room.available;
   // Step 4's rows follow `available` the way the buffers and goal draws above
   // follow the income: the draft carries each category's raw suggestion, and
   // it is scaled here, live, so it tracks every income edit in step 2 and
@@ -225,7 +231,15 @@ export function PaydayCheckinDialog({
     (serverAcknowledgements?.needsDeficitAck ?? false);
   const needsZeroBufferAck =
     plannedBuffer <= 0 || (serverAcknowledgements?.needsZeroBufferAck ?? false);
-  const incomeTransactionCount = plan.accounts.filter((a) => a.incomeEntered > 0).length;
+  // What confirming does to each account's paycheck row (archived accounts are
+  // left as they stand): a new row, the one already recorded updated, or
+  // that one removed when the income goes back to 0.
+  const editable = plan.accounts.filter((a) => !a.readOnly);
+  const incomeChanges = {
+    created: editable.filter((a) => a.incomeEntered > 0 && !a.hasIncomeTransaction).length,
+    updated: editable.filter((a) => a.incomeEntered > 0 && a.hasIncomeTransaction).length,
+    removed: editable.filter((a) => a.incomeEntered <= 0 && a.hasIncomeTransaction).length,
+  };
   const budgetCount = plan.essentialCategories.length + plan.flexibleCategories.length;
   const allocatedCategoryCount = [...plan.essentialCategories, ...flexibleCategories].filter(
     (c) => c.plannedAmount > 0,
@@ -438,7 +452,9 @@ export function PaydayCheckinDialog({
                 onReassignSubscription={reassignSubscription}
                 availableCarryover={plan.availableCarryover}
                 carryoverBasis={plan.carryoverBasis}
+                carryoverProvisional={plan.carryoverProvisional}
                 includedCarryover={plan.includedCarryover}
+                room={room}
                 totalIncome={totalIncome}
                 subscriptionsTotal={plan.subscriptionsTotal}
                 contributionsTotal={plan.contributionsTotal}
@@ -460,17 +476,20 @@ export function PaydayCheckinDialog({
             {step === 4 ? (
               <StepFlexible
                 categories={flexibleCategories}
+                rawSuggestions={plan.flexibleCategories}
                 displayCurrency={plan.displayCurrency}
                 available={available}
-                daysRemaining={plan.daysRemainingInPlanPeriod}
+                cushion={room.cushion}
                 onChange={updateFlexible}
                 t={t}
               />
             ) : null}
             {step === 5 ? (
               <StepConfirm
-                incomeTransactionCount={incomeTransactionCount}
+                incomeChanges={incomeChanges}
                 totalIncome={totalIncome}
+                unallocated={Math.max(0, round2(available - flexibleTotal))}
+                cushion={room.cushion}
                 budgetCount={budgetCount}
                 allocatedCategoryCount={allocatedCategoryCount}
                 displayCurrency={plan.displayCurrency}

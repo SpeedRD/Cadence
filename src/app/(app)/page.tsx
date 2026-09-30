@@ -15,11 +15,12 @@ import { isSameDay } from "@/lib/date";
 import { getAffordRechecks } from "@/lib/data/afford";
 import { getAppContext } from "@/lib/data/context";
 import { getDashboardData, UPCOMING_WINDOW_DAYS } from "@/lib/data/dashboard";
+import { loadConfirmedRooms } from "@/lib/data/flexible-room";
+import { recommendationFor } from "@/lib/flexible-room";
 import { getMonthlyPace } from "@/lib/data/monthly";
 import { getPaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary } from "@/lib/i18n";
-import { summarizePaydayDraft } from "@/lib/payday";
-import { daysElapsedInPeriod, isAfterPaydayInPeriod, periodKey } from "@/lib/period";
+import { daysElapsedInPeriod, isAfterPaydayInPeriod, periodInfo, periodKey } from "@/lib/period";
 
 export const metadata = { title: "Dashboard - Cadence" };
 
@@ -48,15 +49,19 @@ export default async function DashboardPage() {
     isAfterPaydayInPeriod(context.today) &&
     !paydayDraft.isEditingConfirmed &&
     !dismissedToday;
-  // Only once the *current* period's check-in is confirmed and no overall
-  // budget exists yet: the draft plans the next period on a payday date, and a
-  // suggestion for a different period than the hero shows would mislead.
-  const suggestedBudget =
-    paydayDraft.isEditingConfirmed &&
-    periodKey(paydayDraft.periodRef) === summary.period.key &&
-    summary.overallBudget === null
-      ? summarizePaydayDraft(paydayDraft, context.rates).available
-      : null;
+  // K4 for the two periods this page speaks about: the one the hero shows
+  // and the one the check-in card plans (the next one, from payday to period
+  // end). A confirmed period reads what was confirmed, not a draft rebuilt
+  // from today's settings and rates.
+  const rooms = await loadConfirmedRooms([summary.period, periodInfo(paydayDraft.periodRef)], context);
+  const cardRoom = paydayDraft.isEditingConfirmed ? (rooms.get(periodKey(paydayDraft.periodRef)) ?? null) : null;
+  const heroRoom = rooms.get(summary.period.key) ?? null;
+  // "Recommended" is the current period's own room, only once its check-in is
+  // confirmed and no overall budget exists: shown while nothing is budgeted,
+  // and while the budgets leave part of the room in no budget - money that
+  // otherwise carries to the next period (D24). Budgets holding all of it
+  // need no reminder.
+  const recommended = recommendationFor(summary, heroRoom);
 
   // Ordered by what the card currently is, not by what component it is. Before
   // the check-in is confirmed it is a prompt carrying the page's primary action,
@@ -70,6 +75,19 @@ export default async function DashboardPage() {
       rates={context.rates}
       locale={context.language}
       shouldAutoOpen={shouldAutoOpenCheckin}
+      room={
+        cardRoom
+          ? {
+              income: cardRoom.income,
+              buffer: cardRoom.buffer,
+              available: cardRoom.available,
+              flexibleBudgeted: cardRoom.flexibleBudgeted,
+              essential: cardRoom.essential,
+              unallocated: cardRoom.unallocated,
+              cushion: cardRoom.cushion,
+            }
+          : null
+      }
     />
   );
   const checkinLeads = !paydayDraft.isEditingConfirmed;
@@ -108,7 +126,7 @@ export default async function DashboardPage() {
       ) : null}
       <AffordViabilityAlert tracked={affordRechecks} t={t} />
       {checkinLeads ? checkinCard : null}
-      <PeriodHero summary={summary} elapsed={elapsed} suggestedBudget={suggestedBudget} t={t} />
+      <PeriodHero summary={summary} elapsed={elapsed} recommended={recommended} t={t} />
       <section className="sm:hidden">{upcomingCard}</section>
       {checkinLeads ? null : checkinCard}
 

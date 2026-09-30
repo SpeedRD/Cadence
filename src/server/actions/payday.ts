@@ -64,6 +64,7 @@ export async function confirmPaydayCheckinAction(
   });
   if (!result.ok) {
     if (result.reason === "no_active_accounts") return fail(t.noActiveAccounts);
+    if (result.reason === "confirmed_meanwhile") return fail(t.confirmedMeanwhile);
     const message =
       result.reason === "deficit_not_acknowledged"
         ? t.acknowledgeDeficitFirst

@@ -247,7 +247,13 @@ export function AffordResults({
   // count for the whole purchase, said once in the description; when periods
   // draw on different history (a confirmed check-in joins one half of the
   // month only) each row says its own.
-  const incomePeriodCounts = [...new Set(verdict.periods.map((period) => period.flexible.incomePeriods))];
+  // A confirmed period's income is the paycheck it recorded, not an average,
+  // so it has no count of its own to state.
+  // With every period confirmed, the count only says how later periods are projected.
+  const projected = verdict.periods.some((period) => !period.confirmed)
+    ? verdict.periods.filter((period) => !period.confirmed)
+    : verdict.periods;
+  const incomePeriodCounts = [...new Set(projected.map((period) => period.flexible.incomePeriods))];
   // Whether the payday check-ins behind these periods are confirmed: the
   // projection note only says none exists when none does.
   const coverage = checkInCoverage(verdict.periods);
@@ -585,7 +591,9 @@ export function AffordResults({
                   <TableRow key={period.key}>
                     <TableCell>
                       {period.period.label}
-                      {sharedIncomePeriods === null ? (
+                      {period.confirmed ? (
+                        <span className="block text-badge text-muted-foreground">{t.projectionConfirmed}</span>
+                      ) : sharedIncomePeriods === null ? (
                         <span className="block text-badge text-muted-foreground">
                           {t.projectionIncomePeriods(period.flexible.incomePeriods)}
                         </span>
@@ -644,6 +652,24 @@ export function AffordResults({
               ))}
             </ul>
           ) : null}
+          {/* A confirmed period's room also counts its carryover and cap (K4),
+              which have no column: said here so the figures add up. */}
+          {verdict.periods.flatMap((period) => [
+            ...(period.flexible.carryover > 0
+              ? [
+                  <p key={`${period.key}:carryover`} className="text-xs text-muted-foreground">
+                    {t.confirmedCarryoverLine(period.period.label, formatMoney(period.flexible.carryover, period.flexible.currency))}
+                  </p>,
+                ]
+              : []),
+            ...(period.flexible.cap > 0
+              ? [
+                  <p key={`${period.key}:cap`} className="text-xs text-muted-foreground">
+                    {t.confirmedCapLine(period.period.label, formatMoney(period.flexible.cap, period.flexible.currency))}
+                  </p>,
+                ]
+              : []),
+          ])}
           {showEssential ? (
             <p className="text-xs text-muted-foreground">
               {t.essentialFixedLine(

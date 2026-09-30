@@ -22,6 +22,7 @@ import { formatDayMonth } from "@/lib/date";
 import { round2 } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type { Dictionary } from "@/lib/i18n";
+import type { FlexibleRoom } from "@/lib/flexible-room";
 import type {
   AccountBufferBreakdown,
   CoverShortfallSuggestion,
@@ -240,7 +241,9 @@ export function StepCommitments({
   onReassignSubscription,
   availableCarryover,
   carryoverBasis,
+  carryoverProvisional,
   includedCarryover,
+  room,
   totalIncome,
   subscriptionsTotal,
   contributionsTotal,
@@ -275,7 +278,11 @@ export function StepCommitments({
   onReassignSubscription: (recurringItemId: string, accountId: string) => void;
   availableCarryover: number;
   carryoverBasis: CarryoverBasis;
+  /** The period the carryover comes from is still running: the amount is shown as provisional and not counted. */
+  carryoverProvisional: boolean;
   includedCarryover: number;
+  /** K4 over the plan being drafted: the summary's carryover line, the provisional amount and the cushion come from it. */
+  room: FlexibleRoom;
   totalIncome: number;
   subscriptionsTotal: number;
   contributionsTotal: number;
@@ -658,7 +665,9 @@ export function StepCommitments({
         <CardContent className="space-y-2">
           <p className="text-xs text-muted-foreground">
             {carryoverBasis === "prior_period_budget"
-              ? t.carryoverAvailable(formatMoney(availableCarryover, displayCurrency))
+              ? carryoverProvisional
+                ? t.carryoverProvisional(formatMoney(availableCarryover, displayCurrency))
+                : t.carryoverAvailable(formatMoney(availableCarryover, displayCurrency))
               : t.carryoverUnavailable}
           </p>
           <label className="flex items-center gap-2.5 text-sm">
@@ -679,8 +688,13 @@ export function StepCommitments({
           </div>
           <div className="flex justify-between">
             <span>{t.summaryCarryover}</span>
-            <span className="figure">{formatMoney(includedCarryover, displayCurrency)}</span>
+            <span className="figure">{formatMoney(room.carryover, displayCurrency)}</span>
           </div>
+          {room.provisionalCarryover > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t.summaryCarryoverProvisional(formatMoney(room.provisionalCarryover, displayCurrency))}
+            </p>
+          ) : null}
           <div className="flex justify-between text-muted-foreground">
             <span>{t.summarySubscriptions}</span>
             <span className="figure">-{formatMoney(subscriptionsTotal, displayCurrency)}</span>
@@ -714,6 +728,15 @@ export function StepCommitments({
             <span className={available < 0 ? "figure text-[var(--critical)]" : "figure"}>
               {formatMoney(available, displayCurrency)}
             </span>
+          </div>
+          {/* Decision 5.1 (option D): the money the accounts already held,
+              beside the figure and never added to it. */}
+          <div className="flex justify-between gap-3 text-muted-foreground">
+            <span>
+              {t.summaryCushion}
+              <span className="block text-xs">{t.summaryCushionHint}</span>
+            </span>
+            <span className="figure">{formatMoney(room.cushion, displayCurrency)}</span>
           </div>
           {available < 0 ? (
             <Alert variant="destructive">

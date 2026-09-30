@@ -15,22 +15,25 @@ import type { PeriodSummary } from "@/lib/data/period-summary";
 export function PeriodHero({
   summary,
   elapsed,
-  suggestedBudget = null,
+  recommended = null,
   t,
 }: {
   summary: PeriodSummary;
   elapsed: number;
   /**
-   * "Available for flexible categories" from this period's confirmed payday
-   * check-in, in summary.currency, or null when there is no confirmed check-in
-   * for this period or an overall budget is already set. May be zero or
-   * negative - shown as a shortfall, and then not carried to the budget form.
+   * This period's flexible room from its confirmed payday check-in (K4,
+   * src/lib/data/flexible-room.ts), in summary.currency: `available` may be
+   * zero or negative - shown as a shortfall, and then not carried to the
+   * budget form - and `unallocated` is what the budgets leave in no budget.
+   * Null when the period has no confirmed check-in, an overall budget is set,
+   * or the budgets hold all of it.
    */
-  suggestedBudget?: number | null;
+  recommended?: { available: number; unallocated: number } | null;
   t: Dictionary["dashboard"];
 }) {
   const { period, currency } = summary;
   const used = summary.periodBudget > 0 ? summary.spent / summary.periodBudget : 0;
+  const suggestedBudget = recommended?.available ?? null;
   const carriesSuggestion = suggestedBudget !== null && suggestedBudget > 0;
   // `suggested` is read by src/app/(app)/budgets/page.tsx to pre-fill (never
   // save) the overall budget field. A zero/negative figure is shown above but
@@ -87,6 +90,24 @@ export function PeriodHero({
                   </>
                 )}
               </p>
+              {/* The budgets leave part of the plan's room in no budget (D24):
+                  said here, with the way to budget it, rather than hidden
+                  because some category has a budget. */}
+              {recommended && recommended.unallocated > 0 ? (
+                <div className="space-y-2 pt-1">
+                  <p className="text-sm font-medium">
+                    {t.recommendedUnallocated(
+                      formatMoney(recommended.available, currency),
+                      formatMoney(recommended.unallocated, currency),
+                    )}
+                  </p>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/budgets?${new URLSearchParams({ period: periodKey(period) })}`}>
+                      {t.setPeriodBudget}
+                    </Link>
+                  </Button>
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="space-y-3">

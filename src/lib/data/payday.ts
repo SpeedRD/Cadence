@@ -42,7 +42,6 @@ import {
   roomShortfall,
 } from "@/lib/goal-plan";
 import {
-  daysRemainingInPeriod,
   paydayDateFor,
   periodClock,
   periodInfo,
@@ -52,6 +51,7 @@ import {
   type PeriodInfo,
   type PeriodRef,
 } from "@/lib/period";
+import { carryoverIsProvisional, PROVISIONAL_CARRYOVER_BASIS } from "@/lib/flexible-room";
 import { prisma } from "@/lib/prisma";
 import type { RecurringSkipReason } from "@/lib/recurring";
 import type { paydayConfirmSchema } from "@/lib/validation";
@@ -60,6 +60,7 @@ import type { z } from "zod";
 import { getAccountBalances } from "@/lib/data/accounts";
 import { goalPeriodPlans, loadGoalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
 import { loadBudgetSpent } from "@/lib/data/budget-spending";
+import { periodLeftover } from "@/lib/data/flexible-room";
 import { getPeriodSummary } from "@/lib/data/period-summary";
 import { listGoals } from "@/lib/data/goals";
 
@@ -80,6 +81,12 @@ export interface PaydayAccountDraft {
    */
   oneOffIncome: number;
   incomeNote: string;
+  /**
+   * A confirmed check-in already recorded this account's paycheck as a
+   * transaction: confirming again updates that row (or removes it, at 0)
+   * rather than creating one - what Step 5 says it will do.
+   */
+  hasIncomeTransaction: boolean;
   /** The configured buffer floor converted to this account's own currency, so the step can recompute its buffer as income is edited. */
   bufferFloor: number;
   /**
@@ -271,11 +278,22 @@ export interface PaydayCheckinDraft {
    * in PaydayCheckin.protectedBuffer for everything that reads a single figure.
    */
   plannedBuffer: number;
+  /**
+   * What the period before the plan period leaves it (periodLeftover in
+   * src/lib/data/flexible-room.ts): its budget and its plan's unallocated
+   * money, less its budget spending - so far, while it is still running.
+   */
   availableCarryover: number;
   carryoverBasis: CarryoverBasis;
   includedCarryover: number;
-  /** Days left in the plan period counting today, for the safe-to-spend-per-day estimate in Step 4 - the full period length when opened exactly on a payday (the period hasn't started yet), fewer when opened partway through an already-current period. */
-  daysRemainingInPlanPeriod: number;
+  /**
+   * The period the carryover comes from has not ended (decision 3): the
+   * amount can still shrink, so the plan shows it as provisional and counts
+   * none of it until that period's last day is over, when it settles.
+   */
+  carryoverProvisional: boolean;
+  /** That period's last day - the carryover settles once it has passed. */
+  carryoverSettlesAfter: Date;
   /** The server's today (the request's civil day in APP_TIMEZONE), for the dates the wizard pre-fills. */
   today: Date;
 }
@@ -526,13 +544,24 @@ export async function getGoalRoadmapStatus(
   return statuses.find((status) => status.goalId === goalId && status.role === "plan") ?? null;
 }
 
+/**
+ * The carryover a check-in for `planRef` is offered: what the period before
+ * it leaves (periodLeftover - its budget and its plan's unallocated money,
+ * less its budget spending, never below 0; nothing when it had neither a
+ * budget nor a confirmed plan), and whether that is still provisional
+ * because the period has not ended.
+ */
 export async function getAvailableCarryover(
   planRef: PeriodRef,
   context: AppContext,
-): Promise<{ amount: number; basis: CarryoverBasis }> {
-  const prevSummary = await getPeriodSummary(periodInfo(previousPeriod(planRef)), context);
-  if (!prevSummary.hasBudget) return { amount: 0, basis: "no_prior_budget" };
-  return { amount: round2(Math.max(0, prevSummary.safeToSpend)), basis: "prior_period_budget" };
+): Promise<{ amount: number; basis: CarryoverBasis; provisional: boolean; settlesAfter: Date }> {
+  const previous = periodInfo(previousPeriod(planRef));
+  const leftover = await periodLeftover(previous, context);
+  return {
+    ...leftover,
+    provisional: carryoverIsProvisional(previous.end, context.today),
+    settlesAfter: previous.end,
+  };
 }
 
 /**
@@ -810,6 +839,17 @@ export async function getPaydayCheckinDraft(
     ]);
   }
 
+  // The paychecks a confirmed check-in recorded that still exist: confirming
+  // again updates those rows, and creates one only where there is none.
+  const recordedIncomeIds = new Set(
+    (
+      await prisma.transaction.findMany({
+        where: { id: { in: (existing?.snapshots ?? []).flatMap((s) => (s.incomeTransactionId ? [s.incomeTransactionId] : [])) } },
+        select: { id: true },
+      })
+    ).map((row) => row.id),
+  );
+
   // Active accounts are always offered; an archived one appears only when this
   // check-in already recorded something for it, and then read-only.
   const draftableAccounts = accounts.filter(
@@ -834,6 +874,7 @@ export async function getPaydayCheckinDraft(
       incomeEntered: snapshot ? num(snapshot.incomeEntered) : 0,
       oneOffIncome: snapshot?.oneOffIncome ? num(snapshot.oneOffIncome) : 0,
       incomeNote: snapshot?.incomeNote ?? "",
+      hasIncomeTransaction: Boolean(snapshot?.incomeTransactionId && recordedIncomeIds.has(snapshot.incomeTransactionId)),
       // Each account's buffer is computed in its own currency, so the floor
       // has to be converted once per account rather than to the display
       // currency and then compared across currencies.
@@ -1000,7 +1041,8 @@ export async function getPaydayCheckinDraft(
     availableCarryover: carryover.amount,
     carryoverBasis: carryover.basis,
     includedCarryover,
-    daysRemainingInPlanPeriod: daysRemainingInPeriod(context.today, plan),
+    carryoverProvisional: carryover.provisional,
+    carryoverSettlesAfter: carryover.settlesAfter,
     today: context.today,
   };
 }
@@ -1051,6 +1093,8 @@ export interface FlexibleScaling {
 export type ConfirmPaydayCheckinResult =
   | { ok: true; flexibleScaled: FlexibleScaling | null }
   | { ok: false; reason: "no_active_accounts" }
+  /** Another confirmation of the same period landed while this one was being measured (B37): nothing was written. */
+  | { ok: false; reason: "confirmed_meanwhile" }
   | {
       ok: false;
       reason: "deficit_not_acknowledged" | "zero_buffer_not_acknowledged";
@@ -1120,6 +1164,8 @@ export async function confirmPaydayCheckin(
     prisma.paydayCheckin.findFirst({
       where: { year: planRef.year, month: planRef.month, period: planRef.period },
       select: {
+        id: true,
+        updatedAt: true,
         status: true,
         snapshots: { select: { accountId: true, incomeEntered: true, currency: true } },
         allocations: {
@@ -1294,10 +1340,14 @@ export async function confirmPaydayCheckin(
   const includedCarryover = round2(
     Math.min(Math.max(0, input.includedCarryover), carryover.amount),
   );
+  // Taken before the period it comes from has ended, it is provisional
+  // (decision 3): stored as chosen, counted as 0 until that period is over
+  // and its final leftover settles it (src/lib/data/flexible-room.ts).
+  const carryoverProvisional = carryover.provisional && includedCarryover > 0;
 
   const available = availableForFlexibleCategories({
     income: totalIncome,
-    includedCarryover,
+    includedCarryover: carryoverProvisional ? 0 : includedCarryover,
     subscriptions: subscriptionsTotal,
     recurringContributions: contributionsTotal,
     goalPlan: goalPlanTotal,
@@ -1348,13 +1398,28 @@ export async function confirmPaydayCheckin(
     return { ok: false, reason: "zero_buffer_not_acknowledged", acknowledgements };
   }
 
-  await prisma.$transaction(async (tx) => {
+  const readBeforeWriting = existingCheckin;
+  const written = await prisma.$transaction(async (tx) => {
+    // One confirmation of a period at a time (B37): a double submit or a
+    // second window waits here for the first to commit. It then finds the
+    // check-in changed since it read it and writes nothing - it planned
+    // against figures the first one has since replaced, and its balances
+    // would be read against a paycheck it did not record.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`payday-checkin:${plan.key}`}))`;
     // upsert on the (year, month, period) unique key rather than find-then-
     // create: two confirmations of the same period racing each other used to
     // let both find nothing and the loser hit a raw constraint error.
     const existingCheckin = await tx.paydayCheckin.findFirst({
       where: { year: planRef.year, month: planRef.month, period: planRef.period },
     });
+    if ((existingCheckin?.updatedAt.getTime() ?? null) !== (readBeforeWriting?.updatedAt.getTime() ?? null)) {
+      return false;
+    }
+    // The balances each snapshot reconciles against, read under the lock so
+    // they and the snapshot's own paycheck are one state of the ledger.
+    const balanceById = new Map(
+      (await getAccountBalances(context, { status: "ALL", client: tx })).map((account) => [account.id, account.balance]),
+    );
     // The check-in's date is set once, when the row is first created, and a
     // re-confirm keeps it: reopening the wizard days later to adjust one
     // category must not re-date the check-in or the paycheck it recorded.
@@ -1406,7 +1471,7 @@ export async function confirmPaydayCheckin(
       });
       // Measured against the ledger without this check-in's own income, so a
       // re-confirm reconciles against the same figure the first confirm did.
-      const expectedLedgerBalance = ledgerBefore(account.balance, existingSnapshot);
+      const expectedLedgerBalance = ledgerBefore(balanceById.get(account.id) ?? account.balance, existingSnapshot);
       const difference = round2(accountInput.reportedBalance - expectedLedgerBalance);
 
       let incomeTransactionId = existingSnapshot?.incomeTransactionId ?? null;
@@ -1530,7 +1595,7 @@ export async function confirmPaydayCheckin(
         recommendedAmount: carryover.amount,
         plannedAmount: includedCarryover,
         currency: context.displayCurrency,
-        basis: carryover.basis,
+        basis: carryoverProvisional ? PROVISIONAL_CARRYOVER_BASIS : carryover.basis,
       },
     ];
     await tx.paydayPlanAllocation.createMany({ data: allocationRows });
@@ -1579,7 +1644,9 @@ export async function confirmPaydayCheckin(
         });
       }
     }
-  });
+    return true;
+  }, { maxWait: 10_000, timeout: 30_000 });
+  if (!written) return { ok: false, reason: "confirmed_meanwhile" };
 
   return { ok: true, flexibleScaled };
 }

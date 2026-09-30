@@ -512,6 +512,7 @@ database-free function.
 - **Who / direction:** the card overstates flexible money by the finished goal's plan.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
 - **Status (2026-09-30, K1/K2):** counting half removed. A goal reached since the plan was confirmed keeps its confirmed GOAL rows in the rebuilt draft (`reachedGoals`), read-only, counted in the goal plan and taken from the pool first; confirm writes them back unchanged. Repro: the card reads 49,000 before and after (was 54,000), as Afford counts the 5,000. The card still rebuilds its other figures from live data (D32, K4).
+- **Status (2026-09-30, K4):** removed. The card now reads the confirmed period's room (`loadConfirmedRooms`, `lib/data/flexible-room.ts`): every confirmed GOAL row counts, a reached goal's included, and Step 3, "Recommended" and Afford read the same figure. Repro: once the 5,000 goal is reached, Step 3, the card, "Recommended" and Afford all read **49,000** (Afford read -5,000 from a history the account did not have). Harness: "flexible room for a period (K4)", D12.
 
 #### D13. An undated goal's "pace" means four things, and its average divides by the period in progress
 - **Quantities:** Q41 against Q34 and Q72.
@@ -554,6 +555,7 @@ database-free function.
 - **Repro (DB, trace (b)):** Oct 1-15 confirmed with a 60,000 paycheck against a 50,000 history: Step 3 **43,400**, Afford **34,400** (income −10,000, buffer +1,000).
 - **Who / direction:** anyone whose paycheck differs from the average, judging a purchase in a confirmed period; either direction.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** new (extends B7's shared label).
+- **Status (2026-09-30, K4):** removed. For a period whose check-in is confirmed, `projectPeriods` takes its figures from K4 ("confirmed"): the paycheck recorded on each account, the stored buffer, essentials, carryover, cap and GOAL rows against the whole commitments, and `evaluateAffordability` runs K4's formula (`roomFromProjection`, `lib/afford.ts`). The per-account check reads the account's recorded paycheck and the buffer the check-in stored on it (its BUFFER row; an account it recorded no pay on kept none, so no floor is applied - production's BSC reads 0 for Oct 1-15, was -3,000); the room check follows through `projectPeriods`. Repro (trace (b)): Afford **43,400** on Oct 1 and Oct 11 (was 34,400), the same as Step 3, the card and "Recommended". The results page labels such a period "confirmed check-in" and says its figures are the confirmed ones.
 
 #### D18. A bonus typed into a check-in becomes Afford income for six periods; logged as one-off it does not
 - **Quantities:** Q6 (and through it Q10, Q11, Q39) against Q3 and the one-off flag.
@@ -568,6 +570,7 @@ database-free function.
 - **Rules:** `lib/data/afford.ts:772-774` against `lib/payday.ts:340-353`.
 - **Repro (DB):** a savings account earning 150 a period beside a 60,000 salary: Step 3 buffer **6,000**, Afford buffer **8,000** (income 60,150).
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K4):** removed. Once the user has confirmed a check-in, a projected period keeps a buffer only on the accounts the latest confirmed check-in recorded pay on (`loadCheckinBufferAccounts`, `lib/data/afford.ts`); with no check-in ever confirmed every account with projected income keeps one, as before. Repro: Step 3 **6,000**, Afford **6,000** (was 8,000). The chosen account's own check still keeps its floor.
 
 #### D20. A charge the user entered that settles a subscription counts as budget spending; posting's own row for it does not
 - **Quantities:** Q16, Q20, Q26, Q27 against Q8's reservation and Q13.
@@ -598,6 +601,7 @@ database-free function.
 - **Rules:** `max(0, available − allocated) / days` (`step-flexible.tsx:33-34`) against `max(0, budget − spent) / days` (`period-summary.ts:335-338`); the unallocated remainder is written to no Budget row.
 - **Repro (DB, trace (b)):** Step 4 **2,160/day** (32,400 unallocated / 15); the Dashboard next day **1,066.67/day** (16,000 / 15). The 32,400 appears on no later screen and cannot reach the next carryover.
 - **Severity:** Low. **Confidence:** High. **Relates to:** B39, plus new (the unallocated money is dropped).
+- **Status (2026-09-30, K4, decision 2):** removed. Step 4 no longer shows a per-day figure: "Unallocated" is said to be written as no budget and to carry to the next period's check-in with whatever the budgets leave unspent, and Step 5 says the same. The carryover a period leaves (`leftoverFrom` / `periodLeftover`) is its budget plus its plan's unallocated money (`unallocatedRoom`: essential budgets + available − the period budget), less budget spending (K6), never below 0 - so raising a budget later moves money from one part to the other without counting it twice. Repro (trace (b)): the 32,400 reaches Oct 16-31's carryover, **48,400** on Oct 1 and 44,400 after 4,000 spent (were 16,000 and 12,000); after Oct 16-31 takes it, Nov 1-15 is offered 44,400 once. The unspent essential budget carries too, as it always did.
 
 #### D24. "Recommended" is hidden as soon as any category budget exists, so an essentials-only plan makes "safe to spend" the essentials
 - **Quantities:** Q21 and Q20 against Q23.
@@ -605,6 +609,7 @@ database-free function.
 - **Repro (DB):** Oct 1-15 confirmed with Bills (essential) 4,000 and every flexible row 0; 3,000 spent on Groceries: Step 3 **50,000** available; the hero shows **1,000** left, 71.43/day, and no "Recommended".
 - **Who / direction:** first check-ins with no history (no suggestions) where only essentials were typed; safe to spend is understated by the whole flexible amount.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K4):** removed. "Recommended" is the current period's confirmed room (`recommendationFor`, `lib/flexible-room.ts`), shown while no overall budget is set and either nothing is budgeted or the budgets leave part of the room in no budget; beside safe to spend it says how much is in no budget and links to the period's Budgets page. Safe to spend itself still covers only the budgets (decision 2). Repro: Step 3 **50,000**; the hero keeps 1,000 left and 71.43/day and now shows "Recommended: 50,000", 50,000 in no budget (was hidden).
 
 #### D25. "Committed" counts an occurrence the check-in already treats as paid
 - **Quantities:** Q7 against Q8.
@@ -627,6 +632,7 @@ database-free function.
 - **Rules:** `getAvailableCarryover` reads the previous period's safe to spend at draft time (`lib/data/payday.ts:550-557`).
 - **Repro (DB):** Nov 1-15 budget 20,000 with 12,000 spent; on Fri Nov 13 the Nov 16-30 draft includes **8,000** carryover while the Dashboard still offers the same 8,000 over 3 days (2,666.67/day).
 - **Severity:** Medium. **Confidence:** High. **Relates to:** B21.
+- **Status (2026-09-30, K4, decision 3):** removed. A carryover taken while the period it comes from is still running (every check-in done on its payday) is provisional: Step 3 shows it and counts 0 of it, confirm stores it on the CARRYOVER allocation with basis `provisional`, and the first K4 read after that period ends settles it at what the period really left (`settleCarryover`, `lib/data/flexible-room.ts`: one guarded update of the allocation and `includedCarryover`), after which it is an ordinary stored carryover. No migration. Repro: on Fri Nov 13 the Nov 16-30 plan reads **54,000** with 8,000 provisional (was 62,000); 3,000 spent over the weekend, on Nov 16 it counts **5,000** and reads 59,000 (was 8,000 and 62,000).
 
 #### D28. The check-in's per-account room ignores recurring contributions; Afford's does not
 - **Quantities:** Q50 / Q37 against Q25's account check.
@@ -659,6 +665,7 @@ database-free function.
 - **Rules:** `summarizePaydayDraft(draft, context.rates)` over a new draft that reads Settings now (`lib/data/payday.ts:866-872`); `PaydayCheckin.totalIncome` and `protectedBuffer` are never read.
 - **Repro (DB):** a 1,000 USD paycheck confirmed at 60 with a 20,000 Groceries budget, DOP display. At 62: hero income **62,000**, card income 62,000, card available **55,800** (was 54,000), budget still 20,000. Changing the buffer to 15% in Settings: card available **51,000**, buffer 9,000, with no re-confirm.
 - **Severity:** Low. **Confidence:** High. **Relates to:** B38 (currency side), new (settings side).
+- **Status (2026-09-30, K4):** removed. The card reads what was confirmed: `PaydayCheckin.totalIncome` (converted once, at confirm) and `protectedBuffer`, the stored carryover, GOAL rows and essential Budget rows, not a draft rebuilt at today's rates and settings. Repro: at 62 the card reads **54,000** (was 55,800); with the setting at 15% it reads 54,000 with a 6,000 buffer (was 51,000, buffer 9,000). Re-opening the wizard still re-plans with today's settings, which is what confirming again would write.
 
 #### D33. "Count income history from" bounds periods in one place, months in another, and nothing in Reports' per-period average
 - **Quantities:** Q6 and Q27 (by period), Q29 (by month), Q17's average (unbounded).

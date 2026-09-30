@@ -7,8 +7,9 @@
  * runs the very same evaluation server-side before it writes anything, so the
  * verdict the user acknowledged is the one that gates the write.
  *
- * Two checks per affected period, both against *projected* figures - there is
- * no confirmed payday check-in for a period that has not happened yet:
+ * Two checks per affected period, both against projected figures - or, for a
+ * period whose payday check-in is confirmed, against what it confirmed (see
+ * projectPeriods in src/lib/data/afford.ts):
  *
  *   account buffer   the chosen account's projected income, less what its
  *                    recurring items owe in the period, less its share of the
@@ -29,7 +30,8 @@
 import { convert, type RateTable } from "@/lib/currency";
 import { startOfDay } from "@/lib/date";
 import { round2 } from "@/lib/money";
-import { availableForFlexibleCategories, type GoalFundingDraw } from "@/lib/payday";
+import { flexibleRoomFrom, type FlexibleRoom } from "@/lib/flexible-room";
+import type { GoalFundingDraw } from "@/lib/payday";
 import { periodForDate, type PeriodInfo } from "@/lib/period";
 import { advanceDate } from "@/lib/recurring";
 
@@ -206,8 +208,13 @@ export interface PeriodProjection {
      * income - the money they are paid from. 0 when nothing is essential.
      */
     essentialFixed: number;
-    /** "none" when no comparable period had any income for this account - the projection is then a floor, not an average. */
-    basis: "average" | "none";
+    /**
+     * "confirmed" when the period's check-in is confirmed: `income` is the
+     * paycheck it recorded for this account and `buffer` the buffer it kept
+     * (K4). "none" when no comparable period had any income for this account
+     * - the projection is then a floor, not an average.
+     */
+    basis: "average" | "none" | "confirmed";
     /**
      * How many comparable periods `income` is the average of: the divisor,
      * counted from the oldest period with income in any account (see
@@ -237,6 +244,17 @@ export interface PeriodProjection {
     essentialFixed: number;
     /** The divisor behind `income` - the same one every account's average used (see account.incomePeriods). */
     incomePeriods: number;
+    /** The recurring contributions' part of `committed` (the rest is subscriptions and goal funding). Absent reads as 0. */
+    contributions?: number;
+    /** The goal funding part of `committed`: the confirmed GOAL rows, or the estimate. Absent reads as `estimatedGoalFunding`. */
+    goalPlan?: number;
+    /**
+     * For a period whose check-in is confirmed, the carryover its plan counts
+     * and its reconciliation cap (K4, src/lib/data/flexible-room.ts). A
+     * projected period has neither: absent reads as 0.
+     */
+    carryover?: number;
+    cap?: number;
   };
   /** Where `flexible.essentialFixed` came from, so the results page can say what was assumed. */
   essentialFixedBasis: EssentialFixedBasis;
@@ -280,7 +298,7 @@ export interface AccountCheck {
   buffer: number;
   /** This account's share of the period's essential fixed spending - see PeriodProjection.account.essentialFixed. */
   essentialFixed: number;
-  basis: "average" | "none";
+  basis: "average" | "none" | "confirmed";
   /** The divisor behind `income` - see PeriodProjection.account.incomePeriods. */
   incomePeriods: number;
   /** The estimated part of `committed` - see PeriodProjection.account.estimatedGoalFunding. */
@@ -306,6 +324,10 @@ export interface FlexibleCheck {
   essentialFixed: number;
   /** The divisor behind `income` - see PeriodProjection.flexible.incomePeriods. */
   incomePeriods: number;
+  /** The confirmed plan's carryover and cap - see PeriodProjection.flexible; 0 for a projected period. */
+  carryover: number;
+  cap: number;
+  /** K4's `available` for the period (roomFromProjection): what the purchase is taken from. */
   availableBefore: number;
   /** In the display currency. */
   installment: number;
@@ -379,6 +401,30 @@ export function installmentTotalsByPeriod(installments: Installment[]): Map<stri
 }
 
 /**
+ * K4 (src/lib/flexible-room.ts) over one period's projection: "confirmed"
+ * when its check-in is, its figures then being the confirmed ones (see
+ * projectPeriods), "projected" otherwise. The goal funding - the confirmed
+ * GOAL rows, or the estimate - is the goal plan; the rest of `committed` is
+ * the period's commitments.
+ */
+export function roomFromProjection(projection: PeriodProjection): FlexibleRoom {
+  const goalPlan = projection.flexible.goalPlan ?? projection.flexible.estimatedGoalFunding;
+  const contributions = projection.flexible.contributions ?? 0;
+  return flexibleRoomFrom(projection.confirmed ? "confirmed" : "projected", {
+    income: projection.flexible.income,
+    carryover: projection.flexible.carryover ?? 0,
+    provisionalCarryover: 0,
+    subscriptions: round2(projection.flexible.committed - goalPlan - contributions),
+    contributions,
+    goalPlan,
+    essential: projection.flexible.essentialFixed,
+    buffer: projection.flexible.buffer,
+    cap: projection.flexible.cap ?? 0,
+    cushion: 0,
+  });
+}
+
+/**
  * Judges every affected period and the purchase as a whole. `projections`
  * must hold an entry for each period key the installments touch; a missing
  * one is a programming error rather than a shortfall, so it throws.
@@ -430,21 +476,12 @@ export function evaluateAffordability(input: {
       shortfall: headroomAfter < 0 ? round2(-headroomAfter) : 0,
     };
 
-    // The check-in's own formula. Carryover is chosen at check-in time and
-    // is not money the period already has, so it enters as zero; goal
-    // funding is inside `committed` (the confirmed plan's, or the estimate);
-    // the essential fixed categories are projected the way the check-in
-    // fills them, and the rest - income, scheduled charges, the buffer - is
-    // what history and the schedules predict.
-    const availableBefore = availableForFlexibleCategories({
-      income: projection.flexible.income,
-      includedCarryover: 0,
-      subscriptions: projection.flexible.committed,
-      recurringContributions: 0,
-      goalPlan: 0,
-      essentialFixed: projection.flexible.essentialFixed,
-      buffer: projection.flexible.buffer,
-    });
+    // K4 over the projection (roomFromProjection): for a period whose
+    // check-in is confirmed, what it confirmed - the paycheck, its buffer,
+    // carryover and cap - so the figure is the one the check-in and the
+    // Dashboard show; for any other period, what history and the schedules
+    // predict, with no carryover (it is chosen at check-in time) and no cap.
+    const availableBefore = roomFromProjection(projection).available;
     const flexibleInstallment = round2(
       convert(installmentTotal, currency, projection.flexible.currency, rates),
     );
@@ -457,6 +494,8 @@ export function evaluateAffordability(input: {
       estimatedGoalFunding: projection.flexible.estimatedGoalFunding,
       essentialFixed: projection.flexible.essentialFixed,
       incomePeriods: projection.flexible.incomePeriods,
+      carryover: projection.flexible.carryover ?? 0,
+      cap: projection.flexible.cap ?? 0,
       availableBefore,
       installment: flexibleInstallment,
       availableAfter,

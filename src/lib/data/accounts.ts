@@ -40,20 +40,25 @@ export type AccountStatusFilter = "ACTIVE" | "ARCHIVED" | "ALL";
  */
 export async function getAccountBalances(
   context: AppContext,
-  options: { status?: AccountStatusFilter } = {},
+  options: {
+    status?: AccountStatusFilter;
+    /** Read inside this transaction instead - what confirming a check-in does once it holds the period's lock. */
+    client?: Prisma.TransactionClient;
+  } = {},
 ): Promise<AccountBalance[]> {
   const status = options.status ?? "ACTIVE";
+  const db = options.client ?? prisma;
   const [accounts, groups, counts, openingBalances] = await Promise.all([
-    prisma.account.findMany({
+    db.account.findMany({
       where: status === "ALL" ? undefined : { status },
       orderBy: { name: "asc" },
     }),
-    prisma.transaction.groupBy({
+    db.transaction.groupBy({
       by: ["accountId", "type", "currency", "transferDirection"],
       _sum: { amount: true },
     }),
-    prisma.transaction.groupBy({ by: ["accountId", "type"], _count: { _all: true } }),
-    prisma.transaction.findMany({
+    db.transaction.groupBy({ by: ["accountId", "type"], _count: { _all: true } }),
+    db.transaction.findMany({
       where: { type: "OPENING_BALANCE" },
       select: { id: true, accountId: true, amount: true, date: true },
     }),

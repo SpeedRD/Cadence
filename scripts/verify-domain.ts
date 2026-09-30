@@ -6741,8 +6741,14 @@ async function main() {
       eq("once confirmed, the period carries no estimate at all", `${sepAfter.account.estimatedGoalFunding}:${sepAfter.flexible.estimatedGoalFunding}:${sepAfter.estimatedGoals.length}`, "0:0:0");
       eq("the planned goal draw is committed against the account's buffer, in the estimate's place", round2(sepAfter.account.committed - scheduledOf(sepBefore.account)), 400);
       eq("and against the period's flexible money", round2(sepAfter.flexible.committed - scheduledOf(sepBefore.flexible)), 400);
-      eq("account headroom and available-for-flexible both drop by the draw, net of the estimate it replaced", `${round2(sepBefore.account.headroomBefore + sepBefore.account.estimatedGoalFunding - sepAfter.account.headroomBefore)}:${round2(sepBefore.flexible.availableBefore + sepBefore.flexible.estimatedGoalFunding - sepAfter.flexible.availableBefore)}`, "400:400");
-      eq("income is still projected from history, not read from the check-in", sepAfter.account.income, sepBefore.account.income);
+      // Flipped deliberately with K4 (D17): a confirmed period is judged by
+      // what its check-in confirmed - here one that recorded no paycheck -
+      // not by history. Was: income still the history average (9,433.33), so
+      // headroom and available-for-flexible dropped by the 400 draw alone.
+      const sepRoom = (await (await import("../src/lib/data/flexible-room")).loadConfirmedRooms([currentRef], affordContext)).get(currentRef.key);
+      eq("D17: once confirmed, the period's income is the paycheck the check-in recorded - none here - not the history average", `${sepAfter.account.income}:${sepAfter.flexible.income}:${sepAfter.account.basis}`, "0:0:confirmed");
+      eq("D17: ... available-for-flexible is the confirmed period's own room (K4), the 400 draw in it", sepAfter.flexible.availableBefore, sepRoom?.available);
+      eq("D17: ... and the account's headroom is its recorded paycheck less the draw, its other commitments, its essential share and its buffer", sepAfter.account.headroomBefore, round2(0 - sepAfter.account.committed - sepAfter.account.essentialFixed - sepAfter.account.buffer));
       const octoberAfterCheckin = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
       eq("a period with no check-in is untouched", `${round2(scheduledOf(octoberAfterCheckin.get("2026-10-A")!.account) - scheduledOf(reopened.get("2026-10-A")!.account) + 70)}:${round2(scheduledOf(octoberAfterCheckin.get("2026-10-A")!.flexible) - scheduledOf(reopened.get("2026-10-A")!.flexible) + 70)}`, "0:0");
       eq("and still carries its estimate: the check-in confirmed a different period", octoberAfterCheckin.get("2026-10-B")!.flexible.estimatedGoalFunding, 238.1);
@@ -11564,7 +11570,11 @@ async function main() {
           "true:600:0:600",
         );
         const octBDraft = await dDraft(oct6, { year: 2026, month: 10, period: "B" });
-        eq("D20: the carryover Oct 16-31 is offered is Oct 1-15's untouched 16,000 (was 15,400)", octBDraft.availableCarryover, 16000);
+        // Flipped deliberately with K4 (decision 2): the carryover also takes
+        // the 37,400 the plan left unallocated (60,000 - 600 - 6,000 buffer -
+        // 16,000 budgeted). The D20 point stands: nothing of the settled 600
+        // is taken off (was 16,000; 15,400 before D20).
+        eq("D20: the carryover Oct 16-31 is offered is Oct 1-15's untouched 16,000 plus its unallocated 37,400: 53,400 (was 16,000, and 15,400 before D20)", octBDraft.availableCarryover, 53400);
         await dWipe();
       }
       console.log("-- posting writes the row itself (the map's reference case) --");
@@ -12582,6 +12592,494 @@ async function main() {
       await wWipe();
       await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForWindow } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForWindow } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== flexible room for a period (K4): D12 D17 D19 D23 D24 D27 D32, B21 B37 B38 B39 B40 B48.6 B49.2, trace (b) ==");
+  {
+    // Public APIs only: every screen is read through the function it calls,
+    // and each helper falls back to what that screen called before K4 when
+    // src/lib/data/flexible-room.ts is not there - so this block also runs
+    // against the code before K4 and fails there on each divergence and
+    // finding it names, with the map's and the report's numbers
+    // (QUANTITIES_MAP.md, BUG_HUNT_FINDINGS.md). Display DOP, rates USD 1 /
+    // DOP 60 / EUR 0.9, buffer 10% with a 2,000 DOP floor (the Settings row
+    // the draft reads says the same). Fixtures are `Verify K4 ...`, removed
+    // after each case; every other active item is paused, every other open
+    // goal parked and every other active account archived meanwhile, all
+    // restored in the finally.
+    const qSummary = (await import("../src/lib/data/period-summary")).getPeriodSummary;
+    const qPayday = await import("../src/lib/data/payday");
+    const qAfford = await import("../src/lib/data/afford");
+    const qAffordPure = await import("../src/lib/afford");
+    const qPure = await import("../src/lib/payday");
+    const qPost = (await import("../src/lib/recurring-posting")).postDueRecurringItems;
+    const { logManualContribution: qLog, rebuildGoalSaved: qRebuild } = await import("../src/lib/goals");
+    const { getDictionary: qDictionary } = await import("../src/lib/i18n");
+    const qRoomData = await import("../src/lib/data/flexible-room").catch(() => null);
+    const qRoomPure = await import("../src/lib/flexible-room").catch(() => null);
+    type QDraft = Awaited<ReturnType<typeof qPayday.getPaydayCheckinDraft>>;
+    const qRates = (dop: number): RateTable => ({ rates: { USD: 1, DOP: dop, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const qContext = (today: Date, dop = 60, bufferPercent = 10, bufferFloorAmount = 2000) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: qRates(dop),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent,
+      bufferFloorAmount,
+      bufferFloorCurrency: "DOP",
+    });
+    type QContext = ReturnType<typeof qContext>;
+    const qRef = (year: number, month: number, half: "A" | "B") => ({ year, month, period: half });
+    const qAccount = async (name: string, currency = "DOP") => {
+      const row = await prisma.account.create({ data: { name: `Verify K4 ${name}`, currency, type: "CHECKING" } });
+      return { id: row.id, name: row.name, currency: row.currency };
+    };
+    const qCategory = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
+    const qIncome = (accountId: string, date: Date, amount: number) =>
+      prisma.transaction.create({ data: { date, amount, currency: "DOP", type: "INCOME", accountId, note: "Verify K4 income", source: "MANUAL" } });
+    const qExpense = (accountId: string, categoryId: string, date: Date, amount: number) =>
+      prisma.transaction.create({ data: { date, amount, currency: "DOP", type: "EXPENSE", accountId, categoryId, note: "Verify K4 spending", source: "MANUAL" } });
+    const qItem = (data: { name: string; amount: number; kind: "SUBSCRIPTION" | "CONTRIBUTION"; nextDate: Date; accountId: string; goalId?: string; categoryId?: string }) =>
+      prisma.recurringItem.create({
+        data: { currency: "DOP", frequency: "MONTHLY", anchorDay: data.nextDate.getUTCDate(), active: true, ...data, name: `Verify K4 ${data.name}` },
+      });
+    // What the wizard computes live once income is typed: the draft with the
+    // paycheck set and each account's buffer recomputed from it.
+    const qTyped = (draft: QDraft, incomes: Record<string, number>, patch: Partial<QDraft> = {}): QDraft => {
+      const typed = { ...draft, ...patch, accounts: draft.accounts.map((a) => ({ ...a, incomeEntered: incomes[a.accountId] ?? 0 })) } as QDraft;
+      return { ...typed, plannedBuffer: qPure.draftAccountBuffers(typed, qRates(60)).total };
+    };
+    const qConfirm = async (
+      ctx: QContext,
+      ref: { year: number; month: number; period: "A" | "B" },
+      plan: {
+        incomes: Record<string, number>;
+        goals?: { goalId: string; funding: { accountId: string; plannedAmount: number }[] }[];
+        essential?: { categoryId: string; plannedAmount: number }[];
+        flexible?: { categoryId: string; plannedAmount: number }[];
+        includedCarryover?: number;
+        reported?: Record<string, number>;
+      },
+    ) => {
+      const draft = await qPayday.getPaydayCheckinDraft(ctx, ref);
+      return qPayday.confirmPaydayCheckin(
+        {
+          ...ref,
+          accounts: draft.accounts
+            .filter((a) => !a.readOnly)
+            .map((a) => ({ accountId: a.accountId, reportedBalance: plan.reported?.[a.accountId] ?? a.expectedLedgerBalance, incomeEntered: plan.incomes[a.accountId] ?? 0, incomeNote: null })),
+          goals: plan.goals ?? [],
+          essentialCategories: plan.essential ?? [],
+          flexibleCategories: plan.flexible ?? [],
+          includedCarryover: plan.includedCarryover ?? 0,
+          acknowledgedDeficit: true,
+          acknowledgedZeroBuffer: true,
+        },
+        ctx,
+      );
+    };
+    // The confirmed card: K4 for the period (before K4, the draft rebuilt now).
+    const qCard = async (ctx: QContext, ref: { year: number; month: number; period: "A" | "B" }) => {
+      if (qRoomData) return (await qRoomData.loadConfirmedRooms([periodInfo(ref)], ctx)).get(periodInfo(ref).key) ?? null;
+      const draft = await qPayday.getPaydayCheckinDraft(ctx, ref);
+      return draft.isEditingConfirmed ? { ...qPure.summarizePaydayDraft(draft, ctx.rates), carryover: draft.includedCarryover } : null;
+    };
+    // The Dashboard's "Recommended" for the period the hero shows, or null when it is not shown.
+    const qRecommended = async (ctx: QContext) => {
+      const summary = await qSummary(ctx.currentPeriod, ctx);
+      if (qRoomData && qRoomPure) {
+        const room = (await qRoomData.loadConfirmedRooms([ctx.currentPeriod], ctx)).get(ctx.currentPeriod.key) ?? null;
+        return qRoomPure.recommendationFor(summary, room)?.available ?? null;
+      }
+      // Before K4: the plan-period draft, when it is the hero's period, shown only with no budget at all.
+      const draft = await qPayday.getPaydayCheckinDraft(ctx);
+      const suggested =
+        draft.isEditingConfirmed && periodInfo(draft.periodRef).key === summary.period.key && summary.overallBudget === null
+          ? qPure.summarizePaydayDraft(draft, ctx.rates).available
+          : null;
+      return summary.hasBudget ? null : suggested;
+    };
+    // Afford's verdict for a 1-peso purchase on the first open day of `ref`, charged to `chosen`.
+    const qAffordPeriod = async (ctx: QContext, ref: { year: number; month: number; period: "A" | "B" }, chosen: { id: string; name: string; currency: string }) => {
+      const accounts = await prisma.account.findMany({ where: { status: "ACTIVE" }, orderBy: { name: "asc" }, select: { id: true, name: true, currency: true } });
+      const info = periodInfo(ref);
+      const projections = await qAfford.projectPeriods([ref], chosen, accounts, ctx);
+      const date = info.start.getTime() < ctx.today.getTime() ? ctx.today : info.start;
+      return qAffordPure.evaluateAffordability({ installments: qAffordPure.buildInstallments([date], 1), currency: "DOP", projections, rates: ctx.rates }).periods[0];
+    };
+    const qCarryoverRow = async (ref: { year: number; month: number; period: "A" | "B" }) =>
+      prisma.paydayPlanAllocation.findFirst({
+        where: { type: "CARRYOVER", checkin: { year: ref.year, month: ref.month, period: ref.period } },
+        select: { basis: true, plannedAmount: true, checkin: { select: { includedCarryover: true } } },
+      });
+    const qWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify K4 " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { year: 2026, month: { in: [9, 10, 11] } } });
+      await prisma.budget.deleteMany({ where: { year: 2026, month: { in: [9, 10, 11] } } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify K4 " } } } });
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify K4 " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify K4 " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    const qWaitFor = async (condition: () => Promise<boolean>, ms: number) => {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        if (await condition()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return false;
+    };
+
+    check("K4: no check-in for Sep-Nov 2026 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: { year: 2026, month: { in: [9, 10, 11] } } })) === 0);
+    const qSettings = await prisma.settings.findUniqueOrThrow({ where: { id: "singleton" } });
+    check("K4: the Settings row the draft reads keeps a 10% buffer with a 2,000 DOP floor and includes carryover by default", qSettings.bufferPercent === 10 && num(qSettings.bufferFloorAmount) === 2000 && qSettings.bufferFloorCurrency === "DOP" && qSettings.carryoverIncludedByDefault);
+    const pausedForK4 = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForK4 = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const archivedForK4 = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    const billsForK4 = await prisma.category.findFirstOrThrow({ where: { name: "Bills" } });
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK4 } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK4 } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForK4 } }, data: { status: "ARCHIVED" } });
+    await prisma.category.update({ where: { id: billsForK4.id }, data: { isEssentialFixed: true } });
+    const [qGroceries, qDining, qSubscriptionsCat] = [await qCategory("Groceries"), await qCategory("Dining"), await qCategory("Subscriptions")];
+    const octA = qRef(2026, 10, "A");
+    const octB = qRef(2026, 10, "B");
+    try {
+      console.log("-- trace (b): one 'Available for flexible categories' on Step 3, the card, 'Recommended' and Afford (D17), the cushion, and Step 4's unallocated money carried once (D23) --");
+      {
+        const salary = await qAccount("Salary");
+        // Six comparable periods of 50,000 (Apr-Sep, first half), already in
+        // the account before the Sep 30 paycheck: Step 1's reported balance.
+        for (let month = 4; month <= 9; month += 1) await qIncome(salary.id, civilDate(2026, month, 1), 50000);
+        const thirty = await prisma.goal.create({ data: { name: "Verify K4 Thirty", targetAmount: 30000, currency: "DOP", targetDate: civilDate(2026, 12, 30) } });
+        await qItem({ name: "Netflix", amount: 600, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 5), accountId: salary.id, categoryId: qSubscriptionsCat });
+        await qItem({ name: "Thirty Contribution", amount: 2000, kind: "CONTRIBUTION", nextDate: civilDate(2026, 10, 10), accountId: salary.id, goalId: thirty.id });
+        const sep30 = qContext(civilDate(2026, 9, 30));
+        const confirmed = await qConfirm(sep30, octA, {
+          incomes: { [salary.id]: 60000 },
+          goals: [{ goalId: thirty.id, funding: [{ accountId: salary.id, plannedAmount: 3000 }] }],
+          essential: [{ categoryId: billsForK4.id, plannedAmount: 5000 }],
+          flexible: [
+            { categoryId: qGroceries, plannedAmount: 8000 },
+            { categoryId: qDining, plannedAmount: 3000 },
+          ],
+        });
+        check("trace (b): Oct 1-15 confirmed on Sep 30 with a 60,000 paycheck, goal 3,000, Bills 5,000, Groceries 8,000, Dining 3,000", confirmed.ok === true);
+        const fourWay = async (ctx: QContext) => {
+          const step3 = qPure.summarizePaydayDraft(await qPayday.getPaydayCheckinDraft(ctx), ctx.rates).available;
+          const card = (await qCard(ctx, octA))?.available;
+          const recommended = await qRecommended(ctx);
+          const afford = (await qAffordPeriod(ctx, octA, salary)).flexible.availableBefore;
+          return `${step3}:${card}:${recommended}:${afford}`;
+        };
+        const oct1 = qContext(civilDate(2026, 10, 1));
+        eq(
+          "trace (b) / D17, Oct 1: Step 3, the confirmed card, 'Recommended' and Afford all read 60,000 - 600 - 2,000 - 3,000 - 5,000 - 6,000 = 43,400 (Afford read 34,400 from the 50,000 history; 'Recommended' was hidden)",
+          await fourWay(oct1),
+          "43400:43400:43400:43400",
+        );
+        const oct1Room = await qCard(oct1, octA);
+        eq(
+          "decision 5.1: the card's cushion is Step 1's reported 300,000, shown beside the 43,400 and not added to it",
+          `${(oct1Room as { cushion?: number } | null)?.cushion}:${oct1Room?.available}`,
+          "300000:43400",
+        );
+        eq(
+          "D23: Step 4's 32,400 left unallocated (43,400 - 11,000) is not a per-day figure any more: it reaches Oct 16-31's carryover with the 16,000 of budgets - 48,400 (was 16,000; the 32,400 went nowhere)",
+          (await qPayday.getAvailableCarryover(octB, oct1)).amount,
+          48400,
+        );
+        await qPost(civilDate(2026, 10, 11));
+        await qExpense(salary.id, qGroceries, civilDate(2026, 10, 11), 4000);
+        const oct11 = qContext(civilDate(2026, 10, 11));
+        eq("trace (b), Oct 11 (Netflix and the contribution posted, 4,000 on Groceries): still one 43,400 on all four (Afford read 34,400)", await fourWay(oct11), "43400:43400:43400:43400");
+        eq("D23, Oct 11: the carryover offered to Oct 16-31 is 48,400 less the 4,000 spent: 44,400 (was 12,000)", (await qPayday.getAvailableCarryover(octB, oct11)).amount, 44400);
+        // Budgeting 2,000 more on the Budgets page moves it from the
+        // unallocated part to the budgeted part: the carryover is unchanged.
+        await prisma.budget.updateMany({ where: { year: 2026, month: 10, period: "A", categoryId: qGroceries }, data: { amount: 10000 } });
+        eq(
+          "D23: raising Groceries to 10,000 leaves 30,400 unallocated and the carryover at 44,400 - counted once, in one part or the other",
+          `${(await qCard(oct11, octA) as { unallocated?: number } | null)?.unallocated}:${(await qPayday.getAvailableCarryover(octB, oct11)).amount}`,
+          "30400:44400",
+        );
+        // Oct 16-31 is checked in on its payday, Thu Oct 15, while Oct 1-15
+        // still runs: its carryover is provisional (decision 3).
+        const oct15 = qContext(civilDate(2026, 10, 15));
+        const octBDraft = await qPayday.getPaydayCheckinDraft(oct15);
+        eq("decision 3: on Oct 15 the Oct 16-31 draft offers 44,400 as provisional", `${periodInfo(octBDraft.periodRef).key}:${octBDraft.availableCarryover}:${octBDraft.carryoverProvisional}`, "2026-10-B:44400:true");
+        const octBConfirmed = await qConfirm(oct15, octB, { incomes: {}, includedCarryover: octBDraft.availableCarryover });
+        check("decision 3: Oct 16-31 confirmed on Oct 15 with no paycheck and the carryover switched on", octBConfirmed.ok === true);
+        const octBOn15 = await qCard(oct15, octB);
+        eq(
+          "decision 3: while Oct 1-15 runs the plan counts 0 of it and shows the 44,400 as provisional",
+          `${octBOn15?.available}:${(octBOn15 as { provisionalCarryover?: number } | null)?.provisionalCarryover}:${(await qCarryoverRow(octB))?.basis}`,
+          "0:44400:provisional",
+        );
+        const oct16 = qContext(civilDate(2026, 10, 16));
+        const octBOn16 = await qCard(oct16, octB);
+        const settledRow = await qCarryoverRow(octB);
+        eq(
+          "decision 3: on Oct 16 the carryover settles at what Oct 1-15 really left, 44,400, written once to the check-in",
+          `${octBOn16?.available}:${settledRow?.basis}:${num(settledRow?.checkin.includedCarryover ?? 0)}`,
+          "44400:prior_period_budget:44400",
+        );
+        eq(
+          "decision 2: the unallocated money reaches the next carryover exactly once - Nov 1-15 is offered Oct 16-31's 44,400, not 0 and not twice",
+          (await qPayday.getAvailableCarryover(qRef(2026, 11, "A"), oct16)).amount,
+          44400,
+        );
+        eq("decision 3: a second read settles nothing again", `${(await qCard(oct16, octB))?.available}:${num((await qCarryoverRow(octB))?.checkin.includedCarryover ?? 0)}`, "44400:44400");
+        await qWipe();
+      }
+
+      console.log("-- D12: a goal completed mid-period keeps its confirmed plan counted everywhere --");
+      {
+        const salary = await qAccount("Salary");
+        const five = await prisma.goal.create({ data: { name: "Verify K4 Five", targetAmount: 5000, currency: "DOP", targetDate: civilDate(2026, 10, 15) } });
+        const sep30 = qContext(civilDate(2026, 9, 30));
+        const confirmed = await qConfirm(sep30, octA, { incomes: { [salary.id]: 60000 }, goals: [{ goalId: five.id, funding: [{ accountId: salary.id, plannedAmount: 5000 }] }] });
+        check("D12: Oct 1-15 confirmed with a 60,000 paycheck and 5,000 for the 5,000 goal", confirmed.ok === true);
+        const oct1 = qContext(civilDate(2026, 10, 1));
+        await qLog({ goalId: five.id, accountId: salary.id, amount: 5000, date: civilDate(2026, 10, 1), note: null }, qRates(60));
+        await qRebuild(five.id);
+        check("D12: the 5,000 contribution reaches the goal", (await prisma.goal.findUniqueOrThrow({ where: { id: five.id } })).achievedAt !== null);
+        const step3 = qPure.summarizePaydayDraft(await qPayday.getPaydayCheckinDraft(oct1), oct1.rates).available;
+        eq(
+          "D12: once reached, Step 3, the card, 'Recommended' and Afford all keep the 5,000: 60,000 - 6,000 - 5,000 = 49,000 (the card read 54,000 before K1/K2; Afford read the history instead)",
+          `${step3}:${(await qCard(oct1, octA))?.available}:${await qRecommended(oct1)}:${(await qAffordPeriod(oct1, octA, salary)).flexible.availableBefore}`,
+          "49000:49000:49000:49000",
+        );
+        await qWipe();
+      }
+
+      console.log("-- D24: an essentials-only plan still shows 'Recommended' --");
+      {
+        const salary = await qAccount("Salary");
+        const sep30 = qContext(civilDate(2026, 9, 30));
+        const confirmed = await qConfirm(sep30, octA, {
+          incomes: { [salary.id]: 60000 },
+          essential: [{ categoryId: billsForK4.id, plannedAmount: 4000 }],
+          flexible: [
+            { categoryId: qGroceries, plannedAmount: 0 },
+            { categoryId: qDining, plannedAmount: 0 },
+          ],
+        });
+        check("D24: Oct 1-15 confirmed with Bills 4,000 and every flexible row 0", confirmed.ok === true);
+        await qExpense(salary.id, qGroceries, civilDate(2026, 10, 2), 3000);
+        const oct2 = qContext(civilDate(2026, 10, 2));
+        const summary = await qSummary(oct2.currentPeriod, oct2);
+        eq("D24: Step 3 reads 60,000 - 4,000 - 6,000 = 50,000", qPure.summarizePaydayDraft(await qPayday.getPaydayCheckinDraft(oct2), oct2.rates).available, 50000);
+        eq("D24: the hero still shows 1,000 left, 71.43 a day (the unallocated money is in no budget, by decision 2)", `${summary.safeToSpend}:${summary.safeToSpendPerDay}`, "1000:71.43");
+        eq("D24: ... and now shows 'Recommended: 50,000' beside it, with the 50,000 in no budget (was hidden)", await qRecommended(oct2), 50000);
+        eq("D24: ... the 50,000 is what the plan left unallocated", (await qCard(oct2, octA) as { unallocated?: number } | null)?.unallocated, 50000);
+        await qWipe();
+      }
+
+      console.log("-- D32 / B38: the confirmed card and 'Recommended' keep the confirmed paycheck and buffer --");
+      {
+        const dollars = await qAccount("Dollars", "USD");
+        const sep30 = qContext(civilDate(2026, 9, 30));
+        const confirmed = await qConfirm(sep30, octA, { incomes: { [dollars.id]: 1000 }, flexible: [{ categoryId: qGroceries, plannedAmount: 20000 }] });
+        check("D32: a 1,000 USD paycheck confirmed at 60 with a 20,000 Groceries budget", confirmed.ok === true);
+        eq("D32: at 60 the card reads 60,000 - 6,000 = 54,000", (await qCard(qContext(civilDate(2026, 10, 1)), octA))?.available, 54000);
+        eq("D32: at 62 it still reads 54,000 - the paycheck was converted once, at confirm (was 55,800)", (await qCard(qContext(civilDate(2026, 10, 1), 62), octA))?.available, 54000);
+        await prisma.settings.update({ where: { id: "singleton" }, data: { bufferPercent: 15 } });
+        try {
+          const card = await qCard(qContext(civilDate(2026, 10, 1), 60, 15), octA);
+          eq(
+            "D32: with the buffer setting at 15% it still reads 54,000 with the 6,000 buffer it confirmed (was 51,000, buffer 9,000)",
+            `${card?.available}:${(card as { buffer?: number } | null)?.buffer}`,
+            "54000:6000",
+          );
+        } finally {
+          await prisma.settings.update({ where: { id: "singleton" }, data: { bufferPercent: 10 } });
+        }
+        await qWipe();
+      }
+      {
+        const dollars = await qAccount("Dollars", "USD");
+        await qItem({ name: "Gym", amount: 800, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 5), accountId: dollars.id });
+        const sep30 = qContext(civilDate(2026, 9, 30));
+        const confirmed = await qConfirm(sep30, octA, { incomes: { [dollars.id]: 1000 } });
+        check("B38: Oct 1-15 confirmed with a 1,000 USD paycheck, an 800 subscription on Oct 5 and no budget", confirmed.ok === true);
+        const before = await qRecommended(qContext(civilDate(2026, 10, 1)));
+        await qPost(civilDate(2026, 10, 5));
+        const after = await qRecommended(qContext(civilDate(2026, 10, 6), 62));
+        // The posting half of B38 went with K2 (03bd017); the other half is D32's rate drift.
+        eq("B38: 'Recommended' is 60,000 - 800 - 6,000 = 53,200 on Oct 1, and still 53,200 on Oct 6 after the 800 posted and the rate moved to 62 (was 55,000)", `${before}:${after}`, "53200:53200");
+        await qWipe();
+      }
+
+      console.log("-- D19: the same accounts keep a buffer in the check-in and in Afford --");
+      {
+        const salary = await qAccount("Salary");
+        const savings = await qAccount("Savings");
+        for (let month = 4; month <= 9; month += 1) {
+          await qIncome(salary.id, civilDate(2026, month, 16), 60000);
+          await qIncome(savings.id, civilDate(2026, month, 16), 150);
+        }
+        const sep30 = qContext(civilDate(2026, 9, 30));
+        check("D19: Oct 1-15 confirmed with the salary's paycheck only", (await qConfirm(sep30, octA, { incomes: { [salary.id]: 60000 } })).ok === true);
+        const oct15 = qContext(civilDate(2026, 10, 15));
+        const draft = await qPayday.getPaydayCheckinDraft(oct15, octB);
+        const step3Buffer = qTyped(draft, { [salary.id]: 60000 }).plannedBuffer;
+        const affordBuffer = (await qAffordPeriod(oct15, octB, salary)).flexible.buffer;
+        eq("D19: a savings account earning 150 a period beside a 60,000 salary: Step 3 keeps 6,000, and so does Afford (was 8,000: a 2,000 floor on the savings)", `${step3Buffer}:${affordBuffer}`, "6000:6000");
+        await qWipe();
+      }
+
+      console.log("-- D17: a confirmed period's per-account check keeps the buffer the check-in stored on each account --");
+      {
+        const salary = await qAccount("Salary");
+        const spare = await qAccount("Spare");
+        const sep30 = qContext(civilDate(2026, 9, 30));
+        check("D17: Oct 1-15 confirmed with a 60,000 paycheck on the salary and none on the spare account", (await qConfirm(sep30, octA, { incomes: { [salary.id]: 60000 } })).ok === true);
+        const oct1 = qContext(civilDate(2026, 10, 1));
+        const onSpare = (await qAffordPeriod(oct1, octA, spare)).account;
+        const onSalary = (await qAffordPeriod(oct1, octA, salary)).account;
+        eq(
+          "D17: the spare account got no pay and no buffer, so its room is 0, not cut by the 2,000 floor (was -2,000, buffer 2,000)",
+          `${onSpare.buffer}:${onSpare.headroomBefore}`,
+          "0:0",
+        );
+        eq("D17: ... while the salary keeps the 6,000 buffer the check-in stored on it: 60,000 - 6,000 = 54,000", `${onSalary.buffer}:${onSalary.headroomBefore}`, "6000:54000");
+        await qWipe();
+      }
+
+      console.log("-- D27 / B21: a carryover from a period still running is provisional, and never more than it leaves --");
+      {
+        const salary = await qAccount("Salary");
+        // What the account held before: without it the 12,000 below would
+        // leave Step 1's balance negative and the reconciliation cap would
+        // take it off the plan (not this case).
+        await qIncome(salary.id, civilDate(2026, 10, 1), 30000);
+        await prisma.budget.create({ data: { year: 2026, month: 11, period: "A", categoryId: qGroceries, amount: 20000, currency: "DOP" } });
+        await qExpense(salary.id, qGroceries, civilDate(2026, 11, 5), 12000);
+        const nov13 = qContext(civilDate(2026, 11, 13));
+        const novA = await qSummary(periodInfo(qRef(2026, 11, "A")), nov13);
+        eq("D27: on Fri Nov 13 the Dashboard still offers Nov 1-15's 8,000 over 3 days", `${novA.safeToSpend}:${novA.safeToSpendPerDay}`, "8000:2666.67");
+        const draft = await qPayday.getPaydayCheckinDraft(nov13);
+        eq("D27: the Nov 16-30 draft offers the same 8,000, marked provisional", `${periodInfo(draft.periodRef).key}:${draft.availableCarryover}:${draft.carryoverProvisional}`, "2026-11-B:8000:true");
+        const step3 = qPure.summarizePaydayDraft(qTyped(draft, { [salary.id]: 60000 }, { includedCarryover: 8000 }), nov13.rates);
+        eq(
+          "D27 / B21: Step 3 counts none of it while Nov 1-15 is still spendable: 60,000 - 6,000 = 54,000, with 8,000 shown as provisional (was 62,000)",
+          `${step3.available}:${(step3 as { room?: { provisionalCarryover: number } }).room?.provisionalCarryover}`,
+          "54000:8000",
+        );
+        check("B21: Nov 16-30 confirmed on Nov 13 with the carryover switched on", (await qConfirm(nov13, qRef(2026, 11, "B"), { incomes: { [salary.id]: 60000 }, includedCarryover: 8000 })).ok === true);
+        eq("B21: the confirmed card counts 0 of it on Nov 13", (await qCard(nov13, qRef(2026, 11, "B")))?.available, 54000);
+        await qExpense(salary.id, qGroceries, civilDate(2026, 11, 14), 3000);
+        const nov16 = qContext(civilDate(2026, 11, 16));
+        const card = await qCard(nov16, qRef(2026, 11, "B"));
+        const left = (await qSummary(periodInfo(qRef(2026, 11, "A")), nov16)).safeToSpend;
+        eq(
+          "D27 / B21: 3,000 spent over the weekend - on Nov 16 the plan counts what Nov 1-15 really left, 5,000, and never the 8,000 (was 8,000 counted from Nov 13 on)",
+          `${left}:${(card as { carryover?: number } | null)?.carryover}:${card?.available}`,
+          "5000:5000:59000",
+        );
+        check("B21: the counted carryover never exceeds what the period left", ((card as { carryover?: number } | null)?.carryover ?? Infinity) <= left);
+        await qWipe();
+      }
+
+      console.log("-- B37: two confirms of one check-in at once write one snapshot; the second is told so --");
+      {
+        const race = await qAccount("Race");
+        await qIncome(race.id, civilDate(2026, 9, 1), 1000);
+        const sep30 = qContext(civilDate(2026, 9, 30));
+        const draft = await qPayday.getPaydayCheckinDraft(sep30, octA);
+        const input = {
+          ...octA,
+          accounts: draft.accounts.filter((a) => !a.readOnly).map((a) => ({ accountId: a.accountId, reportedBalance: 1000, incomeEntered: a.accountId === race.id ? 5000 : 0, incomeNote: null })),
+          goals: [],
+          essentialCategories: [],
+          flexibleCategories: [],
+          includedCarryover: 0,
+          acknowledgedDeficit: true,
+          acknowledgedZeroBuffer: true,
+        };
+        // Hold the period's lock so both confirms finish measuring before
+        // either writes - the overlap a double submit or a second window
+        // makes - then let them go.
+        const lockKey = `payday-checkin:${periodInfo(octA).key}`;
+        let release: () => void = () => undefined;
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const holder = prisma.$transaction(
+          async (tx) => {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+            await released;
+          },
+          { maxWait: 10_000, timeout: 60_000 },
+        );
+        const waiting = async (granted: boolean, count: number) =>
+          Number((await prisma.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND granted = ${granted}`)[0].n) >= count;
+        await qWaitFor(() => waiting(true, 1), 5000);
+        const both = Promise.all([qPayday.confirmPaydayCheckin(input, sep30), qPayday.confirmPaydayCheckin(input, sep30)]);
+        await qWaitFor(() => waiting(false, 2), 20000);
+        release();
+        await holder;
+        const results = await both;
+        const snapshots = await prisma.paydayAccountSnapshot.findMany({ where: { accountId: race.id } });
+        eq(
+          "B37: one confirm is written and the other refused as 'confirmed meanwhile' (both were ok)",
+          results.map((result) => (result.ok ? "ok" : result.reason)).sort().join(","),
+          "confirmed_meanwhile,ok",
+        );
+        eq(
+          "B37: one check-in, one paycheck row and one snapshot, reconciled against the 1,000 before the pay: expected 1,000, difference 0 (was expected -4,000, difference 5,000)",
+          `${await prisma.paydayCheckin.count({ where: { ...octA } })}:${await prisma.transaction.count({ where: { accountId: race.id, source: "PAYDAY_CHECKIN" } })}:${snapshots.length}:${num(snapshots[0]?.expectedLedgerBalance ?? 0)}:${num(snapshots[0]?.difference ?? 0)}`,
+          "1:1:1:1000:0",
+        );
+        const en = qDictionary("en").payday as Record<string, unknown>;
+        const es = qDictionary("es").payday as Record<string, unknown>;
+        check("B37: the refusal has its own message in English and Spanish", typeof en.confirmedMeanwhile === "string" && typeof es.confirmedMeanwhile === "string" && en.confirmedMeanwhile !== es.confirmedMeanwhile);
+        await qWipe();
+      }
+
+      console.log("-- B39 B40 B48.6 B49.2: Step 4 and Step 5 say what the code does --");
+      {
+        const en = qDictionary("en");
+        const es = qDictionary("es");
+        check(
+          "B39: no payday string repeats the Dashboard's 'Disponible para gastar por día' (Step 4's per-day label copied it)",
+          !Object.values(es.payday).includes(es.dashboard.safeToSpendPerDay) && !Object.values(en.payday).includes("Estimated safe to spend per day"),
+        );
+        const rows = [
+          { categoryId: "a", suggestedAmount: 400, plannedAmount: 0, held: false },
+          { categoryId: "b", suggestedAmount: 150, plannedAmount: 0, held: false },
+        ];
+        const resolved = qPure.resolveFlexibleCategories(rows, -500);
+        const note =
+          "flexibleStepNote" in qPure
+            ? qPure.flexibleStepNote(rows, resolved, -500)
+            : resolved.some((row) => row.suggestedAmount > 0)
+              ? null
+              : "no_history";
+        eq("B40: suggestions 400 and 150 with -500 available scale to 0 and Step 4 says the plan has no room, not 'No spending history yet'", `${resolved.map((row) => row.suggestedAmount).join("|")}:${note}`, "0|0:deficit");
+        const scaled = qPure.scaleFlexibleSuggestions(Array.from({ length: 10 }, (_, index) => ({ id: `s${index}`, suggested: 1 })), 0.05);
+        eq(
+          "B49.2: ten suggestions of 1 against 0.05 scale to 0.01 x 5 and 0 x 5 - none negative, summing to 0.05 (was -0.04 and 0.01 x 9)",
+          `${scaled.filter((row) => row.scaled < 0).length}:${round2(scaled.reduce((sum, row) => sum + row.scaled, 0))}:${scaled.filter((row) => row.scaled === 0.01).length}`,
+          "0:0.05:5",
+        );
+        const note648 = (dictionary: typeof en) => (dictionary.payday.confirmIncomeNote as unknown as (counts: object, amount: string) => string)({ created: 0, updated: 1, removed: 1 }, "RD$60,000.00");
+        check(
+          "B48.6: re-confirming says the recorded paycheck is updated and another removed, never 'will be created'",
+          !/created/.test(note648(en)) && /1 updated/.test(note648(en)) && /1 removed/.test(note648(en)) && !/creará/.test(note648(es)) && /actualiza/.test(note648(es)),
+          `${note648(en)} | ${note648(es)}`,
+        );
+      }
+    } finally {
+      await qWipe();
+      await prisma.category.update({ where: { id: billsForK4.id }, data: { isEssentialFixed: billsForK4.isEssentialFixed } });
+      await prisma.account.updateMany({ where: { id: { in: archivedForK4 } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK4 } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK4 } }, data: { active: true } });
     }
   }
 

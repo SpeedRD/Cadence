@@ -131,3 +131,37 @@ export function budgetSpentFrom(
   }
   return { total: round2(total), byCategory };
 }
+
+/** A period's budget as the Dashboard, the Budgets page, carryover and K4 read it, in the display currency. */
+export interface PeriodBudget {
+  /** The explicit overall budget, when one is set. */
+  overallBudget: number | null;
+  /** Each category's budget, keyed by category id. */
+  byCategory: Map<string, number>;
+  categoryBudgetTotal: number;
+  /** overallBudget when set, otherwise the sum of the category budgets. */
+  periodBudget: number;
+  hasBudget: boolean;
+}
+
+/** The period's Budget rows read into one figure: the overall row when there is one, else the category rows summed. */
+export function periodBudgetFrom(
+  budgets: readonly { categoryId: string | null; amount: number; currency: string }[],
+  toDisplay: (amount: number, currency: string) => number,
+): PeriodBudget {
+  const overallRow = budgets.find((budget) => budget.categoryId === null);
+  const overallBudget = overallRow ? round2(toDisplay(overallRow.amount, overallRow.currency)) : null;
+  const byCategory = new Map<string, number>();
+  for (const budget of budgets) {
+    if (!budget.categoryId) continue;
+    byCategory.set(budget.categoryId, round2(toDisplay(budget.amount, budget.currency)));
+  }
+  const categoryBudgetTotal = round2([...byCategory.values()].reduce((total, value) => total + value, 0));
+  return {
+    overallBudget,
+    byCategory,
+    categoryBudgetTotal,
+    periodBudget: overallBudget ?? categoryBudgetTotal,
+    hasBudget: overallBudget !== null || categoryBudgetTotal > 0,
+  };
+}

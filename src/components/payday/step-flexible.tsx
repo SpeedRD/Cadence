@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { formatMoney } from "@/lib/currency";
 import { round2 } from "@/lib/money";
+import { flexibleStepNote } from "@/lib/payday";
 import type { Dictionary } from "@/lib/i18n";
 import type { PaydayCategoryDraft, SuggestionBasis } from "@/lib/data/payday";
 
@@ -16,29 +17,34 @@ function basisLabel(basis: SuggestionBasis, t: Dictionary["payday"]) {
 
 export function StepFlexible({
   categories,
+  rawSuggestions,
   displayCurrency,
   available,
-  daysRemaining,
+  cushion,
   onChange,
   t,
 }: {
+  /** The rows as resolved against `available`: each suggestion already scaled to it. */
   categories: PaydayCategoryDraft[];
+  /** The same rows' raw suggestions, before scaling: history exists even when every scaled one is 0. */
+  rawSuggestions: readonly { suggestedAmount: number }[];
   displayCurrency: string;
   available: number;
-  daysRemaining: number;
+  /** K4's cushion: shown beside the plan, never added to it. */
+  cushion: number;
   onChange: (categoryId: string, plannedAmount: number) => void;
   t: Dictionary["payday"];
 }) {
   const allocated = round2(categories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const remaining = round2(available - allocated);
-  const perDay = round2(Math.max(0, remaining) / Math.max(1, daysRemaining));
-  const hasSuggestions = categories.some((c) => c.suggestedAmount > 0);
+  const note = flexibleStepNote(rawSuggestions, categories, available);
 
   return (
     <div className="space-y-3">
-      {categories.length > 0 && !hasSuggestions ? (
-        <p className="text-sm text-muted-foreground">{t.noSuggestionsYetNote}</p>
-      ) : null}
+      {/* No history is one thing; history scaled to nothing because the plan
+          has no room left (B40) is another, and says so. */}
+      {note === "no_history" ? <p className="text-sm text-muted-foreground">{t.noSuggestionsYetNote}</p> : null}
+      {note === "deficit" ? <p className="text-sm text-muted-foreground">{t.flexibleDeficitNote}</p> : null}
       {categories.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t.noFlexibleCategoriesConfigured}</p>
       ) : (
@@ -72,13 +78,21 @@ export function StepFlexible({
             <span>{t.flexibleAllocated}</span>
             <span className="figure">{formatMoney(allocated, displayCurrency)}</span>
           </div>
-          <div className="flex justify-between">
-            <span>{t.flexibleUnallocated}</span>
-            <span className="figure">{formatMoney(Math.max(0, remaining), displayCurrency)}</span>
+          {/* What the unallocated money is (D23): not a budget, nor money to
+              spend per day - it carries to the next period's check-in. */}
+          <div className="border-t border-border/70 pt-1.5">
+            <div className="flex justify-between font-medium">
+              <span>{t.flexibleUnallocated}</span>
+              <span className="figure">{formatMoney(Math.max(0, remaining), displayCurrency)}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">{t.flexibleUnallocatedCarries}</p>
           </div>
-          <div className="flex justify-between border-t border-border/70 pt-1.5 font-medium">
-            <span>{t.safeToSpendPerDayEstimate}</span>
-            <span className="figure">{formatMoney(perDay, displayCurrency)}</span>
+          <div className="flex justify-between gap-3 text-muted-foreground">
+            <span>
+              {t.summaryCushion}
+              <span className="block text-xs">{t.summaryCushionHint}</span>
+            </span>
+            <span className="figure">{formatMoney(cushion, displayCurrency)}</span>
           </div>
           {remaining < 0 ? (
             <div className="reveal-block">

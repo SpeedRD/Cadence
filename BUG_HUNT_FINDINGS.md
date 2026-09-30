@@ -281,6 +281,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** check-ins done on a Friday payday before a weekend period end (Nov 13 2026, Feb 26 2027, …). With carryover included by default, available money is overstated by whatever is then spent over the weekend.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** on a check-in opened before the previous period ends, show the carryover as provisional and re-read it on confirm. Or take it only once the previous period has ended, and let the next confirm or draft pick it up.
+- **Status: fixed** (2026-09-30, K4, decision 3). A carryover taken before the period it comes from has ended is provisional: shown in Step 3 and on the check-in, counted as 0, and settled once that period ends at what it really left (the CARRYOVER allocation's basis `provisional`, settled by one guarded update in `src/lib/data/flexible-room.ts`). Repro: on Fri Nov 13 the Nov B plan counts 0 of the 8,000 (reads 54,000, was 62,000); after 3,000 more is spent over the weekend it counts 5,000 on Nov 16, never 8,000.
 
 ### B22. Afford's "average of your last 6 comparable pay periods" is a constant; the real basis varies per account
 - **What:** the page passes `HISTORY_PERIODS` (6) to the copy. The real divisor is per account, from that account's first activity (`averageSinceFirstActivity`), and "count income history from" can shorten the walk. `PeriodProjection.historyPeriods` holds the walked count, but nothing reads it, and the walked count is not the divisor either.
@@ -447,6 +448,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** a double submit or retry. The stored reconciliation fields are wrong. Nothing re-reads them today, so the damage is limited to the audit record and to exports.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** read balances inside the transaction, after locking the check-in row (`SELECT … FOR UPDATE` on the unique key).
+- **Status: fixed** (2026-09-30). Confirming takes a transaction-level advisory lock on the period, re-reads the check-in under it and reads the balances inside the same transaction; a confirmation that finds the check-in changed since it measured writes nothing and returns `confirmed_meanwhile`, shown as "This check-in was confirmed from another window or a second tap..." (English and Spanish). Repro: two parallel confirms give one `ok` and one refusal, 1 check-in, 1 income row, 1 snapshot with expected 1,000 and difference 0 (were two `ok`s and expected -4,000, difference 5,000).
 
 ### B38. The dashboard's "Recommended" budget grows as the period's subscriptions post
 - **What:** the draft of a confirmed period recomputes subscriptions from today, so posted ones drop out of `available`.
@@ -455,6 +457,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** shown only when the current period's check-in is confirmed and no overall budget exists. The recommendation is then overstated by what has already posted.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** for a confirmed period, count occurrences from the period's start (or read the confirmed allocation rows).
+- **Status: fixed** (2026-09-30, K4). The posting half went with K2 (whole commitments, 03bd017); the rest is D32: "Recommended" now reads the confirmed period's room - its stored paycheck and buffer - not a draft rebuilt at today's rates. Repro: a 1,000 USD paycheck with an 800 subscription reads 53,200 on Oct 1 and still 53,200 on Oct 6 after it posted and the rate moved to 62 (was 55,000).
 
 ### B39. Step 4's "Estimated safe to spend per day" is unallocated money per day, not the dashboard's figure
 - **What:** Step 4 computes (available − allocated) ÷ days, which is 0 once everything is allocated. The dashboard's figure is (budget − spent) ÷ days. The Spanish label ("Disponible para gastar por día") is the dashboard's label word for word.
@@ -463,6 +466,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** display only. It understates what can be spent and invites confusion between the two figures.
 - **Severity / confidence:** Low / High. Evidence: code path.
 - **Fix:** label it "Unallocated per day", or compute the dashboard's figure from the planned budgets.
+- **Status: fixed** (2026-09-30, K4). Step 4 has no per-day figure any more: "Unallocated" is said to be written as no budget and to carry to the next period's check-in, and that money now does (decision 2, D23). The Spanish label that copied the Dashboard's is gone with it; no payday string repeats "Disponible para gastar por día".
 
 ### B40. A plan in deficit shows "No spending history yet"
 - **What:** the note is gated on scaled suggestions, and every suggestion scales to 0 when available ≤ 0.
@@ -471,6 +475,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** users in deficit are told they have no history, which is false.
 - **Severity / confidence:** Low / High. Evidence: pure run.
 - **Fix:** gate the note on the raw suggestions, and show a deficit note when the scaled ones are all 0.
+- **Status: fixed** (2026-09-30). The note is chosen by `flexibleStepNote` (`src/lib/payday.ts`) from the raw suggestions: "No spending history yet" only when none has any, and a deficit note ("This plan leaves nothing for flexible categories, so every suggestion is scaled to 0...") when there is history but no room. Repro: 400 and 150 with -500 available gives the deficit note.
 
 ### B41. A SEMI_MONTHLY suggestion's next date ignores the weekend shift posting applies
 - **What:** detection steps each anchor with MONTHLY, which has no shift. Posting's SEMI_MONTHLY rule pulls a weekend date back to Friday.
@@ -563,6 +568,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Fix:** one wording pass driven by the computations. Item 3's threshold should be checked on the monthly equivalent.
 - **Status:** items 1, 2, 3, 4, 5, 8, 10, 11 and 12 fixed (copy, English and Spanish; item 1 also carries a `confirmed` flag from the projection so the note can say whether check-ins exist for none, all or some of the evaluated periods; item 5 adds a hint under the field). Item 3's behavior and item 7 were fixed earlier: the room check runs when one charge or the monthly equivalent reaches the threshold (SEMI_MONTHLY stays unchecked), and "Next 7 days" covers today and the following six. Still open: items 6 and 9 (payday wizard and goals-roadmap strings, out of scope here). No string used by the wizard was needed for the other items.
 - **Status (K3, 2026-09-30):** item 9 fixed. The Goals list, detail and Dashboard card name the period ("Oct 1-15: 5,571.32 planned · 5,571.32 contributed"), and the Inbox shows the period as its own evidence line beside "Planned" (the labels no longer say "this period"). Item 6 is still open.
+- **Status: fixed** (item 6, 2026-09-30). Step 5 says what confirming does to each paycheck row - created, updated in place or removed at 0 - from whether the check-in already recorded one that still exists (`PaydayAccountDraft.hasIncomeTransaction`), e.g. "Income transactions, RD$60,000.00 in total: 1 updated, 1 removed - the ones this check-in recorded before are changed in place, not added again." (English and Spanish). All twelve items are now fixed.
 
 ---
 
@@ -579,6 +585,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Fix:** 1: reject a leading-zero comma group. 2: clamp at 0 and give the remainder to the largest positive row. 3: refuse anchor pairs that collide. 4: compare against the day after the month end. 5: require ACTIVE.
 - **Status:** item 1 fixed (only item 1). A comma group counts as thousands only after a 1-3 digit leading group that is not a lone 0, so "0,125" and "0,500" are rejected as too many decimals like "0.125".
 - **Status:** items 3, 4 and 5 fixed (only those). The form refuses a SEMI_MONTHLY pair whose weekend-shifted dates can coincide in some month of 2000-2099 (74 of 465 pairs), an item created on a month's last day counts for that month, and approving a staged email or importing a CSV needs an ACTIVE account; an edit that changes only the second day is refused too, while saving a pair an item already has is not; item 2 is still open.
+- **Status: fixed** (item 2, 2026-09-30). When the largest row would absorb a negative remainder, `scaleFlexibleSuggestions` shares the cents instead (every row rounded down, the cents left to the rows that lost the most to rounding): never negative, summing exactly to `available`. Repro: ten suggestions of 1 against 0.05 give 0.01 x 5 and 0 x 5 (were -0.04 and 0.01 x 9). Items 1-5 are now all fixed.
 
 ---
 
