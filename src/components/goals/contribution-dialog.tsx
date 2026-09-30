@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+
+import { ConversionPreview } from "@/components/form/conversion-preview";
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
 import { AccountSelect, type Option } from "@/components/form/selects";
@@ -7,6 +10,7 @@ import { markGoalAchieved } from "@/components/goals/goal-achieved";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { getDictionary, type Locale } from "@/lib/i18n";
+import type { RateTable } from "@/lib/currency";
 import { addContributionAction } from "@/server/actions/goals";
 
 /**
@@ -19,6 +23,7 @@ export function ContributionDialog({
   currency,
   accounts,
   defaultDate,
+  rates,
   trigger,
   locale,
 }: {
@@ -28,11 +33,17 @@ export function ContributionDialog({
   /** Active accounts only - a new row is never filed against an archived one. */
   accounts: Option[];
   defaultDate: string;
+  /** The request's rate table, for the conversion preview. */
+  rates: RateTable["rates"];
   trigger: React.ReactNode;
   locale: Locale;
 }) {
   const t = getDictionary(locale).goals;
   const common = getDictionary(locale).common;
+  // Tracked only for the conversion preview: the account's expense is stored
+  // in its own currency, converted once at today's rate (K7).
+  const [amountText, setAmountText] = useState("");
+  const [accountId, setAccountId] = useState<string | undefined>(undefined);
 
   return (
     <FormDialog
@@ -58,6 +69,7 @@ export function ContributionDialog({
             inputMode="decimal"
             className="font-mono"
             placeholder="0.00"
+            onChange={(event) => setAmountText(event.target.value)}
             required
           />
         </Field>
@@ -80,8 +92,16 @@ export function ContributionDialog({
           name="accountId"
           accounts={accounts}
           common={common}
+          onValueChange={setAccountId}
         />
       </Field>
+      <ConversionPreview
+        amount={amountText}
+        currency={currency}
+        accountCurrency={accounts.find((account) => account.id === accountId)?.currency}
+        rates={rates}
+        locale={locale}
+      />
 
       <Field label={common.note} htmlFor="contribution-note">
         <Textarea

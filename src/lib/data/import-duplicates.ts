@@ -1,3 +1,4 @@
+import { enteredMoney, inAccountCurrency, moneyRow } from "@/lib/account-money";
 import { resolveImportCategoryId } from "@/lib/categorization";
 import {
   csvFingerprint,
@@ -67,18 +68,20 @@ export async function findCsvDuplicates(input: {
       accountId: input.accountId,
       date: { gte: new Date(`${dates[0]}T00:00:00Z`), lte: new Date(`${dates[dates.length - 1]}T00:00:00Z`) },
     },
-    select: { id: true, date: true, amount: true, currency: true, note: true, externalId: true },
+    select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, note: true, externalId: true },
   });
 
   const existingByFingerprint = new Map<string, ExistingCsvMatch[]>();
   for (const row of existing) {
+    // A fingerprint is the file's own figure: what the row was entered as.
+    const entered = enteredMoney(moneyRow(row));
     const fingerprint =
       fingerprintFromCsvExternalId(row.externalId) ??
       csvFingerprint({
         accountId: input.accountId,
         date: toISODate(row.date),
-        amount: num(row.amount),
-        currency: row.currency,
+        amount: entered.amount,
+        currency: entered.currency,
         note: row.note,
       });
     const list = existingByFingerprint.get(fingerprint) ?? [];
@@ -120,9 +123,13 @@ export async function findCsvPostedDuplicates(input: {
   lookup?: PostedLookup;
   timeoutMs?: number;
 }): Promise<Map<number, PostedMatch> | null> {
-  const categories = await prisma.category.findMany({ select: { id: true, name: true } });
+  const [categories, account] = await Promise.all([
+    prisma.category.findMany({ select: { id: true, name: true } }),
+    prisma.account.findUnique({ where: { id: input.accountId }, select: { currency: true } }),
+  ]);
   const knownCategoryIds = new Set(categories.map((category) => category.id));
   const categoryIdByName = new Map(categories.map((category) => [category.name.toLowerCase(), category.id]));
+  const accountCurrency = account?.currency ?? input.currency;
 
   const incoming = input.rows.flatMap((row, index) => {
     if (input.skip.has(index) || row.type === "EXTERNAL_TRANSFER") return [];
@@ -134,8 +141,8 @@ export async function findCsvPostedDuplicates(input: {
         accountId: input.accountId,
         type: row.type,
         date,
-        amount: row.amount,
-        currency: input.currency,
+        // Judged as the import will store it (K7).
+        ...inAccountCurrency({ amount: row.amount, currency: input.currency }, accountCurrency, input.rates),
         note: row.note,
         categoryId: resolveImportCategoryId({
           explicitCategoryId: row.categoryId,

@@ -2,9 +2,10 @@
 
 import { randomUUID } from "node:crypto";
 
+import { enteredShare, moneyRow, transferLegsInAccounts } from "@/lib/account-money";
 import { getSettings, requireAuth } from "@/lib/auth";
 import { backfillUncategorizedTransactions } from "@/lib/categorization";
-import { formatMoney } from "@/lib/currency";
+import { IDENTITY_RATES, formatMoney } from "@/lib/currency";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { recomputeGoalSaved, removeContribution } from "@/lib/goals";
@@ -18,7 +19,6 @@ import {
   manualContributionIdFromTransaction,
   recurringContributionKeyFromTransaction,
   transactionEditBlock,
-  transferLegs,
 } from "@/lib/transactions";
 import {
   firstError,
@@ -29,7 +29,7 @@ import {
 } from "@/lib/validation";
 
 import { getAppContext } from "@/lib/data/context";
-import { createManualTransaction } from "@/lib/data/manual-transaction";
+import { createManualTransaction, storedTransactionValues } from "@/lib/data/manual-transaction";
 import { keepPostedInsteadOfEntry } from "@/lib/data/posted-duplicates";
 
 import {
@@ -119,8 +119,11 @@ export async function saveTransactionAction(
     // transactionSchema) stays as it is, but the amount it sits inside may
     // be the very thing being edited: the same bound the form applies to a
     // share it does set.
+    // The stored share is in the account's currency; the form's amount is as
+    // entered, so the share is measured as the form shows it (enteredShare).
+    const previousRow = { ...moneyRow(existing), yourShare: existing.yourShare === null ? null : num(existing.yourShare) };
     if (values.yourShare === undefined && existing.yourShare !== null) {
-      const kept = num(existing.yourShare);
+      const kept = enteredShare(previousRow) ?? num(existing.yourShare);
       const shareIssue = yourShareIssue(values.amount, kept);
       if (shareIssue) return fail(localizeValidationMessage(shareIssue, locale));
     }
@@ -133,7 +136,14 @@ export async function saveTransactionAction(
       const linked = await prisma.transaction.count({ where: { reimbursesTransactionId: id } });
       if (linked > 0) return fail(t.sharedHasReimbursements);
     }
-    await prisma.transaction.update({ where: { id }, data: values });
+    // Stored in the account's currency (K7): the same money re-saved keeps
+    // its stored conversion, and a corrected amount keeps the stored rate.
+    const previousAccount = await prisma.account.findUnique({ where: { id: existing.accountId }, select: { currency: true } });
+    const stored = await storedTransactionValues(values, async () => (await getAppContext()).rates, {
+      row: previousRow,
+      accountCurrency: previousAccount?.currency ?? existing.currency,
+    });
+    await prisma.transaction.update({ where: { id }, data: stored });
   } else {
     // The row is written whatever the hints say; see createManualTransaction.
     const created = await createManualTransaction(values, { getContext: getAppContext });
@@ -367,8 +377,10 @@ export async function saveTransferAction(
   );
   if (referenceError) return fail(referenceError);
 
-  // The receiving leg may carry what the bank actually credited when the two
-  // accounts are in different currencies - see transferLegs.
+  // Each leg is stored in its own account's currency (K7, see
+  // transferLegsInAccounts): the receiving leg carries what the bank actually
+  // credited when the user gave it, otherwise the amount converted once at
+  // today's rate.
   const accounts = await prisma.account.findMany({
     where: { id: { in: [fromAccountId, toAccountId] } },
     select: { id: true, currency: true },
@@ -376,26 +388,36 @@ export async function saveTransferAction(
   const fromAccount = accounts.find((account) => account.id === fromAccountId);
   const toAccount = accounts.find((account) => account.id === toAccountId);
   if (!fromAccount || !toAccount) return fail(t.accountNoLongerExists);
-  const legs = transferLegs({
+  const legInput = {
     amount,
     currency,
     receivedAmount,
     fromCurrency: fromAccount.currency,
     toCurrency: toAccount.currency,
-  });
+  };
+  const rates =
+    currency !== fromAccount.currency || currency !== toAccount.currency ? (await getAppContext()).rates : IDENTITY_RATES;
 
   if (transferId) {
-    const existingLegs = await prisma.transaction.findMany({ where: { transferId } });
+    const existingLegs = await prisma.transaction.findMany({
+      where: { transferId },
+      include: { account: { select: { currency: true } } },
+    });
     if (existingLegs.length !== 2) return fail(t.transferNoLongerExists);
+    const previousLeg = (direction: "OUT" | "IN") => {
+      const leg = existingLegs.find((row) => row.transferDirection === direction);
+      return leg ? { row: moneyRow(leg), accountCurrency: leg.account.currency } : null;
+    };
+    const legs = transferLegsInAccounts(legInput, rates, { out: previousLeg("OUT"), in: previousLeg("IN") });
 
     await prisma.$transaction(async (tx) => {
       await tx.transaction.updateMany({
         where: { transferId, transferDirection: "OUT" },
-        data: { date, amount: legs.out.amount, currency: legs.out.currency, note, accountId: fromAccountId },
+        data: { date, ...legs.out, note, accountId: fromAccountId },
       });
       await tx.transaction.updateMany({
         where: { transferId, transferDirection: "IN" },
-        data: { date, amount: legs.in.amount, currency: legs.in.currency, note, accountId: toAccountId },
+        data: { date, ...legs.in, note, accountId: toAccountId },
       });
     });
 
@@ -403,13 +425,13 @@ export async function saveTransferAction(
     return done(t.transferUpdated);
   }
 
+  const legs = transferLegsInAccounts(legInput, rates);
   const newTransferId = randomUUID();
   await prisma.$transaction(async (tx) => {
     await tx.transaction.create({
       data: {
         date,
-        amount: legs.out.amount,
-        currency: legs.out.currency,
+        ...legs.out,
         note,
         type: "TRANSFER",
         source: "MANUAL",
@@ -421,8 +443,7 @@ export async function saveTransferAction(
     await tx.transaction.create({
       data: {
         date,
-        amount: legs.in.amount,
-        currency: legs.in.currency,
+        ...legs.in,
         note,
         type: "TRANSFER",
         source: "MANUAL",

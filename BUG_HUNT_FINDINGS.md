@@ -262,6 +262,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** accounts holding rows in another currency (card subscriptions billed in USD). The balance drifts with the rate. The check-in then sees a reconciliation gap that caps the flexible budget, although no money moved.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** store the amount in the account's currency at posting and entry time (as manual contributions already do), or store the rate used, and sum stored native amounts.
+- **Status:** fixed (2026-09-30, K7). A row is stored in its account's currency at entry - posting included - with the entered figure and the rate kept, and balances sum what is stored: a 100 USD charge on a DOP account entered at 60 reads -6,000 at 60 and at 63. Rows written before the fix read as before until `scripts/backfill-account-currency.ts` stores them.
 
 ### B20. The monthly pace extrapolates a confirmed one-off (and full shared amounts) by days elapsed
 - **What:** `getCurrentMonthPace` projects lifestyle spending as (so far ÷ days elapsed) × days in month. The input keeps extraordinary rows and full shared amounts. The average it is compared with (`typicalOnly`) excludes them.
@@ -329,6 +330,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** goals whose currency differs from the account's. The account balance moves by the rate difference with no money moving.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** keep the twin's amount unless the amount or account changed (`isSameMoney` exists for this). When only the amount changes, scale the stored twin in proportion.
+- **Status:** fixed (2026-09-30, K7). An edit that changes neither the amount nor the account keeps the twin as stored (a date-only edit at 60.2 keeps 5,850), and an amount correction - manual or recurring - scales the twin at the rate it was stored at (120 USD: 7,020; a posted 100 USD corrected to 110 USD at 62 moves the account by 600, the rate it posted at).
 
 ### B26. Moving a finite item's `nextDate` back onto a posted day uses up an installment
 - **What:** the `already_posted` branch still decrements `remainingOccurrences`.

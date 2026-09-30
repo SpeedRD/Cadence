@@ -6,6 +6,7 @@
  * session and turns each outcome into a toast.
  */
 import { Prisma } from "@/generated/prisma/client";
+import { inAccountCurrency, shareInAccountCurrency } from "@/lib/account-money";
 import { resolveImportCategoryId } from "@/lib/categorization";
 import { csvExternalId } from "@/lib/csv-fingerprint";
 import { fromISODate, toISODate } from "@/lib/date";
@@ -112,7 +113,7 @@ export async function importCsvTransactions(
 ): Promise<CsvImportResult> {
   const account = await prisma.account.findUnique({
     where: { id: input.accountId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, currency: true },
   });
   if (!account) return { ok: false, reason: "account_missing" };
   if (account.status !== "ACTIVE") return { ok: false, reason: "account_not_active" };
@@ -162,11 +163,15 @@ export async function importCsvTransactions(
     const fingerprint = report.fingerprints[index];
     const ordinal = (ordinalByFingerprint.get(fingerprint) ?? 0) + 1;
     ordinalByFingerprint.set(fingerprint, ordinal);
+    // Stored in the account's currency (K7): a file in another currency is
+    // converted once, at the rate the review step used, and each row keeps
+    // the file's own figure. The fingerprint stays the file's figure, so the
+    // same statement imported again is still recognised.
+    const stored = inAccountCurrency({ amount: row.amount, currency: input.currency }, account.currency, rates);
     return [{
       rowIndex: index,
       date: fromISODate(row.date) as Date,
-      amount: row.amount,
-      currency: input.currency,
+      ...stored,
       type: row.type,
       transferDirection: row.transferDirection,
       accountId: account.id,
@@ -190,8 +195,8 @@ export async function importCsvTransactions(
       // also names a shared expense it pays back is left ordinary here, as
       // the dialog does (canBeOneOffIncome): the link already excludes it.
       isOneOffIncome: row.type === "INCOME" && row.isOneOffIncome === true && row.reimburses === null,
-      // A share belongs to an expense only, on the same terms.
-      yourShare: row.type === "EXPENSE" ? row.yourShare : null,
+      // A share belongs to an expense only, on the same terms, converted with its amount.
+      yourShare: row.type === "EXPENSE" ? shareInAccountCurrency(row.yourShare, stored) : null,
     }];
   });
   const dataIndexByRow = new Map(data.map((row, dataIndex) => [row.rowIndex, dataIndex]));
@@ -206,11 +211,17 @@ export async function importCsvTransactions(
       if (dataIndex === undefined || row.type !== "INCOME" || row.reimburses === null) return [];
       return [{ index: dataIndex, reference: parseReimbursedExpenseReference(row.reimburses) }];
     });
+  // A reference names an expense by the figure it was written with: the
+  // file's own, or - exported from Cadence - the stored one. Both are keys.
   const batchSharedByKey = new Map<string, string[]>();
   data.forEach((row) => {
     if (row.type !== "EXPENSE" || row.yourShare === null) return;
-    const key = referenceKey(input.rows[row.rowIndex].date, row.note, row.amount, row.currency);
-    batchSharedByKey.set(key, [...(batchSharedByKey.get(key) ?? []), row.externalId]);
+    const date = input.rows[row.rowIndex].date;
+    const keys = new Set([
+      referenceKey(date, row.note, row.amount, row.currency),
+      referenceKey(date, row.note, input.rows[row.rowIndex].amount, input.currency),
+    ]);
+    for (const key of keys) batchSharedByKey.set(key, [...(batchSharedByKey.get(key) ?? []), row.externalId]);
   });
 
   try {
@@ -231,14 +242,32 @@ export async function importCsvTransactions(
             where: {
               type: "EXPENSE",
               yourShare: { not: null },
-              OR: parsed.map(({ reference }) => ({
-                date: fromISODate(reference.date) as Date,
-                note: reference.note,
-                amount: reference.amount,
-                currency: reference.currency,
-              })),
+              OR: parsed.flatMap(({ reference }) => [
+                {
+                  date: fromISODate(reference.date) as Date,
+                  note: reference.note,
+                  amount: reference.amount,
+                  currency: reference.currency,
+                },
+                {
+                  date: fromISODate(reference.date) as Date,
+                  note: reference.note,
+                  originalAmount: reference.amount,
+                  originalCurrency: reference.currency,
+                },
+              ]),
             },
-            select: { id: true, date: true, note: true, amount: true, currency: true, externalId: true, source: true },
+            select: {
+              id: true,
+              date: true,
+              note: true,
+              amount: true,
+              currency: true,
+              originalAmount: true,
+              originalCurrency: true,
+              externalId: true,
+              source: true,
+            },
           })
         : [];
       const batchExternalIds = new Set(data.map((row) => row.externalId));
@@ -247,8 +276,11 @@ export async function importCsvTransactions(
         // The batch's own rows are in the ledger now too; they are counted
         // once, as batch rows, not again here.
         if (expense.source === "CSV" && expense.externalId && batchExternalIds.has(expense.externalId)) continue;
-        const key = referenceKey(toISODate(expense.date), expense.note, num(expense.amount), expense.currency);
-        ledgerByKey.set(key, [...(ledgerByKey.get(key) ?? []), expense.id]);
+        const keys = new Set([referenceKey(toISODate(expense.date), expense.note, num(expense.amount), expense.currency)]);
+        if (expense.originalCurrency !== null && expense.originalAmount !== null) {
+          keys.add(referenceKey(toISODate(expense.date), expense.note, num(expense.originalAmount), expense.originalCurrency));
+        }
+        for (const key of keys) ledgerByKey.set(key, [...(ledgerByKey.get(key) ?? []), expense.id]);
       }
       const batchIdByExternalId = new Map(
         (

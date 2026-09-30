@@ -14,10 +14,13 @@ import type { PaydayAccountDraft } from "@/lib/data/payday";
 
 export function StepBalances({
   accounts,
+  ledgerDate,
   onChange,
   t,
 }: {
   accounts: PaydayAccountDraft[];
+  /** The day the ledger balances are as of (K8): the day before this period's pay landed, YYYY-MM-DD. */
+  ledgerDate: string;
   onChange: (accountId: string, reportedBalance: number) => void;
   t: Dictionary["payday"];
 }) {
@@ -30,10 +33,10 @@ export function StepBalances({
           {t.manageAccountsLink}
         </Link>
       </div>
-      {/* What the figure means, because the ledger figure below already leaves
-          this check-in's own income out: reopening days after payday must not
-          invite typing the account's current balance, which would count that
-          income twice in Step 3's reconciliation. On a phone it folds behind
+      {/* What the figure means, because the ledger figure below is the day
+          before this period's pay landed (K8): reopening days after payday
+          must not invite typing the account's current balance, which holds
+          the pay and whatever was spent since. On a phone it folds behind
           a disclosure so the first field is not a paragraph away, but stays
           one tap from every visit; above sm it is always shown. */}
       <button
@@ -60,7 +63,7 @@ export function StepBalances({
               <div>
                 <p className="text-sm font-medium">{account.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  {t.ledgerBalance}: {formatMoney(account.expectedLedgerBalance, account.currency)}
+                  {t.ledgerBalanceOn(ledgerDate)}: {formatMoney(account.expectedLedgerBalance, account.currency)}
                   {account.readOnly ? ` · ${t.archivedAccountNote}` : ""}
                 </p>
               </div>

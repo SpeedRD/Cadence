@@ -520,8 +520,14 @@ saving) can be renamed but never removed.
 ### Multi-currency, localization, and the PIN gate
 
 Every account, transaction, recurring item, and goal is recorded in DOP, USD, or
-EUR. Changing the display currency only changes how figures are presented
-everywhere; it never converts or mutates what was recorded. Conversions use cached,
+EUR. A transaction is stored in its account's currency: an amount entered (or
+imported, approved from a receipt, or posted by a recurring item) in another
+currency is converted once, at that day's rate, and the entered amount and the
+rate are kept beside it - the form shows the converted amount and the rate
+before you save, and the ledger shows what each converted row was entered as.
+So a balance never moves with the exchange rate. Changing the display currency
+only changes how figures are presented everywhere; it never converts or mutates
+what was recorded. Conversions use cached,
 periodically refreshed USD-based rates, and a stale rate table is flagged on every
 page. For DOP and EUR, Banco Popular Dominicano's own published sell rate is
 preferred over the market rate whenever one less than a week old is stored; Settings

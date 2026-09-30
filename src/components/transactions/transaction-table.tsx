@@ -31,7 +31,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatMoney } from "@/lib/currency";
+import { enteredMoney, enteredShare, rateLine } from "@/lib/account-money";
+import { formatMoney, type RateTable } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { canBeExtraordinary, transactionEditBlock } from "@/lib/transactions";
@@ -61,14 +62,23 @@ function amountStyle(row: TransactionRow) {
   return { sign, tone };
 }
 
+/** What a converted row was entered as, and the rate it was stored at (K7) - or null for a row entered in its account's currency. */
+function enteredAsText(row: TransactionRow, t: Dictionary["transactions"]): string | null {
+  if (row.originalCurrency === null || row.originalAmount === null || row.rate === null) return null;
+  return t.enteredAs(formatMoney(row.originalAmount, row.originalCurrency), rateLine(row.originalCurrency, row.currency, row.rate));
+}
+
 function AmountCell({
   row,
   displayCurrency,
+  t,
 }: {
   row: TransactionRow;
   displayCurrency: string;
+  t: Dictionary["transactions"];
 }) {
   const { sign, tone } = amountStyle(row);
+  const entered = enteredAsText(row, t);
 
   return (
     <div className="text-right">
@@ -81,6 +91,7 @@ function AmountCell({
           {formatMoney(row.amount, row.currency)}
         </p>
       ) : null}
+      {entered ? <p className="text-hint whitespace-normal text-muted-foreground">{entered}</p> : null}
     </div>
   );
 }
@@ -93,8 +104,18 @@ function AmountCell({
  */
 function transferFormValues(row: TransactionRow) {
   const isOut = row.transferDirection === "OUT";
-  const outAmount = isOut ? row.amount : (row.counterpartAmount ?? row.amount);
-  const outCurrency = isOut ? row.currency : (row.counterpartCurrency ?? row.currency);
+  // The sending leg as it was entered (K7): its original when it was
+  // converted into its account's currency.
+  const outLeg = isOut
+    ? enteredMoney(row)
+    : enteredMoney({
+        amount: row.counterpartAmount ?? row.amount,
+        currency: row.counterpartCurrency ?? row.currency,
+        originalAmount: row.counterpartOriginalAmount,
+        originalCurrency: row.counterpartOriginalCurrency,
+      });
+  const outAmount = outLeg.amount;
+  const outCurrency = outLeg.currency;
   const inAmount = isOut ? row.counterpartAmount : row.amount;
   const inCurrency = isOut ? row.counterpartCurrency : row.currency;
   const declaredReceived =
@@ -323,6 +344,11 @@ function MobileLedger({
                       {formatMoney(row.amount, row.currency)}
                     </span>
                   ) : null}
+                  {enteredAsText(row, t) ? (
+                    <span className="col-span-2 text-right text-hint text-muted-foreground">
+                      {enteredAsText(row, t)}
+                    </span>
+                  ) : null}
                   {row.isExtraordinary || row.isOneOffIncome || row.yourShare !== null || row.reimburses ? (
                     <span className="col-span-2 flex flex-wrap items-center gap-1.5 text-hint text-muted-foreground">
                       <RowBadges row={row} locale={locale} t={t} />
@@ -391,6 +417,7 @@ export function TransactionTable({
   categories,
   openSharedExpenses,
   displayCurrency,
+  rates,
   locale,
 }: {
   rows: TransactionRow[];
@@ -399,6 +426,8 @@ export function TransactionTable({
   /** For the edit dialog's reimbursement picker - see TransactionDialog. */
   openSharedExpenses: OpenSharedExpense[];
   displayCurrency: string;
+  /** The request's rate table, for the edit dialogs' conversion preview. */
+  rates: RateTable["rates"];
   locale: Locale;
 }) {
   const dictionary = getDictionary(locale);
@@ -500,7 +529,7 @@ export function TransactionTable({
                   />
                 </TableCell>
                 <TableCell>
-                  <AmountCell row={row} displayCurrency={displayCurrency} />
+                  <AmountCell row={row} displayCurrency={displayCurrency} t={t} />
                 </TableCell>
                 <TableCell>
                   <DropdownMenu>
@@ -548,17 +577,30 @@ export function TransactionTable({
           locale={locale}
           open
           onOpenChange={(next) => !next && setEditing(null)}
+          rates={rates}
           values={{
             id: editingPlain.id,
             date: toISODate(editingPlain.date),
-            amount: editingPlain.amount,
-            currency: editingPlain.currency,
+            // As it was entered (K7): the form shows what the user typed, and
+            // re-saving it unchanged keeps the stored conversion.
+            amount: enteredMoney(editingPlain).amount,
+            currency: enteredMoney(editingPlain).currency,
+            stored: {
+              row: {
+                amount: editingPlain.amount,
+                currency: editingPlain.currency,
+                originalAmount: editingPlain.originalAmount,
+                originalCurrency: editingPlain.originalCurrency,
+                rate: editingPlain.rate,
+              },
+              accountCurrency: accounts.find((account) => account.id === editingPlain.accountId)?.currency ?? editingPlain.currency,
+            },
             type: editingPlain.type,
             accountId: editingPlain.accountId,
             categoryId: editingPlain.categoryId ?? "none",
             note: editingPlain.note,
             transferDirection: editingPlain.transferDirection,
-            yourShare: editingPlain.yourShare,
+            yourShare: enteredShare(editingPlain),
             reimbursesTransactionId: editingPlain.reimbursesTransactionId,
             isOneOffIncome: editingPlain.isOneOffIncome,
             source: editingPlain.source,

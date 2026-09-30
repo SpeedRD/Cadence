@@ -61,6 +61,7 @@
  * active items are considered for that fallback, since Cadence does not keep a
  * history of when an item was paused.
  */
+import { exactAmountIn } from "@/lib/account-money";
 import { convert } from "@/lib/currency";
 import { appTimeZone, civilDateInZone, minDate, startOfDay } from "@/lib/date";
 import { num, round2, sum } from "@/lib/money";
@@ -71,7 +72,7 @@ import { outstanding, outstandingAmount, sumOccurrences } from "@/lib/period-com
 import { monthlyEquivalent } from "@/lib/recurring";
 import { chargeMatchesItem, itemsWithAmbiguousCategory } from "@/lib/recurring-settlement";
 import { ownShare } from "@/lib/shared-expense";
-import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } from "@/lib/transactions";
+import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX, manualContributionIdFromTransaction } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
 import { loadCommitments } from "@/lib/data/period-commitments";
@@ -137,8 +138,12 @@ function firstOccurrenceOf(item: RecurringForMonth): Date {
 
 interface MatchableTransaction {
   id: string;
+  /** As stored: in the account's currency (K7). */
   amount: number;
   currency: string;
+  /** What it was entered as, when that was another currency than its account's. */
+  originalAmount?: number | null;
+  originalCurrency?: string | null;
   categoryId: string | null;
   note: string | null;
 }
@@ -152,6 +157,7 @@ interface ClassifiableTransaction extends MatchableTransaction {
 
 export interface RecurringMatchResult {
   matchedTransactionIds: Set<string>;
+  /** What each item's matched charges come to in the item's own currency - the figure each charge holds in it (exactAmountIn). */
   actualNativeByItemId: Map<string, number>;
   /** How many transactions each item matched - one per occurrence it can answer for. */
   matchedCountByItemId: Map<string, number>;
@@ -197,7 +203,7 @@ export function matchRecurringToTransactions(
       if (!chargeMatchesItem(item, tx, ambiguous.has(item.id))) continue;
 
       matchedTransactionIds.add(tx.id);
-      actualNativeByItemId.set(item.id, (actualNativeByItemId.get(item.id) ?? 0) + tx.amount);
+      actualNativeByItemId.set(item.id, (actualNativeByItemId.get(item.id) ?? 0) + (exactAmountIn(tx, item.currency) ?? tx.amount));
       matchedCountByItemId.set(item.id, (matchedCountByItemId.get(item.id) ?? 0) + 1);
     }
   }
@@ -412,6 +418,8 @@ async function computeMonthActuals(
         id: true,
         amount: true,
         currency: true,
+        originalAmount: true,
+        originalCurrency: true,
         categoryId: true,
         note: true,
         source: true,
@@ -426,7 +434,7 @@ async function computeMonthActuals(
     // recurringItemId foreign key (see the module doc comment).
     prisma.goalContribution.findMany({
       where: { date: { gte: window.start, lte: rangeEnd } },
-      select: { amount: true, currency: true, recurringExternalId: true },
+      select: { id: true, amount: true, currency: true, recurringExternalId: true },
     }),
   ]);
 
@@ -437,6 +445,8 @@ async function computeMonthActuals(
     id: tx.id,
     amount: num(tx.amount),
     currency: tx.currency,
+    originalAmount: tx.originalAmount === null ? null : num(tx.originalAmount),
+    originalCurrency: tx.originalCurrency,
     categoryId: tx.categoryId,
     note: tx.note,
     isExtraordinary: tx.isExtraordinary,
@@ -526,17 +536,17 @@ async function computeMonthActuals(
   const remaining = unposted.filter((tx) => !subscriptionMatch.matchedTransactionIds.has(tx.id));
   const contributionMatch = matchRecurringToTransactions(contributionItems, remaining);
 
+  // A matched charge counts at what it stored - what its account moved (K7) -
+  // however it was matched to its item.
+  for (const tx of unposted) {
+    if (subscriptionMatch.matchedTransactionIds.has(tx.id)) committedActual += toDisplay(tx.amount, tx.currency);
+    else if (contributionMatch.matchedTransactionIds.has(tx.id)) contributionActual += toDisplay(tx.amount, tx.currency);
+  }
   for (const item of subscriptionItems) {
-    const native = subscriptionMatch.actualNativeByItemId.get(item.id);
-    if (native === undefined) continue;
-    committedActual += toDisplay(native, item.currency);
-    actualSubscriptionItemIds.add(item.id);
+    if (subscriptionMatch.actualNativeByItemId.has(item.id)) actualSubscriptionItemIds.add(item.id);
   }
   for (const item of contributionItems) {
-    const native = contributionMatch.actualNativeByItemId.get(item.id);
-    if (native === undefined) continue;
-    contributionActual += toDisplay(native, item.currency);
-    actualContributionItemIds.add(item.id);
+    if (contributionMatch.actualNativeByItemId.has(item.id)) actualContributionItemIds.add(item.id);
   }
 
   const accountedForIds = new Set([
@@ -601,6 +611,15 @@ async function computeMonthActuals(
 
   // Only the contributions with no Transaction standing in for them, so an
   // auto-posted occurrence counts once however its recurring item ended up.
+  // A hand-logged one counts at what its own expense stored - the money that
+  // left the account, fixed at entry (K7) - rather than its goal-currency
+  // figure re-converted at today's rate.
+  const twinByContributionId = new Map(
+    transactions.flatMap((tx) => {
+      const contributionId = manualContributionTwinIds.has(tx.id) ? manualContributionIdFromTransaction(tx) : null;
+      return contributionId ? [[contributionId, tx] as const] : [];
+    }),
+  );
   const goalContributionTotal = sum(
     goalContributions
       .filter(
@@ -608,7 +627,10 @@ async function computeMonthActuals(
           contribution.recurringExternalId === null ||
           !postedExternalIds.has(contribution.recurringExternalId),
       )
-      .map((contribution) => toDisplay(num(contribution.amount), contribution.currency)),
+      .map((contribution) => {
+        const twin = twinByContributionId.get(contribution.id);
+        return twin ? toDisplay(num(twin.amount), twin.currency) : toDisplay(num(contribution.amount), contribution.currency);
+      }),
   );
 
   return {

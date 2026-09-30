@@ -185,6 +185,7 @@ export default async function GoalsPage() {
                     currency={goal.currency}
                     accounts={accounts}
                     defaultDate={today}
+                    rates={context.rates.rates}
                     locale={context.language}
                     trigger={
                       <Button variant="outline" size="xs">

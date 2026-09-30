@@ -8,6 +8,7 @@
  * key) and re-runs detection against the current ledger, so nothing the
  * client sends - an amount, a date, a name - is ever written as given.
  */
+import { enteredMoney, moneyRow } from "@/lib/account-money";
 import { convert } from "@/lib/currency";
 import { addDays } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
@@ -59,6 +60,8 @@ export async function findRecurringSuggestions(context: AppContext): Promise<Rec
         date: true,
         amount: true,
         currency: true,
+        originalAmount: true,
+        originalCurrency: true,
         type: true,
         source: true,
         accountId: true,
@@ -77,7 +80,13 @@ export async function findRecurringSuggestions(context: AppContext): Promise<Rec
   ]);
 
   const candidates = detectRecurringPatterns({
-    transactions: transactions.map((row) => ({ ...row, amount: num(row.amount) })),
+    // A charge is suggested as what it was entered as (K7): a subscription billed
+    // in dollars repeats as the same dollars, while its peso figure moves with
+    // the rate of each month's charge.
+    transactions: transactions.map(({ originalAmount, originalCurrency, ...row }) => ({
+      ...row,
+      ...enteredMoney(moneyRow({ amount: row.amount, currency: row.currency, originalAmount, originalCurrency })),
+    })),
     trackedItems: items.map((item) => ({ ...item, amount: num(item.amount) })),
     dismissed,
     today: context.today,

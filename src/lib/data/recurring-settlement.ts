@@ -29,6 +29,9 @@ export interface PlannedCharge {
   date: Date;
   amount: number;
   currency: string;
+  /** What the charge was entered as, when that was another currency than its account's (K7). */
+  originalAmount: number | null;
+  originalCurrency: string | null;
   accountId: string;
   /** A hand-logged contribution's own expense: its GoalContribution already exists. */
   isContributionTwin: boolean;
@@ -121,6 +124,8 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
       date: true,
       amount: true,
       currency: true,
+      originalAmount: true,
+      originalCurrency: true,
       categoryId: true,
       note: true,
       accountId: true,
@@ -151,12 +156,25 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
     // goal any more; it is nobody's payment of anything.
     if (contributionId !== null && contributionGoalId === null) continue;
     const amount = num(row.amount);
-    charges.push({ id: row.id, date: row.date, amount, currency: row.currency, categoryId: row.categoryId, note: row.note, contributionGoalId });
+    const originalAmount = row.originalAmount === null ? null : num(row.originalAmount);
+    charges.push({
+      id: row.id,
+      date: row.date,
+      amount,
+      currency: row.currency,
+      originalAmount,
+      originalCurrency: row.originalCurrency,
+      categoryId: row.categoryId,
+      note: row.note,
+      contributionGoalId,
+    });
     plannedById.set(row.id, {
       id: row.id,
       date: row.date,
       amount,
       currency: row.currency,
+      originalAmount,
+      originalCurrency: row.originalCurrency,
       accountId: row.accountId,
       isContributionTwin: contributionId !== null,
     });

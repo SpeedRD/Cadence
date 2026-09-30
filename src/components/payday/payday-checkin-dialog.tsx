@@ -422,6 +422,7 @@ export function PaydayCheckinDialog({
             {step === 1 ? (
               <StepBalances
                 accounts={plan.accounts}
+                ledgerDate={toISODate(draft.ledgerDate)}
                 onChange={(accountId, reportedBalance) => updateAccount(accountId, { reportedBalance })}
                 t={t}
               />

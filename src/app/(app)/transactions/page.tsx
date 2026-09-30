@@ -131,6 +131,7 @@ export default async function TransactionsPage({
                 categories={categories}
                 openSharedExpenses={openSharedExpenses}
                 values={{ date: today, currency: context.displayCurrency }}
+                rates={context.rates.rates}
                 locale={context.language}
                 trigger={
                   <Button size="sm" className="max-sm:hidden">
@@ -149,6 +150,7 @@ export default async function TransactionsPage({
               categories={categories}
               openSharedExpenses={openSharedExpenses}
               values={{ date: today, currency: context.displayCurrency }}
+              rates={context.rates.rates}
               locale={context.language}
               trigger={
                 <Button size="sm">
@@ -215,6 +217,7 @@ export default async function TransactionsPage({
               categories={categories}
               openSharedExpenses={openSharedExpenses}
               displayCurrency={context.displayCurrency}
+              rates={context.rates.rates}
               locale={context.language}
             />
           </CardContent>

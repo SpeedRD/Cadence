@@ -125,6 +125,9 @@ export const es = {
       isOneOffIncome: "Ingreso único",
       yourShare: "Tu parte",
       reimburses: "Reembolsa",
+      originalAmount: "Monto registrado",
+      originalCurrency: "Moneda registrada",
+      rate: "Tasa",
       createdAt: "Creado el",
       updatedAt: "Actualizado el",
       name: "Nombre",
@@ -619,6 +622,11 @@ export const es = {
     receivedAmountLabel: (code: string) => `Monto realmente recibido (${code})`,
     receivedAmountHint:
       "Déjalo en blanco para registrar el mismo monto en ambos lados, convertido a la tasa de hoy. Escríbelo para registrar exactamente lo que acreditó el banco.",
+    // Montos guardados en la moneda de la cuenta (src/lib/account-money.ts).
+    savedAsTodaysRate: (amount: string, rate: string) => `Se guarda en esta cuenta como ${amount} (${rate}, tasa de hoy).`,
+    savedAsKeptRate: (amount: string, rate: string) =>
+      `Se guarda en esta cuenta como ${amount} (${rate}, la tasa con la que se guardó).`,
+    enteredAs: (original: string, rate: string) => `registrado como ${original} · ${rate}`,
   },
   accounts: {
     title: "Cuentas",
@@ -633,6 +641,7 @@ export const es = {
     colType: "Tipo",
     colActivity: "Actividad",
     colBalance: "Saldo",
+    scheduledAfterToday: (amount: string) => `${amount} con fecha posterior a hoy, fuera de este saldo`,
     transactionCount: (n: number) => `${n} ${n === 1 ? "transacción" : "transacciones"}`,
     actionsFor: (name: string) => `Acciones de ${name}`,
     deleteAccountTitle: (name: string) => `¿Eliminar ${name}?`,
@@ -1452,9 +1461,10 @@ export const es = {
     step1Description:
       "Esto es solo una verificación de conciliación - nunca crea ingresos ni gastos.",
     step1BalanceMeaning:
-      "El “saldo reportado” es lo que la cuenta tenía antes de que llegara el ingreso de este periodo - no lo que tiene ahora si el pago ya entró y parte ya se gastó. El saldo según el libro que se muestra en cada cuenta es esa cifra (deja fuera el ingreso de este mismo chequeo): parte de él y cámbialo solo si sabes que el libro está mal.",
+      "El “saldo reportado” es lo que la cuenta tenía el día antes de que llegara el pago de este periodo - no lo que tiene ahora, con el pago y lo gastado desde entonces. El saldo según el libro que se muestra en cada cuenta es el libro de ese día (deja fuera el ingreso de este mismo chequeo y todo lo que tenga fecha posterior): parte de él y cámbialo solo si sabes que el libro está mal.",
     balanceMeaningDisclosure: "¿Qué cuenta como saldo reportado?",
     ledgerBalance: "Saldo según el libro",
+    ledgerBalanceOn: (date: string) => `Saldo según el libro al ${date}`,
     reportedBalance: "Saldo reportado",
     matchesLedger: "Coincide con el libro",
     aboveLedger: (amount: string) => `${amount} por encima del libro`,

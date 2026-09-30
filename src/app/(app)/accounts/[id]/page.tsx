@@ -22,6 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { rateLine } from "@/lib/account-money";
 import { formatMoney } from "@/lib/currency";
 import { getAccountLedger } from "@/lib/data/accounts";
 import { getAppContext } from "@/lib/data/context";
@@ -83,11 +84,15 @@ export default async function AccountDetailPage({
           <Stat
             label={t.balance}
             value={formatMoney(ledger.balance, account.currency)}
-            hint={
+            hint={[
               account.currency !== context.displayCurrency
                 ? formatMoney(ledger.displayBalance, context.displayCurrency)
-                : t.transactionCount(rows.length)
-            }
+                : t.transactionCount(rows.length),
+              // Rows dated after today are not in the balance (D42).
+              ...(ledger.scheduled !== 0
+                ? [t.scheduledAfterToday(formatMoney(ledger.scheduled, account.currency, { signDisplay: "always" }))]
+                : []),
+            ].join(" · ")}
           />
           <Stat
             label={t.incomeIn}
@@ -226,6 +231,15 @@ export default async function AccountDetailPage({
                           {row.effect > 0 ? "+" : "-"}
                           {formatMoney(Math.abs(row.effect), account.currency)}
                         </span>
+                        {/* What it was entered as, when that was another currency (K7). */}
+                        {row.originalCurrency !== null && row.originalAmount !== null && row.rate !== null ? (
+                          <p className="text-hint whitespace-normal text-muted-foreground">
+                            {transactionsT.enteredAs(
+                              formatMoney(row.originalAmount, row.originalCurrency),
+                              rateLine(row.originalCurrency, row.currency, row.rate),
+                            )}
+                          </p>
+                        ) : null}
                       </TableCell>
                       <TableCell className="figure text-right text-sm text-muted-foreground">
                         {formatMoney(row.runningBalance, account.currency)}

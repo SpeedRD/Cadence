@@ -136,6 +136,9 @@ export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
       h.isOneOffIncome,
       h.yourShare,
       h.reimburses,
+      h.originalAmount,
+      h.originalCurrency,
+      h.rate,
       h.createdAt,
       h.id,
     ],
@@ -167,6 +170,12 @@ export async function buildExportFiles(locale: Locale): Promise<ExportFile[]> {
             currency: row.reimburses.currency,
           })
         : "",
+      // What the row was entered as when that was another currency than the
+      // account's, and the rate it was stored at (K7) - Amount and Currency
+      // above are what the account moved.
+      row.originalAmount === null ? "" : money(row.originalAmount),
+      text(row.originalCurrency),
+      row.rate === null ? "" : num(row.rate).toString(),
       timestamp(row.createdAt),
       row.id,
     ]),

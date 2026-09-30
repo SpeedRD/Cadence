@@ -132,6 +132,9 @@ export const en = {
       isOneOffIncome: "One-off income",
       yourShare: "Your share",
       reimburses: "Reimburses",
+      originalAmount: "Entered amount",
+      originalCurrency: "Entered currency",
+      rate: "Rate",
       createdAt: "Created at",
       updatedAt: "Updated at",
       name: "Name",
@@ -628,6 +631,11 @@ export const en = {
     receivedAmountLabel: (code: string) => `Actual amount received (${code})`,
     receivedAmountHint:
       "Leave blank to record the same amount on both sides, converted at today's rate. Fill it in to record exactly what the bank credited.",
+    // Amounts stored in the account's currency (src/lib/account-money.ts).
+    savedAsTodaysRate: (amount: string, rate: string) => `Saved in this account as ${amount} (${rate}, today's rate).`,
+    savedAsKeptRate: (amount: string, rate: string) =>
+      `Saved in this account as ${amount} (${rate}, the rate it was saved at).`,
+    enteredAs: (original: string, rate: string) => `entered as ${original} · ${rate}`,
   },
   accounts: {
     title: "Accounts",
@@ -642,6 +650,7 @@ export const en = {
     colType: "Type",
     colActivity: "Activity",
     colBalance: "Balance",
+    scheduledAfterToday: (amount: string) => `${amount} dated after today, not in this balance`,
     transactionCount: (n: number) => `${n} transaction${n === 1 ? "" : "s"}`,
     actionsFor: (name: string) => `Actions for ${name}`,
     deleteAccountTitle: (name: string) => `Delete ${name}?`,
@@ -1465,9 +1474,10 @@ export const en = {
     step1Description:
       "This is a reconciliation check only - it never creates income or expenses.",
     step1BalanceMeaning:
-      "“Reported balance” is what the account held before this period's income landed - not what it holds now if the pay has already arrived and some of it is spent. The ledger balance shown for each account is that figure (this check-in's own income is left out of it), so start from it and change it only if you know the ledger is wrong.",
+      "“Reported balance” is what the account held the day before this period's pay landed - not what it holds now, after the pay and whatever was spent since. The ledger balance shown for each account is the ledger on that day (this check-in's own income, and every row dated after it, are left out), so start from it and change it only if you know the ledger is wrong.",
     balanceMeaningDisclosure: "What counts as the reported balance?",
     ledgerBalance: "Ledger balance",
+    ledgerBalanceOn: (date: string) => `Ledger balance on ${date}`,
     reportedBalance: "Reported balance",
     matchesLedger: "Matches ledger",
     aboveLedger: (amount: string) => `${amount} above ledger`,

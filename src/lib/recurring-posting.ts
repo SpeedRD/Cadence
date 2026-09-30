@@ -5,7 +5,10 @@
  * into real ledger rows - one per elapsed occurrence - and rolled forward:
  *
  *   SUBSCRIPTION  -> an EXPENSE Transaction (source RECURRING) charged to the
- *                    item's account on the occurrence's due date.
+ *                    item's account on the occurrence's due date, in the
+ *                    account's currency: an item in another currency is
+ *                    converted once, at the day's rate, which is kept with
+ *                    the row (src/lib/account-money.ts).
  *   CONTRIBUTION  -> the same outgoing Transaction from the item's account, plus
  *                    a GoalContribution on the item's goal, converted once into
  *                    the goal's own currency and tagged with the same
@@ -72,6 +75,7 @@
  * transaction that writes its rows, and the Transaction's (source, externalId)
  * unique key pins each (item, due date) pair as a second guard.
  */
+import { exactAmountIn, inAccountCurrency } from "@/lib/account-money";
 import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
 import { startOfDay, toISODate } from "@/lib/date";
 import { recomputeGoalSaved, savedFromContributions } from "@/lib/goals";
@@ -132,7 +136,7 @@ async function loadDueItems(today: Date) {
   return prisma.recurringItem.findMany({
     where: { active: true, nextDate: { lte: today } },
     include: {
-      account: { select: { status: true } },
+      account: { select: { status: true, currency: true } },
       goal: { select: { currency: true, achievedAt: true } },
     },
     orderBy: { nextDate: "asc" },
@@ -179,6 +183,7 @@ class SettlementLost extends Error {}
 async function postOccurrence(
   item: DueItem,
   accountId: string,
+  accountCurrency: string,
   due: Date,
   settledBy: PlannedCharge | null,
   rates: RateTable,
@@ -264,12 +269,15 @@ async function postOccurrence(
         }
         // The charge is this contribution's ledger half: the GoalContribution
         // carries the occurrence key (the settlement's too) and the charge's
-        // own date and amount, so the goal counts exactly the money that left.
+        // own date and amount, so the goal counts exactly the money that left
+        // - the figure the charge holds in the goal's currency when it holds
+        // one (its stored amount, or what it was entered as), converted
+        // otherwise.
         const goalCurrency = item.goal?.currency ?? item.currency;
         await tx.goalContribution.create({
           data: {
             goalId,
-            amount: round2(convert(settledBy.amount, settledBy.currency, goalCurrency, rates)),
+            amount: exactAmountIn(settledBy, goalCurrency) ?? round2(convert(settledBy.amount, settledBy.currency, goalCurrency, rates)),
             currency: goalCurrency,
             date: settledBy.date,
             note: item.name,
@@ -280,11 +288,15 @@ async function postOccurrence(
         return { result: "already_logged" as const, goalContribution: true, completed, counted };
       }
 
+      // Stored in the account's currency (K7): an item in another currency is
+      // converted once, here, at the day's rate, and the item's own amount
+      // and that rate are kept with the row. The row is then the fact of what
+      // was charged; the item stays the schedule.
+      const charged = inAccountCurrency({ amount: num(item.amount), currency: item.currency }, accountCurrency, rates);
       await tx.transaction.create({
         data: {
           date: due,
-          amount: item.amount,
-          currency: item.currency,
+          ...charged,
           type: "EXPENSE",
           accountId,
           categoryId: item.categoryId,
@@ -302,10 +314,15 @@ async function postOccurrence(
       // and with it achievedAt - would drift with the exchange rate rather than
       // with the money. Converting once, here, fixes the row at the rate on the
       // day it was posted.
+      // A goal in the account's currency counts exactly what the account
+      // moved, so the two halves of the occurrence agree to the cent.
       const goalCurrency = item.goal?.currency ?? item.currency;
-      const contributionAmount = round2(
-        convert(num(item.amount), item.currency, goalCurrency, rates),
-      );
+      const contributionAmount =
+        goalCurrency === item.currency
+          ? num(item.amount)
+          : goalCurrency === charged.currency
+            ? charged.amount
+            : round2(convert(num(item.amount), item.currency, goalCurrency, rates));
       // recurringExternalId is the same key as the Transaction's externalId
       // above, and unlike recurringItemId it is not nulled when the item is
       // deleted - that is what lets the monthly savings/investing calculation
@@ -368,10 +385,10 @@ export async function postDueRecurringItems(
   // item stuck on a missing account costs no more per request than one query.
   const postable = due.filter((item) => skipReasonFor(item) === null && item.accountId !== null);
 
-  // Only a contribution whose currency differs from its goal's needs a rate
-  // to post, and only a goal holding contributions in another currency (its
-  // currency was changed since) needs one to check its saved total, so a run
-  // with nothing to convert never touches the rate service.
+  // Only an item whose currency differs from its account's or its goal's
+  // needs a rate to post, and only a goal holding contributions in another
+  // currency (its currency was changed since) needs one to check its saved
+  // total, so a run with nothing to convert never touches the rate service.
   const contributionGoals = new Map(
     postable
       .filter((item) => item.kind === "CONTRIBUTION" && item.goalId !== null && item.goal !== null)
@@ -389,9 +406,8 @@ export async function postDueRecurringItems(
     foreignContributions ||
     postable.some(
       (item) =>
-        item.kind === "CONTRIBUTION" &&
-        item.goal !== null &&
-        item.goal.currency !== item.currency,
+        (item.account !== null && item.account.currency !== item.currency) ||
+        (item.kind === "CONTRIBUTION" && item.goal !== null && item.goal.currency !== item.currency),
     );
   const rates = needsRates ? await getRateTable() : IDENTITY_RATES;
 
@@ -442,6 +458,7 @@ export async function postDueRecurringItems(
         const outcome = await postOccurrence(
           item,
           item.accountId,
+          item.account?.currency ?? item.currency,
           occurrence,
           plan.settledBy.get(recurringExternalId(item.id, occurrence)) ?? null,
           rates,

@@ -1,6 +1,14 @@
+import {
+  inAccountCurrency,
+  moneyRow,
+  roundRate,
+  toAccountMoney,
+  type MoneyRow,
+  type StoredMoney,
+} from "@/lib/account-money";
 import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
 import { today as todayInAppZone } from "@/lib/date";
-import { num, round2 } from "@/lib/money";
+import { num, round2, type DecimalLike } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
 import { skipMissedOccurrences } from "@/lib/data/recurring";
@@ -47,7 +55,9 @@ export async function logManualContribution(
   // upsert ExchangeRate rows, neither of which belongs inside a write.
   const table =
     rates ?? (goal.currency === account.currency ? IDENTITY_RATES : await getRateTable());
-  const accountAmount = round2(convert(input.amount, goal.currency, account.currency, table));
+  // The twin is stored in the account's currency with the contribution's own
+  // figure and the rate kept beside it (K7), like any other row.
+  const twin = inAccountCurrency({ amount: input.amount, currency: goal.currency }, account.currency, table);
 
   return prisma.$transaction(async (tx) => {
     const contribution = await tx.goalContribution.create({
@@ -64,8 +74,7 @@ export async function logManualContribution(
     const transaction = await tx.transaction.create({
       data: {
         date: input.date,
-        amount: accountAmount,
-        currency: account.currency,
+        ...twin,
         type: "EXPENSE",
         accountId: account.id,
         categoryId: savingsCategory?.id ?? null,
@@ -124,8 +133,27 @@ function recurringContributionTwin(key: string) {
         { recurringSettlement: { is: { occurrenceKey: key } } },
       ],
     },
-    select: { id: true, currency: true },
+    select: { id: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true },
   });
+}
+
+/**
+ * A contribution's ledger twin as K7 reads it: stored in its account's
+ * currency, converted from the contribution's own figure. A twin written
+ * before K7 kept no original, but it was converted from the contribution
+ * all the same, so the contribution's stored amount and the rate that pair
+ * implies stand in for it - an amount correction then scales the twin in
+ * proportion rather than re-converting it at today's rate (B25).
+ */
+function twinAsStored(
+  twin: { amount: DecimalLike; currency: string; originalAmount: DecimalLike; originalCurrency: string | null; rate: DecimalLike },
+  contribution: { amount: DecimalLike; currency: string },
+): MoneyRow {
+  const row = moneyRow(twin);
+  if (row.originalCurrency !== null || row.currency === contribution.currency) return row;
+  const contributed = num(contribution.amount);
+  if (contributed <= 0) return row;
+  return { ...row, originalAmount: contributed, originalCurrency: contribution.currency, rate: roundRate(row.amount / contributed) };
 }
 
 export type RecurringContributionUpdate =
@@ -138,9 +166,9 @@ export type RecurringContributionUpdate =
  * Corrects one already-posted occurrence of a recurring contribution: the
  * amount the goal counts (in the goal's currency, as stored) and the expense
  * that moved the money - the RECURRING row, or the charge that settled the
- * occurrence - in one write. The expense keeps its own
- * currency - the item's - so when that differs from the goal's the new amount
- * is converted at today's rate, the way a manual contribution's expense is.
+ * occurrence - in one write. The expense stays in its account's currency: a
+ * new amount is carried across at the rate the expense was stored at (K7), so
+ * the correction scales it rather than re-converting it at today's rate.
  * The RecurringItem itself is untouched: this is about what was charged on
  * that date, not what the item charges next. The caller rebuilds the goal's
  * cached total afterwards, as every contribution write does.
@@ -152,7 +180,7 @@ export async function updateRecurringContributionAmount(
 ): Promise<RecurringContributionUpdate> {
   const contribution = await prisma.goalContribution.findUnique({
     where: { id: contributionId },
-    select: { id: true, goalId: true, currency: true, recurringExternalId: true },
+    select: { id: true, goalId: true, amount: true, currency: true, recurringExternalId: true },
   });
   if (!contribution) return { ok: false, reason: "not_found" };
   if (!contribution.recurringExternalId) return { ok: false, reason: "not_recurring" };
@@ -161,19 +189,23 @@ export async function updateRecurringContributionAmount(
   const table =
     rates ??
     (!twin || twin.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
-  const transactionAmount = twin
-    ? round2(convert(amount, contribution.currency, twin.currency, table))
+  const stored = twin
+    ? toAccountMoney({ amount, currency: contribution.currency }, twin.currency, table, {
+        row: twinAsStored(twin, contribution),
+        accountCurrency: twin.currency,
+      })
     : null;
+  const transactionAmount = stored ? stored.amount : null;
 
   await prisma.$transaction(async (tx) => {
     await tx.goalContribution.update({
       where: { id: contribution.id },
       data: { amount },
     });
-    if (twin && transactionAmount !== null) {
+    if (twin && stored) {
       await tx.transaction.update({
         where: { id: twin.id },
-        data: { amount: transactionAmount },
+        data: stored,
       });
     }
   });
@@ -192,10 +224,11 @@ export type ManualContributionUpdate =
  * paired it with, in one write. The manual counterpart to
  * updateRecurringContributionAmount above.
  *
- * Changing the account re-converts the amount into that account's own
- * currency, the same conversion logManualContribution applies at creation;
- * leaving the account alone keeps the twin in its existing currency and just
- * carries the new amount and date across. A contribution logged before
+ * Changing the account converts the amount into that account's own
+ * currency at today's rate, the same conversion logManualContribution applies
+ * at creation. Leaving the account alone keeps the twin as stored (K7): an
+ * edit of the date alone never touches its amount (B25), and a new amount is
+ * carried across at the rate the twin was stored at. A contribution logged before
  * contributions had an account has no twin to find - as with the recurring
  * path, the contribution itself is still corrected, and the account it now
  * points at takes effect the next time a twin exists to move.
@@ -207,30 +240,38 @@ export async function updateManualContribution(
 ): Promise<ManualContributionUpdate> {
   const contribution = await prisma.goalContribution.findUnique({
     where: { id: contributionId },
-    select: { id: true, goalId: true, currency: true, recurringExternalId: true },
+    select: { id: true, goalId: true, amount: true, currency: true, recurringExternalId: true },
   });
   if (!contribution) return { ok: false, reason: "not_found" };
   if (contribution.recurringExternalId) return { ok: false, reason: "not_manual" };
 
   const twin = await prisma.transaction.findFirst({
     where: { source: "MANUAL", externalId: manualContributionExternalId(contribution.id) },
-    select: { id: true, currency: true, accountId: true },
+    select: { id: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, accountId: true },
   });
 
   let account: { id: string; currency: string } | null = null;
-  let transactionAmount: number | null = null;
+  let stored: StoredMoney | null = null;
   if (twin) {
-    account =
-      twin.accountId === input.accountId
-        ? { id: twin.accountId, currency: twin.currency }
-        : await prisma.account.findUniqueOrThrow({
-            where: { id: input.accountId },
-            select: { id: true, currency: true },
-          });
+    const sameAccount = twin.accountId === input.accountId;
+    account = sameAccount
+      ? { id: twin.accountId, currency: twin.currency }
+      : await prisma.account.findUniqueOrThrow({
+          where: { id: input.accountId },
+          select: { id: true, currency: true },
+        });
+    const kept = sameAccount ? { row: twinAsStored(twin, contribution), accountCurrency: twin.currency } : null;
+    const keepsConversion =
+      kept !== null &&
+      kept.row.originalCurrency === contribution.currency &&
+      kept.row.rate !== null &&
+      kept.row.rate !== undefined;
     const table =
-      rates ?? (account.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
-    transactionAmount = round2(convert(input.amount, contribution.currency, account.currency, table));
+      rates ??
+      (account.currency === contribution.currency || keepsConversion ? IDENTITY_RATES : await getRateTable());
+    stored = toAccountMoney({ amount: input.amount, currency: contribution.currency }, account.currency, table, kept);
   }
+  const transactionAmount = stored ? stored.amount : null;
 
   await prisma.$transaction(async (tx) => {
     await tx.goalContribution.update({
@@ -239,14 +280,13 @@ export async function updateManualContribution(
         ? { amount: input.amount, date: input.date, accountId: account!.id }
         : { amount: input.amount, date: input.date },
     });
-    if (twin && account && transactionAmount !== null) {
+    if (twin && account && stored) {
       await tx.transaction.update({
         where: { id: twin.id },
         data: {
-          amount: transactionAmount,
+          ...stored,
           date: input.date,
           accountId: account.id,
-          currency: account.currency,
         },
       });
     }

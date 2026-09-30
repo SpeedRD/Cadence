@@ -190,13 +190,14 @@ export interface TransferLeg {
 }
 
 /**
- * What each leg of a transfer records. Both legs carry the entered amount
- * and currency - the receiving account's balance then converts it at the
- * current rate - unless the accounts are in different currencies and the
- * user gave the amount the bank actually credited: then the receiving leg
- * carries that exact figure in the receiving account's own currency, the way
- * a real cross-currency transfer lands. Same-currency transfers ignore the
- * override entirely, so their two legs can never disagree.
+ * What each leg of a transfer was entered as. Both legs carry the entered
+ * amount and currency unless the accounts are in different currencies and
+ * the user gave the amount the bank actually credited: then the receiving
+ * leg carries that exact figure in the receiving account's own currency, the
+ * way a real cross-currency transfer lands. Same-currency transfers ignore the
+ * override entirely, so their two legs can never disagree. Each leg is then
+ * stored in its own account's currency, converted once
+ * (transferLegsInAccounts in src/lib/account-money.ts).
  */
 export function transferLegs(input: {
   amount: number;

@@ -1,3 +1,4 @@
+import { exactAmountIn, moneyRow } from "@/lib/account-money";
 import { convert } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -46,8 +47,13 @@ export interface SharedExpenseDetails {
 export interface TransactionRow extends SharedExpenseDetails {
   id: string;
   date: Date;
+  /** As stored: in the account's currency (K7), or - on a row written before K7 - as it was entered. */
   amount: number;
   currency: string;
+  /** What the row was entered as, when that was another currency than the account's, and the rate it was stored at. */
+  originalAmount: number | null;
+  originalCurrency: string | null;
+  rate: number | null;
   displayAmount: number;
   type: string;
   source: string;
@@ -82,6 +88,9 @@ export interface TransactionRow extends SharedExpenseDetails {
   /** The other leg's own figure - differs from this row's on a cross-currency transfer with a declared received amount. */
   counterpartAmount: number | null;
   counterpartCurrency: string | null;
+  /** The other leg's entered figure, when it was converted (K7). */
+  counterpartOriginalAmount: number | null;
+  counterpartOriginalCurrency: string | null;
 }
 
 function buildWhere(filters: TransactionFilters): Prisma.TransactionWhereInput {
@@ -138,6 +147,8 @@ export async function listTransactions(
           accountId: true,
           amount: true,
           currency: true,
+          originalAmount: true,
+          originalCurrency: true,
           account: { select: { name: true } },
         },
       })
@@ -173,6 +184,9 @@ export async function listTransactions(
       date: transaction.date,
       amount: num(transaction.amount),
       currency: transaction.currency,
+      originalAmount: transaction.originalAmount === null ? null : num(transaction.originalAmount),
+      originalCurrency: transaction.originalCurrency,
+      rate: transaction.rate === null ? null : num(transaction.rate),
       displayAmount: round2(
         convert(
           num(transaction.amount),
@@ -200,6 +214,8 @@ export async function listTransactions(
       counterpartAccountId: counterpart?.accountId ?? null,
       counterpartAmount: counterpart ? num(counterpart.amount) : null,
       counterpartCurrency: counterpart?.currency ?? null,
+      counterpartOriginalAmount: counterpart?.originalAmount == null ? null : num(counterpart.originalAmount),
+      counterpartOriginalCurrency: counterpart?.originalCurrency ?? null,
     };
   });
 
@@ -213,9 +229,11 @@ export async function listTransactions(
 
 /**
  * The linked deposits of each shared expense in `expenseIds`, summed into
- * that expense's own currency (a deposit in another currency converts at the
- * current rate, as every cross-currency figure here does). Expenses with no
- * deposit yet are simply absent from the map.
+ * that expense's own currency - the currency its account stores it in (K7).
+ * A deposit counts at the figure it holds in that currency (stored, or as it
+ * was entered), so a payback does not float with the rate; only a deposit
+ * that holds no figure in that currency converts at the current rate.
+ * Expenses with no deposit yet are simply absent from the map.
  */
 async function sumReimbursements(
   expenseIds: string[],
@@ -226,17 +244,17 @@ async function sumReimbursements(
   const currencyById = new Map(expenses.map((expense) => [expense.id, expense.currency]));
   const deposits = await prisma.transaction.findMany({
     where: { type: "INCOME", reimbursesTransactionId: { in: expenseIds } },
-    select: { reimbursesTransactionId: true, amount: true, currency: true },
+    select: { reimbursesTransactionId: true, amount: true, currency: true, originalAmount: true, originalCurrency: true },
   });
   const recovered = new Map<string, number>();
   for (const deposit of deposits) {
     const expenseId = deposit.reimbursesTransactionId as string;
     const currency = currencyById.get(expenseId);
     if (!currency) continue;
+    const row = moneyRow(deposit);
     recovered.set(
       expenseId,
-      (recovered.get(expenseId) ?? 0) +
-        convert(num(deposit.amount), deposit.currency, currency, context.rates),
+      (recovered.get(expenseId) ?? 0) + (exactAmountIn(row, currency) ?? convert(row.amount, row.currency, currency, context.rates)),
     );
   }
   return recovered;

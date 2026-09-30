@@ -14,6 +14,8 @@
  */
 import { createHash } from "node:crypto";
 
+import { roundRate, storedMoney, type StoredMoney } from "@/lib/account-money";
+
 import { addDays, maxDate, minDate, toISODate } from "@/lib/date";
 import { num, type DecimalLike } from "@/lib/money";
 import { fundedPeriodFor, periodInfo } from "@/lib/period";
@@ -62,12 +64,13 @@ export interface PostedMatch {
   others: PostedMatchRow[];
   /**
    * What choosing the posted charge writes on `posted`: the incoming amount and
-   * currency in place of its own, nothing else. Null when they already agree,
+   * currency in place of its own - as the incoming row stores them, in the
+   * account's currency, with what it was entered as - nothing else. Null when they already agree,
    * and always for a paycheck (a check-in owns it), a contribution's ledger
    * half (its GoalContribution must stay in step) and an ambiguous match
    * (which row is meant is not known).
    */
-  rewrite: { amount: number; currency: string } | null;
+  rewrite: StoredMoney | null;
 }
 
 type Client = Prisma.TransactionClient;
@@ -107,7 +110,19 @@ export async function findPostedDuplicates(
         { source: "PAYDAY_CHECKIN", type: "INCOME" },
       ],
     },
-    select: { id: true, date: true, amount: true, currency: true, type: true, accountId: true, source: true, externalId: true, note: true },
+    select: {
+      id: true,
+      date: true,
+      amount: true,
+      currency: true,
+      originalAmount: true,
+      originalCurrency: true,
+      type: true,
+      accountId: true,
+      source: true,
+      externalId: true,
+      note: true,
+    },
   });
   if (rows.length === 0) return result;
 
@@ -168,6 +183,8 @@ export async function findPostedDuplicates(
       date: row.date,
       amount: num(row.amount),
       currency: row.currency,
+      originalAmount: row.originalAmount === null ? null : num(row.originalAmount),
+      originalCurrency: row.originalCurrency,
       // A paycheck whose snapshot is gone falls back to the funding window of
       // the period its own day funds.
       window:
@@ -200,7 +217,13 @@ export async function findPostedDuplicates(
   for (const [key, verdict] of plan) {
     const entry = incomingByKey.get(key) as IncomingEntry;
     const primary = viewById.get(verdict.postedId) as PostedMatchRow;
-    const differs = primary.currency !== entry.currency || Math.round(primary.amount * 100) !== Math.round(entry.amount * 100);
+    const postedEntry = posted.find((row) => row.id === verdict.postedId) as PostedEntry;
+    const incomingMoney = rewriteFor(storedMoney(entry), postedEntry);
+    const differs =
+      primary.currency !== incomingMoney.currency ||
+      Math.round(primary.amount * 100) !== Math.round(incomingMoney.amount * 100) ||
+      (postedEntry.originalCurrency ?? null) !== incomingMoney.originalCurrency ||
+      Math.round((postedEntry.originalAmount ?? 0) * 100) !== Math.round((incomingMoney.originalAmount ?? 0) * 100);
     result.set(key, {
       kind: primary.kind,
       possible: verdict.possible,
@@ -208,12 +231,30 @@ export async function findPostedDuplicates(
       posted: primary,
       others: verdict.candidateIds.slice(1).map((id) => viewById.get(id) as PostedMatchRow),
       rewrite:
-        differs && !verdict.ambiguous && rewritable.has(primary.id)
-          ? { amount: entry.amount, currency: entry.currency }
-          : null,
+        differs && !verdict.ambiguous && rewritable.has(primary.id) ? incomingMoney : null,
     });
   }
   return result;
+}
+
+/**
+ * What "It's the posted charge" writes on a posted row: the incoming money as
+ * the account stores it. A bank's figure in the account's own currency for a
+ * row posting converted from the item's currency keeps what that row was
+ * entered as - the item's amount - with the rate the bank's figure implies,
+ * so the row still says what it was charged for.
+ */
+function rewriteFor(incoming: StoredMoney, posted: PostedEntry): StoredMoney {
+  if (incoming.originalCurrency !== null || posted.originalCurrency == null || posted.originalAmount == null) return incoming;
+  if (posted.originalCurrency === incoming.currency || posted.currency !== incoming.currency || posted.originalAmount <= 0) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    originalAmount: posted.originalAmount,
+    originalCurrency: posted.originalCurrency,
+    rate: roundRate(incoming.amount / posted.originalAmount),
+  };
 }
 
 export type PostedLookup = typeof findPostedDuplicates;
@@ -258,14 +299,20 @@ export async function lookUpPostedDuplicates(
  * "It's the posted charge": the incoming row is not written, and when the
  * match carries a rewrite, the posted RECURRING row takes the incoming amount
  * and currency - the bank's or the receipt's figure for the money that really
- * moved. No other field changes, a paycheck is never touched, and nothing is
+ * moved, in the account's currency, with what it was entered as. No other field changes, a paycheck is never touched, and nothing is
  * deleted. Returns whether the posted row changed.
  */
 export async function applyPostedMatch(client: Client, match: PostedMatch): Promise<boolean> {
   if (!match.rewrite) return false;
   const updated = await client.transaction.updateMany({
     where: { id: match.posted.id, source: "RECURRING" },
-    data: { amount: match.rewrite.amount, currency: match.rewrite.currency },
+    data: {
+      amount: match.rewrite.amount,
+      currency: match.rewrite.currency,
+      originalAmount: match.rewrite.originalAmount,
+      originalCurrency: match.rewrite.originalCurrency,
+      rate: match.rewrite.rate,
+    },
   });
   return updated.count > 0;
 }
@@ -281,6 +328,9 @@ export function entryDigest(row: {
   date: Date;
   amount: DecimalLike;
   currency: string;
+  originalAmount: DecimalLike;
+  originalCurrency: string | null;
+  rate: DecimalLike;
   type: string;
   accountId: string;
   categoryId: string | null;
@@ -298,6 +348,9 @@ export function entryDigest(row: {
         toISODate(row.date),
         num(row.amount).toFixed(2),
         row.currency,
+        row.originalAmount === null || row.originalAmount === undefined ? null : num(row.originalAmount).toFixed(2),
+        row.originalCurrency,
+        row.rate === null || row.rate === undefined ? null : num(row.rate).toString(),
         row.type,
         row.accountId,
         row.categoryId,
@@ -371,6 +424,9 @@ export async function keepPostedInsteadOfEntry(
         date: entry.date,
         amount: num(entry.amount),
         currency: entry.currency,
+        originalAmount: entry.originalAmount === null ? null : num(entry.originalAmount),
+        originalCurrency: entry.originalCurrency,
+        rate: entry.rate === null ? null : num(entry.rate),
         note: entry.note,
         categoryId: entry.categoryId,
       },
@@ -391,6 +447,9 @@ export async function keepPostedInsteadOfEntry(
         date: entry.date,
         amount: entry.amount,
         currency: entry.currency,
+        originalAmount: entry.originalAmount,
+        originalCurrency: entry.originalCurrency,
+        rate: entry.rate,
         type: entry.type,
         accountId: entry.accountId,
         categoryId: entry.categoryId,

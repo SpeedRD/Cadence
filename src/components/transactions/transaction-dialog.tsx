@@ -23,7 +23,9 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { CURRENCIES, formatMoney } from "@/lib/currency";
+import { ConversionPreview } from "@/components/form/conversion-preview";
+import { CURRENCIES, formatMoney, type RateTable } from "@/lib/currency";
+import type { MoneyRow } from "@/lib/account-money";
 import { toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { canBeOneOffIncome, canBeSharedExpense } from "@/lib/transactions";
@@ -51,6 +53,13 @@ export interface TransactionFormValues {
   /** With externalId, lets canBeSharedExpense decide whether the share switch is offered; a new row is MANUAL. */
   source?: string;
   externalId?: string | null;
+  /**
+   * The row being edited as stored, in its account's currency (K7), with the
+   * currency of the account it is on - so the conversion preview says when
+   * re-saving keeps the stored rate. `amount` and `currency` above are what
+   * it was entered as.
+   */
+  stored?: { row: MoneyRow; accountCurrency: string };
 }
 
 export function TransactionDialog({
@@ -58,6 +67,7 @@ export function TransactionDialog({
   categories,
   openSharedExpenses,
   values,
+  rates,
   trigger,
   open: controlledOpen,
   onOpenChange,
@@ -68,6 +78,8 @@ export function TransactionDialog({
   /** What an INCOME row can be linked to as a reimbursement - see listOpenSharedExpenses. */
   openSharedExpenses: OpenSharedExpense[];
   values: TransactionFormValues;
+  /** The request's rate table, for the conversion preview (ConversionPreview). */
+  rates: RateTable["rates"];
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -108,6 +120,8 @@ export function TransactionDialog({
   // reset with `type` below.
   const [isShared, setIsShared] = useState(values.yourShare != null);
   const [currency, setCurrency] = useState(values.currency ?? CURRENCIES[0]);
+  // The amount as typed, for the conversion preview under it.
+  const [amountText, setAmountText] = useState(values.amount === undefined ? "" : String(values.amount));
   // The one-off income switch, carried as a hidden field like the share
   // switch, and the reimbursement pick it depends on: a deposit linked to a
   // shared expense is already left out of income averages by its link, so the
@@ -156,6 +170,7 @@ export function TransactionDialog({
       setIsOneOffIncome(values.isOneOffIncome ?? false);
       setReimbursesId(values.reimbursesTransactionId ?? "none");
       setCurrency(values.currency ?? CURRENCIES[0]);
+      setAmountText(values.amount === undefined ? "" : String(values.amount));
       setAccountId(defaultAccountId);
       setAccountTouched(false);
       resetCategory();
@@ -265,6 +280,7 @@ export function TransactionDialog({
             placeholder="0.00"
             className="font-mono"
             defaultValue={values.amount ?? ""}
+            onChange={(event) => setAmountText(event.target.value)}
             required
           />
         </Field>
@@ -277,6 +293,18 @@ export function TransactionDialog({
           />
         </Field>
       </div>
+
+      {/* In another currency than the account's, the amount is stored in the
+          account's currency, converted once now (K7): what it will be saved
+          as, and at which rate, before it is. */}
+      <ConversionPreview
+        amount={amountText}
+        currency={currency}
+        accountCurrency={accounts.find((account) => account.id === accountId)?.currency}
+        rates={rates}
+        previous={values.stored}
+        locale={locale}
+      />
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label={common.account} htmlFor="transaction-account">

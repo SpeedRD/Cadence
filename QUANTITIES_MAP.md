@@ -686,17 +686,20 @@ database-free function.
 - **Repro (DB, trace (d)):** 15 USD posted to a DOP account, bank charged 918: ledger **19,100 / 19,082 / 19,070** at 60 / 61.2 / 62 against the bank's fixed 19,082; Step 1's difference goes from −18 to +12; the monthly "committed so far" reads 900 / 918 / 930. A 100 USD transfer into a DOP account with the received amount blank: **6,050** at 60.5 and **6,120** at 61.2.
 - **Who / direction:** accounts holding foreign rows (card subscriptions, installments, transfers). The balance drifts with the rate. It does not reach the plan's cap unless the reported balance is negative (see D40), contrary to what B19 says.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** B19.
+- **Status (2026-09-30, K7):** removed. A row is stored in its account's currency, converted once at entry with the entered figure and the rate kept beside it (`Transaction.originalAmount`, `originalCurrency`, `rate`; `src/lib/account-money.ts`). Posting converts an item in another currency once, at the day's rate; a transfer with the received amount blank stores each leg in its own account's currency. Repro: the 15 USD posted at 61.2 is stored as 918 DOP, so the ledger and Step 1 read 19,082 at 60 / 61.2 / 62 (was 19,100 / 19,082 / 19,070) and the difference against the bank is 0 at all three; the monthly "committed so far" reads 918 (was 900 / 918 / 930); the 100 USD transfer lands as 6,050 at 60.5 and stays 6,050 at 61.2 (was 6,120). A row written before this reads as before (converted at today's rate) until `scripts/backfill-account-currency.ts` stores it.
 
 #### D36. A goal counts a contribution at one rate while the ledger reads it at today's, and an edit re-converts the ledger half
 - **Quantities:** Q30 against Q42 and Q13's savings figure.
 - **Rules:** GoalContribution is converted once at posting (`lib/recurring-posting.ts:305-308`); the RECURRING row stays in the item currency; manual edits re-convert the twin at today's rate (`lib/goals.ts:160-166, 220-233`).
 - **Repro (DB):** a recurring 100 USD contribution from a DOP account into a DOP goal, posted with the stored rate at 58.5: the goal counts **5,850**; once the rate is 60.2 the account shows −**6,020** and the monthly savings **6,020** for the same occurrence. A 100 USD manual contribution from a DOP account logged at 58.5 (twin 5,850 DOP): a date-only edit at 60.2 rewrites the twin to **6,020** while the goal keeps 100 USD.
 - **Severity:** Low. **Confidence:** High. **Relates to:** B25, new (posting side).
+- **Status (2026-09-30, K7):** removed. Posting converts the contribution's expense once, with the same table as its GoalContribution: at 58.5 the goal counts 5,850 and the account shows -5,850 at 60.2 (was -6,020), and the month's savings count 5,850 (was 6,020). A manual contribution's twin is kept on an edit that does not change the amount or the account (a date-only edit at 60.2 keeps 5,850, was 6,020), and an amount correction scales it at the rate it was stored at (120 USD: 7,020, was 7,224).
 
 #### D37. A reimbursement's "pending" floats with the rate
 - **Quantities:** Q58.
 - **Repro (pure):** a 90 USD expense with a 30 share, 3,600 DOP paid back: settled at 60; **2.86 USD pending** at 63, and the expense is offered again in the picker.
 - **Severity:** Very low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K7):** removed for an expense and its payback on accounts in one currency (the real shape): both are stored in that currency, so 90 USD with a 30 share entered on a DOP account at 60 is 5,400 / 1,800 DOP and a 3,600 DOP payback settles it at any rate (was 2.86 USD pending at 63, and offered again). A deposit counts at the figure it holds in the expense's currency (stored, or as entered); only a deposit on an account in another currency, entered in a third one, still converts at today's rate.
 
 #### D38. A charge settles a recurring occurrence only in the same currency; the duplicate check converts
 - **Quantities:** "already paid" (posting, Q8) against the posted-duplicate prompt.
@@ -704,34 +707,40 @@ database-free function.
 - **Repro (DB):** a 15 USD item due Oct 5 on a DOP account; the user enters 907.50 DOP "Fict Netflix" on Oct 3. Posting on Oct 5: **0 settlements**, the ledger holds **907.50 DOP and 15 USD**. The same with the item in DOP: 1 settlement, no RECURRING row.
 - **Who / direction:** foreign-currency subscriptions and installments whose local charge is recorded before the due date; the money is counted twice.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** new (the currency case of B2/B10/B5).
+- **Status (2026-09-30, K7, decision 5):** changed. Settlement and the duplicate check both compare in the account's currency. Posting settles an occurrence only when the charge holds the item's amount exactly - as stored, or as it was entered (a charge entered as 15 USD on the DOP account, stored as 918 DOP, settles the 15 USD item) - never through a conversion. Repro: the 907.50 DOP charge settles nothing; the occurrence posts once, as 918 DOP (was 15 USD), and the charge is put to the user as a possible match of the posted 918 DOP, compared in DOP. As before, the question is asked when a charge is brought in after posting; one entered before posting is not asked about (the audit's pair 4 still lists it).
 
 #### D39. A hand-logged contribution in another currency does not settle its recurring occurrence, so it posts again
 - **Quantities:** Q30, Q42.
 - **Rules:** the twin is in the account's currency (`lib/goals.ts:50, 68`); the settlement branch needs the item's currency (`lib/recurring-settlement.ts:202-208`).
 - **Repro (DB):** a recurring 100 USD contribution from a DOP account to a USD goal due Oct 10; the user logs the 100 USD by hand on Oct 8. After posting: goal saved **200 USD**; ledger 6,000 DOP and 100 USD.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K7):** removed. A hand-logged contribution's twin keeps the contribution's own figure (100 USD) beside the 6,000 DOP it is stored as, so it settles the 100 USD occurrence: the goal saves 100 USD and the ledger holds 6,000 DOP once (was 200 USD, and 6,000 DOP plus 100 USD).
 
 #### D40. "Reconciliation" is two unrelated figures: the Step 1 difference caps nothing, a negative reported balance caps everything
 - **Quantities:** Q49 against Q52/Q53.
 - **Rules:** Q49 is computed and stored but not read; the cap reduces to `max(0, −reported)` (`lib/payday.ts:355-357`) and never reads the ledger.
 - **Repro (DB):** ledger 49,082: reported 49,082 → difference 0, cap 0; reported **40,000** → difference −9,082, **cap 0**; reported **−300** → cap **300**.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new. See decision 5.1.
+- **Status (2026-09-30, K8, decision 5.1 option D):** resolved. `reconciliation(expected, reported)` (`src/lib/payday.ts`) is Step 1's one comparison, and the snapshot stores its expected and difference: a check only, capping nothing (49,082 against 40,000 is -9,082, cap 0). The cap stays a reported balance below zero (-300 caps 300), about the money reported, not the ledger.
 
 #### D41. Step 1's ledger already holds the period's spending, so a late first check-in is capped by it and charged for it again
 - **Quantities:** Q47, Q48, Q53 against Q16.
 - **Rules:** `ledgerBefore` removes only this check-in's paycheck (`lib/data/payday.ts:565-574`) and pre-fills the reported balance with it (`:834`); the copy says it is the balance before this period's income.
 - **Repro (DB):** balance 1,000 before pay, 5,000 of groceries on Oct 1, check-in on Oct 3: pre-filled reported **−4,000**; confirm scales the flexible budgets from 45,000 to **41,000**; the 5,000 also counts as spent, safe to spend **36,000**.
 - **Severity:** Medium. **Confidence:** High (it relies on the user accepting the pre-fill). **Relates to:** new (the case U9 names).
+- **Status (2026-09-30, K8):** removed. Step 1's ledger is `reconciliationLedger` (`src/lib/data/payday.ts`, over `ledgerAt` in `src/lib/data/accounts.ts`): the ledger the day before the period's pay landed (its funding window's start), without this check-in's paycheck, and Step 1 names that day. Repro on Oct 3: expected and pre-filled 1,000 as of Sep 29 (was -4,000); the flexible budgets stay 45,000 (were scaled to 41,000); safe to spend 40,000 (was 36,000).
 
 #### D42. Balances and "saved" include rows dated in the future
 - **Quantities:** Q42, Q47, Q30.
 - **Repro (DB):** a rent row dated Nov 1 lowers the Oct 15 balance and Step 1 ledger to **30,000**. In trace (a) a contribution dated Oct 1 is in "saved" on Sep 30.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K8):** removed for balances (chosen: excluded, shown apart). A balance is the ledger as of today; rows dated later are shown apart ("... dated after today, not in this balance") on the Accounts list and the account page, and Step 1 stops at the day before the pay. Repro on Oct 15: 32,000 on the list, the account page and Step 1, with -2,000 shown apart (was 30,000). A goal's "saved" still counts a contribution dated later (not changed here).
 
 #### D43. The bank's sell rate is used in both directions
 - **Quantities:** Q54 in every conversion.
 - **Repro (pure):** BPD buy 59.80 / sell 61.20: 1,000 USD income shows as **61,200 DOP** (the buy side would give 59,800).
 - **Severity:** Low. **Confidence:** High. **Relates to:** B44.
+- **Status (2026-09-30, K7, decision 1):** decided. The bank's sell rate stays the rate; it is applied once, at entry, and stored with the row (`Transaction.rate`), so a later rate never moves the row: 1,000 USD entered at 61.20 is 61,200 DOP and stays 61,200 when the table says 59.80 (was 59,800). Totals shown in another currency than an account's still convert at today's table.
 
 ### Periods, installments and debts
 
@@ -754,6 +763,7 @@ database-free function.
 #### D47. Editing a posted installment to the real pesos changes the past, not the future
 - **Repro (DB, trace (c)):** after the edit to 3,350 DOP, Afford, the room check, the monthly pace and the ledger read **3,350** for October while the three remaining payments stay 50 EUR at today's rate (3,333.33, later 3,444.44) everywhere.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K7, decision 3):** consistent. The posted row is the fact, stored in the account's currency (50 EUR posts as 3,333.33 DOP and stays 3,333.33 when the euro moves to 68.89, was 3,444.44); editing it to 3,350 DOP changes that row only, and the item stays the schedule (50 EUR, 3 left), projected at today's rate.
 
 #### D48. The cover-transfer dialog pre-fills the browser's UTC date
 - **Repro (pure):** at 21:30 on Oct 14 in Santo Domingo, the app's today is **2026-10-14**; the dialog's default is **2026-10-15** (`payday-checkin-dialog.tsx:517`).

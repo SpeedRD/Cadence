@@ -13,6 +13,7 @@
  * sends is trusted as a "recommended" figure.
  */
 import { getSettings } from "@/lib/auth";
+import { addDays } from "@/lib/date";
 import { convert, isSameMoney } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import {
@@ -23,6 +24,7 @@ import {
   planAccountBuffers,
   planGoalFunding,
   reachedGoalFunding,
+  reconciliation,
   scaleFlexibleSuggestions,
   type GoalFundingPlan,
 } from "@/lib/payday";
@@ -42,6 +44,7 @@ import {
   roomShortfall,
 } from "@/lib/goal-plan";
 import {
+  fundingWindow,
   paydayDateFor,
   periodClock,
   periodInfo,
@@ -57,7 +60,8 @@ import type { RecurringSkipReason } from "@/lib/recurring";
 import type { paydayConfirmSchema } from "@/lib/validation";
 import type { z } from "zod";
 
-import { getAccountBalances } from "@/lib/data/accounts";
+import { getAccountBalances, ledgerAt } from "@/lib/data/accounts";
+import { loadPayLanded } from "@/lib/data/period-income";
 import { goalPeriodPlans, loadGoalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
 import { loadBudgetSpent } from "@/lib/data/budget-spending";
 import { periodLeftover } from "@/lib/data/flexible-room";
@@ -65,6 +69,7 @@ import { getPeriodSummary } from "@/lib/data/period-summary";
 import { listGoals } from "@/lib/data/goals";
 
 import type { AppContext } from "@/lib/data/context";
+import type { Prisma } from "@/generated/prisma/client";
 
 export interface PaydayAccountDraft {
   accountId: string;
@@ -254,6 +259,8 @@ export type CarryoverBasis = "prior_period_budget" | "no_prior_budget";
 export interface PaydayCheckinDraft {
   periodRef: PeriodRef;
   periodLabel: string;
+  /** The day Step 1's ledger balances are as of: the day before this period's pay landed (K8). */
+  ledgerDate: Date;
   isEditingConfirmed: boolean;
   checkinId: string | null;
   displayCurrency: string;
@@ -565,20 +572,24 @@ export async function getAvailableCarryover(
 }
 
 /**
- * An account's ledger balance with this check-in's own income taken back out,
- * so "expected" means the same thing on a first confirm and on a re-confirm.
- * Only a snapshot that actually created an income Transaction has anything to
- * subtract.
+ * K8: what Step 1 reconciles each account against for the check-in of
+ * `planRef` - the ledger as of the day before that period's pay landed (its
+ * funding window's start, src/lib/period.ts), without this check-in's own
+ * paycheck rows (`paycheckIds`). Spending after the pay, and rows dated
+ * later, are not in it: the reported balance is what the account held
+ * before this period's income, and a check-in opened days after payday is
+ * measured against that same day. The same figure on a first confirm and a
+ * re-confirm, which only adds rows after it.
  */
-function ledgerBefore(
-  balance: number,
-  snapshot:
-    | { incomeEntered: { toString(): string } | number; incomeTransactionId: string | null }
-    | undefined
-    | null,
-): number {
-  if (!snapshot?.incomeTransactionId) return round2(balance);
-  return round2(balance - num(snapshot.incomeEntered));
+export async function reconciliationLedger(
+  planRef: PeriodRef,
+  context: Pick<AppContext, "rates">,
+  options: { paycheckIds?: readonly string[]; client?: Prisma.TransactionClient } = {},
+): Promise<{ date: Date; byAccount: Map<string, number> }> {
+  const payLanded = await loadPayLanded([planRef]);
+  const date = addDays(fundingWindow(planRef, payLanded).from, -1);
+  const byAccount = await ledgerAt(date, context, { excludeIds: options.paycheckIds, client: options.client });
+  return { date, byAccount };
 }
 
 /**
@@ -822,6 +833,11 @@ export async function getPaydayCheckinDraft(
   );
 
   const existingSnapshotByAccount = new Map((existing?.snapshots ?? []).map((s) => [s.accountId, s]));
+  // Step 1's ledger (K8): each account as of the day before this period's pay
+  // landed, without this check-in's own paychecks.
+  const ledger = await reconciliationLedger(planRef, context, {
+    paycheckIds: (existing?.snapshots ?? []).flatMap((s) => (s.incomeTransactionId ? [s.incomeTransactionId] : [])),
+  });
   const existingAllocationByKey = new Map(
     (existing?.allocations ?? []).map((a) => [
       `${a.type}:${a.categoryId ?? a.goalId ?? a.recurringItemId ?? ""}`,
@@ -864,13 +880,12 @@ export async function getPaydayCheckinDraft(
       currency: account.currency,
       type: account.type,
       // The ledger balance to reconcile against is the one *before* this
-      // check-in's own income landed. Re-opening a confirmed check-in would
-      // otherwise compare the reported balance against a ledger that already
-      // contains the paycheck this very screen is recording, so the same
-      // reported figure read as a match on the first pass and as a shortfall
-      // on the second.
-      expectedLedgerBalance: ledgerBefore(account.balance, snapshot),
-      reportedBalance: snapshot ? num(snapshot.reportedBalance) : ledgerBefore(account.balance, snapshot),
+      // period's pay landed (reconciliationLedger): not today's, which would
+      // hold the paycheck this very screen is recording and whatever was
+      // spent since, so a late first check-in would pre-fill the period's own
+      // spending as a shortfall (D41).
+      expectedLedgerBalance: ledger.byAccount.get(account.id) ?? 0,
+      reportedBalance: snapshot ? num(snapshot.reportedBalance) : (ledger.byAccount.get(account.id) ?? 0),
       incomeEntered: snapshot ? num(snapshot.incomeEntered) : 0,
       oneOffIncome: snapshot?.oneOffIncome ? num(snapshot.oneOffIncome) : 0,
       incomeNote: snapshot?.incomeNote ?? "",
@@ -1023,6 +1038,7 @@ export async function getPaydayCheckinDraft(
   return {
     periodRef: planRef,
     periodLabel: plan.longLabel,
+    ledgerDate: ledger.date,
     isEditingConfirmed: Boolean(existing),
     checkinId: existing?.id ?? null,
     displayCurrency: context.displayCurrency,
@@ -1415,11 +1431,18 @@ export async function confirmPaydayCheckin(
     if ((existingCheckin?.updatedAt.getTime() ?? null) !== (readBeforeWriting?.updatedAt.getTime() ?? null)) {
       return false;
     }
-    // The balances each snapshot reconciles against, read under the lock so
-    // they and the snapshot's own paycheck are one state of the ledger.
-    const balanceById = new Map(
-      (await getAccountBalances(context, { status: "ALL", client: tx })).map((account) => [account.id, account.balance]),
-    );
+    // The balances each snapshot reconciles against (K8), read under the lock
+    // so they and the snapshot's own paycheck are one state of the ledger.
+    const recorded = existingCheckin
+      ? await tx.paydayAccountSnapshot.findMany({
+          where: { paydayCheckinId: existingCheckin.id, incomeTransactionId: { not: null } },
+          select: { incomeTransactionId: true },
+        })
+      : [];
+    const ledger = await reconciliationLedger(planRef, context, {
+      paycheckIds: recorded.map((snapshot) => snapshot.incomeTransactionId as string),
+      client: tx,
+    });
     // The check-in's date is set once, when the row is first created, and a
     // re-confirm keeps it: reopening the wizard days later to adjust one
     // category must not re-date the check-in or the paycheck it recorded.
@@ -1469,10 +1492,12 @@ export async function confirmPaydayCheckin(
       const existingSnapshot = await tx.paydayAccountSnapshot.findFirst({
         where: { paydayCheckinId: checkin.id, accountId: account.id },
       });
-      // Measured against the ledger without this check-in's own income, so a
+      // Measured against the ledger before this period's pay (K8), so a
       // re-confirm reconciles against the same figure the first confirm did.
-      const expectedLedgerBalance = ledgerBefore(balanceById.get(account.id) ?? account.balance, existingSnapshot);
-      const difference = round2(accountInput.reportedBalance - expectedLedgerBalance);
+      const { expected: expectedLedgerBalance, difference } = reconciliation(
+        ledger.byAccount.get(account.id) ?? 0,
+        accountInput.reportedBalance,
+      );
 
       let incomeTransactionId = existingSnapshot?.incomeTransactionId ?? null;
       if (accountInput.incomeEntered > 0) {

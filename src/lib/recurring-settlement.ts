@@ -10,8 +10,11 @@
  * The rules, all of them here so both readers get the same verdict:
  *
  *   - Predicate: the monthly pace's own (chargeMatchesItem, also used by
- *     matchRecurringToTransactions) - same currency, amount within a cent, and
- *     either the item's name in the note or its category. When two active
+ *     matchRecurringToTransactions) - the charge holds the item's amount in
+ *     the item's currency to within a cent (as stored, or as it was entered
+ *     before it was stored in its account's currency - never through a
+ *     conversion at some rate), and either the item's name in the note or its
+ *     category. When two active
  *     items share a currency, an amount and a category, the category cannot
  *     tell them apart, so for both of them only the name counts. That guard is
  *     judged over every active item, never over the ones that happen to be due
@@ -39,6 +42,7 @@
  * paycheck - is planPostedDuplicates below, on the same window, guard and
  * one-to-one rule.
  */
+import { exactAmountIn, sameMoneyExactly, wasConverted } from "@/lib/account-money";
 import { convert, type RateTable } from "@/lib/currency";
 import { addDays, daysBetween, maxDate, minDate, toISODate } from "@/lib/date";
 import { incomeWindow, periodForDate, type PeriodRef } from "@/lib/period";
@@ -75,6 +79,9 @@ export interface MatchableCharge {
   id: string;
   amount: number;
   currency: string;
+  /** What the charge was entered as, when that was another currency than its account's (K7). */
+  originalAmount?: number | null;
+  originalCurrency?: string | null;
   categoryId: string | null;
   note: string | null;
 }
@@ -116,13 +123,25 @@ export function chargeIdentifiesItem(
 }
 
 /**
- * Whether `charge` looks like one of `item`'s charges: same currency, amount
- * within a cent, and either the item's name in the note or - unless
- * `categoryIsAmbiguous` - the item's category.
+ * The charge's money in the item's currency when the charge holds it exactly
+ * (exactAmountIn) and it is the item's amount to within a cent. A charge
+ * stored in its account's currency agrees with an item in that currency by
+ * its stored amount, and with an item in another currency only by what it
+ * was entered as - never through a conversion at some rate, so a local
+ * charge against a foreign item is left to the posted-duplicate question.
+ */
+function holdsItemAmount(item: MatchableItem, charge: MatchableCharge): boolean {
+  const amount = exactAmountIn(charge, item.currency);
+  return amount !== null && Math.abs(amount - item.amount) <= AMOUNT_MATCH_TOLERANCE;
+}
+
+/**
+ * Whether `charge` looks like one of `item`'s charges: the item's amount in
+ * its currency (holdsItemAmount), and either the item's name in the note or
+ * - unless `categoryIsAmbiguous` - the item's category.
  */
 export function chargeMatchesItem(item: MatchableItem, charge: MatchableCharge, categoryIsAmbiguous: boolean): boolean {
-  if (charge.currency !== item.currency) return false;
-  if (Math.abs(charge.amount - item.amount) > AMOUNT_MATCH_TOLERANCE) return false;
+  if (!holdsItemAmount(item, charge)) return false;
   return chargeIdentifiesItem(item, charge, categoryIsAmbiguous);
 }
 
@@ -200,12 +219,7 @@ export function planSettlements(input: {
       if (taken.has(charge.id)) return false;
       if (charge.date.getTime() < window.start.getTime() || charge.date.getTime() > window.end.getTime()) return false;
       if (charge.contributionGoalId !== null) {
-        return (
-          item.kind === "CONTRIBUTION" &&
-          item.goalId === charge.contributionGoalId &&
-          charge.currency === item.currency &&
-          Math.abs(charge.amount - item.amount) <= AMOUNT_MATCH_TOLERANCE
-        );
+        return item.kind === "CONTRIBUTION" && item.goalId === charge.contributionGoalId && holdsItemAmount(item, charge);
       }
       return chargeMatchesItem(item, charge, ambiguous.has(item.id));
     });
@@ -237,9 +251,11 @@ export function settlementSpan(dues: readonly Date[]): { start: Date; end: Date 
 // ---------------------------------------------------------------------------
 
 /**
- * How far a charge in another currency may land from the posted amount,
- * converted into the charge's currency at the current rate table, and still
- * be shown as a possible match - a share of the converted amount. A card
+ * How far a charge may land from a posted amount it agrees with only through
+ * a conversion - a row in another currency converted at the current rate
+ * table, or two rows in the account's currency one of which was converted
+ * from another currency when it was stored (K7) - and still be shown as a
+ * possible match: a share of the posted amount in the charge's currency. A card
  * charge settles within a few tenths of a percent of the published bank rate,
  * a foreign-transaction margin can add one or two points on top, and the rate
  * table is today's while the charge is from up to a period ago. Three percent
@@ -271,8 +287,13 @@ export interface IncomingEntry {
   accountId: string;
   type: "EXPENSE" | "INCOME";
   date: Date;
+  /** As the row stores it: in its account's currency (K7), or - for a row stored before K7 - as it was. */
   amount: number;
   currency: string;
+  /** What it was entered as, when that was another currency than its account's, and the rate it was stored at. */
+  originalAmount?: number | null;
+  originalCurrency?: string | null;
+  rate?: number | null;
   categoryId: string | null;
   note: string | null;
 }
@@ -286,6 +307,9 @@ export interface PostedEntry {
   date: Date;
   amount: number;
   currency: string;
+  /** What posting converted it from (the item's amount and currency), or what a rewrite brought in. */
+  originalAmount?: number | null;
+  originalCurrency?: string | null;
   /**
    * The days an incoming row may fall on to be this row's money: the
    * occurrence's settlementWindow, or for a paycheck the income window of
@@ -338,10 +362,13 @@ function seriesOf(entry: PostedEntry): string {
  * posted row is a candidate for an incoming one when both are on the same
  * account and go the same way (an expense against RECURRING rows, a deposit
  * against paychecks), the incoming date is inside the posted row's window,
- * and the amounts agree: in the same currency to within a cent
- * (AMOUNT_MATCH_TOLERANCE), or - only when no same-currency candidate exists -
- * in another currency to within CROSS_CURRENCY_MATCH_TOLERANCE after
- * converting the posted amount with `rates`, which makes it a possible match.
+ * and the amounts agree: exactly, to within a cent (AMOUNT_MATCH_TOLERANCE), in
+ * some currency both rows hold exactly - as stored, or as entered before
+ * being stored in the account's currency (sameMoneyExactly) - or, only when
+ * no exact candidate exists, to within CROSS_CURRENCY_MATCH_TOLERANCE through
+ * a conversion: a row in another currency converted with `rates`, or two
+ * rows in the account's currency one of which was converted when it was
+ * stored. That makes it a possible match.
  * So does a posted RECURRING row whose item the incoming row does not name
  * (chargeIdentifiesItem, under the look-alike guard below) and whose date is
  * more than PROXIMITY_DAYS from the row's: the same amount on the same
@@ -390,15 +417,16 @@ export function planPostedDuplicates(input: {
         entry.date.getTime() >= posted.window.start.getTime() &&
         entry.date.getTime() <= posted.window.end.getTime(),
     );
-    let pool = eligible.filter(
-      (posted) => posted.currency === entry.currency && Math.abs(posted.amount - entry.amount) <= AMOUNT_MATCH_TOLERANCE,
-    );
+    let pool = eligible.filter((posted) => sameMoneyExactly(posted, entry, AMOUNT_MATCH_TOLERANCE));
     const converted = pool.length === 0;
     if (converted) {
       pool = eligible.filter((posted) => {
-        if (posted.currency === entry.currency) return false;
-        const converted = convert(posted.amount, posted.currency, entry.currency, input.rates);
-        return converted > 0 && Math.abs(entry.amount - converted) <= CROSS_CURRENCY_MATCH_TOLERANCE * converted;
+        // Two rows in one currency, neither converted from another: their
+        // amounts simply differ.
+        if (posted.currency === entry.currency && !wasConverted(posted) && !wasConverted(entry)) return false;
+        const inEntryCurrency =
+          posted.currency === entry.currency ? posted.amount : convert(posted.amount, posted.currency, entry.currency, input.rates);
+        return inEntryCurrency > 0 && Math.abs(entry.amount - inEntryCurrency) <= CROSS_CURRENCY_MATCH_TOLERANCE * inEntryCurrency;
       });
     }
     if (pool.length === 0) return null;

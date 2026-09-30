@@ -43,6 +43,19 @@ export function defaultProtectedBuffer(
 
 export { availableForFlexibleCategories, type FlexibleInput } from "@/lib/flexible-room";
 
+/**
+ * K8: Step 1's comparison for one account - the ledger the day before this
+ * period's pay landed (`expected`, reconciliationLedger in
+ * src/lib/data/payday.ts), what the user reports the account held then, and
+ * the difference. A check only (decision 5.1): nothing in the plan reads the
+ * difference. Only a reported balance below zero lowers the plan, as the cap
+ * (AccountBufferPlan.reportedGap), which is about the money reported, not
+ * about the ledger.
+ */
+export function reconciliation(expected: number, reported: number): { expected: number; reported: number; difference: number } {
+  return { expected: round2(expected), reported: round2(reported), difference: round2(reported - expected) };
+}
+
 /** A reached goal's confirmed draws as planGoalFunding input: held on the accounts they came from, so the goals after it share what is left. */
 export function reachedGoalFunding(
   reached: readonly Pick<PaydayReachedGoalDraft, "goalId" | "plannedAmount" | "rows">[],
@@ -354,7 +367,7 @@ export interface AccountBufferAccount {
   /**
    * Step 1's reported balance for this account, in its own currency: the
    * balance *before* this check-in's income, the same convention Step 1
-   * reconciles against (see ledgerBefore in src/lib/data/payday.ts). Absent
+   * reconciles against (see reconciliationLedger in src/lib/data/payday.ts). Absent
    * or null when the caller has no reported balance to reconcile with.
    */
   reportedBalance?: number | null;

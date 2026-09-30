@@ -10,6 +10,14 @@
  * recurring charge or a check-in's paycheck (lookUpPostedDuplicates, which
  * fails open).
  */
+import {
+  needsConversion,
+  shareInAccountCurrency,
+  toAccountMoney,
+  type MoneyRow,
+  type StoredMoney,
+} from "@/lib/account-money";
+import { IDENTITY_RATES } from "@/lib/currency";
 import { ownShare } from "@/lib/shared-expense";
 import { prisma } from "@/lib/prisma";
 import { num } from "@/lib/money";
@@ -29,6 +37,40 @@ import type { RateTable } from "@/lib/currency";
 import type { transactionSchema } from "@/lib/validation";
 
 export type ManualTransactionValues = Omit<z.infer<typeof transactionSchema>, "id">;
+
+/** The form's values as the row stores them: amount and share in the account's currency, with the entered figure kept beside them. */
+export type StoredTransactionValues = Omit<ManualTransactionValues, "currency"> & StoredMoney;
+
+/**
+ * K7 for the transaction form (src/lib/account-money.ts): the entered amount
+ * and share stored in the account's currency, converted once at `getRates`'
+ * rate when the form's currency is another, with the entered figure and the
+ * rate kept. `previous` is the row being edited, as stored, and its account's
+ * currency: re-saving it unchanged keeps its stored conversion, and a new
+ * amount in the same currency is converted at the rate stored with it.
+ * Rates are asked for only when a conversion is needed.
+ */
+export async function storedTransactionValues(
+  values: ManualTransactionValues,
+  getRates: () => Promise<RateTable>,
+  previous?: { row: MoneyRow & { yourShare: number | null }; accountCurrency: string } | null,
+): Promise<StoredTransactionValues> {
+  const account = await prisma.account.findUniqueOrThrow({ where: { id: values.accountId }, select: { currency: true } });
+  const table = needsConversion(values.currency, account.currency) ? await getRates() : IDENTITY_RATES;
+  const stored = toAccountMoney({ amount: values.amount, currency: values.currency }, account.currency, table, previous);
+  return {
+    ...values,
+    amount: stored.amount,
+    currency: stored.currency,
+    originalAmount: stored.originalAmount,
+    originalCurrency: stored.originalCurrency,
+    rate: stored.rate,
+    // undefined stays undefined: the form did not offer the share, and the
+    // stored one is left as it is (see transactionSchema).
+    yourShare:
+      values.yourShare === undefined ? undefined : shareInAccountCurrency(values.yourShare, stored, previous),
+  };
+}
 
 export interface ManualTransactionResult {
   id: string;
@@ -66,7 +108,13 @@ export async function createManualTransaction(
         ).get("new")
       : undefined;
 
-  const created = await prisma.transaction.create({ data: { ...values, source: "MANUAL" } });
+  // Stored in the account's currency (K7); the one-off check above measured
+  // what the user typed, which it converts into the display currency itself.
+  const stored = await storedTransactionValues(
+    values,
+    async () => (context ? context.rates : await (options.getRates ?? getRateTable)()),
+  );
+  const created = await prisma.transaction.create({ data: { ...stored, source: "MANUAL" } });
 
   const found =
     created.type === "EXPENSE" || created.type === "INCOME"
@@ -79,6 +127,9 @@ export async function createManualTransaction(
               date: created.date,
               amount: num(created.amount),
               currency: created.currency,
+              originalAmount: created.originalAmount === null ? null : num(created.originalAmount),
+              originalCurrency: created.originalCurrency,
+              rate: created.rate === null ? null : num(created.rate),
               note: created.note,
               categoryId: created.categoryId,
             },

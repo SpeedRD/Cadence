@@ -206,6 +206,17 @@ model Transaction {
   /// back, not earnings. One shared expense may be reimbursed by many deposits over
   /// time. Set to null if the expense is deleted underneath it.
   reimbursesTransactionId String?
+  /// The money as it was entered, when that was in another currency than the
+  /// account's (QUANTITIES_MAP.md K7): `amount` and `currency` are then what
+  /// the account moved, converted once at entry at `rate` (units of the
+  /// account's currency per unit of `originalCurrency`) and never again.
+  /// All three are null on a row entered in the account's own currency. A row
+  /// written before this existed may still carry another currency in
+  /// `currency` with these null; every reader converts such a row at today's
+  /// rate, as before, until scripts/backfill-account-currency.ts stores it.
+  originalAmount    Decimal?           @db.Decimal(14, 2)
+  originalCurrency  String?
+  rate              Decimal?           @db.Decimal(20, 10)
   createdAt         DateTime           @default(now())
 
   account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)

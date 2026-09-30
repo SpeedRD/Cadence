@@ -1,6 +1,7 @@
-import { convert } from "@/lib/currency";
+import { accountAmount, moneyRow } from "@/lib/account-money";
+import { convert, type RateTable } from "@/lib/currency";
 import { today as todayInAppZone } from "@/lib/date";
-import { num, round2 } from "@/lib/money";
+import { num, round2, type DecimalLike } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { balanceSign } from "@/lib/transactions";
 
@@ -17,10 +18,16 @@ export interface AccountBalance {
   status: AccountStatus;
   currency: string;
   createdAt: Date;
-  /** In the account's own currency. */
+  /** In the account's own currency, as of today: rows dated after today are not in it (see scheduled). */
   balance: number;
   /** Same balance converted to the selected display currency. */
   displayBalance: number;
+  /**
+   * What rows dated after today will do to the balance once their day comes,
+   * signed, in the account's own currency - shown apart, never in `balance`
+   * (QUANTITIES_MAP.md D42). 0 when there are none.
+   */
+  scheduled: number;
   transactionCount: number;
   /** Transactions other than the opening balance itself - gates the "Set opening balance" action. */
   otherTransactionCount: number;
@@ -31,8 +38,11 @@ export type AccountStatusFilter = "ACTIVE" | "ARCHIVED" | "ALL";
 
 /**
  * Balances are aggregated in SQL per (account, type, currency, direction) and
- * converted afterwards, so a foreign-currency transaction lands in the account's
- * own currency. Transfers net to zero across their two legs.
+ * read in the account's own currency (K7): a row stored in it is summed as
+ * stored, and a row written before K7 in another currency is converted at
+ * today's rate, as it always was. Transfers net to zero across their two legs.
+ * A balance is the ledger as of today (ledgerAt): rows dated after today are
+ * reported apart as `scheduled`.
  *
  * Defaults to active accounts only - the dynamic "active accounts" list the
  * payday check-in and every "pick an account" selector must use. Pass
@@ -48,13 +58,19 @@ export async function getAccountBalances(
 ): Promise<AccountBalance[]> {
   const status = options.status ?? "ACTIVE";
   const db = options.client ?? prisma;
-  const [accounts, groups, counts, openingBalances] = await Promise.all([
+  const [accounts, groups, laterGroups, counts, openingBalances] = await Promise.all([
     db.account.findMany({
       where: status === "ALL" ? undefined : { status },
       orderBy: { name: "asc" },
     }),
     db.transaction.groupBy({
       by: ["accountId", "type", "currency", "transferDirection"],
+      where: { date: { lte: context.today } },
+      _sum: { amount: true },
+    }),
+    db.transaction.groupBy({
+      by: ["accountId", "type", "currency", "transferDirection"],
+      where: { date: { gt: context.today } },
       _sum: { amount: true },
     }),
     db.transaction.groupBy({ by: ["accountId", "type"], _count: { _all: true } }),
@@ -86,17 +102,8 @@ export async function getAccountBalances(
   );
 
   return accounts.map((account) => {
-    const balance = groups
-      .filter((group) => group.accountId === account.id)
-      .reduce((total, group) => {
-        const amount = convert(
-          num(group._sum.amount),
-          group.currency,
-          account.currency,
-          context.rates,
-        );
-        return total + balanceSign(group.type, group.transferDirection) * amount;
-      }, 0);
+    const balance = signedTotal(groups, account, context.rates);
+    const scheduled = signedTotal(laterGroups, account, context.rates);
 
     return {
       id: account.id,
@@ -109,11 +116,64 @@ export async function getAccountBalances(
       displayBalance: round2(
         convert(balance, account.currency, context.displayCurrency, context.rates),
       ),
+      scheduled: round2(scheduled),
       transactionCount: countsByAccount.get(account.id) ?? 0,
       otherTransactionCount: otherCountsByAccount.get(account.id) ?? 0,
       openingBalance: openingBalanceByAccount.get(account.id) ?? null,
     };
   });
+}
+
+type BalanceGroup = {
+  accountId: string;
+  type: string;
+  currency: string;
+  transferDirection: string | null;
+  _sum: { amount: DecimalLike };
+};
+
+/** One account's signed total of `groups`, in its own currency (accountAmount per group). */
+function signedTotal(groups: readonly BalanceGroup[], account: { id: string; currency: string }, rates: RateTable): number {
+  return groups
+    .filter((group) => group.accountId === account.id)
+    .reduce(
+      (total, group) =>
+        total +
+        balanceSign(group.type, group.transferDirection) *
+          accountAmount({ amount: num(group._sum.amount), currency: group.currency }, account.currency, rates),
+      0,
+    );
+}
+
+/**
+ * K8: each account's ledger at the end of `date` - every row dated on or
+ * before it, signed, in the account's own currency (K7) - less the rows in
+ * `excludeIds`. Accounts with no such row read 0. What the payday check-in
+ * reconciles against (the day before the period's pay landed) and, at
+ * today, every balance.
+ */
+export async function ledgerAt(
+  date: Date,
+  context: Pick<AppContext, "rates">,
+  options: { accountIds?: readonly string[]; excludeIds?: readonly string[]; client?: Prisma.TransactionClient } = {},
+): Promise<Map<string, number>> {
+  const db = options.client ?? prisma;
+  const [accounts, groups] = await Promise.all([
+    db.account.findMany({
+      where: options.accountIds ? { id: { in: [...options.accountIds] } } : undefined,
+      select: { id: true, currency: true },
+    }),
+    db.transaction.groupBy({
+      by: ["accountId", "type", "currency", "transferDirection"],
+      where: {
+        date: { lte: date },
+        ...(options.accountIds ? { accountId: { in: [...options.accountIds] } } : {}),
+        ...(options.excludeIds && options.excludeIds.length > 0 ? { id: { notIn: [...options.excludeIds] } } : {}),
+      },
+      _sum: { amount: true },
+    }),
+  ]);
+  return new Map(accounts.map((account) => [account.id, round2(signedTotal(groups, account, context.rates))]));
 }
 
 export type SetOpeningBalanceResult = { ok: true } | { ok: false; reason: "has_history" };
@@ -274,6 +334,12 @@ export interface AccountLedgerRow extends SharedExpenseDetails {
   date: Date;
   amount: number;
   currency: string;
+  /** What the row was entered as, when that was another currency than the account's (K7), and the rate it was stored at. */
+  originalAmount: number | null;
+  originalCurrency: string | null;
+  rate: number | null;
+  /** Dated after today: in the running balance, not in the account's balance (see scheduled). */
+  scheduled: boolean;
   /** Signed, in the account's currency. */
   effect: number;
   runningBalance: number;
@@ -314,23 +380,27 @@ export async function getAccountLedger(accountId: string, context: AppContext) {
   const sharedDetails = await loadReimbursementDetails(transactions, context);
 
   let running = 0;
+  let asOfToday = 0;
+  let scheduled = 0;
   const rows: AccountLedgerRow[] = transactions.map((transaction) => {
-    const amountInAccountCurrency = convert(
-      num(transaction.amount),
-      transaction.currency,
-      account.currency,
-      context.rates,
-    );
+    const money = moneyRow(transaction);
     const effect =
       balanceSign(transaction.type, transaction.transferDirection) *
-      amountInAccountCurrency;
+      accountAmount(money, account.currency, context.rates);
     running += effect;
+    const later = transaction.date.getTime() > context.today.getTime();
+    if (later) scheduled += effect;
+    else asOfToday += effect;
     return {
       ...(sharedDetails.get(transaction.id) as SharedExpenseDetails),
       id: transaction.id,
       date: transaction.date,
-      amount: num(transaction.amount),
+      amount: money.amount,
       currency: transaction.currency,
+      originalAmount: money.originalAmount ?? null,
+      originalCurrency: money.originalCurrency ?? null,
+      rate: money.rate ?? null,
+      scheduled: later,
       effect: round2(effect),
       runningBalance: round2(running),
       type: transaction.type,
@@ -369,10 +439,12 @@ export async function getAccountLedger(accountId: string, context: AppContext) {
   return {
     account,
     rows: rows.reverse(),
-    balance: round2(running),
+    // As of today, like the Accounts list (D42); what is dated later is apart.
+    balance: round2(asOfToday),
     displayBalance: round2(
-      convert(running, account.currency, context.displayCurrency, context.rates),
+      convert(asOfToday, account.currency, context.displayCurrency, context.rates),
     ),
+    scheduled: round2(scheduled),
     totals: {
       inflow: round2(inflow),
       outflow: round2(outflow),

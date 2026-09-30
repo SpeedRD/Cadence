@@ -99,6 +99,7 @@ export default async function GoalDetailPage({
               currency={summary.currency}
               accounts={accounts}
               defaultDate={today}
+              rates={context.rates.rates}
               locale={context.language}
               trigger={
                 <Button size="sm">

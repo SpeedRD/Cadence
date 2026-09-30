@@ -198,6 +198,12 @@ function AccountsTable({
                       {formatMoney(account.displayBalance, displayCurrency)}
                     </p>
                   ) : null}
+                  {/* Rows dated after today are not in the balance (D42); what they will do is shown apart. */}
+                  {account.scheduled !== 0 ? (
+                    <p className="text-hint text-muted-foreground">
+                      {t.scheduledAfterToday(formatMoney(account.scheduled, account.currency, { signDisplay: "always" }))}
+                    </p>
+                  ) : null}
                 </TableCell>
                 <TableCell>
                   <AccountRowActions account={account} locale={locale} today={today} />

@@ -47,6 +47,15 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   `findPostedDuplicates()` in `src/lib/data/posted-duplicates.ts`), on the same
   window and look-alike guard. A match is only ever put to the user ("It's
   the posted charge" / "It's a different charge"); never resolve one silently.
+- A Transaction is stored in its account's currency (QUANTITIES_MAP.md K7):
+  every write converts through `src/lib/account-money.ts` (`toAccountMoney`,
+  `inAccountCurrency`, `transferLegsInAccounts`), keeping `originalAmount`,
+  `originalCurrency` and `rate` when the entry was in another currency. Rows
+  written before that may still be foreign to their account; read them
+  through `accountAmount` (today's rate for those, as before) and compare
+  money with `exactAmountIn`/`sameMoneyExactly`, never by `currency ===`
+  against an item's currency. `scripts/backfill-account-currency.ts` (dry
+  run by default) stores the old rows; never run it against production.
 - New `/api/cron/*` routes must be added to `BEARER_AUTH_PATHS` in
   `src/proxy.ts`, or the proxy redirects them to `/login` before the
   handler's bearer check ever runs.

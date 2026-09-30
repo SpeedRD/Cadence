@@ -783,11 +783,19 @@ async function main(): Promise<number> {
           });
           const candidates = await prisma.transaction.findMany({
             where: { type: "EXPENSE", accountId: item.accountId, source: { not: "RECURRING" }, recurringSettlement: { is: null }, date: periodRange(period) },
-            select: { id: true, date: true, amount: true, currency: true, categoryId: true, note: true },
+            select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, categoryId: true, note: true },
           });
           const matched = matchRecurringToTransactions(
             [{ id: item.id, name: item.name, amount: num(item.amount), currency: item.currency, categoryId: item.categoryId, kind: item.kind, frequency: item.frequency, nextDate: item.nextDate }],
-            candidates.map((tx) => ({ id: tx.id, amount: num(tx.amount), currency: tx.currency, categoryId: tx.categoryId, note: tx.note })),
+            candidates.map((tx) => ({
+              id: tx.id,
+              amount: num(tx.amount),
+              currency: tx.currency,
+              originalAmount: tx.originalAmount === null ? null : num(tx.originalAmount),
+              originalCurrency: tx.originalCurrency,
+              categoryId: tx.categoryId,
+              note: tx.note,
+            })),
           );
           const manual = [
             ...settledHere.map((row) => row.transaction),
@@ -1144,7 +1152,7 @@ async function main(): Promise<number> {
         transferId: null,
         recurringSettlement: { is: null },
       },
-      select: { id: true, date: true, amount: true, currency: true, type: true, accountId: true, categoryId: true, note: true, source: true, externalId: true },
+      select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, type: true, accountId: true, categoryId: true, note: true, source: true, externalId: true },
     });
     const incoming = brought
       .filter((row) => manualContributionIdFromTransaction(row) === null)
@@ -1155,6 +1163,9 @@ async function main(): Promise<number> {
         date: row.date,
         amount: num(row.amount),
         currency: row.currency,
+        originalAmount: row.originalAmount === null ? null : num(row.originalAmount),
+        originalCurrency: row.originalCurrency,
+        rate: row.rate === null ? null : num(row.rate),
         categoryId: row.categoryId,
         note: row.note,
       }));

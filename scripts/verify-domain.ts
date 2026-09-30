@@ -110,6 +110,30 @@ function eq(name: string, actual: unknown, expected: unknown) {
   check(name, Object.is(actual, expected) || actual === expected, `got ${String(actual)}, expected ${String(expected)}`);
 }
 
+/**
+ * Makes getRateTable() - which recurring posting calls - return exactly
+ * `table` (USD-based): fresh open.er-api.com rows, and Banco Popular rows of
+ * today carrying the same DOP and EUR, so the preference for them changes
+ * nothing and nothing is fetched. Returns what puts the table back as it was.
+ * Posting converts an item in another currency than its account's once, at
+ * this rate (K7), so a check on a posted figure needs a known one.
+ */
+async function seedStoredRates(table: Record<string, number>): Promise<() => Promise<void>> {
+  const before = await prisma.exchangeRate.findMany();
+  const now = new Date();
+  await prisma.exchangeRate.deleteMany();
+  await prisma.exchangeRate.createMany({
+    data: [
+      ...Object.entries(table).map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency, source: "open-er-api", rate, fetchedAt: now })),
+      ...["DOP", "EUR"].map((targetCurrency) => ({ baseCurrency: "USD", targetCurrency, source: "bpd", rate: table[targetCurrency], fetchedAt: now, asOf: now })),
+    ],
+  });
+  return async () => {
+    await prisma.exchangeRate.deleteMany();
+    if (before.length > 0) await prisma.exchangeRate.createMany({ data: before });
+  };
+}
+
 async function main() {
   console.log("\n== APP_TIMEZONE / business date ==");
   const SD = "America/Santo_Domingo";
@@ -672,12 +696,14 @@ async function main() {
     const groceriesCat = await prisma.category.findFirstOrThrow({ where: { name: "Groceries" } });
     const incomeCat = await prisma.category.findFirstOrThrow({ where: { name: "Income" } });
 
+    // Today is after every fixture row below: a balance is the ledger as of
+    // today (K8, D42), so rows dated later would be reported apart.
     const extContext = {
       displayCurrency: "USD" as const,
       language: "en" as const,
       rates,
-      today: civilDate(2026, 8, 20),
-      currentPeriod: periodForDate(civilDate(2026, 8, 20)),
+      today: civilDate(2026, 8, 31),
+      currentPeriod: periodForDate(civilDate(2026, 8, 31)),
     };
     const balanceOf = async (accountId: string) => {
       const balances = await getAccountBalances(extContext, { status: "ALL" });
@@ -866,11 +892,12 @@ async function main() {
     const bsc = await prisma.account.create({
       data: { name: "Verify BSC", currency: "DOP", type: "CHECKING" },
     });
+    // Today is after the Aug 21 row: a balance is the ledger as of today (K8, D42).
     const bscContext = {
       displayCurrency: "USD" as const,
       language: "en" as const,
       rates,
-      today: civilDate(2026, 8, 20),
+      today: civilDate(2026, 8, 31),
       currentPeriod: periodForDate(civilDate(2026, 8, 20)),
     };
 
@@ -5378,18 +5405,26 @@ async function main() {
 
     console.log("\n-- a EUR posted row against a DOP bank row --");
     {
-      // rates: 1 USD = 0.5 EUR = 60 DOP, so 12.99 EUR is 1,558.80 DOP.
+      // rates: 1 USD = 0.5 EUR = 60 DOP, so 12.99 EUR is 1,558.80 DOP - what
+      // posting now stores on the DOP card, converted once (K7).
       const dop = await postedAccount("DOP Card", "DOP");
       const spotify = await postedItem("Spotify", 12.99, "EUR", 12, dop.id, subsId);
+      const restoreRates = await seedStoredRates(rates.rates);
       await postRun(civilDate(2026, 10, 12));
+      await restoreRates();
       const postedRow = await prisma.transaction.findFirstOrThrow({ where: { accountId: dop.id, source: "RECURRING" } });
       const within = csvRow("2026-10-13", 1580, "SPOTIFY P3A1B2");
       const outside = csvRow("2026-10-13", 1700, "SPOTIFY P3A1B2");
       const inside = (await findCsvPostedDuplicates({ accountId: dop.id, currency: "DOP", rows: [within], skip: new Set(), rates }))?.get(0);
+      // Flipped deliberately with K7: the posted row is stored as 1,558.80 DOP
+      // converted from 12.99 EUR, so the bank's DOP figure is compared in DOP
+      // (a possible match, since the posted figure was a conversion), and the
+      // rewrite keeps the 12.99 EUR it was entered as, at the rate the bank's
+      // figure implies (was {"amount":1580,"currency":"DOP"} against 12.99 EUR).
       eq(
         "1,580 DOP (1.4% off) is a possible match that would put the bank's figure on the posted row",
-        `${inside?.possible}:${JSON.stringify(inside?.rewrite)}`,
-        `true:${JSON.stringify({ amount: 1580, currency: "DOP" })}`,
+        `${num(postedRow.amount)}:${postedRow.currency}|${inside?.possible}:${JSON.stringify(inside?.rewrite)}`,
+        `1558.8:DOP|true:${JSON.stringify({ amount: 1580, currency: "DOP", originalAmount: 12.99, originalCurrency: "EUR", rate: Number((1580 / 12.99).toFixed(10)) })}`,
       );
       eq("1,700 DOP (9% off) is not a match", (await findCsvPostedDuplicates({ accountId: dop.id, currency: "DOP", rows: [outside], skip: new Set(), rates }))?.size, 0);
       const warned = await findCsvPostedDuplicates({ accountId: dop.id, currency: "DOP", rows: [within], skip: new Set(), rates });
@@ -12907,10 +12942,16 @@ async function main() {
         const confirmed = await qConfirm(sep30, octA, { incomes: { [dollars.id]: 1000 } });
         check("B38: Oct 1-15 confirmed with a 1,000 USD paycheck, an 800 subscription on Oct 5 and no budget", confirmed.ok === true);
         const before = await qRecommended(qContext(civilDate(2026, 10, 1)));
+        const restoreRates = await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.9 });
         await qPost(civilDate(2026, 10, 5));
+        await restoreRates();
         const after = await qRecommended(qContext(civilDate(2026, 10, 6), 62));
         // The posting half of B38 went with K2 (03bd017); the other half is D32's rate drift.
-        eq("B38: 'Recommended' is 60,000 - 800 - 6,000 = 53,200 on Oct 1, and still 53,200 on Oct 6 after the 800 posted and the rate moved to 62 (was 55,000)", `${before}:${after}`, "53200:53200");
+        // Flipped deliberately with K7: the 800 DOP subscription posts to the
+        // USD account as the 13.33 USD that account paid (converted once, at
+        // 60), so at 62 its figure in the display currency is 826.46 - the
+        // confirmed income and buffer still do not move (was 53,200).
+        eq("B38: 'Recommended' is 60,000 - 800 - 6,000 = 53,200 on Oct 1, and on Oct 6 after the 800 DOP posted as 13.33 USD and the rate moved to 62, 60,000 - 826.46 - 6,000 = 53,173.54 (was 55,000)", `${before}:${after}`, "53200:53173.54");
         await qWipe();
       }
 
@@ -13080,6 +13121,510 @@ async function main() {
       await prisma.account.updateMany({ where: { id: { in: archivedForK4 } }, data: { status: "ACTIVE" } });
       await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK4 } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK4 } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== amounts in the account's currency and the ledger at a date (K7 K8): D35 D36 D37 D38 D39 D40 D41 D42 D43 D47, B19 B25, the backfill ==");
+  {
+    // Public APIs only: each new function is looked up with a fallback to
+    // what the screen or the write did before K7/K8, and the stored originals
+    // are read by SQL only when the column exists - so this block also runs
+    // against the code before K7 and fails there on each divergence and
+    // finding it names, with the map's numbers (QUANTITIES_MAP.md,
+    // BUG_HUNT_FINDINGS.md). Display DOP, buffer 10% with a 2,000 DOP floor.
+    // Fixtures are `Verify K7 ...`; every other active item is paused and
+    // every other active account archived meanwhile, all restored in the
+    // finally.
+    const { spawnSync } = await import("node:child_process");
+    const kMoney = await import("../src/lib/account-money").catch(() => null);
+    const kAccounts = await import("../src/lib/data/accounts");
+    const kPayday = await import("../src/lib/data/payday");
+    const kPure = await import("../src/lib/payday");
+    const kPost = (await import("../src/lib/recurring-posting")).postDueRecurringItems;
+    const kGoals = await import("../src/lib/goals");
+    const kManual = await import("../src/lib/data/manual-transaction");
+    const kTransactions = await import("../src/lib/data/transactions");
+    const kDuplicates = await import("../src/lib/data/posted-duplicates");
+    const kSummary = (await import("../src/lib/data/period-summary")).getPeriodSummary;
+    const kMonthly = await import("../src/lib/data/monthly");
+    const { transactionSchema: kSchema } = await import("../src/lib/validation");
+    const { transferLegs: kTransferLegs } = await import("../src/lib/transactions");
+    type KContext = Parameters<typeof kAccounts.getAccountBalances>[0] &
+      Parameters<typeof kPayday.getPaydayCheckinDraft>[0] &
+      Parameters<typeof kPayday.confirmPaydayCheckin>[1];
+    const kRates = (dop: number, eur = 0.9): RateTable => ({ rates: { USD: 1, DOP: dop, EUR: eur }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const kContext = (today: Date, dop = 60, eur = 0.9) =>
+      ({
+        displayCurrency: "DOP" as const,
+        language: "en" as const,
+        rates: kRates(dop, eur),
+        today,
+        currentPeriod: periodForDate(today),
+        bufferPercent: 10,
+        bufferFloorAmount: 2000,
+        bufferFloorCurrency: "DOP",
+      }) as unknown as KContext;
+    const kAccount = async (name: string, currency = "DOP") =>
+      prisma.account.create({ data: { name: `Verify K7 ${name}`, currency, type: "CHECKING" } });
+    const kOpening = (accountId: string, date: Date, amount: number, currency = "DOP") =>
+      prisma.transaction.create({ data: { accountId, date, amount, currency, type: "OPENING_BALANCE", source: "OPENING_BALANCE" } });
+    const kBalance = async (accountId: string, ctx: KContext) =>
+      (await kAccounts.getAccountBalances(ctx, { status: "ALL" })).find((account) => account.id === accountId)?.balance;
+    const kItem = (data: { name: string; amount: number; currency: string; nextDate: Date; accountId: string; kind?: "SUBSCRIPTION" | "CONTRIBUTION"; goalId?: string; remainingOccurrences?: number }) =>
+      prisma.recurringItem.create({
+        data: { frequency: "MONTHLY", anchorDay: data.nextDate.getUTCDate(), active: true, kind: "SUBSCRIPTION", ...data, name: `Verify K7 ${data.name}` },
+      });
+    const kGoal = (name: string, currency: string) =>
+      prisma.goal.create({ data: { name: `Verify K7 ${name}`, currency, targetAmount: 1_000_000 } });
+    // The form's values, parsed by the form's own schema.
+    const kValues = (form: Record<string, string>) => {
+      const parsed = kSchema.parse({ categoryId: "none", note: "", ...form });
+      const { id: _id, ...values } = parsed;
+      return values;
+    };
+    const kCreate = (form: Record<string, string>, rates: RateTable) =>
+      kManual.createManualTransaction(kValues(form), {
+        getContext: async () => ({ ...kContext(civilDate(2026, 10, 20)), rates }) as never,
+        getRates: async () => rates,
+      });
+    // Posting reads the stored rate table (getRateTable); each run gets a known one.
+    const kPostAt = async (day: Date, dop: number, eur = 0.9) => {
+      const restore = await seedStoredRates({ USD: 1, DOP: dop, EUR: eur });
+      try {
+        return await kPost(day);
+      } finally {
+        await restore();
+      }
+    };
+    const hasOriginals =
+      (await prisma.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM information_schema.columns WHERE table_name = 'Transaction' AND column_name = 'originalAmount'`)[0].n === 1;
+    type KOriginal = { originalAmount: number | null; originalCurrency: string | null; rate: number | null };
+    const kOriginal = async (id: string): Promise<KOriginal> =>
+      hasOriginals
+        ? (
+            await prisma.$queryRaw<KOriginal[]>`SELECT "originalAmount"::float8 AS "originalAmount", "originalCurrency", rate::float8 AS rate FROM "Transaction" WHERE id = ${id}`
+          )[0]
+        : { originalAmount: null, originalCurrency: null, rate: null };
+    const kRows = async (accountId: string, where: Record<string, unknown> = {}) =>
+      (
+        await prisma.transaction.findMany({ where: { accountId, type: "EXPENSE", ...where }, orderBy: [{ date: "asc" }, { amount: "asc" }], select: { amount: true, currency: true } })
+      )
+        .map((row) => `${num(row.amount)}:${row.currency}`)
+        .join("|");
+    const kWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify K7 " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { year: 2026, month: { in: [9, 10, 11] } } });
+      await prisma.budget.deleteMany({ where: { year: 2026, month: { in: [9, 10, 11] } } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify K7 " } } } });
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.transaction.updateMany({ where: { accountId: { in: accounts } }, data: { reimbursesTransactionId: null } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify K7 " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify K7 " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    const oct = (day: number) => civilDate(2026, 10, day);
+
+    const pausedForK7 = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const archivedForK7 = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK7 } }, data: { active: false } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForK7 } }, data: { status: "ARCHIVED" } });
+    try {
+      check("K7: no check-in for Sep-Nov 2026 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: { year: 2026, month: { in: [9, 10, 11] } } })) === 0);
+
+      console.log("-- D35 B19 (trace d): a 15 USD charge on a DOP account, and a transfer with the received amount blank --");
+      {
+        const card = await kAccount("Card");
+        await kOpening(card.id, oct(1), 20000);
+        await kItem({ name: "Netflix", amount: 15, currency: "USD", nextDate: oct(5), accountId: card.id });
+        const paceBefore = await Promise.all([60, 61.2, 62].map(async (dop) => (await kMonthly.getCurrentMonthPace(kContext(oct(20), dop) as never)).committedSpentSoFar));
+        await kPostAt(oct(5), 61.2);
+        const posted = await prisma.transaction.findFirstOrThrow({ where: { accountId: card.id, source: "RECURRING" } });
+        const original = await kOriginal(posted.id);
+        eq(
+          "D35: posting stores the charge on the DOP account as the bank did: 918 DOP, entered as 15 USD at 61.2 (was 15 USD, re-converted by every reader)",
+          `${num(posted.amount)}:${posted.currency}:${original.originalAmount}:${original.originalCurrency}:${original.rate}`,
+          "918:DOP:15:USD:61.2",
+        );
+        eq(
+          "D35: the ledger reads 19,082 at 60, 61.2 and 62, the bank's fixed figure (was 19,100 / 19,082 / 19,070)",
+          (await Promise.all([60, 61.2, 62].map((dop) => kBalance(card.id, kContext(oct(20), dop))))).join("|"),
+          "19082|19082|19082",
+        );
+        const step1 = await Promise.all(
+          [60, 61.2, 62].map(async (dop) => (await kPayday.getPaydayCheckinDraft(kContext(oct(20), dop))).accounts.find((a) => a.accountId === card.id)?.expectedLedgerBalance),
+        );
+        eq(
+          "D35: Step 1's ledger and so its difference against the bank's 19,082 do not change sign with the rate: 19,082 and 0 at 60, 61.2 and 62 (was 19,100 / 19,082 / 19,070, -18 to +12)",
+          `${step1.join("|")}:${step1.map((expected) => round2(19082 - (expected ?? 0))).join("|")}`,
+          "19082|19082|19082:0|0|0",
+        );
+        const paceAfter = await Promise.all([60, 61.2, 62].map(async (dop) => (await kMonthly.getCurrentMonthPace(kContext(oct(20), dop) as never)).committedSpentSoFar));
+        eq(
+          "D35: the monthly 'committed so far' counts 918 at every rate (was 900 / 918 / 930)",
+          paceAfter.map((after, index) => round2(after - paceBefore[index])).join("|"),
+          "918|918|918",
+        );
+        const b19 = await kAccount("B19");
+        await kCreate({ date: "2026-10-02", amount: "100", currency: "USD", type: "EXPENSE", accountId: b19.id, note: "Verify K7 B19 charge" }, kRates(60));
+        eq(
+          "B19: a 100 USD charge on a DOP account entered at 60 reads -6,000 at 60 and at 63 (was -6,000 / -6,300)",
+          `${await kBalance(b19.id, kContext(oct(20), 60))}|${await kBalance(b19.id, kContext(oct(20), 63))}`,
+          "-6000|-6000",
+        );
+        const usd = await kAccount("Transfer USD", "USD");
+        const dop = await kAccount("Transfer DOP");
+        const legInput = { amount: 100, currency: "USD", receivedAmount: null, fromCurrency: "USD", toCurrency: "DOP" };
+        const legs = kMoney?.transferLegsInAccounts
+          ? kMoney.transferLegsInAccounts(legInput, kRates(60.5))
+          : (() => {
+              const entered = kTransferLegs(legInput);
+              return { out: entered.out, in: entered.in };
+            })();
+        const transferId = crypto.randomUUID();
+        await prisma.$transaction([
+          prisma.transaction.create({ data: { date: oct(2), ...legs.out, type: "TRANSFER", source: "MANUAL", accountId: usd.id, transferId, transferDirection: "OUT" } }),
+          prisma.transaction.create({ data: { date: oct(2), ...legs.in, type: "TRANSFER", source: "MANUAL", accountId: dop.id, transferId, transferDirection: "IN" } }),
+        ]);
+        eq(
+          "D35: a 100 USD transfer into a DOP account with the received amount blank lands as 6,050 at 60.5 and stays 6,050 at 61.2 (was 6,050 / 6,120)",
+          `${await kBalance(dop.id, kContext(oct(20), 60.5))}|${await kBalance(dop.id, kContext(oct(20), 61.2))}`,
+          "6050|6050",
+        );
+        await kWipe();
+      }
+
+      console.log("-- D36 B25: a contribution counted at one rate by the goal and by the ledger, and edits that keep the twin --");
+      {
+        const source = await kAccount("Contribution Source");
+        await kOpening(source.id, oct(1), 50000);
+        const fund = await kGoal("Fund DOP", "DOP");
+        await kItem({ name: "Fund Transfer", amount: 100, currency: "USD", nextDate: oct(7), accountId: source.id, kind: "CONTRIBUTION", goalId: fund.id });
+        const savingsBefore = (await kMonthly.getCurrentMonthPace(kContext(oct(20), 60.2) as never)).savingsInvestingSoFar;
+        await kPostAt(oct(7), 58.5);
+        const saved = num((await prisma.goal.findUniqueOrThrow({ where: { id: fund.id } })).savedAmount);
+        eq(
+          "D36: the recurring 100 USD contribution posted at 58.5: the goal counts 5,850 and at 60.2 the account shows -5,850 (was 5,850 against -6,020)",
+          `${saved}|${round2((await kBalance(source.id, kContext(oct(20), 60.2)))! - 50000)}`,
+          "5850|-5850",
+        );
+        eq(
+          "D36: the month's savings count the same occurrence as 5,850 at 60.2 (was 6,020)",
+          round2((await kMonthly.getCurrentMonthPace(kContext(oct(20), 60.2) as never)).savingsInvestingSoFar - savingsBefore),
+          5850,
+        );
+
+        const dollars = await kGoal("Fund USD", "USD");
+        const savingsBeforeManual = (await kMonthly.getCurrentMonthPace(kContext(oct(20), 60.2) as never)).savingsInvestingSoFar;
+        const logged = await kGoals.logManualContribution({ goalId: dollars.id, accountId: source.id, amount: 100, date: oct(8), note: null }, kRates(58.5));
+        eq(
+          "D36: a 100 USD contribution logged by hand at 58.5 counts in the month's savings as the 5,850 its expense stored, at 60.2 too (was 6,020, the 100 USD re-converted)",
+          round2((await kMonthly.getCurrentMonthPace(kContext(oct(20), 60.2) as never)).savingsInvestingSoFar - savingsBeforeManual),
+          5850,
+        );
+        const twinOf = async () => num((await prisma.transaction.findUniqueOrThrow({ where: { id: logged.transactionId } })).amount);
+        const twinAtEntry = await twinOf();
+        await kGoals.updateManualContribution(logged.contributionId, { amount: 100, date: oct(9), accountId: source.id }, kRates(60.2));
+        const afterDateEdit = await twinOf();
+        eq(
+          "B25 D36: a 100 USD contribution logged at 58.5 has a 5,850 DOP twin, and a date-only edit at 60.2 keeps it (was rewritten to 6,020)",
+          `${twinAtEntry}|${afterDateEdit}`,
+          "5850|5850",
+        );
+        await kGoals.updateManualContribution(logged.contributionId, { amount: 120, date: oct(9), accountId: source.id }, kRates(60.2));
+        eq("B25: correcting it to 120 USD at 60.2 scales the twin at the rate it was stored at: 7,020 (was 7,224)", await twinOf(), 7020);
+
+        const monthly = await kGoal("Fund Monthly", "USD");
+        await kItem({ name: "Fund Monthly", amount: 100, currency: "USD", nextDate: oct(12), accountId: source.id, kind: "CONTRIBUTION", goalId: monthly.id });
+        await kPostAt(oct(12), 60);
+        const postedContribution = await prisma.goalContribution.findFirstOrThrow({ where: { goalId: monthly.id } });
+        const before = await kBalance(source.id, kContext(oct(20), 62));
+        await kGoals.updateRecurringContributionAmount(postedContribution.id, 110, kRates(62));
+        eq(
+          "B25: correcting a posted 100 USD contribution to 110 USD at 62 carries its expense at the 60 it was stored at: the account moves by 600 more (was 620, the 10 USD re-read at 62)",
+          round2((before ?? 0) - ((await kBalance(source.id, kContext(oct(20), 62))) ?? 0)),
+          600,
+        );
+        await kWipe();
+      }
+
+      console.log("-- D37: a reimbursement's pending amount does not float with the rate --");
+      {
+        const shared = await kAccount("Shared");
+        const expense = await kCreate(
+          { date: "2026-10-03", amount: "90", currency: "USD", type: "EXPENSE", accountId: shared.id, note: "Verify K7 dinner", isShared: "true", yourShare: "30" },
+          kRates(60),
+        );
+        await kCreate(
+          { date: "2026-10-10", amount: "3600", currency: "DOP", type: "INCOME", accountId: shared.id, note: "Verify K7 payback", reimbursesTransactionId: expense.id },
+          kRates(60),
+        );
+        const row = (await kTransactions.listTransactions({ accountId: shared.id }, kContext(oct(20), 63) as never)).rows.find((candidate) => candidate.id === expense.id);
+        const open = (await kTransactions.listOpenSharedExpenses(kContext(oct(20), 63) as never)).some((candidate) => candidate.id === expense.id);
+        eq(
+          "D37: a 90 USD expense with a 30 share, paid back with 3,600 DOP, is settled at 63 and no longer offered (was 2.86 USD pending and offered again)",
+          `${row?.reimbursement?.pending}:${row?.reimbursement?.settled}:${open}`,
+          "0:true:false",
+        );
+        await kWipe();
+      }
+
+      console.log("-- D38 D39: settlement and the duplicate check compare in the account's currency --");
+      {
+        const card = await kAccount("Stream Card");
+        const item = await kItem({ name: "Streamer", amount: 15, currency: "USD", nextDate: oct(5), accountId: card.id });
+        const local = await kCreate({ date: "2026-10-03", amount: "907.50", currency: "DOP", type: "EXPENSE", accountId: card.id, note: "Verify K7 Streamer" }, kRates(61.2));
+        await kPostAt(oct(5), 61.2);
+        eq(
+          "D38: a 907.50 DOP charge against a 15 USD item settles nothing (decision 5); the ledger holds it and the occurrence posted once, converted: 907.50 DOP and 918 DOP (was 907.50 DOP and 15 USD)",
+          `${await prisma.recurringSettlement.count({ where: { recurringItemId: item.id } })}|${await kRows(card.id)}`,
+          "0|907.5:DOP|918:DOP",
+        );
+        const entry = await prisma.transaction.findUniqueOrThrow({ where: { id: local.id } });
+        const match = (
+          await kDuplicates.findPostedDuplicates(
+            [{ key: entry.id, accountId: card.id, type: "EXPENSE", date: entry.date, amount: num(entry.amount), currency: entry.currency, note: entry.note, categoryId: null }],
+            kRates(61.2),
+          )
+        ).get(entry.id);
+        eq(
+          "D38: the same charge is put to the user as a possible match of the posted 918 DOP, compared in DOP",
+          `${match?.possible}:${match?.posted.amount}:${match?.posted.currency}`,
+          "true:918:DOP",
+        );
+        const typed = await kAccount("Typed Card");
+        const typedItem = await kItem({ name: "Typist", amount: 15, currency: "USD", nextDate: oct(5), accountId: typed.id });
+        await kCreate({ date: "2026-10-03", amount: "15", currency: "USD", type: "EXPENSE", accountId: typed.id, note: "Verify K7 Typist" }, kRates(61.2));
+        await kPostAt(oct(5), 61.2);
+        eq(
+          "D38 (unchanged): the same charge entered as 15 USD on the DOP account settles the occurrence exactly - stored as 918 DOP, entered as 15 USD - and posting writes nothing",
+          `${await prisma.recurringSettlement.count({ where: { recurringItemId: typedItem.id } })}|${await prisma.transaction.count({ where: { accountId: typed.id, source: "RECURRING" } })}`,
+          "1|0",
+        );
+
+        const payer = await kAccount("Payer");
+        const goal = await kGoal("Dollar Goal", "USD");
+        await kItem({ name: "Dollar Goal", amount: 100, currency: "USD", nextDate: oct(10), accountId: payer.id, kind: "CONTRIBUTION", goalId: goal.id });
+        await kGoals.logManualContribution({ goalId: goal.id, accountId: payer.id, amount: 100, date: oct(8), note: null }, kRates(60));
+        await kGoals.rebuildGoalSaved(goal.id);
+        await kPostAt(oct(10), 60);
+        eq(
+          "D39: a 100 USD contribution logged by hand from a DOP account on Oct 8 settles the Oct 10 occurrence: the goal saves 100 USD and the ledger holds 6,000 DOP once (was 200 USD, and 6,000 DOP plus 100 USD)",
+          `${num((await prisma.goal.findUniqueOrThrow({ where: { id: goal.id } })).savedAmount)}|${await kRows(payer.id)}`,
+          "100|6000:DOP",
+        );
+        await kWipe();
+      }
+
+      console.log("-- D40 D41 D42: Step 1 compares the reported balance with the ledger the day before the pay landed --");
+      {
+        const late = await kAccount("Late");
+        const groceries = (await prisma.category.findFirstOrThrow({ where: { name: "Groceries" } })).id;
+        await kOpening(late.id, civilDate(2026, 9, 1), 1000);
+        await prisma.transaction.create({ data: { date: oct(1), amount: 5000, currency: "DOP", type: "EXPENSE", accountId: late.id, categoryId: groceries, note: "Verify K7 groceries", source: "MANUAL" } });
+        const oct3 = kContext(oct(3));
+        const draft = await kPayday.getPaydayCheckinDraft(oct3);
+        const prefill = draft.accounts.find((a) => a.accountId === late.id);
+        eq(
+          "D41: checking in on Oct 3, 1,000 before the pay and 5,000 of groceries on Oct 1: Step 1's ledger and pre-filled reported balance are 1,000 (was -4,000)",
+          `${prefill?.expectedLedgerBalance}|${prefill?.reportedBalance}`,
+          "1000|1000",
+        );
+        eq(
+          "D41: Step 1 says which day that ledger is: Sep 29, the day before Wed Sep 30's pay",
+          toISODate((draft as { ledgerDate?: Date }).ledgerDate ?? oct(3)),
+          "2026-09-29",
+        );
+        const ref = { year: 2026, month: 10, period: "A" as const };
+        const confirmed = await kPayday.confirmPaydayCheckin(
+          {
+            ...ref,
+            accounts: draft.accounts.filter((a) => !a.readOnly).map((a) => ({ accountId: a.accountId, reportedBalance: a.reportedBalance, incomeEntered: a.accountId === late.id ? 50000 : 0, incomeNote: null })),
+            goals: [],
+            essentialCategories: [],
+            flexibleCategories: [{ categoryId: groceries, plannedAmount: 45000 }],
+            includedCarryover: 0,
+            acknowledgedDeficit: true,
+            acknowledgedZeroBuffer: true,
+          },
+          oct3,
+        );
+        const budget = await prisma.budget.findFirst({ where: { ...ref, categoryId: groceries } });
+        const summary = await kSummary(periodInfo(ref), oct3 as never);
+        eq(
+          "D41: confirming 45,000 for Groceries keeps 45,000 (no cap from the period's own spending) and safe to spend is 40,000 (was scaled to 41,000, safe to spend 36,000)",
+          `${confirmed.ok}|${num(budget?.amount)}|${summary.safeToSpend}`,
+          "true|45000|40000",
+        );
+        const snapshot = await prisma.paydayAccountSnapshot.findFirstOrThrow({ where: { accountId: late.id } });
+        const reconciliation = (kPure as { reconciliation?: (expected: number, reported: number) => { expected: number; reported: number; difference: number } }).reconciliation;
+        eq(
+          "D40: reconciliation(account, check-in) is Step 1's one comparison, and the snapshot stores it: expected 1,000, reported 1,000, difference 0",
+          `${JSON.stringify(reconciliation?.(1000, 1000))}|${num(snapshot.expectedLedgerBalance)}:${num(snapshot.difference)}`,
+          `${JSON.stringify({ expected: 1000, reported: 1000, difference: 0 })}|1000:0`,
+        );
+        eq(
+          "D40: against a ledger of 49,082 a reported 40,000 is a difference of -9,082, a check only (decision 5.1): it caps nothing",
+          `${JSON.stringify(reconciliation?.(49082, 40000))}|${kPure.planAccountBuffers([{ accountId: "x", name: "x", currency: "DOP", income: 50000, bufferFloor: 2000, reportedBalance: 40000 }], [], { bufferPercent: 10, displayCurrency: "DOP", rates: kRates(60) }).reconciliationGap}`,
+          `${JSON.stringify({ expected: 49082, reported: 40000, difference: -9082 })}|0`,
+        );
+        eq(
+          "D40 (unchanged, decision 5.1): only a reported balance below zero caps the plan: -300 caps 300",
+          kPure.planAccountBuffers([{ accountId: "x", name: "x", currency: "DOP", income: 50000, bufferFloor: 2000, reportedBalance: -300 }], [], { bufferPercent: 10, displayCurrency: "DOP", rates: kRates(60) }).reconciliationGap,
+          300,
+        );
+        await kWipe();
+
+        const rent = await kAccount("Rent");
+        await kOpening(rent.id, oct(1), 32000);
+        await prisma.transaction.create({ data: { date: civilDate(2026, 11, 1), amount: 2000, currency: "DOP", type: "EXPENSE", accountId: rent.id, note: "Verify K7 rent", source: "MANUAL" } });
+        const oct15 = kContext(oct(15));
+        const listed = (await kAccounts.getAccountBalances(oct15, { status: "ALL" })).find((account) => account.id === rent.id);
+        const ledger = await kAccounts.getAccountLedger(rent.id, oct15 as never);
+        const step1 = (await kPayday.getPaydayCheckinDraft(oct15)).accounts.find((a) => a.accountId === rent.id)?.expectedLedgerBalance;
+        eq(
+          "D42: a rent row dated Nov 1 is not in the Oct 15 balance, the account page or Step 1 - 32,000 - and is shown apart as -2,000 dated after today (was 30,000 everywhere)",
+          `${listed?.balance}|${ledger?.balance}|${step1}|${(listed as { scheduled?: number } | undefined)?.scheduled}|${(ledger as { scheduled?: number } | null)?.scheduled}`,
+          "32000|32000|32000|-2000|-2000",
+        );
+        await kWipe();
+      }
+
+      console.log("-- D43 D47: the rate is applied once, at entry; the posted row is the fact, the item the schedule --");
+      {
+        const pay = await kAccount("Dollar Pay");
+        const income = await kCreate({ date: "2026-10-02", amount: "1000", currency: "USD", type: "INCOME", accountId: pay.id, note: "Verify K7 dollars" }, kRates(61.2));
+        const original = await kOriginal(income.id);
+        eq(
+          "D43: 1,000 USD entered on a DOP account at Banco Popular's sell rate 61.20 is stored as 61,200 with that rate, and still reads 61,200 when the table says 59.80 (was 59,800)",
+          `${original.rate}|${await kBalance(pay.id, kContext(oct(20), 59.8))}`,
+          "61.2|61200",
+        );
+
+        const klarna = await kAccount("Klarna");
+        const plan = await kItem({ name: "Klarna TV", amount: 50, currency: "EUR", nextDate: oct(20), accountId: klarna.id, remainingOccurrences: 4 });
+        await kPostAt(oct(20), 60, 0.9);
+        const postedRow = await prisma.transaction.findFirstOrThrow({ where: { accountId: klarna.id, source: "RECURRING" } });
+        const effectAt = async (dop: number) =>
+          (await kAccounts.getAccountLedger(klarna.id, kContext(oct(21), dop) as never))?.rows.find((row) => row.id === postedRow.id)?.effect;
+        eq(
+          "D47 (trace c): the first 50 EUR installment posts as 3,333.33 DOP and reads 3,333.33 when the euro moves to 68.89 (was 3,444.44)",
+          `${await effectAt(60)}|${await effectAt(62)}`,
+          "-3333.33|-3333.33",
+        );
+        const edit = kValues({ id: postedRow.id, date: "2026-10-20", amount: "3350", currency: "DOP", type: "EXPENSE", accountId: klarna.id, note: postedRow.note ?? "" });
+        const stored = kManual.storedTransactionValues
+          ? await kManual.storedTransactionValues(edit, async () => kRates(62), {
+              row: { amount: num(postedRow.amount), currency: postedRow.currency, ...(await kOriginal(postedRow.id)), yourShare: null },
+              accountCurrency: "DOP",
+            })
+          : edit;
+        await prisma.transaction.update({ where: { id: postedRow.id }, data: stored });
+        const item = await prisma.recurringItem.findUniqueOrThrow({ where: { id: plan.id } });
+        eq(
+          "D47 (decision 3): edited to the 3,350 DOP the bank charged, the posted row is 3,350 DOP and the item stays the schedule - 50 EUR, 3 payments left",
+          `${await effectAt(62)}|${num(item.amount)}:${item.currency}:${item.remainingOccurrences}`,
+          "-3350|50:EUR:3",
+        );
+        await kWipe();
+      }
+
+      console.log("-- a row saved before the backfill reads exactly as today; the backfill --");
+      {
+        const card = await kAccount("Legacy Card");
+        const usd = await kAccount("Legacy Dollars", "USD");
+        await kOpening(card.id, oct(1), 20000);
+        // Rows as the code before K7 wrote them: in the item's or the form's
+        // currency, on a DOP account, with nothing else.
+        const legacyNetflix = await prisma.transaction.create({ data: { date: oct(5), amount: 15, currency: "USD", type: "EXPENSE", accountId: card.id, note: "Verify K7 Netflix", source: "RECURRING", externalId: `verify-k7-legacy:${oct(5).getTime()}` } });
+        const legacyWhoop = await prisma.transaction.create({ data: { date: oct(6), amount: 30, currency: "EUR", type: "EXPENSE", accountId: card.id, note: "Verify K7 Whoop", source: "RECURRING", externalId: `verify-k7-legacy:${oct(6).getTime()}` } });
+        const legacyShared = await prisma.transaction.create({ data: { date: oct(7), amount: 90, currency: "USD", yourShare: 30, type: "EXPENSE", accountId: card.id, note: "Verify K7 shared", source: "MANUAL" } });
+        await prisma.transaction.create({ data: { date: oct(8), amount: 3600, currency: "DOP", type: "INCOME", accountId: card.id, note: "Verify K7 payback", source: "MANUAL", reimbursesTransactionId: legacyShared.id } });
+        const legacyTransfer = crypto.randomUUID();
+        await prisma.$transaction([
+          prisma.transaction.create({ data: { date: oct(9), amount: 100, currency: "USD", type: "TRANSFER", source: "MANUAL", accountId: usd.id, transferId: legacyTransfer, transferDirection: "OUT" } }),
+          prisma.transaction.create({ data: { date: oct(9), amount: 100, currency: "USD", type: "TRANSFER", source: "MANUAL", accountId: card.id, transferId: legacyTransfer, transferDirection: "IN" } }),
+        ]);
+        const oldReading = (dop: number) => round2(20000 - 15 * dop - 30 * (dop / 0.9) - 90 * dop + 3600 + 100 * dop);
+        eq(
+          "a row saved before the backfill reads exactly as before K7: converted at today's rate, 21,254 at 61.2 and 21,223.33 at 62",
+          `${await kBalance(card.id, kContext(oct(20), 61.2))}|${await kBalance(card.id, kContext(oct(20), 62))}`,
+          `${oldReading(61.2)}|${oldReading(62)}`,
+        );
+        eq(
+          "a row saved before the backfill: Step 1 and the ledger read it at today's rate too",
+          `${(await kPayday.getPaydayCheckinDraft(kContext(oct(20), 62))).accounts.find((a) => a.accountId === card.id)?.expectedLedgerBalance}|${(await kAccounts.getAccountLedger(card.id, kContext(oct(20), 62) as never))?.balance}`,
+          `${oldReading(62)}|${oldReading(62)}`,
+        );
+
+        const digest = async () =>
+          (await prisma.$queryRaw<{ d: string }[]>`SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t.id), '')) AS d FROM "Transaction" t`)[0].d;
+        const backfill = (args: string[]) =>
+          spawnSync("npx", ["tsx", "scripts/backfill-account-currency.ts", ...args], { encoding: "utf8", env: { ...process.env } });
+        const restoreRates = await seedStoredRates({ USD: 1, DOP: 61.2, EUR: 0.9 });
+        try {
+          const table = kContext(oct(20), 61.2, 0.9);
+          const balancesBefore = (await kAccounts.getAccountBalances(table, { status: "ALL" })).map((account) => `${account.id}:${account.balance}`).sort().join("|");
+          const before = await digest();
+          const dry = backfill([]);
+          eq(
+            "backfill: the dry run lists each row in another currency than its account's and changes nothing",
+            `${dry.status}|${[legacyNetflix.id, legacyWhoop.id, legacyShared.id].every((id) => dry.stdout.includes(id))}|${(await digest()) === before}`,
+            "0|true|true",
+          );
+          check("backfill: the dry run says so and shows each affected balance before and after", /Dry run: nothing was written/.test(dry.stdout) && /before .* after .* same/.test(dry.stdout), dry.stdout + dry.stderr);
+          const applied = backfill(["--apply"]);
+          const afterApply = await digest();
+          const netflixNow = await prisma.transaction.findUniqueOrThrow({ where: { id: legacyNetflix.id } });
+          const whoopNow = await prisma.transaction.findUniqueOrThrow({ where: { id: legacyWhoop.id } });
+          const sharedNow = await prisma.transaction.findUniqueOrThrow({ where: { id: legacyShared.id } });
+          eq(
+            "backfill --apply: 15 USD becomes 918 DOP entered as 15 USD at 61.2; 30 EUR becomes 2,040 DOP; the shared 90 USD becomes 5,508 DOP with its 30 share as 1,836",
+            `${applied.status}|${num(netflixNow.amount)}:${netflixNow.currency}:${JSON.stringify(await kOriginal(netflixNow.id))}|${num(whoopNow.amount)}:${whoopNow.currency}|${num(sharedNow.amount)}:${num(sharedNow.yourShare)}`,
+            `0|918:DOP:${JSON.stringify({ originalAmount: 15, originalCurrency: "USD", rate: 61.2 })}|2040:DOP|5508:1836`,
+          );
+          eq(
+            "backfill: every account's balance in its own currency is identical before and after, at the same rates",
+            (await kAccounts.getAccountBalances(table, { status: "ALL" })).map((account) => `${account.id}:${account.balance}`).sort().join("|"),
+            balancesBefore,
+          );
+          const again = backfill(["--apply"]);
+          eq(
+            "backfill: a second --apply finds nothing to change and changes nothing",
+            `${again.status}|${/Nothing to change/.test(again.stdout)}|${(await digest()) === afterApply}`,
+            "0|true|true",
+          );
+          eq(
+            "backfill: after it, the balance no longer moves with the rate: 21,254 at 61.2 and at 62",
+            `${await kBalance(card.id, kContext(oct(20), 61.2))}|${await kBalance(card.id, kContext(oct(20), 62))}`,
+            `${oldReading(61.2)}|${oldReading(61.2)}`,
+          );
+        } finally {
+          await restoreRates();
+        }
+        await kWipe();
+      }
+
+      console.log("-- the entry form shows what it will store --");
+      {
+        const preview = kMoney?.toAccountMoney({ amount: 15, currency: "EUR" }, "DOP", kRates(60, 0.9));
+        eq(
+          "the dialog's preview and the server store the same: 15 EUR on a DOP account at 66.67 is 1,000 DOP, entered as 15 EUR",
+          `${preview?.amount}:${preview?.currency}:${preview?.originalAmount}:${preview?.originalCurrency}:${preview && kMoney?.rateLine("EUR", "DOP", preview.rate ?? 0)}`,
+          "1000:DOP:15:EUR:1 EUR = 66.6667 DOP",
+        );
+        const { getDictionary: kDictionary } = await import("../src/lib/i18n");
+        const en = kDictionary("en").transactions as Record<string, unknown>;
+        const es = kDictionary("es").transactions as Record<string, unknown>;
+        check(
+          "the conversion line and the 'entered as' note exist in English and Spanish",
+          ["savedAsTodaysRate", "savedAsKeptRate", "enteredAs"].every((key) => typeof en[key] === "function" && typeof es[key] === "function"),
+        );
+      }
+    } finally {
+      await kWipe();
+      await prisma.account.updateMany({ where: { id: { in: archivedForK7 } }, data: { status: "ACTIVE" } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK7 } }, data: { active: true } });
     }
   }
 

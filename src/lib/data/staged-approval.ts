@@ -10,6 +10,7 @@
  * review page shows the match before they are asked (stagedPostedMatches).
  */
 import { Prisma } from "@/generated/prisma/client";
+import { inAccountCurrency } from "@/lib/account-money";
 import { prisma } from "@/lib/prisma";
 
 import { applyPostedMatch, lookUpPostedDuplicates, type PostedLookup, type PostedMatch } from "@/lib/data/posted-duplicates";
@@ -39,15 +40,19 @@ export type StagedApprovalResult =
   | { ok: false; reason: "not_found" | "already_reviewed" | "account_missing" | "account_not_active" | "exists" | "match_gone" | "check_failed" }
   | { ok: false; reason: "needs_choice"; match: PostedMatch };
 
-/** The staged values as the row it would become, for the matcher. */
-function incomingFor(input: Omit<StagedApprovalInput, "id" | "resolution">, key: string) {
+/** The staged values as the row it would become - in its account's currency (K7) - for the matcher. */
+function incomingFor(
+  input: Omit<StagedApprovalInput, "id" | "resolution">,
+  key: string,
+  accountCurrency: string,
+  rates: RateTable,
+) {
   return {
     key,
     accountId: input.accountId,
     type: "EXPENSE" as const,
     date: input.date,
-    amount: input.amount,
-    currency: input.currency,
+    ...inAccountCurrency({ amount: input.amount, currency: input.currency }, accountCurrency, rates),
     note: input.rawDescription,
     categoryId: input.categoryId,
   };
@@ -75,11 +80,17 @@ export async function approveStagedTransaction(
   if (!staged) return { ok: false, reason: "not_found" };
   if (staged.status !== "PENDING") return { ok: false, reason: "already_reviewed" };
 
-  const account = await prisma.account.findUnique({ where: { id: input.accountId }, select: { id: true, status: true } });
+  const account = await prisma.account.findUnique({
+    where: { id: input.accountId },
+    select: { id: true, status: true, currency: true },
+  });
   if (!account) return { ok: false, reason: "account_missing" };
   if (account.status !== "ACTIVE") return { ok: false, reason: "account_not_active" };
 
-  const found = await lookUpPostedDuplicates([incomingFor(input, staged.id)], rates, options);
+  // The receipt's amount as the account will store it: converted once, now,
+  // when the receipt is in another currency, with the receipt's own figure kept.
+  const incoming = incomingFor(input, staged.id, account.currency, rates);
+  const found = await lookUpPostedDuplicates([incoming], rates, options);
   if (!found && input.resolution === "posted") return { ok: false, reason: "check_failed" };
   const match = found?.get(staged.id) ?? null;
   const reviewed = {
@@ -111,8 +122,11 @@ export async function approveStagedTransaction(
       prisma.transaction.create({
         data: {
           date: input.date,
-          amount: input.amount,
-          currency: input.currency,
+          amount: incoming.amount,
+          currency: incoming.currency,
+          originalAmount: incoming.originalAmount,
+          originalCurrency: incoming.originalCurrency,
+          rate: incoming.rate,
           type: "EXPENSE",
           accountId: input.accountId,
           categoryId: input.categoryId,
@@ -144,6 +158,8 @@ export async function stagedPostedMatches(
   rates: RateTable,
 ): Promise<Record<string, Record<string, PostedMatch>>> {
   const result: Record<string, Record<string, PostedMatch>> = {};
+  const accounts = await prisma.account.findMany({ where: { id: { in: [...accountIds] } }, select: { id: true, currency: true } });
+  const currencyOf = new Map(accounts.map((account) => [account.id, account.currency]));
   for (const row of rows) {
     if (row.status !== "PENDING") continue;
     const values = {
@@ -156,7 +172,10 @@ export async function stagedPostedMatches(
     // One call per row: entries on different accounts never pair with each
     // other's posted rows, so this is each account judged separately.
     const found = await lookUpPostedDuplicates(
-      accountIds.map((accountId) => incomingFor({ ...values, accountId }, accountId)),
+      accountIds.flatMap((accountId) => {
+        const accountCurrency = currencyOf.get(accountId);
+        return accountCurrency ? [incomingFor({ ...values, accountId }, accountId, accountCurrency, rates)] : [];
+      }),
       rates,
     );
     if (found && found.size > 0) result[row.id] = Object.fromEntries(found);

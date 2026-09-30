@@ -169,3 +169,25 @@ finishing in a few seconds, `DIRECT_URL` is pointing at the transaction pooler
 Order matters in the other direction too: deploying code that reads a column
 its migration has not created yet takes the whole app down with a Prisma
 error, so migrate first, deploy second.
+
+### Storing older rows in their account's currency (one-off)
+
+The migration `20260930200000_add_transaction_original_amount` adds
+`Transaction.originalAmount`, `originalCurrency` and `rate`; from then on every
+new row is stored in its account's currency. Rows written before it in another
+currency than their account's keep reading as they always did (converted at
+today's rate) until `scripts/backfill-account-currency.ts` stores them at
+today's rate, keeping what they were entered as. It is safe to deploy the code
+first and run the backfill whenever you choose:
+
+```bash
+set -a; source .env.supabase; set +a
+DATABASE_URL="$DIRECT_URL" npx tsx scripts/backfill-account-currency.ts          # dry run: prints every row and balance, writes nothing
+DATABASE_URL="$DIRECT_URL" npx tsx scripts/backfill-account-currency.ts --apply  # writes, in one transaction
+unset DATABASE_URL DIRECT_URL
+```
+
+Each account's balance reads the same before and after. It refuses `--apply`
+until the migration is applied, and a second `--apply` changes nothing. Open
+the app once first if Settings says the exchange rates are stale: the script
+uses the stored rates and never fetches.
