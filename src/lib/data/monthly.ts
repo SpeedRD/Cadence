@@ -75,7 +75,7 @@ import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
 import { loadCommitments } from "@/lib/data/period-commitments";
-import type { CategoryLine } from "@/lib/data/period-summary";
+import type { SpendingLine } from "@/lib/data/period-summary";
 import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
 
 export const MIN_HISTORICAL_MONTHS = 3;
@@ -99,6 +99,7 @@ interface CategoryMeta {
   name: string;
   color: string;
   isSavingsDefault: boolean;
+  isSubscriptionDefault: boolean;
 }
 
 export interface RecurringForMatch {
@@ -256,7 +257,7 @@ async function withFirstPostedDates(items: ActiveRecurringItem[]): Promise<Recur
 
 async function loadCategoryMeta(): Promise<CategoryMeta[]> {
   return prisma.category.findMany({
-    select: { id: true, name: true, color: true, isSavingsDefault: true },
+    select: { id: true, name: true, color: true, isSavingsDefault: true, isSubscriptionDefault: true },
   });
 }
 
@@ -367,7 +368,7 @@ interface MonthActuals {
   lifestyle: number;
   /** The part of `lifestyle` that is typical spending: one-offs left out, shared expenses at the user's share. */
   typicalLifestyle: number;
-  lifestyleByCategory: CategoryLine[];
+  lifestyleByCategory: SpendingLine[];
   committedActual: number;
   contributionActual: number;
   savingsFromCategory: number;
@@ -549,10 +550,7 @@ async function computeMonthActuals(
   let lifestyle = 0;
   let typicalLifestyle = 0;
   let savingsFromCategory = 0;
-  const lifestyleByCategoryMap = new Map<
-    string | null,
-    { name: string; color: string; total: number; extraordinary: number; othersShare: number }
-  >();
+  const lifestyleByCategoryMap = new Map<string | null, { name: string; color: string; total: number }>();
 
   for (const tx of matchable) {
     if (accountedForIds.has(tx.id)) continue;
@@ -572,6 +570,14 @@ async function computeMonthActuals(
       savingsFromCategory += amount;
       continue;
     }
+    // A charge filed under a subscription category that no item accounted
+    // for is committed spending, not lifestyle: the same category budget
+    // spending leaves out (K6, src/lib/budget-spending.ts), so a one-time
+    // purchase filed there is outside the budget and outside the pace alike.
+    if (category?.isSubscriptionDefault) {
+      committedActual += amount;
+      continue;
+    }
     lifestyle += amount;
     if (!tx.isExtraordinary) typicalLifestyle += ownCost;
     const key = tx.categoryId;
@@ -579,33 +585,17 @@ async function computeMonthActuals(
       name: category?.name ?? "Uncategorized",
       color: category?.color ?? "#7a8590",
       total: 0,
-      extraordinary: 0,
-      othersShare: 0,
     };
     existing.total += amount;
-    if (tx.isExtraordinary) existing.extraordinary += amount;
-    // Reported the way getPeriodSummary reports it: the part of the line's
-    // total that is other people's money - nothing once the share has already
-    // been read in the amount's place, and nothing for a one-off whose whole
-    // amount is already set aside.
-    else if (tx.yourShare !== null && !typicalOnly) existing.othersShare += fullAmount - ownCost;
     lifestyleByCategoryMap.set(key, existing);
   }
 
-  const lifestyleByCategory: CategoryLine[] = [...lifestyleByCategoryMap.entries()]
+  const lifestyleByCategory: SpendingLine[] = [...lifestyleByCategoryMap.entries()]
     .map(([categoryId, value]) => ({
       categoryId,
       name: value.name,
       color: value.color,
       spent: round2(value.total),
-      extraordinarySpent: round2(value.extraordinary),
-      othersShareSpent: round2(value.othersShare),
-      // RECURRING rows never reach lifestyleByCategoryMap - accountedForIds
-      // (built above) skips them before this map is built - so there is
-      // nothing left to exclude here.
-      spentExcludingRecurring: round2(value.total),
-      spentExcludingOccurrences: round2(value.total),
-      budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
 
@@ -637,7 +627,7 @@ async function computeMonthActuals(
 export interface MonthlyBreakdown {
   window: MonthWindow;
   lifestyle: number;
-  lifestyleByCategory: CategoryLine[];
+  lifestyleByCategory: SpendingLine[];
   committed: number;
   savingsInvesting: number;
   normalSpending: number;
@@ -717,7 +707,7 @@ export interface HistoricalMonthlyAverage {
   averageSavingsInvesting: number;
   averageNormalSpending: number;
   averageTotalOutflow: number;
-  averageLifestyleByCategory: CategoryLine[];
+  averageLifestyleByCategory: SpendingLine[];
 }
 
 function emptyHistoricalAverage(monthsUsed: number): HistoricalMonthlyAverage {
@@ -762,21 +752,14 @@ export async function getHistoricalMonthlyAverage(context: AppContext): Promise<
       categoryTotals.set(line.categoryId, existing);
     }
   }
-  const averageLifestyleByCategory: CategoryLine[] = [...categoryTotals.entries()]
+  // Completed months already leave confirmed one-offs out and read a shared
+  // expense at the user's own share (classifyCompletedMonth).
+  const averageLifestyleByCategory: SpendingLine[] = [...categoryTotals.entries()]
     .map(([categoryId, value]) => ({
       categoryId,
       name: value.name,
       color: value.color,
       spent: round2(value.total / n),
-      // Completed months already leave confirmed one-offs out and read a
-      // shared expense at the user's own share (classifyCompletedMonth).
-      extraordinarySpent: 0,
-      othersShareSpent: 0,
-      // Same as lifestyleByCategory above: RECURRING rows never reach this
-      // total in the first place.
-      spentExcludingRecurring: round2(value.total / n),
-      spentExcludingOccurrences: round2(value.total / n),
-      budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
 

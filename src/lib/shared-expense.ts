@@ -9,15 +9,17 @@
  *                                       of the rest back
  *
  * The expense's `amount` is never changed: it is what left the account, so the
- * ledger, the account balance and the current period's spending keep it in
- * full. Only the figures that estimate the *future* read the share instead -
- * the one-off threshold (src/lib/extraordinary.ts), the two averages of
- * typical spending (getCategorySuggestions, getHistoricalMonthlyAverage) and
- * the month in progress's projection (getCurrentMonthPace) - and
- * a linked deposit is left out of every income average (Afford's projections),
- * since it is money coming back rather than earnings. Nothing here projects
- * money not yet received: a share is recovered only when its deposit is a
- * real, logged row.
+ * ledger, the account balance and the month in progress's "spent so far" keep
+ * it in full. Spending read against a plan reads the share instead: budget
+ * spending (the overall "spent", the Budgets page's rows, carryover and the
+ * category suggestions - src/lib/budget-spending.ts), Reports' spending
+ * figures and averages, the one-off threshold (src/lib/extraordinary.ts), the
+ * monthly averages (getHistoricalMonthlyAverage) and the month in progress's
+ * projection (getCurrentMonthPace). A linked deposit is income as a fact and
+ * is left out of every income estimate (src/lib/period-income.ts), since it
+ * is money coming back rather than earnings; it never offsets the expense.
+ * Nothing here projects money not yet received: a share is recovered only
+ * when its deposit is a real, logged row.
  *
  * Pure - no Prisma - so scripts/verify-domain.ts can check it directly and the
  * client-side transaction form can validate with the same rule.

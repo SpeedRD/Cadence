@@ -577,7 +577,7 @@ async function main(): Promise<number> {
         getPeriodSummary(period, context as AppContext),
         prisma.transaction.findMany({
           where: { date: periodRange(period), type: "EXPENSE" },
-          select: { id: true, amount: true, currency: true, source: true, categoryId: true, externalId: true },
+          select: { id: true, amount: true, currency: true, source: true, categoryId: true, externalId: true, yourShare: true },
         }),
         // A charge that paid a subscription occurrence stands for that
         // occurrence, which the plan already reserved: like posting's own
@@ -594,7 +594,10 @@ async function main(): Promise<number> {
       const twinsInsideByRule: { id: string; amount: number }[] = [];
       for (const tx of expenses) {
         if (tx.source === "RECURRING" || settledSubscriptionCharges.has(tx.id) || outsideBudget(tx.categoryId)) continue;
-        const amount = toDisplay(num(tx.amount), tx.currency);
+        // A shared expense is budget spending at the user's own share (the
+        // user's decision on D22), what left the account less other people's
+        // part.
+        const amount = toDisplay(tx.yourShare === null ? num(tx.amount) : num(tx.yourShare), tx.currency);
         if (twinIds.has(tx.id)) twinsInsideByRule.push({ id: tx.id, amount });
         else spentWithoutTwins += amount;
       }

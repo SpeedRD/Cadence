@@ -11,9 +11,11 @@
 import {
   MONTHS_LONG,
   MONTHS_SHORT,
+  addDays,
   civilDate,
   daysBetween,
   daysInMonth,
+  minDate,
   startOfDay,
 } from "@/lib/date";
 
@@ -141,6 +143,63 @@ export function periodClock(today: Date): PeriodClock {
   const current = periodForDate(day);
   const plan = isAfterPaydayInPeriod(day) ? periodInfo(nextPeriod(current)) : current;
   return { today: day, current, plan, planPayday: paydayDateFor(plan) };
+}
+
+/**
+ * How many days before a period's first day its pay may land and still be
+ * that period's. A period's pay is modelled to land on its payday
+ * (paydayDateFor), the last business day before it starts, but banks often
+ * pay a day or two earlier still - the user's salary has landed on a Friday
+ * three days before a Monday payday. Five days covers that with a day of
+ * slack and stays well short of the period before's own pay.
+ */
+export const PAYCHECK_LEAD_DAYS = 5;
+
+function incomeWindowStart(ref: PeriodRef): Date {
+  return minDate(paydayDateFor(ref), addDays(periodInfo(ref).start, -PAYCHECK_LEAD_DAYS));
+}
+
+/**
+ * The days an ordinary deposit is attributed to `ref`: from the earlier of
+ * its payday and PAYCHECK_LEAD_DAYS before its first day, up to, not
+ * including, where the next period's income window starts. Period income
+ * (src/lib/period-income.ts) counts pay over it, and a check-in paycheck's
+ * duplicate check (paycheckWindow in src/lib/recurring-settlement.ts) is
+ * bounded by it.
+ */
+export function incomeWindow(ref: PeriodRef): { from: Date; until: Date } {
+  return { from: incomeWindowStart(ref), until: incomeWindowStart(nextPeriod(ref)) };
+}
+
+/** The period whose income window contains `date`: the next one once its window has opened. */
+export function fundedPeriodFor(date: Date): PeriodInfo {
+  const current = periodForDate(date);
+  const following = periodInfo(nextPeriod(current));
+  return startOfDay(date).getTime() >= incomeWindowStart(following).getTime() ? following : current;
+}
+
+/** The day a period's pay was recorded as landing, if it has been (see fundingWindow). */
+export type PayLanded = (ref: PeriodRef) => Date | null;
+
+function fundingWindowStart(ref: PeriodRef, landed: Date | null): Date {
+  const payday = paydayDateFor(ref);
+  if (!landed) return payday;
+  const day = startOfDay(landed);
+  return day.getTime() >= incomeWindowStart(ref).getTime() && day.getTime() <= payday.getTime() ? day : payday;
+}
+
+/**
+ * The days whose money is `ref`'s to move toward a goal: from the day its pay
+ * actually landed - the recorded paycheck (a check-in's income transaction for
+ * it, or a deposit attributed to it by its income window) when one falls
+ * between PAYCHECK_LEAD_DAYS before its first day and its payday - otherwise
+ * from its payday, up to, not including, where the next period's window
+ * starts by the same rule. Until the next period's pay arrives, what is moved
+ * is still this period's money.
+ */
+export function fundingWindow(ref: PeriodRef, payLanded: PayLanded): { from: Date; until: Date } {
+  const next = nextPeriod(ref);
+  return { from: fundingWindowStart(ref, payLanded(ref)), until: fundingWindowStart(next, payLanded(next)) };
 }
 
 /** Which pay period a date falls into, with that month's real start/end dates. */

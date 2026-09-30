@@ -59,6 +59,7 @@ import type { z } from "zod";
 
 import { getAccountBalances } from "@/lib/data/accounts";
 import { goalPeriodPlans, loadGoalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
+import { loadBudgetSpent } from "@/lib/data/budget-spending";
 import { getPeriodSummary } from "@/lib/data/period-summary";
 import { listGoals } from "@/lib/data/goals";
 
@@ -72,6 +73,12 @@ export interface PaydayAccountDraft {
   expectedLedgerBalance: number;
   reportedBalance: number;
   incomeEntered: number;
+  /**
+   * The part of incomeEntered the user says is one-off (a bonus), 0 up to
+   * incomeEntered: the period's income all the same, left out of the income
+   * estimate later periods are projected from (src/lib/period-income.ts).
+   */
+  oneOffIncome: number;
   incomeNote: string;
   /** The configured buffer floor converted to this account's own currency, so the step can recompute its buffer as income is edited. */
   bufferFloor: number;
@@ -338,11 +345,10 @@ export async function getCategorySuggestions(
   const historicalPeriodCount = new Map<string, number>();
   if (remaining.length > 0) {
     // HISTORY_PERIODS comparable (same-half) periods, starting at
-    // comparableRef and stepping one full cycle back each time, fetched in
-    // parallel instead of sequentially - each getPeriodSummary() call is an
-    // independent DB round-trip, and the dashboard calls this unconditionally
-    // on every load. A period that ended before Settings' "count income
-    // history from" date is dropped here, before anything is fetched - the
+    // comparableRef and stepping one full cycle back each time, read in one
+    // query - the dashboard calls this unconditionally on every load. A
+    // period that ended before Settings' "count income history from" date is
+    // dropped here, before anything is fetched - the
     // same rule Afford's comparableHistory applies - so the per-category
     // count below runs over the periods that remain, exactly as it already
     // runs from a category's oldest spending forward.
@@ -353,38 +359,26 @@ export async function getCategorySuggestions(
       if (countsInIncomeHistory(info, context.incomeHistoryStartDate)) cursors.push(info);
       cursor = previousComparablePeriod(cursor);
     }
-    const summaries = await Promise.all(
-      cursors.map((period) => getPeriodSummary(period, context)),
-    );
-    // `summaries` runs newest first, so the oldest period with any spending is
-    // the furthest index the average should reach back to.
-    summaries.forEach((summary, index) => {
-      for (const line of summary.categories) {
-        if (!line.categoryId || !remaining.includes(line.categoryId)) continue;
-        // A one-off the user confirmed as extraordinary is not typical
-        // spending, so it is left out of the sum (Transaction.isExtraordinary,
-        // see src/lib/extraordinary.ts), a shared expense counts only the
-        // user's own part (Transaction.yourShare, see
-        // src/lib/shared-expense.ts) - the rest was other people's money
-        // passing through - and spentExcludingOccurrences leaves out anything
-        // already committed at payday-planning time, by the test budget
-        // spending uses: a row that stands for a recurring occurrence (an
-        // auto-posted charge, or a charge the user entered that paid one),
-        // whatever category it happens to be filed under - see
-        // CategoryLine.spentExcludingOccurrences. The
-        // period still counts as one the category was active in - the money
-        // was really spent - so the divisor below reads the real `spent`,
-        // unchanged.
-        historicalTotals.set(
-          line.categoryId,
-          (historicalTotals.get(line.categoryId) ?? 0) +
-            line.spentExcludingOccurrences -
-            line.extraordinarySpent -
-            line.othersShareSpent,
-        );
-        if (line.spent > 0) {
-          historicalPeriodCount.set(line.categoryId, index + 1);
-        }
+    const spentByPeriod = await loadBudgetSpent(cursors, context);
+    // Newest first, so the oldest period with budget spending in a category
+    // is the furthest index the average reaches back to.
+    cursors.forEach((period, index) => {
+      const spent = spentByPeriod.get(period.key);
+      for (const [categoryId, line] of spent?.byCategory ?? []) {
+        if (!categoryId || !remaining.includes(categoryId)) continue;
+        // Budget spending (K6, src/lib/budget-spending.ts) is what the
+        // budget will be measured against, so it is what the suggestion
+        // averages: nothing the plan already reserves (a row that stands for
+        // a recurring occurrence, whatever category it is filed under), a
+        // shared expense at the user's share, and a confirmed one-off
+        // (Transaction.isExtraordinary, see src/lib/extraordinary.ts) taken
+        // off once, as part of that same population - a charge outside it is
+        // never subtracted. A period counts toward the divisor when the
+        // category had budget spending in it, the same population as the
+        // numerator, so periods whose only charge was a reserved one do not
+        // dilute the average.
+        historicalTotals.set(categoryId, (historicalTotals.get(categoryId) ?? 0) + line.spent - line.oneOff);
+        if (line.spent > 0) historicalPeriodCount.set(categoryId, index + 1);
       }
     });
   }
@@ -838,6 +832,7 @@ export async function getPaydayCheckinDraft(
       expectedLedgerBalance: ledgerBefore(account.balance, snapshot),
       reportedBalance: snapshot ? num(snapshot.reportedBalance) : ledgerBefore(account.balance, snapshot),
       incomeEntered: snapshot ? num(snapshot.incomeEntered) : 0,
+      oneOffIncome: snapshot?.oneOffIncome ? num(snapshot.oneOffIncome) : 0,
       incomeNote: snapshot?.incomeNote ?? "",
       // Each account's buffer is computed in its own currency, so the floor
       // has to be converted once per account rather than to the display
@@ -1449,6 +1444,7 @@ export async function confirmPaydayCheckin(
         reportedBalance: accountInput.reportedBalance,
         difference,
         incomeEntered: accountInput.incomeEntered,
+        oneOffIncome: Math.min(accountInput.oneOffIncome ?? 0, accountInput.incomeEntered),
         incomeNote: accountInput.incomeNote,
         incomeTransactionId,
         currency: account.currency,

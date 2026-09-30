@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 
 import { addDays, maxDate, minDate, toISODate } from "@/lib/date";
 import { num, type DecimalLike } from "@/lib/money";
-import { periodInfo } from "@/lib/period";
+import { fundedPeriodFor, periodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import {
   itemIdFromOccurrenceKey,
@@ -149,8 +149,8 @@ export async function findPostedDuplicates(
   });
   const itemById = new Map(postedItems.map((item) => [item.id, toMatchable(item)]));
   const contributionHalves = new Set(contributionKeys.map((row) => row.recurringExternalId as string));
-  const plannedStartByPaycheck = new Map(
-    snapshots.map((snapshot) => [snapshot.incomeTransactionId as string, periodInfo(snapshot.checkin).start]),
+  const plannedByPaycheck = new Map(
+    snapshots.map((snapshot) => [snapshot.incomeTransactionId as string, periodInfo(snapshot.checkin)]),
   );
 
   const posted: PostedEntry[] = [];
@@ -159,7 +159,7 @@ export async function findPostedDuplicates(
   for (const row of rows) {
     const kind = row.source === "RECURRING" ? "recurring" : "paycheck";
     const item = kind === "recurring" && row.externalId ? (itemById.get(itemIdFromOccurrenceKey(row.externalId) ?? "") ?? null) : null;
-    const plannedStart = plannedStartByPaycheck.get(row.id);
+    const planned = plannedByPaycheck.get(row.id);
     posted.push({
       id: row.id,
       kind,
@@ -168,8 +168,10 @@ export async function findPostedDuplicates(
       date: row.date,
       amount: num(row.amount),
       currency: row.currency,
-      // A paycheck whose snapshot is gone falls back to its own day's window.
-      window: kind === "paycheck" && plannedStart ? paycheckWindow(plannedStart) : settlementWindow(row.date),
+      // A paycheck whose snapshot is gone falls back to the funding window of
+      // the period its own day funds.
+      window:
+        kind === "paycheck" ? paycheckWindow(planned ?? fundedPeriodFor(row.date)) : settlementWindow(row.date),
       item,
     });
     viewById.set(row.id, {

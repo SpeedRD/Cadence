@@ -8,13 +8,13 @@
  *   income      history can only estimate this, so it uses the one averaging
  *               walk the app already has - getCategorySuggestions() in
  *               src/lib/data/payday.ts steps back through HISTORY_PERIODS
- *               comparable (same-half: A vs. B) periods - over what each
- *               account received (the same attribution getPeriodSummary uses:
- *               ordinary INCOME rows by date, plus the confirmed check-in's
- *               per-account income for the period rather than the check-in
- *               day's transaction - minus deposits that pay back a shared
- *               expense, which are not earnings, and income the user marked
- *               as one-off, which is not expected again; see loadPeriodIncome).
+ *               comparable (same-half: A vs. B) periods - over each
+ *               account's period income on the estimate basis (K5,
+ *               src/lib/period-income.ts: the attribution getPeriodSummary
+ *               uses, less deposits that pay back a shared expense, which
+ *               are not earnings, and income the user marked as one-off,
+ *               on a row or as part of a check-in paycheck, which is not
+ *               expected again; see loadHistoryIncome).
  *               Every account divides by the same count: the comparable
  *               periods since the oldest one with income in any account
  *               (incomeHistoryDepth), so pay that moved from one account to
@@ -92,20 +92,19 @@ import {
   parsePeriodKey,
   periodClock,
   periodInfo,
-  periodRange,
   previousComparablePeriod,
   type PeriodInfo,
   type PeriodRef,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { whole, type CommitmentOccurrence } from "@/lib/period-commitments";
-import { reimbursedExpenseIdFromTransaction } from "@/lib/transactions";
 import type { affordInputSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAppContext } from "@/lib/data/context";
 import { loadGoalPeriodPlans } from "@/lib/data/goal-plan";
 import { loadCommitments } from "@/lib/data/period-commitments";
+import { loadPeriodIncome } from "@/lib/data/period-income";
 import {
   getCategorySuggestions,
   HISTORY_PERIODS,
@@ -217,59 +216,29 @@ async function loadConfirmedOpenPeriodKeys(today: Date): Promise<Set<string>> {
 type PeriodIncome = Map<string, number>;
 
 /**
- * The income this walk averages over. A deposit that pays back a shared
- * expense (Transaction.reimbursesTransactionId, see src/lib/shared-expense.ts)
- * is left out here by its own identity - the same device
- * manualContributionIdFromTransaction gives getPeriodSummary for a
- * contribution's expense - never by category or note: it raised the account's
- * balance like any income, but it is the user's own money coming back, and
- * averaging it in would project earnings that were never earned. Income the
- * user marked as a one-off (Transaction.isOneOffIncome - a gift, a sale, a
- * refund) is left out by its flag: it was earned and counts wherever income
- * is a fact, but this walk estimates what the next periods will bring, and
- * a one-time receipt is not that.
+ * The income this walk averages over: period income on the estimate basis
+ * (K5, src/lib/period-income.ts) for each comparable period, kept to the
+ * active accounts. A deposit counts in the period it funds - a check-in's
+ * paycheck in the period the check-in planned, any other from the payday it
+ * landed on - and one-off income (a gift, a sale, a refund, a bonus marked on
+ * the check-in), and deposits paying back a shared expense, are left out:
+ * they were received, but the next periods cannot expect them.
  */
-async function loadPeriodIncome(
-  period: PeriodInfo,
+async function loadHistoryIncome(
+  periods: PeriodInfo[],
   accounts: ActiveAccount[],
   context: AffordContext,
-): Promise<PeriodIncome> {
-  const accountIds = accounts.map((account) => account.id);
-  const currencyByAccount = new Map(accounts.map((account) => [account.id, account.currency]));
-  const [transactions, checkin] = await Promise.all([
-    prisma.transaction.findMany({
-      where: {
-        accountId: { in: accountIds },
-        date: periodRange(period),
-        type: "INCOME",
-        // A paycheck belongs to the period its check-in planned, which is
-        // added from the snapshots below; its transaction sits on the
-        // check-in day.
-        source: { not: "PAYDAY_CHECKIN" },
-        isOneOffIncome: false,
-      },
-      select: { accountId: true, amount: true, currency: true, type: true, reimbursesTransactionId: true },
-    }),
-    prisma.paydayCheckin.findFirst({
-      where: { year: period.year, month: period.month, period: period.period, status: "CONFIRMED" },
-      select: { snapshots: { select: { accountId: true, incomeEntered: true, currency: true } } },
-    }),
-  ]);
-
-  const income: PeriodIncome = new Map();
-  const add = (accountId: string, amount: number, currency: string) => {
-    const accountCurrency = currencyByAccount.get(accountId);
-    if (!accountCurrency) return;
-    income.set(accountId, (income.get(accountId) ?? 0) + convert(amount, currency, accountCurrency, context.rates));
-  };
-  for (const transaction of transactions) {
-    if (reimbursedExpenseIdFromTransaction(transaction) !== null) continue;
-    add(transaction.accountId, num(transaction.amount), transaction.currency);
-  }
-  for (const snapshot of checkin?.snapshots ?? []) {
-    add(snapshot.accountId, num(snapshot.incomeEntered), snapshot.currency);
-  }
-  return income;
+): Promise<PeriodIncome[]> {
+  const figures = await loadPeriodIncome(periods, "estimate", context);
+  const active = new Set(accounts.map((account) => account.id));
+  return periods.map(
+    (period) =>
+      new Map(
+        [...(figures.get(period.key)?.byAccount ?? new Map<string, number>())].filter(([accountId]) =>
+          active.has(accountId),
+        ),
+      ),
+  );
 }
 
 /** What one evaluated period already owes: per funding account in that account's currency, and in total in the display currency. */
@@ -561,10 +530,7 @@ export async function projectPeriods(
     loadEssentialFixed(periods, suggestionRefFor, context),
     loadGoalPeriodPlans(periods, context, { commitments: commitmentsByPeriod }),
     ...[...histories.entries()].map(async ([key, history]) => {
-      const incomes = await Promise.all(
-        history.map((period) => loadPeriodIncome(period, accounts, context)),
-      );
-      incomeByHistory.set(key, incomes);
+      incomeByHistory.set(key, await loadHistoryIncome(history, accounts, context));
     }),
   ]);
 

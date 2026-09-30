@@ -92,10 +92,12 @@ export default async function AccountDetailPage({
           <Stat
             label={t.incomeIn}
             value={formatMoney(totals.inflow, account.currency)}
+            hint={t.byTransactionDate}
           />
           <Stat
             label={t.spendingOut}
             value={formatMoney(totals.outflow, account.currency)}
+            hint={t.byTransactionDate}
           />
           <Stat
             label={t.netTransfers}

@@ -41,7 +41,7 @@
  */
 import { convert, type RateTable } from "@/lib/currency";
 import { addDays, daysBetween, maxDate, minDate, toISODate } from "@/lib/date";
-import { periodForDate } from "@/lib/period";
+import { incomeWindow, periodForDate, type PeriodRef } from "@/lib/period";
 
 import type { RecurringKind } from "@/generated/prisma/enums";
 
@@ -288,7 +288,7 @@ export interface PostedEntry {
   currency: string;
   /**
    * The days an incoming row may fall on to be this row's money: the
-   * occurrence's settlementWindow, or for a paycheck that of the first day of
+   * occurrence's settlementWindow, or for a paycheck the income window of
    * the period its check-in planned (paycheckWindow).
    */
   window: { start: Date; end: Date };
@@ -314,14 +314,17 @@ export interface PostedDuplicate {
 }
 
 /**
- * The window a paycheck's deposit may land in: the settlement window of the
- * first day of the period the check-in planned. A period's pay lands on the
- * last day of the period before, pulled back to Friday over a weekend, which
- * is the same few days before the period that let a bill due on the 1st be
- * paid from it (SETTLEMENT_LEAD_DAYS).
+ * The days a deposit may land on to be the paycheck a check-in recorded for
+ * `planned`: that period's income window (incomeWindow in
+ * src/lib/period.ts) - from the earlier of its payday and PAYCHECK_LEAD_DAYS
+ * before its first day, through the day before the next period's window
+ * opens - the days period income counts that period's pay in. The next
+ * period's pay, landing in the last days of this one, is outside it, so it is
+ * never put to the user as this check-in's paycheck.
  */
-export function paycheckWindow(plannedPeriodStart: Date): { start: Date; end: Date } {
-  return settlementWindow(plannedPeriodStart);
+export function paycheckWindow(planned: PeriodRef): { start: Date; end: Date } {
+  const window = incomeWindow(planned);
+  return { start: window.from, end: addDays(window.until, -1) };
 }
 
 /** Which series a posted row belongs to: several occurrences of one item (or several paychecks) are one series. */

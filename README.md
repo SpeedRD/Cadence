@@ -92,7 +92,25 @@ income → review commitments and goals → flexible categories → confirm.** E
 gets written. The same wizard opens from the Budgets page for whichever period is
 being viewed, so a period that was never checked in can be done late (its paycheck
 is dated on that period's payday) and a confirmed one can be revisited; a check-in
-keeps its original date when it is re-confirmed.
+keeps its original date when it is re-confirmed. Step 2 takes, beside each
+account's income, an optional "of which one-off" part (a bonus, a 13th salary): it
+counts as the period's income, and like one-off income rows it is left out of the
+income estimate Afford and the room checks project later periods from.
+
+A period's income is the money that funds it: a check-in's paycheck counts in the
+period the check-in planned, and any other deposit that lands in the last five days
+before a period starts counts in that period - pay for the 16th-31st that arrives on
+the 15th, or a day or two early, is the second half's income, whether it came through
+the check-in or a CSV import. A deposit in those days is what the CSV import compares
+with a check-in's recorded paycheck, so the next period's pay is never offered as the
+one already recorded. Goal money follows the pay itself: a contribution belongs to a
+period from the day that period's pay is recorded landing (or its payday, when none
+is recorded) until the next period's pay lands, so a contribution made the day the
+salary arrives belongs to that salary's period, and one made before the next salary
+arrives still belongs to the current one. One-off income and paybacks of a shared
+expense are not pay for a period and count by the day they arrive. The Dashboard,
+Reports and Afford all read it that way; the Transactions and account pages total
+rows by their date and say so.
 
 ![Payday check-in step 1: reconcile each account's reported balance against the ledger](screenshots/payday-step-balances.png)
 
@@ -164,8 +182,11 @@ over-allocation.
 Set an overall budget per period, or let it fall back to the sum of category
 budgets. The budget is net of commitments: safe-to-spend is the period budget minus
 flexible spending so far, divided by the days remaining. Charges posted by recurring
-items and spending in the subscription and savings categories don't eat into it —
-the payday check-in already set that money aside. The period switcher steps
+items, charges you entered that paid a recurring occurrence, goal contributions and
+spending in the subscription and savings categories don't eat into it — the payday
+check-in already set that money aside — and a shared expense counts at your share.
+The category rows count the same spending, so they add up to the overall figure,
+and the check-in's category suggestions and the carryover are measured on it too. The period switcher steps
 through any past or future period; its plan button reads "Plan this period" for
 the one due next, "Review this period's plan" once it's confirmed, and "Check in
 for this period" for any other period that was never checked in, so a period
@@ -217,14 +238,15 @@ charges are never classified; their amounts are scheduled, not organic.
 
 An expense paid on behalf of several people can be marked as a **shared expense**
 with your own share of it. The transaction keeps the full amount - it is what left
-the account, so the account balance, the period's totals and the budgets all
-count it in full - while the one-off check, the two typical-spending averages and the
-monthly pace projection read your share in its place (the rest shows on the pace
-card's "not projected" line), so a DOP 2,725 round of movie tickets neither trips
-the one-off prompt nor drags future suggestions up by money that was never yours.
+the account, so the ledger and the account balance count it in full - while the
+budgets (the period's spent, its category rows, the carryover and the suggestions),
+Reports' spending and averages, the one-off check and the monthly pace projection read
+your share in its place (the rest shows on the pace card's "not projected" line), so
+a DOP 2,725 round of movie tickets neither overspends the budget, trips the one-off
+prompt nor drags future suggestions up by money that was never yours.
 As people pay you back, log each deposit as income and pick the expense it
-reimburses: a linked deposit raises the balance like any income but is never
-averaged as income by Afford's projections, and the expense's row shows how much
+reimburses: a linked deposit raises the balance and counts as the period's income, but it never
+offsets the expense and is never averaged as income by Afford's projections, and the expense's row shows how much
 has come back so far and what is still pending. Nothing is projected for money
 not yet received; a share is recovered only when its deposit is a real, logged
 row. A shared expense with deposits linked to it cannot be deleted or unshared

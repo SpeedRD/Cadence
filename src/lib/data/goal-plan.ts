@@ -17,7 +17,7 @@ import {
 } from "@/lib/goal-plan";
 import { savedFromContributions } from "@/lib/goals";
 import { num, round2 } from "@/lib/money";
-import { periodClock, periodsRemaining, type PeriodClock, type PeriodInfo } from "@/lib/period";
+import { periodClock, periodsRemaining, type PayLanded, type PeriodClock, type PeriodInfo } from "@/lib/period";
 import {
   outstanding,
   outstandingAmount,
@@ -29,6 +29,7 @@ import {
 import { prisma } from "@/lib/prisma";
 
 import { loadCommitments } from "@/lib/data/period-commitments";
+import { loadPayLanded } from "@/lib/data/period-income";
 
 import type { AppContext } from "@/lib/data/context";
 
@@ -87,7 +88,8 @@ export async function loadGoalPeriodPlans(
 ): Promise<Map<string, GoalPeriodPlan[]>> {
   const result = new Map<string, GoalPeriodPlan[]>();
   if (periods.length === 0) return result;
-  const [goals, commitments, checkins] = await Promise.all([
+  const clock = periodClock(context.today);
+  const [goals, commitments, checkins, payLanded] = await Promise.all([
     loadGoalRows(),
     options.commitments ?? loadCommitments(periods, context),
     prisma.paydayCheckin.findMany({
@@ -105,8 +107,10 @@ export async function loadGoalPeriodPlans(
         },
       },
     }),
+    // When each period's pay landed, which opens its contribution window
+    // (the plan period's too: a later period is paced from it).
+    loadPayLanded([...periods, clock.plan]),
   ]);
-  const clock = periodClock(context.today);
 
   for (const period of periods) {
     const checkin = checkins.find(
@@ -115,7 +119,7 @@ export async function loadGoalPeriodPlans(
     const occurrences = commitments.get(period.key) ?? [];
     result.set(
       period.key,
-      goals.map((goal) => goalPeriodPlan(goal, period, clock, { occurrences, allocations: checkin?.allocations ?? null }, context)),
+      goals.map((goal) => goalPeriodPlan(goal, period, clock, { occurrences, allocations: checkin?.allocations ?? null, payLanded }, context)),
     );
   }
   return result;
@@ -123,8 +127,9 @@ export async function loadGoalPeriodPlans(
 
 /**
  * K3's goalPeriodPlan: one goal's plan for one period, as of the clock's
- * day, from the period's commitments (K2) and its confirmed check-in's GOAL
- * rows (null when the period is not confirmed). loadGoalPeriodPlans() loads
+ * day, from the period's commitments (K2), its confirmed check-in's GOAL
+ * rows (null when the period is not confirmed) and when each period's pay
+ * landed (loadPayLanded, for its contribution window). loadGoalPeriodPlans() loads
  * those inputs once for every goal and period and calls this for each pair.
  */
 export function goalPeriodPlan(
@@ -134,17 +139,20 @@ export function goalPeriodPlan(
   inputs: {
     occurrences: readonly CommitmentOccurrence[];
     allocations: { goalId: string | null; plannedAmount: unknown; recommendedAmount: unknown; currency: string }[] | null;
+    /** When each period's pay landed (loadPayLanded), for its contribution window. */
+    payLanded: PayLanded;
   },
   context: Pick<AppContext, "rates" | "displayCurrency">,
 ): GoalPeriodPlan {
-  const { occurrences, allocations } = inputs;
+  const { occurrences, allocations, payLanded } = inputs;
   const toDisplay = (amount: number, currency: string) => convert(amount, currency, context.displayCurrency, context.rates);
   const target = num(goal.targetAmount);
   const pacePeriod = pacePeriodFor(period, clock.plan);
-  const paceFrom = contributionWindow(pacePeriod).from;
-  const window = contributionWindow(period);
+  const paceFrom = contributionWindow(pacePeriod, payLanded).from;
+  const window = contributionWindow(period, payLanded);
   // Saved as every page shows it (Goal.savedAmount, the cached sum of the
-  // contributions), less what is dated on or after the pace period's payday.
+  // contributions), less what is dated in or after the pace period's funding
+  // window.
   const savedBefore = round2(
     num(goal.savedAmount) -
       savedFromContributions(

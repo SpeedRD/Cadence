@@ -1173,7 +1173,7 @@ async function main() {
     where: { active: true, kind: { in: ["SUBSCRIPTION", "CONTRIBUTION"] }, name: { startsWith: "Verify" } },
     select: { id: true, name: true, amount: true, currency: true, categoryId: true, kind: true, frequency: true, nextDate: true, anchorDay: true, secondAnchorDay: true, createdAt: true },
   })).map((item) => ({ ...item, amount: Number(item.amount), firstPostedDate: civilDate(2026, 6, 25) }));
-  const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
+  const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true, isSubscriptionDefault: true } });
 
   const julyBreakdown = await classifyCompletedMonth(julyWindow, monthlyContext, recurringForMatch, categoryMeta);
   eq("lifestyle counts groceries + uncategorized expenses", julyBreakdown.lifestyle, 72);
@@ -8668,7 +8668,7 @@ async function main() {
 
     const planRef = { year: 2026, month: 9, period: "B" as const };
     const augustWindow = windowFor({ year: 2026, month: 8 });
-    const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
+    const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true, isSubscriptionDefault: true } });
     const paceContext = { ...extraContext, today: civilDate(2026, 8, 25), currentPeriod: periodForDate(civilDate(2026, 8, 25)) };
 
     const suggestionsDeclined = await suggestFor(planRef, [{ id: extraCategory.id }], extraContext);
@@ -8859,12 +8859,16 @@ async function main() {
     eq("an ordinary row has no share", ordinary.yourShare, null);
 
     const periodAfter = await summaryFor(sharedContext.currentPeriod, sharedContext);
-    eq("this period's Spent rises by the full 2,725 + 600: what left the account", round2(periodAfter.spent - periodBefore.spent), 3325);
-    eq("...and so does total spending", round2(periodAfter.totalSpent - periodBefore.totalSpent), 3325);
+    // Flipped deliberately with K6 (the user's decision on D22): budget
+    // spending, the category rows and Reports' total read a shared expense at
+    // the user's share; only the ledger and the balance keep the full amount.
+    // Were: Spent +3,325, total +3,325, line 3,325 with othersShareSpent
+    // 2,180 and extraordinarySpent 0 (both fields removed: nothing reads them).
+    eq("this period's Spent rises by the share 545 + the dinner's 600, not the full 2,725: the budget reads your share", round2(periodAfter.spent - periodBefore.spent), 1145);
+    eq("...and so does total spending, the Reports view", round2(periodAfter.totalSpent - periodBefore.totalSpent), 1145);
     const ticketsLine = periodAfter.categories.find((line) => line.categoryId === sharedCategory.id)!;
-    eq("the category line's spent is the full amount too", ticketsLine.spent, 3325);
-    eq("...with other people's part reported beside it, the way one-offs are", ticketsLine.othersShareSpent, 2180);
-    eq("...and nothing extraordinary", ticketsLine.extraordinarySpent, 0);
+    eq("the category line's spent is 545 + 600 too", ticketsLine.spent, 1145);
+    eq("...and so is the Budgets page's row: budget spending at your share", ticketsLine.budgetSpent, 1145);
     const balanceAfter = (await balancesFor(sharedContext)).find((a) => a.id === sharedAccount.id)!.balance;
     eq("the account balance drops by the full 2,725 + 600", round2(balanceBefore - balanceAfter), 3325);
 
@@ -8879,12 +8883,14 @@ async function main() {
       JSON.stringify({ amount: 1322.5, basis: "average" }),
     );
     const augustWindow = windowFor({ year: 2026, month: 8 });
-    const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
+    const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true, isSubscriptionDefault: true } });
     const septemberContext = { ...sharedContext, today: civilDate(2026, 9, 17), currentPeriod: periodForDate(civilDate(2026, 9, 17)) };
     const augustWithShare = await classifyMonth(augustWindow, septemberContext, [], categoryMeta);
     const augustLineWithShare = augustWithShare.lifestyleByCategory.find((line) => line.categoryId === sharedCategory.id)!;
     eq("completed month: the category's lifestyle figure is 545 + 600", augustLineWithShare.spent, 1145);
-    eq("...with nothing left to report as other people's part - it was already read at the share", augustLineWithShare.othersShareSpent, 0);
+    // Flipped deliberately with K6: the line no longer carries
+    // othersShareSpent (it read 0 here; nothing reads it). The line is the
+    // share already, as checked just above.
     const paceWithShare = await currentPace(sharedContext);
 
     // The same rows with the share taken off: the only thing that changes is
@@ -8897,7 +8903,10 @@ async function main() {
     const paceWithoutShare = await currentPace(sharedContext);
     eq("the month in progress is the same either way - spent so far is what left the account", paceWithShare.lifestyleSpentSoFar, paceWithoutShare.lifestyleSpentSoFar);
     const periodWithoutShare = await summaryFor(sharedContext.currentPeriod, sharedContext);
-    eq("and so is this period's Spent", periodWithoutShare.spent, periodAfter.spent);
+    // Flipped deliberately with K6 (D22): was "and so is this period's Spent"
+    // (equal either way). The budget now reads the share, so taking it off
+    // raises Spent by other people's 2,180.
+    eq("this period's Spent rises by exactly the 2,180 of other people's part when the share is taken off", round2(periodWithoutShare.spent - periodAfter.spent), 2180);
     eq("the ordinary dinner is 600 in the summary with or without the tickets' share", periodWithoutShare.categories.find((line) => line.categoryId === sharedCategory.id)!.spent - 2725, 600);
     await prisma.transaction.update({ where: { id: tickets.id }, data: { yourShare: 545 } });
 
@@ -10858,7 +10867,7 @@ async function main() {
 
       console.log("-- B49.4: an item created on a month's last day counts for that month --");
       {
-        const meta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true } });
+        const meta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true, isSubscriptionDefault: true } });
         const { classifyCompletedMonth: classifyFix } = await import("../src/lib/data/monthly");
         const item = (createdAt: Date) => ({
           id: "fix-created", name: "Verify Fix Created", amount: 40, currency: "USD", categoryId: null, kind: "SUBSCRIPTION" as const,
@@ -11476,8 +11485,13 @@ async function main() {
     const octA = periodInfo({ year: 2026, month: 10, period: "A" });
     const categoryId = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
     const [subscriptions, entertainment, groceries] = [await categoryId("Subscriptions"), await categoryId("Entertainment"), await categoryId("Groceries")];
+    // The Budgets page's row: CategoryLine.budgetSpent since K6 (it was
+    // spentExcludingOccurrences), read through ?. so this still runs on the
+    // code before either.
     const occurrencesLeftOut = (line: { spent: number } | undefined) =>
-      (line as { spentExcludingOccurrences?: number } | undefined)?.spentExcludingOccurrences ?? line?.spent;
+      (line as { budgetSpent?: number } | undefined)?.budgetSpent ??
+      (line as { spentExcludingOccurrences?: number } | undefined)?.spentExcludingOccurrences ??
+      line?.spent;
     const dWipe = async () => {
       const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify D20 " } }, select: { id: true } })).map((a) => a.id);
       await prisma.paydayCheckin.deleteMany({ where: { year: 2026, month: 10 } });
@@ -12089,6 +12103,485 @@ async function main() {
       await gWipe();
       await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK3 } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK3 } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== period income and budget spending (K5 K6): D18 D21 D22 D26 D30 D31, settled one-offs and shares, a paycheck's one-off part ==");
+  {
+    // QUANTITIES_MAP.md K5 (period income, fact and estimate) and K6 (budget
+    // spending), with the map's numbers. Public APIs only, new fields and
+    // modules read through ?. / a guarded import, so the section also runs on
+    // the code before (where the divergences show as failures). Display DOP,
+    // buffer 10% / 2,000 DOP floor. Fixtures `Verify K56 ...` in 2031-2032,
+    // with their own categories, so no other section's rows reach the
+    // period-wide figures; every other active item is paused and every open
+    // goal parked, as in the D20 section.
+    const { getPeriodSummary: kSummary } = await import("../src/lib/data/period-summary");
+    const kPayday = await import("../src/lib/data/payday");
+    const { getSpendingTrendSummary: kTrend } = await import("../src/lib/data/reports");
+    const { getHistoricalMonthlyAverage: kMonthly, getCurrentMonthPace: kPace } = await import("../src/lib/data/monthly");
+    const { projectPeriods: kProject } = await import("../src/lib/data/afford");
+    const { summarizeTransactions: kByDate } = await import("../src/lib/data/transactions");
+    const { paydayConfirmSchema: kConfirmSchema } = await import("../src/lib/validation");
+    const { getDictionary: kDictionary } = await import("../src/lib/i18n");
+    const kIncome = await import("../src/lib/period-income").catch(() => null);
+    // fundedPeriodFor lives in src/lib/period.ts (the funding window K5, K3 and B5 share); it was in period-income.ts first.
+    const kFunded = ((await import("../src/lib/period")) as Record<string, unknown>).fundedPeriodFor ?? (kIncome as Record<string, unknown> | null)?.fundedPeriodFor;
+    const kFundedPeriodFor = kFunded as ((date: Date) => { key: string }) | undefined;
+    const kSpending = await import("../src/lib/budget-spending").catch(() => null);
+    const kRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+    const kContext = (today: Date) => ({ displayCurrency: "DOP" as const, language: "en" as const, rates: kRates, today, currentPeriod: periodForDate(today), bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP", incomeHistoryStartDate: null });
+    const kRef = (year: number, month: number, period: "A" | "B") => ({ year, month, period });
+    const budgetRow = (line: { spent: number } | undefined) =>
+      (line as { budgetSpent?: number } | undefined)?.budgetSpent ??
+      (line as { spentExcludingOccurrences?: number } | undefined)?.spentExcludingOccurrences ??
+      line?.spent;
+    const kWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify K56 " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { year: { in: [2031, 2032] } } });
+      await prisma.budget.deleteMany({ where: { year: { in: [2031, 2032] } } });
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.transaction.updateMany({ where: { accountId: { in: accounts } }, data: { reimbursesTransactionId: null } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify K56 " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+      await prisma.category.deleteMany({ where: { name: { startsWith: "Verify K56 " } } });
+    };
+    await kWipe();
+    check("K56: no check-in or budget in 2031-2032 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: { year: { in: [2031, 2032] } } })) + (await prisma.budget.count({ where: { year: { in: [2031, 2032] } } })) === 0);
+    const pausedForK56 = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForK56 = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK56 } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK56 } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    const subscriptionsCategory = await prisma.category.findFirstOrThrow({ where: { isSubscriptionDefault: true } });
+    const newCategory = (name: string) => prisma.category.create({ data: { name: `Verify K56 ${name}`, kind: "EXPENSE", color: "#7a8590" } });
+    const newAccount = (name: string) => prisma.account.create({ data: { name: `Verify K56 ${name}`, currency: "DOP", type: "CHECKING" } });
+    const spend = (accountId: string, date: Date, amount: number, categoryId: string, extra: Record<string, unknown> = {}) =>
+      prisma.transaction.create({ data: { date, amount, currency: "DOP", type: "EXPENSE", accountId, categoryId, note: "Verify K56 spend", source: "MANUAL", ...extra } });
+    const earn = (accountId: string, date: Date, amount: number, extra: Record<string, unknown> = {}) =>
+      prisma.transaction.create({ data: { date, amount, currency: "DOP", type: "INCOME", accountId, note: "Verify K56 pay", source: "MANUAL", ...extra } });
+    // A confirmed check-in written directly: its snapshot and its paycheck row.
+    const checkedIn = async (accountId: string, ref: { year: number; month: number; period: "A" | "B" }, checkinDate: Date, amount: number) => {
+      const row = await earn(accountId, checkinDate, amount, { source: "PAYDAY_CHECKIN" });
+      await prisma.paydayCheckin.create({
+        data: {
+          ...ref,
+          checkinDate,
+          currency: "DOP",
+          totalIncome: amount,
+          status: "CONFIRMED",
+          snapshots: { create: { accountId, expectedLedgerBalance: 0, reportedBalance: 0, difference: 0, incomeEntered: amount, incomeTransactionId: row.id, currency: "DOP" } },
+        },
+      });
+    };
+    try {
+      console.log("-- the pure rules (K5 K6) --");
+      {
+        eq(
+          "K5: a deposit funds the latest period whose paycheck window (B5's, from 5 days before its start) it is in: Oct 10 -> Oct 1-15, Oct 11 and 15 -> Oct 16-31, Oct 26 -> Oct 16-31, Oct 27 -> Nov 1-15",
+          [civilDate(2031, 10, 10), civilDate(2031, 10, 11), civilDate(2031, 10, 15), civilDate(2031, 10, 26), civilDate(2031, 10, 27)].map((date) => kFundedPeriodFor?.(date).key).join(","),
+          "2031-10-A,2031-10-B,2031-10-B,2031-10-B,2031-11-A",
+        );
+        eq(
+          "K5: ...so pay landing on a Friday three days before the modelled Monday payday (Aug 28 2026, for Sep 1-15) still funds Sep 1-15",
+          kFundedPeriodFor?.(civilDate(2026, 8, 28)).key,
+          "2026-09-A",
+        );
+        const deposit = (extra: Record<string, unknown>) => ({ date: civilDate(2026, 9, 28), type: "INCOME", isOneOffIncome: false, reimbursesTransactionId: null, ...extra });
+        eq(
+          "K5: on Sep 28 a paycheck counts in Oct 1-15, while a payback of a shared expense and one-off income count by their date, Sep 16-30",
+          [deposit({}), deposit({ reimbursesTransactionId: "expense" }), deposit({ isOneOffIncome: true })].map((row) => kIncome?.incomePeriodFor(row).key).join(","),
+          "2026-10-A,2026-09-B,2026-09-B",
+        );
+        eq(
+          "K5: the one-off part of a paycheck may be 0 up to the whole paycheck",
+          [0, 60000, 60000.01, -1].map((part) => (kIncome ? String(kIncome.oneOffIncomeIssue(60000, part)) : "absent")).join("|"),
+          "null|null|The one-off part cannot be more than the income|Enter 0 or more",
+        );
+        const parsed = kConfirmSchema.safeParse({ year: 2031, month: 12, period: "B", accounts: [{ accountId: "a", reportedBalance: 0, incomeEntered: 1000, oneOffIncome: 1500, incomeNote: null }], goals: [], essentialCategories: [], flexibleCategories: [], includedCarryover: 0, acknowledgedDeficit: false, acknowledgedZeroBuffer: false });
+        const { localizeValidationMessage: kLocalize } = await import("../src/lib/validation");
+        eq(
+          "K5: confirming refuses a one-off part above the income, in both languages",
+          parsed.success ? "accepted" : `${parsed.error.issues[0]?.message} / ${kLocalize(parsed.error.issues[0]?.message ?? "", "es")}`,
+          "The one-off part cannot be more than the income / La parte única no puede ser mayor que el ingreso",
+        );
+        const categories = new Map([
+          ["dining", { id: "dining", kind: "EXPENSE", isSubscriptionDefault: false, isSavingsDefault: false }],
+          ["subs", { id: "subs", kind: "EXPENSE", isSubscriptionDefault: true, isSavingsDefault: false }],
+        ]);
+        const row = (amount: number, extra: Record<string, unknown> = {}) => ({ amount, currency: "DOP", categoryId: "dining", source: "MANUAL", externalId: null, isExtraordinary: false, yourShare: null, settlementKind: null, ...extra });
+        const pure = kSpending?.budgetSpentFrom(
+          [
+            row(2000),
+            row(5000, { isExtraordinary: true, settlementKind: "SUBSCRIPTION" }),
+            row(3000, { yourShare: 1000, settlementKind: "SUBSCRIPTION" }),
+            row(1600, { yourShare: 1000 }),
+            row(900, { isExtraordinary: true }),
+            row(4000, { categoryId: "subs" }),
+            row(600, { source: "RECURRING" }),
+            row(700, { source: "MANUAL", externalId: "goal-contribution:g1" }),
+          ],
+          categories,
+          (amount) => amount,
+        );
+        eq(
+          "K6: budget spending is 2,000 + the 1,000 share + the 900 one-off; settled charges, a subscription category, a RECURRING row and a contribution twin are out",
+          `${pure?.total}:${pure?.byCategory.get("dining")?.spent}:${pure?.byCategory.get("dining")?.oneOff}:${pure?.byCategory.has("subs")}`,
+          "3900:3900:900:false",
+        );
+      }
+
+      console.log("-- D18: a bonus typed into a check-in, marked as its one-off part --");
+      {
+        const pay = await newAccount("Pay");
+        for (const month of [7, 8, 9, 10, 11]) await earn(pay.id, civilDate(2031, month, 20), 60000);
+        const dec15 = kContext(civilDate(2031, 12, 15));
+        const confirmDecB = async (income: number, oneOff: number) => {
+          const draft = await kPayday.getPaydayCheckinDraft(dec15, kRef(2031, 12, "B"));
+          return kPayday.confirmPaydayCheckin(
+            {
+              ...kRef(2031, 12, "B"),
+              accounts: draft.accounts
+                .filter((a) => !a.readOnly)
+                .map((a) => ({ accountId: a.accountId, reportedBalance: a.expectedLedgerBalance, incomeEntered: a.accountId === pay.id ? income : 0, oneOffIncome: a.accountId === pay.id ? oneOff : 0, incomeNote: a.accountId === pay.id ? "Verify K56 salary and bonus" : null })),
+              goals: [],
+              essentialCategories: [],
+              flexibleCategories: [],
+              includedCarryover: 0,
+              acknowledgedDeficit: true,
+              acknowledgedZeroBuffer: true,
+            },
+            dec15,
+          );
+        };
+        check("D18: Dec 16-31 2031 confirmed at 120,000 with 60,000 of it one-off", (await confirmDecB(120000, 60000)).ok === true);
+        const snapshot = await prisma.paydayAccountSnapshot.findFirst({ where: { accountId: pay.id } });
+        eq("D18: the snapshot stores the one-off part beside the income (was not stored)", `${num(snapshot?.incomeEntered ?? 0)}:${snapshot?.oneOffIncome === null || snapshot?.oneOffIncome === undefined ? null : num(snapshot.oneOffIncome)}`, "120000:60000");
+        const reopened = await kPayday.getPaydayCheckinDraft(dec15, kRef(2031, 12, "B"));
+        eq("D18: reopening the check-in shows the one-off part again", (reopened.accounts.find((a) => a.accountId === pay.id) as { oneOffIncome?: number } | undefined)?.oneOffIncome, 60000);
+        eq("D18: the paycheck is Dec 16-31's income, bonus included - a fact", (await kSummary(periodInfo(kRef(2031, 12, "B")), dec15)).income, 120000);
+        const jan5 = kContext(civilDate(2032, 1, 5));
+        const chosen = { id: pay.id, name: pay.name, currency: "DOP" };
+        const projectJanB = async () => (await kProject([kRef(2032, 1, "B")], chosen, [chosen], jan5)).get("2032-01-B")!;
+        const withBonus = await projectJanB();
+        eq("D18: Afford projects Jan 16-31 at 60,000 with a 6,000 buffer, the bonus left out (was 70,000 and 7,000)", `${withBonus.account.income}:${withBonus.account.buffer}`, "60000:6000");
+        check("D18: confirming the same paycheck with no one-off part still works", (await confirmDecB(60000, 0)).ok === true);
+        const plain = await projectJanB();
+        eq("D18: a paycheck with a one-off part leaves the estimate where the plain paycheck puts it", `${plain.account.income}:${withBonus.account.income}`, "60000:60000");
+        eq("D18: ...while the fact follows the paycheck: 60,000 now", (await kSummary(periodInfo(kRef(2031, 12, "B")), dec15)).income, 60000);
+        await prisma.paydayCheckin.deleteMany({ where: { year: 2031, month: 12 } });
+        await prisma.transaction.deleteMany({ where: { accountId: pay.id, source: "PAYDAY_CHECKIN" } });
+        await checkedIn(pay.id, kRef(2031, 12, "B"), civilDate(2031, 12, 15), 60000);
+        await earn(pay.id, civilDate(2031, 12, 20), 60000, { isOneOffIncome: true });
+        eq("D18: the same bonus logged as a one-off row projects 60,000 too (as before)", (await projectJanB()).account.income, 60000);
+        await kWipe();
+      }
+
+      console.log("-- D21: one population for the overall figure and the category rows --");
+      {
+        const card = await newAccount("Card");
+        const fun = await newCategory("Fun");
+        const netflix = await prisma.recurringItem.create({ data: { name: "Verify K56 Netflix", amount: 1000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2031, 11, 5), anchorDay: 5, active: false, accountId: card.id, categoryId: fun.id } });
+        await prisma.budget.create({ data: { ...kRef(2031, 10, "A"), categoryId: fun.id, amount: 5000, currency: "DOP" } });
+        await spend(card.id, civilDate(2031, 10, 5), 1000, fun.id, { source: "RECURRING", externalId: `${netflix.id}:2031-10-05` });
+        await spend(card.id, civilDate(2031, 10, 3), 4000, subscriptionsCategory.id);
+        await spend(card.id, civilDate(2031, 10, 4), 700, fun.id);
+        const summary = await kSummary(periodInfo(kRef(2031, 10, "A")), kContext(civilDate(2031, 10, 6)));
+        eq("D21: the posted Netflix under Fun is not on its row: 700 of 5,000, the overall spent 700 (the map's 1,000 of 5,000 was already gone with D20)", `${budgetRow(summary.categories.find((line) => line.categoryId === fun.id))}:${summary.spent}`, "700:700");
+        eq("D21: a charge in the Subscriptions category is on no budget row, as it is in no overall spent (its row read 4,000)", budgetRow(summary.categories.find((line) => line.categoryId === subscriptionsCategory.id)) ?? 0, 0);
+        eq("D21: the rows add up to the overall spent (were 4,700 against 700)", round2(summary.categories.reduce((sum, line) => sum + (budgetRow(line) ?? 0), 0)), summary.spent);
+        eq("D21: the Reports view keeps every charge: 1,000 + 4,000 + 700", summary.totalSpent, 5700);
+        await kWipe();
+      }
+
+      console.log("-- D22 / decision: a shared expense counts at your share wherever budget spending is read --");
+      {
+        const card = await newAccount("Shared");
+        const dining = await newCategory("Dining");
+        await spend(card.id, civilDate(2031, 9, 20), 16000, dining.id, { yourShare: 10000 });
+        const suggestion = (await kPayday.getCategorySuggestions(kRef(2031, 10, "B"), [dining], kContext(civilDate(2031, 10, 16)))).get(dining.id);
+        eq("D22: the suggestion from a 16,000 dinner with a 10,000 share is 10,000 (as before)", `${suggestion?.basis}:${suggestion?.amount}`, "average:10000");
+        await kWipe();
+
+        const card2 = await newAccount("Shared");
+        const dining2 = await newCategory("Dining");
+        await prisma.budget.create({ data: { ...kRef(2031, 10, "A"), categoryId: dining2.id, amount: 10000, currency: "DOP" } });
+        const dinner = await spend(card2.id, civilDate(2031, 10, 3), 16000, dining2.id, { yourShare: 10000 });
+        await earn(card2.id, civilDate(2031, 10, 5), 6000, { reimbursesTransactionId: dinner.id });
+        const oct6 = kContext(civilDate(2031, 10, 6));
+        const summary = await kSummary(periodInfo(kRef(2031, 10, "A")), oct6);
+        eq("D22: overall spent is the 10,000 share and safe to spend 0 (were 16,000 and -6,000)", `${summary.spent}:${summary.safeToSpend}`, "10000:0");
+        eq("D22: the payback is income, never an offset: +6,000 (as before)", summary.income, 6000);
+        const line = summary.categories.find((entry) => entry.categoryId === dining2.id);
+        eq("D22: the Budgets row and the Reports bar read the share: 10,000 each (were 16,000)", `${budgetRow(line)}:${line?.spent}`, "10000:10000");
+        eq("D22: Reports' This period reads the share: 10,000 (was 16,000)", summary.totalSpent, 10000);
+        await prisma.budget.updateMany({ where: { ...kRef(2031, 10, "A"), categoryId: dining2.id }, data: { amount: 12000 } });
+        eq("D22: the carryover Oct 16-31 is offered is the 2,000 left of a 12,000 budget (was 0: the full 16,000 overspent it)", (await kPayday.getAvailableCarryover(kRef(2031, 10, "B"), oct6)).amount, 2000);
+        await kWipe();
+
+        const card3 = await newAccount("Shared");
+        const dining3 = await newCategory("Dining");
+        for (const month of [1, 2, 3, 4, 5, 6]) {
+          await spend(card3.id, civilDate(2031, month, 5), 3000, dining3.id, { yourShare: 1000 });
+          await spend(card3.id, civilDate(2031, month, 20), 3000, dining3.id, { yourShare: 1000 });
+        }
+        const jul6 = kContext(civilDate(2031, 7, 6));
+        const trend = await kTrend(jul6);
+        const monthly = await kMonthly(jul6);
+        const dining3Monthly = monthly.averageLifestyleByCategory.find((entry) => entry.categoryId === dining3.id)?.spent;
+        eq("D22: Reports' per-period average reads the share: 1,000 over 5 completed periods (was 3,000)", `${trend.average?.average}:${trend.average?.periods}`, "1000:5");
+        eq("D22: ...so it agrees with the monthly average's 2,000 a month for the same dinners (two periods a month)", `${dining3Monthly}:${round2((trend.average?.average ?? 0) * 2)}`, "2000:2000");
+        await kWipe();
+      }
+
+      console.log("-- D26: a paycheck counts in the period it funds, check-in or CSV --");
+      {
+        const pay = await newAccount("Salary");
+        const nov2 = kContext(civilDate(2031, 11, 2));
+        const incomeOf = async (period: "A" | "B") => (await kSummary(periodInfo(kRef(2031, 10, period)), nov2)).income;
+        const trendIncome = async () => (await kTrend(nov2)).points.filter((point) => point.period.year === 2031 && point.period.month === 10).map((point) => point.income).join(",");
+        const [aBefore, bBefore, trendBefore] = [await incomeOf("A"), await incomeOf("B"), await trendIncome()];
+        await checkedIn(pay.id, kRef(2031, 10, "A"), civilDate(2031, 9, 30), 60000);
+        await earn(pay.id, civilDate(2031, 10, 15), 60000, { source: "CSV" });
+        eq(
+          "D26: Oct 1-15 checked in at 60,000 on Sep 30 and the Oct 15 paycheck imported by CSV: Oct 1-15 +60,000, Oct 16-31 +60,000 (were +120,000 and 0)",
+          `${round2((await incomeOf("A")) - aBefore)}:${round2((await incomeOf("B")) - bBefore)}`,
+          "60000:60000",
+        );
+        const trendAfter = (await trendIncome()).split(",").map(Number);
+        const trendStart = trendBefore.split(",").map(Number);
+        eq("D26: Reports' trend moves the same way: +60,000 in each half (were +120,000 and 0)", trendAfter.map((value, index) => round2(value - trendStart[index])).join(","), "60000,60000");
+        await kWipe();
+        const pay2 = await newAccount("Salary");
+        const aBefore2 = await incomeOf("A");
+        await checkedIn(pay2.id, kRef(2031, 10, "B"), civilDate(2031, 10, 15), 60000);
+        eq("D26: Oct 16-31 checked in on Oct 15: the Dashboard's Oct 1-15 income does not move (as before)", round2((await incomeOf("A")) - aBefore2), 0);
+        const byDate = await kByDate({ accountId: pay2.id, from: civilDate(2031, 10, 1), to: civilDate(2031, 10, 15) }, nov2);
+        eq("D26: the Transactions page totals the same account by date: 60,000 in on Oct 1-15 (as before)", byDate.income, 60000);
+        const english = kDictionary("en");
+        const spanish = kDictionary("es");
+        check(
+          "D26: and says so, in both languages: 'by transaction date' on the Transactions total and the account page (was unlabelled)",
+          english.transactions.recordsSummary(1, "a", "b").endsWith("by transaction date") &&
+            spanish.transactions.recordsSummary(1, "a", "b").endsWith("por fecha de transacción") &&
+            (english.accounts as { byTransactionDate?: string }).byTransactionDate === "By transaction date" &&
+            (spanish.accounts as { byTransactionDate?: string }).byTransactionDate === "Por fecha de transacción",
+        );
+        await kWipe();
+      }
+
+      console.log("-- D30: the suggestion's divisor counts the periods its numerator counts --");
+      {
+        const card = await newAccount("Stream");
+        const fun = await newCategory("Stream Fun");
+        const netflix = await prisma.recurringItem.create({ data: { name: "Verify K56 Stream", amount: 1000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2031, 11, 20), anchorDay: 20, active: false, accountId: card.id, categoryId: fun.id } });
+        for (const month of [4, 5, 6, 7, 8]) await spend(card.id, civilDate(2031, month, 20), 1000, fun.id, { source: "RECURRING", externalId: `${netflix.id}:2031-0${month}-20` });
+        await spend(card.id, civilDate(2031, 9, 22), 3000, fun.id);
+        const suggestion = (await kPayday.getCategorySuggestions(kRef(2031, 10, "B"), [fun], kContext(civilDate(2031, 10, 16)))).get(fun.id);
+        eq("D30: five periods of only a posted subscription and 3,000 of own spending in the sixth: 3,000 (was 500)", `${suggestion?.basis}:${suggestion?.amount}`, "average:3000");
+        await kWipe();
+      }
+
+      console.log("-- D31: a one-time purchase under Subscriptions is outside the budget and outside lifestyle --");
+      {
+        const oct6 = kContext(civilDate(2031, 10, 6));
+        const periodBefore = await kSummary(periodInfo(kRef(2031, 10, "A")), oct6);
+        const paceBefore = await kPace(oct6);
+        const card = await newAccount("Purchase");
+        await spend(card.id, civilDate(2031, 10, 3), 4000, subscriptionsCategory.id);
+        const periodAfter = await kSummary(periodInfo(kRef(2031, 10, "A")), oct6);
+        const paceAfter = await kPace(oct6);
+        eq("D31: period spent +0, total +4,000 (as before)", `${round2(periodAfter.spent - periodBefore.spent)}:${round2(periodAfter.totalSpent - periodBefore.totalSpent)}`, "0:4000");
+        eq(
+          "D31: the monthly pace files it as committed: lifestyle +0, projected +0, committed so far +4,000 (were +4,000, +20,666.67 and 0)",
+          `${round2(paceAfter.lifestyleSpentSoFar - paceBefore.lifestyleSpentSoFar)}:${round2(paceAfter.projectedLifestyle - paceBefore.projectedLifestyle)}:${round2(paceAfter.committedSpentSoFar - paceBefore.committedSpentSoFar)}`,
+          "0:0:4000",
+        );
+        await kWipe();
+      }
+
+      console.log("-- a settled charge that is also one-off or shared is taken off a suggestion once --");
+      {
+        const card = await newAccount("Settled");
+        const food = await newCategory("Food");
+        const shop = await newCategory("Shop");
+        const gym = await prisma.recurringItem.create({ data: { name: "Verify K56 Gym", amount: 5000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2031, 10, 20), anchorDay: 20, active: false, accountId: card.id, categoryId: subscriptionsCategory.id } });
+        const club = await prisma.recurringItem.create({ data: { name: "Verify K56 Club", amount: 3000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2031, 10, 21), anchorDay: 21, active: false, accountId: card.id, categoryId: subscriptionsCategory.id } });
+        await spend(card.id, civilDate(2031, 9, 18), 2000, food.id);
+        const oneOff = await spend(card.id, civilDate(2031, 9, 20), 5000, food.id, { isExtraordinary: true });
+        await prisma.recurringSettlement.create({ data: { transactionId: oneOff.id, occurrenceKey: `${gym.id}:2031-09-20`, recurringItemId: gym.id, kind: "SUBSCRIPTION", dueDate: civilDate(2031, 9, 20) } });
+        await spend(card.id, civilDate(2031, 9, 18), 2000, shop.id);
+        const shared = await spend(card.id, civilDate(2031, 9, 21), 3000, shop.id, { yourShare: 1000 });
+        await prisma.recurringSettlement.create({ data: { transactionId: shared.id, occurrenceKey: `${club.id}:2031-09-21`, recurringItemId: club.id, kind: "SUBSCRIPTION", dueDate: civilDate(2031, 9, 21) } });
+        const suggestions = await kPayday.getCategorySuggestions(kRef(2031, 10, "B"), [food, shop], kContext(civilDate(2031, 10, 16)));
+        eq("a settled charge marked one-off is not subtracted from the suggestion it was never in: 2,000 (was -3,000)", suggestions.get(food.id)?.amount, 2000);
+        eq("a settled shared charge's other part is not subtracted either: 2,000 (was 0)", suggestions.get(shop.id)?.amount, 2000);
+        await kWipe();
+      }
+    } finally {
+      await kWipe();
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK56 } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK56 } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== one attribution window: a salary, the contribution made from it and the paycheck's duplicate check name one period (K5 K3 B5) ==");
+  {
+    // One rule for which period money that arrives for a period belongs to:
+    // its funding window, from the earlier of its modelled payday and 5 days
+    // before its first day to where the next period's window starts. K5's
+    // income attribution already used it; K3's contribution window started at
+    // the payday, and B5's paycheck window ran to the planned period's end,
+    // which holds the next period's payday. Public APIs only, the new helpers
+    // read through ?. with a fallback, so this runs on the tree before too.
+    // Display DOP; fixtures `Verify Window ...`; other active items paused and
+    // open goals parked, restored in the finally.
+    const periodLib = (await import("../src/lib/period")) as Record<string, unknown>;
+    const incomeLib = (await import("../src/lib/period-income").catch(() => null)) as Record<string, unknown> | null;
+    const goalPlanLib = (await import("../src/lib/goal-plan").catch(() => null)) as null | typeof import("../src/lib/goal-plan");
+    const { listGoals: wGoals } = await import("../src/lib/data/goals");
+    const { loadPeriodIncome: wIncome } = await import("../src/lib/data/period-income");
+    const { findPostedDuplicates: wDuplicates } = await import("../src/lib/data/posted-duplicates");
+    const wRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+    const wContext = (today: Date) => ({ displayCurrency: "DOP" as const, language: "en" as const, rates: wRates, today, currentPeriod: periodForDate(today), recurringPosting: null, bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP" });
+    const wRef = (year: number, month: number, period: "A" | "B") => ({ year, month, period });
+    const wWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Window " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { OR: [{ year: 2026, month: { in: [8, 9, 10] } }, { year: 2031, month: 10 }] } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Window " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Window " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    const wAccount = (name: string) => prisma.account.create({ data: { name: `Verify Window ${name}`, currency: "DOP", type: "CHECKING" } });
+    const wGoal = async (name: string, target: number, targetDate: Date, contributions: [number, Date][]) => {
+      const goal = await prisma.goal.create({ data: { name: `Verify Window ${name}`, targetAmount: target, currency: "DOP", targetDate, savedAmount: round2(contributions.reduce((sum, [amount]) => sum + amount, 0)) } });
+      await prisma.goalContribution.createMany({ data: contributions.map(([amount, date]) => ({ goalId: goal.id, amount, currency: "DOP", date })) });
+      return goal;
+    };
+    // A confirmed check-in with its paycheck (a PAYDAY_CHECKIN row and the snapshot pointing at it) and GOAL rows.
+    const wCheckin = async (ref: { year: number; month: number; period: "A" | "B" }, checkinDate: Date, paycheck: { accountId: string; amount: number } | null, goals: { goalId: string; accountId: string; amount: number }[] = []) => {
+      const row = paycheck ? await prisma.transaction.create({ data: { date: checkinDate, amount: paycheck.amount, currency: "DOP", type: "INCOME", accountId: paycheck.accountId, note: "Verify Window pay", source: "PAYDAY_CHECKIN" } }) : null;
+      await prisma.paydayCheckin.create({
+        data: {
+          ...ref,
+          checkinDate,
+          currency: "DOP",
+          totalIncome: paycheck?.amount ?? 0,
+          status: "CONFIRMED",
+          snapshots: paycheck ? { create: { accountId: paycheck.accountId, expectedLedgerBalance: 0, reportedBalance: 0, difference: 0, incomeEntered: paycheck.amount, incomeTransactionId: row?.id, currency: "DOP" } } : undefined,
+          allocations: { create: goals.map((goal) => ({ type: "GOAL" as const, goalId: goal.goalId, accountId: goal.accountId, plannedAmount: goal.amount, recommendedAmount: goal.amount, currency: "DOP" })) },
+        },
+      });
+    };
+    await wWipe();
+    check("window: no check-in for Aug-Oct 2026 or Oct 2031 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: { OR: [{ year: 2026, month: { in: [8, 9, 10] } }, { year: 2031, month: 10 }] } })) === 0);
+    const pausedForWindow = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForWindow = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForWindow } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForWindow } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    try {
+      console.log("-- the rule (pure) --");
+      {
+        // A period's goal money opens the day its pay landed (when recorded
+        // between five days before its first day and its payday), else on
+        // its payday. contributionWindow takes when each period's pay landed;
+        // the tree before took the period alone, so it is called both ways.
+        type Landed = (ref: { year: number; month: number; period: "A" | "B" }) => Date | null;
+        const windowOf = (ref: { year: number; month: number; period: "A" | "B" }, landed: Landed) =>
+          (goalPlanLib?.contributionWindow as unknown as (r: typeof ref, l: Landed) => { from: Date; until: Date } | undefined)?.(ref, landed);
+        const opensOn = (landed: Landed) => { const window = windowOf(wRef(2026, 9, "A"), landed); return window ? `${toISODate(window.from)}..${toISODate(window.until)}` : "absent"; };
+        const sepA = (date: Date | null): Landed => (ref) => (ref.year === 2026 && ref.month === 9 && ref.period === "A" ? date : null);
+        eq(
+          "window: Sep 1-15 2026's goal money opens on the Mon Aug 31 payday when no pay is recorded, and runs to Sep 16-31's Mon Sep 15 payday (it opened Aug 27, closing Sep 11)",
+          opensOn(sepA(null)),
+          "2026-08-31..2026-09-15",
+        );
+        eq("window: ...on Fri Aug 28 when the salary is recorded landing then (three days early)", opensOn(sepA(civilDate(2026, 8, 28))), "2026-08-28..2026-09-15");
+        eq("window: ...and on the payday when the recorded pay is outside the lead (Aug 25, six days before)", opensOn(sepA(civilDate(2026, 8, 25))), "2026-08-31..2026-09-15");
+        const octA2031 = windowOf(wRef(2031, 10, "A"), (ref) => (ref.period === "B" && ref.month === 10 ? civilDate(2031, 10, 13) : null));
+        eq("window: Oct 1-15 2031's money runs until Oct 16-31's pay lands: Mon Oct 13 when it is recorded then (the Oct 15 payday when not)", octA2031 ? toISODate(octA2031.until) : "absent", "2031-10-13");
+      }
+
+      console.log("-- a salary landing three days before the modelled payday, and the contribution made from it --");
+      {
+        const main = await wAccount("Main");
+        await prisma.transaction.create({ data: { date: civilDate(2026, 8, 28), amount: 45000, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window PAYROLL", source: "CSV" } });
+        const fund = await wGoal("Fund", 60000, civilDate(2027, 6, 30), [[3000, civilDate(2026, 8, 28)]]);
+        const sep2 = wContext(civilDate(2026, 9, 2));
+        const salary = (await wIncome([wRef(2026, 9, "A"), wRef(2026, 8, "B")], "fact", sep2));
+        const plan = (await wGoals(sep2)).find((goal) => goal.id === fund.id) as { plan?: { period?: { key: string }; contributed?: number } } | undefined;
+        eq(
+          "window: salary and contribution on Fri Aug 28 (Mon Aug 31 is the modelled payday) both belong to Sep 1-15: its income 45,000, its contributed 3,000 (contributed was 0, filed in Aug 16-31)",
+          `${salary.get("2026-09-A")?.byAccount.get(main.id) ?? 0}:${plan?.plan?.period?.key}:${plan?.plan?.contributed}`,
+          "45000:2026-09-A:3000",
+        );
+        await wWipe();
+      }
+
+      console.log("-- goal money on Oct 12: before Oct 16-31's pay lands, and the day it lands --");
+      {
+        const main = await wAccount("Main");
+        type Planned = { plan?: { period?: { key: string }; contributed?: number } } | undefined;
+        const fund = await wGoal("Oct fund", 30000, civilDate(2026, 12, 31), [[2000, civilDate(2026, 10, 12)]]);
+        const planOn = async (today: Date) => ((await wGoals(wContext(today))).find((goal) => goal.id === fund.id) as Planned)?.plan;
+        const oct12 = await planOn(civilDate(2026, 10, 12));
+        eq(
+          "window: with no Oct 16-31 pay recorded, 2,000 moved on Mon Oct 12 is Oct 1-15's money: contributed 2,000 (was 0, filed in Oct 16-31 from Oct 11)",
+          `${oct12?.period?.key}:${oct12?.contributed}`,
+          "2026-10-A:2000",
+        );
+        await prisma.transaction.create({ data: { date: civilDate(2026, 10, 12), amount: 45000, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window PAYROLL", source: "CSV" } });
+        const income = await wIncome([wRef(2026, 10, "A"), wRef(2026, 10, "B")], "fact", wContext(civilDate(2026, 10, 16)));
+        const afterSalaryOct12 = await planOn(civilDate(2026, 10, 12));
+        const oct16 = await planOn(civilDate(2026, 10, 16));
+        eq(
+          "window: with the salary deposited Oct 12 and the contribution the same day, both count for Oct 16-31: its income 45,000, its contributed 2,000, and Oct 1-15 contributed 0",
+          `${income.get("2026-10-B")?.byAccount.get(main.id) ?? 0}:${oct16?.period?.key}:${oct16?.contributed}:${afterSalaryOct12?.period?.key}:${afterSalaryOct12?.contributed}`,
+          "45000:2026-10-B:2000:2026-10-A:0",
+        );
+        await wWipe();
+      }
+
+      console.log("-- the next period's paycheck imported by CSV is not the recorded one (B5) --");
+      {
+        const main = await wAccount("Salary");
+        await wCheckin(wRef(2031, 10, "A"), civilDate(2031, 9, 30), { accountId: main.id, amount: 60000 });
+        const incoming = (key: string, date: Date) => ({ key, accountId: main.id, type: "INCOME" as const, date, amount: 60000, currency: "DOP", categoryId: null, note: "PAYROLL ACME" });
+        // One row per call: a batch pairs one incoming row per recorded paycheck.
+        const alone = async (key: string, date: Date) => (await wDuplicates([incoming(key, date)], wRates)).get(key)?.kind ?? "none";
+        eq(
+          "window: against Oct 1-15's recorded paycheck (Sep 30), a CSV row on Sep 29 or Oct 10 is put to the user; one on Oct 11 and the next paycheck on Oct 15 are not (both were)",
+          `sep29=${await alone("sep29", civilDate(2031, 9, 29))},oct10=${await alone("oct10", civilDate(2031, 10, 10))},oct11=${await alone("oct11", civilDate(2031, 10, 11))},oct15=${await alone("oct15", civilDate(2031, 10, 15))}`,
+          "sep29=paycheck,oct10=paycheck,oct11=none,oct15=none",
+        );
+        await wCheckin(wRef(2031, 10, "B"), civilDate(2031, 10, 15), { accountId: main.id, amount: 60000 });
+        const nextRecorded = await prisma.transaction.findFirstOrThrow({ where: { accountId: main.id, source: "PAYDAY_CHECKIN", date: civilDate(2031, 10, 15) } });
+        eq("window: once Oct 16-31 is checked in, the Oct 15 CSV row is put to the user as that check-in's paycheck (as before)", (await wDuplicates([incoming("oct15", civilDate(2031, 10, 15))], wRates)).get("oct15")?.posted.id, nextRecorded.id);
+        await wWipe();
+      }
+
+      console.log("-- the user's goal: Pay back money, 29,000 due Sun Nov 15 2026 --");
+      for (const [label, movedOn] of [["moved on the Sep 30 payday", civilDate(2026, 9, 30)], ["moved Mon Sep 28, the day a salary landed before the payday", civilDate(2026, 9, 28)]] as const) {
+        const main = await wAccount("Goal account");
+        // The salary that funds Oct 1-15, recorded (by CSV) the day it landed.
+        await prisma.transaction.create({ data: { date: movedOn, amount: 45000, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window PAYROLL", source: "CSV" } });
+        const payBack = await wGoal("Pay back money", 29000, civilDate(2026, 11, 15), [[8285.94, civilDate(2026, 9, 15)], [4000.09, civilDate(2026, 9, 15)], [5571.32, movedOn]]);
+        await wCheckin(wRef(2026, 10, "A"), civilDate(2026, 9, 30), null, [{ goalId: payBack.id, accountId: main.id, amount: 5571.32 }]);
+        const read = async (today: Date) => (await wGoals(wContext(today))).find((goal) => goal.id === payBack.id) as { displayPerPeriod?: number; periodsLeft?: number; plan?: { period?: { key: string }; planned?: number; contributed?: number } } | undefined;
+        const sep30 = await read(civilDate(2026, 9, 30));
+        const oct15 = await read(civilDate(2026, 10, 15));
+        eq(
+          `window, user's goal (${label}): Oct 1-15 5,571.32 planned and 5,571.32 contributed, pace 4,178.49 over 4; from Oct 15, 3,714.22 over 3`,
+          `${sep30?.plan?.period?.key}:${sep30?.plan?.planned}:${sep30?.plan?.contributed}:${sep30?.displayPerPeriod}:${sep30?.periodsLeft}|${oct15?.displayPerPeriod}:${oct15?.periodsLeft}`,
+          "2026-10-A:5571.32:5571.32:4178.49:4|3714.22:3",
+        );
+        await wWipe();
+      }
+    } finally {
+      await wWipe();
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForWindow } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForWindow } }, data: { active: true } });
     }
   }
 

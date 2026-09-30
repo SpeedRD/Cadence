@@ -285,7 +285,7 @@ export const es = {
     itemsDueBefore: (count: number, date: string) =>
       `${count} elemento${count === 1 ? "" : "s"} vence${count === 1 ? "" : "n"} antes de ${date}`,
     income: "Ingresos",
-    loggedThisPeriod: "registrado este periodo",
+    loggedThisPeriod: "recibido para este periodo",
     of: (amount: string) => `de ${amount}`,
     reached: "Alcanzada",
     dueThisPeriod: "vence este periodo",
@@ -327,7 +327,7 @@ export const es = {
   transactions: {
     title: "Transacciones",
     recordsSummary: (total: number, out: string, income: string) =>
-      `${total} registro${total === 1 ? "" : "s"} · ${out} gastado, ${income} recibido`,
+      `${total} registro${total === 1 ? "" : "s"} · ${out} gastado, ${income} recibido, por fecha de transacción`,
     importCsv: "Importar CSV",
     transfer: "Transferencia",
     new: "Nueva",
@@ -646,6 +646,7 @@ export const es = {
     balance: "Saldo",
     incomeIn: "Ingresos",
     spendingOut: "Gastos",
+    byTransactionDate: "Por fecha de transacción",
     netTransfers: "Transferencias netas",
     inOut: (inAmount: string, outAmount: string) => `${inAmount} entrada · ${outAmount} salida`,
     netExternal: "Externas netas",
@@ -1456,8 +1457,11 @@ export const es = {
     noActiveAccountsDescription: "Agrega o restaura una cuenta antes de iniciar un chequeo.",
 
     step2Title: "Registra el ingreso recibido",
-    step2Description: "Opcional por cuenta - deja una cuenta en cero si no entró nada.",
+    step2Description:
+      "Opcional por cuenta - deja una cuenta en cero si no entró nada. Si una parte es única, como un bono, ingresa también esa parte: cuenta en este periodo y los siguientes no la esperan de nuevo.",
     incomeAmount: "Ingreso recibido",
+    oneOffIncomeAmount: "De eso, único",
+    oneOffIncomeTooHigh: "La parte única no puede ser mayor que el ingreso recibido.",
     incomeNotePlaceholder: "Salario, pago freelance, bono...",
     totalIncome: "Ingreso total",
 

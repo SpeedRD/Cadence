@@ -296,7 +296,7 @@ export const en = {
     itemsDueBefore: (count: number, date: string) =>
       `${count} item${count === 1 ? "" : "s"} due before ${date}`,
     income: "Income",
-    loggedThisPeriod: "logged this period",
+    loggedThisPeriod: "received for this period",
     of: (amount: string) => `of ${amount}`,
     reached: "Reached",
     dueThisPeriod: "due this period",
@@ -337,7 +337,7 @@ export const en = {
   transactions: {
     title: "Transactions",
     recordsSummary: (total: number, out: string, income: string) =>
-      `${total} record${total === 1 ? "" : "s"} · ${out} out, ${income} in`,
+      `${total} record${total === 1 ? "" : "s"} · ${out} out, ${income} in, by transaction date`,
     importCsv: "Import CSV",
     transfer: "Transfer",
     new: "New",
@@ -655,6 +655,7 @@ export const en = {
     balance: "Balance",
     incomeIn: "Income in",
     spendingOut: "Spending out",
+    byTransactionDate: "By transaction date",
     netTransfers: "Net transfers",
     inOut: (inAmount: string, outAmount: string) => `${inAmount} in · ${outAmount} out`,
     netExternal: "Net external",
@@ -1469,8 +1470,11 @@ export const en = {
     noActiveAccountsDescription: "Add or restore an account before starting a check-in.",
 
     step2Title: "Record income received",
-    step2Description: "Optional per account - leave any account at zero if nothing came in.",
+    step2Description:
+      "Optional per account - leave any account at zero if nothing came in. If part of it is one-off, like a bonus, enter that part too: it counts this period, and later periods don't expect it again.",
     incomeAmount: "Income received",
+    oneOffIncomeAmount: "Of which one-off",
+    oneOffIncomeTooHigh: "The one-off part can't be more than the income received.",
     incomeNotePlaceholder: "Salary, freelance payment, bonus...",
     totalIncome: "Total income",
 

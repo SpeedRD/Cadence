@@ -1,6 +1,6 @@
 import { formatMoney } from "@/lib/currency";
 
-import type { CategoryLine } from "@/lib/data/period-summary";
+import type { SpendingLine } from "@/lib/data/period-summary";
 
 /**
  * Ranked horizontal bars. Every bar is directly labelled with its category and
@@ -11,7 +11,7 @@ export function CategoryBars({
   currency,
   uncategorizedLabel,
 }: {
-  lines: CategoryLine[];
+  lines: SpendingLine[];
   currency: string;
   uncategorizedLabel: string;
 }) {

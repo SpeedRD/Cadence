@@ -6,6 +6,7 @@ import { daysInMonth, fromISODate } from "@/lib/date";
 import type { Locale } from "@/lib/i18n";
 import { INSIGHT_SOURCES } from "@/lib/insights";
 import { AMOUNT_MAX, parseAmountInput, round2, type ParsedAmount } from "@/lib/money";
+import { oneOffIncomeIssue } from "@/lib/period-income";
 import { semiMonthlyAnchorsCollide } from "@/lib/recurring";
 import { yourShareIssue } from "@/lib/shared-expense";
 import {
@@ -657,7 +658,14 @@ export const paydayConfirmSchema = z.object({
         accountId: z.string().trim().min(1),
         reportedBalance: signedPlanAmount,
         incomeEntered: planAmount,
+        // The part of incomeEntered that is one-off (a bonus): still the
+        // period's income, left out of the income estimate
+        // (src/lib/period-income.ts). Absent reads as none.
+        oneOffIncome: planAmount.optional(),
         incomeNote: z.string().max(200).nullable(),
+      }).superRefine((entry, ctx) => {
+        const issue = oneOffIncomeIssue(entry.incomeEntered, entry.oneOffIncome ?? 0);
+        if (issue) ctx.addIssue({ code: "custom", message: issue, path: ["oneOffIncome"] });
       }),
     )
     .min(1, "Add at least one active account")
@@ -843,6 +851,7 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
     "Ese precio es demasiado pequeño para dividirlo en tantas cuotas",
   "Enter your share": "Ingresa tu parte",
   "Your share cannot be more than the amount": "Tu parte no puede ser mayor que el monto",
+  "The one-off part cannot be more than the income": "La parte única no puede ser mayor que el ingreso",
 };
 
 /** One of the schemas' messages in the UI's language - for a check an action runs outside a schema. */

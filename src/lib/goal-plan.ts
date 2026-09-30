@@ -6,26 +6,27 @@
  * the debt comparator. Pure and database-free; the loader is
  * src/lib/data/goal-plan.ts.
  *
- *   pace       what reaching the target asks of each period, fixed on the
- *              payday of the period it is computed for - the day its money
- *              is in hand (paydayDateFor): (target - saved from contributions
- *              dated before that payday) / the periods left from the period
- *              (goalPeriodsLeft). A contribution made from that payday on
- *              does not move that period's bar. A period after the plan
+ *   pace       what reaching the target asks of each period, fixed where
+ *              the funding window of the period it is computed for opens -
+ *              the day its pay landed, else its payday (contributionWindow):
+ *              (target - saved from contributions dated before that day) /
+ *              the periods left from the period (goalPeriodsLeft). A
+ *              contribution made from that day on does not move that
+ *              period's bar. A period after the plan
  *              period is asked the plan period's pace - it recomputes from its
  *              own payday once it becomes the plan period. Gross: recurring
  *              contributions are part of it. A goal with no target date has no
  *              per-period pace; its figure is the whole remaining balance on
- *              that payday, asked of the one period being planned.
+ *              that day, asked of the one period being planned.
  *   scheduled  the goal's recurring contributions in the period (K2's whole
  *              occurrences: posted, settled and outstanding; one posting will
  *              skip counts for nothing)
  *   byHand     max(0, pace - scheduled): what the check-in funds by hand
  *   planned    the period's confirmed GOAL rows; 0 when the period is
  *              confirmed with none for the goal, null when it is not confirmed
- *   contributed  contributions dated from the period's payday to the day
- *              before the next period's (contributionWindow), logged and
- *              posted: money moved on payday for the period being planned is
+ *   contributed  contributions dated in the period's funding window
+ *              (contributionWindow), logged and posted: money moved from the
+ *              day the period's pay landed until the next period's lands is
  *              that period's, though it is dated before its first day
  *
  * Two statements are read off a plan (decision 5.3, option C):
@@ -35,7 +36,7 @@
  */
 import { addDays } from "@/lib/date";
 import { round2 } from "@/lib/money";
-import { goalPeriodsLeft, nextPeriod, paydayDateFor, type PeriodInfo, type PeriodRef } from "@/lib/period";
+import { fundingWindow, goalPeriodsLeft, type PayLanded, type PeriodInfo, type PeriodRef } from "@/lib/period";
 
 /**
  * How many days before a plan period ends a follow-through shortfall is
@@ -74,13 +75,17 @@ export function pacePeriodFor(period: PeriodInfo, plan: PeriodInfo): PeriodInfo 
 }
 
 /**
- * The days whose contributions belong to `period`: from its payday - the day
- * its money is in hand, which can fall before its first day - up to, not
- * including, the next period's payday. The pace of `period` is fixed on
+ * The days whose contributions belong to `period`: its funding window
+ * (fundingWindow in src/lib/period.ts) - from the day its pay landed
+ * (`payLanded`, when recorded between five days before its first day and its
+ * payday), otherwise its payday, up to where the next period's window starts
+ * by the same rule. A contribution made the day the salary lands belongs to
+ * the period that salary funds, and one made before the next period's pay
+ * has arrived is still this period's. The pace of `period` is fixed on
  * `from`.
  */
-export function contributionWindow(period: PeriodRef): { from: Date; until: Date } {
-  return { from: paydayDateFor(period), until: paydayDateFor(nextPeriod(period)) };
+export function contributionWindow(period: PeriodRef, payLanded: PayLanded): { from: Date; until: Date } {
+  return fundingWindow(period, payLanded);
 }
 
 /** One goal in one period, every figure in the display currency. */

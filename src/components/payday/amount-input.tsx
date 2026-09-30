@@ -37,6 +37,8 @@ export function PaydayAmountInput({
   ariaLabel,
   className,
   disabled = false,
+  invalid = false,
+  describedBy,
 }: {
   value: number;
   onChange: (value: number) => void;
@@ -45,6 +47,10 @@ export function PaydayAmountInput({
   ariaLabel?: string;
   className?: string;
   disabled?: boolean;
+  /** Marks the field invalid (aria-invalid), which the input's own styles show. */
+  invalid?: boolean;
+  /** The id of the message explaining why, when invalid. */
+  describedBy?: string;
 }) {
   const [text, setText] = useState(String(value));
   const [prevValue, setPrevValue] = useState(value);
@@ -66,6 +72,8 @@ export function PaydayAmountInput({
     <Input
       id={id}
       aria-label={ariaLabel}
+      aria-invalid={invalid || undefined}
+      aria-describedby={describedBy}
       disabled={disabled}
       inputMode="decimal"
       className={cn("font-mono text-right", className)}

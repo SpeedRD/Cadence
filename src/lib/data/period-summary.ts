@@ -11,59 +11,42 @@ import {
 } from "@/lib/period-commitments";
 import { prisma } from "@/lib/prisma";
 import type { RecurringSkipReason } from "@/lib/recurring";
-import { manualContributionIdFromTransaction } from "@/lib/transactions";
+import {
+  budgetSpentFrom,
+  inUnbudgetedCategory,
+  isContributionTwin,
+  ownCost,
+  spendingLineKey,
+} from "@/lib/budget-spending";
 
+import { SPENDING_ROW_SELECT, spendingRowFrom } from "@/lib/data/budget-spending";
+import { loadPeriodIncome } from "@/lib/data/period-income";
 import { periodCommitments } from "@/lib/data/period-commitments";
 
 import type { AppContext } from "@/lib/data/context";
 import type { RecurringKind } from "@/generated/prisma/enums";
 
-export interface CategoryLine {
+/** One category's spending, as a breakdown bar shows it (Reports, the monthly averages). */
+export interface SpendingLine {
   categoryId: string | null;
   name: string;
   color: string;
+  /**
+   * Every expense in the category, at the user's own cost: a shared expense
+   * counts at its share (ownCost in src/lib/budget-spending.ts). Recurring
+   * charges stay in - the "total" view Reports shows.
+   */
   spent: number;
+}
+
+/** A period's line for one category: the total view beside budget spending and the budget. */
+export interface CategoryLine extends SpendingLine {
   /**
-   * The part of `spent` from transactions the user confirmed as extraordinary
-   * (Transaction.isExtraordinary). Still real spending, so it stays inside
-   * `spent` for every actual figure; the payday planner's category average
-   * subtracts it to estimate typical spending. 0 on a line built from rows
-   * that already left such transactions out.
+   * Budget spending in the category (K6, src/lib/budget-spending.ts): what
+   * the Budgets page's row shows. The lines' figures add up to the overall
+   * `spent`.
    */
-  extraordinarySpent: number;
-  /**
-   * The part of `spent` that was other people's share of shared expenses
-   * (amount - Transaction.yourShare, see src/lib/shared-expense.ts). Like
-   * `extraordinarySpent`, still inside `spent` for every actual figure and
-   * subtracted only by the averages that estimate typical spending, so they
-   * read the user's own cost. A row that is also a confirmed one-off is
-   * already wholly in `extraordinarySpent` and adds nothing here. 0 on a
-   * line built from rows that already read the share in place of the amount.
-   */
-  othersShareSpent: number;
-  /**
-   * `spent` minus any RECURRING-sourced rows (an auto-posted subscription or
-   * contribution charge, already committed at payday-planning time - see
-   * outsideBudget in getPeriodSummary). `spent` itself stays the complete,
-   * factual figure Reports reads as what was really spent, source included;
-   * this one exists only for callers averaging what a category usually
-   * costs organically, e.g. getCategorySuggestions, so a subscription filed
-   * under a flexible category never leaks into recommending more of it.
-   * Equal to `spent` on a line already built from non-RECURRING rows only
-   * (e.g. monthly.ts's lifestyleByCategory, which excludes them earlier).
-   */
-  spentExcludingRecurring: number;
-  /**
-   * `spent` minus every row that stands for a recurring occurrence - a
-   * RECURRING row, or a charge the user entered that settled an occurrence
-   * (RecurringSettlement, either kind) - which the period's plan already
-   * reserved, so budget spending leaves them out (see outsideBudget in
-   * getPeriodSummary). What the Budgets page's category rows show, so they
-   * agree with the overall "spent" for these rows; `spent` stays the factual
-   * figure Reports reads. Equal to `spent` on a line built from rows that
-   * already leave recurring occurrences out (monthly.ts's lines).
-   */
-  spentExcludingOccurrences: number;
+  budgetSpent: number;
   budget: number | null;
 }
 
@@ -164,15 +147,18 @@ export interface PeriodSummary {
   periodBudget: number;
   hasBudget: boolean;
   /**
-   * Spending the period budget is answerable for. Excludes what the budget was
-   * never asked to cover: every row that stands for a recurring occurrence
-   * (an automatically posted charge, or a charge the user entered that paid
-   * one), and anything in a subscription or savings category. See the note
+   * Budget spending (K6, src/lib/budget-spending.ts): what the period budget
+   * is answerable for. Excludes what the budget was never asked to cover -
+   * every row that stands for a recurring occurrence (an automatically posted
+   * charge, or a charge the user entered that paid one), a hand-logged
+   * contribution's own expense, and anything in a subscription or savings
+   * category - and reads a shared expense at the user's share. See the note
    * above safeToSpend.
    */
   spent: number;
-  /** Every expense in the period, whether budgeted or not. */
+  /** Every expense in the period, whether budgeted or not, at the user's own cost (a shared expense at its share). */
   totalSpent: number;
+  /** The period's income as a fact (K5, src/lib/period-income.ts): what arrived to fund it, in the display currency. */
   income: number;
   /** What the period's recurring items still expect to leave: its outstanding occurrences. */
   committed: number;
@@ -215,39 +201,20 @@ export async function getPeriodSummary(
   const { rates, displayCurrency } = context;
   const range = periodRange(period);
 
-  const [budgets, transactions, categories, commitments, checkin] = await Promise.all([
+  const [budgets, transactions, categories, commitments, incomeByPeriod] = await Promise.all([
     prisma.budget.findMany({
       where: { year: period.year, month: period.month, period: period.period },
     }),
     prisma.transaction.findMany({
-      where: { date: range, type: { in: ["EXPENSE", "INCOME"] } },
-      select: {
-        amount: true,
-        currency: true,
-        type: true,
-        source: true,
-        externalId: true,
-        categoryId: true,
-        isExtraordinary: true,
-        yourShare: true,
-        recurringSettlement: { select: { kind: true } },
-      },
+      where: { date: range, type: "EXPENSE" },
+      select: SPENDING_ROW_SELECT,
     }),
     prisma.category.findMany({ orderBy: { name: "asc" } }),
     periodCommitments(period, context),
-    // A paycheck belongs to the period its check-in planned, not to the day it
-    // landed: pay for the 16th-31st arrives on the 15th, which is the period
-    // before. The Transaction keeps the real date so the ledger still matches
-    // the bank; only this attribution moves.
-    prisma.paydayCheckin.findFirst({
-      where: {
-        year: period.year,
-        month: period.month,
-        period: period.period,
-        status: "CONFIRMED",
-      },
-      select: { snapshots: { select: { incomeEntered: true, currency: true } } },
-    }),
+    // The period's income on the one attribution (K5): a paycheck counts in
+    // the period it funds - a check-in's in the period it planned, any other
+    // from the payday it landed on - not in the calendar half it is dated in.
+    loadPeriodIncome([period], "fact", context),
   ]);
 
   const toDisplay = (amount: number, currency: string) =>
@@ -270,131 +237,29 @@ export async function getPeriodSummary(
     [...budgetByCategory.values()].reduce((total, value) => total + value, 0),
   );
 
-  // Categories the payday planner never budgets for (it filters both of these
-  // out when it builds its essential and flexible lists), so spending in them
-  // is not spending against the period budget either.
-  const outsideBudgetCategoryIds = new Set(
-    categories
-      .filter((category) => category.isSubscriptionDefault || category.isSavingsDefault)
-      .map((category) => category.id),
-  );
-  // Only an expense category can carry a breakdown line. An expense filed under
-  // an income category (the transaction form offers every category) counted in
-  // `spent` but matched no line, so the lines never added up to the total; it
-  // joins the Uncategorized line instead of disappearing from the breakdown.
-  const expenseCategoryIds = new Set(
-    categories.filter((category) => category.kind === "EXPENSE").map((category) => category.id),
-  );
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const rows = transactions.map(spendingRowFrom);
+  // The budget's figures - the overall spent and each category's row - are
+  // one population (K6): what the plan did not already reserve.
+  const budget = budgetSpentFrom(rows, categoryById, toDisplay);
 
+  // The total view, by category: every expense at the user's own cost,
+  // recurring charges included - what Reports shows as spent. A hand-logged
+  // contribution's own expense keeps its line only while it is still filed
+  // under a savings or subscription category; reassigned elsewhere it would
+  // quietly inflate that category, so it is left out of the lines (it stays
+  // in totalSpent, what left the accounts).
   const spentByCategory = new Map<string | null, number>();
-  // Confirmed one-offs, by the same key: reported beside each line's spending
-  // (never subtracted from it) so an average can leave them out.
-  const extraordinaryByCategory = new Map<string | null, number>();
-  // Other people's share of shared expenses, by the same key and on the same
-  // terms: reported beside the spending so an average can read the user's own
-  // cost. The full amount stays in every actual figure below - it is what
-  // left the account.
-  const othersShareByCategory = new Map<string | null, number>();
-  // spentByCategory minus RECURRING-sourced rows: a RECURRING posting was
-  // already committed at payday-planning time (like `spent` below excludes it
-  // via outsideBudget), so it must not also inflate getCategorySuggestions'
-  // average for whatever category it happens to be filed under - a
-  // subscription filed under a flexible category (e.g. "Entertainment"
-  // instead of "Subscriptions") would otherwise leak its full amount into
-  // that category's suggested budget every period. `spentByCategory` itself
-  // stays the complete, factual figure Reports reads as what was really
-  // spent; this parallel map exists only to feed CategoryLine.spentExcludingRecurring,
-  // getCategorySuggestions' own averaging input. Mirrors, rather than reuses,
-  // computeMonthActuals in monthly.ts, which already skips every RECURRING
-  // row before building its own category map.
-  const spentByCategoryExcludingRecurring = new Map<string | null, number>();
-  // spentByCategory minus every row that stands for a recurring occurrence
-  // (see standsForOccurrence below): CategoryLine.spentExcludingOccurrences,
-  // what the Budgets page's category rows show.
-  const spentByCategoryExcludingOccurrences = new Map<string | null, number>();
-  let spent = 0;
   let totalSpent = 0;
-  let income = 0;
-  for (const transaction of transactions) {
-    const amount = toDisplay(num(transaction.amount), transaction.currency);
-    if (transaction.type === "INCOME") {
-      // Check-in income is added below, from the check-in that planned it.
-      if (transaction.source !== "PAYDAY_CHECKIN") income += amount;
-      continue;
-    }
+  for (const row of rows) {
+    const amount = toDisplay(ownCost(row), row.currency);
     totalSpent += amount;
-
-    // A manual goal contribution's paired expense (source MANUAL, externalId
-    // "goal-contribution:<id>" - see logManualContribution in src/lib/goals.ts)
-    // is never spending: the GoalContribution it moved money for already
-    // counts it as savings. Filing it under a savings/subscription category
-    // (isSavingsDefault/isSubscriptionDefault, below) is what keeps it out
-    // today, but that category assignment is an editable field, not an
-    // identity - a direct database edit could reassign it. Checking the row
-    // itself, the same way transactionEditBlock and hasLinkedGoalContribution
-    // already do, closes that gap: the row stays excluded from budget
-    // spending (and from leaking into a category's average, e.g.
-    // getCategorySuggestions) however its category ends up.
-    //
-    // A charge the user entered that recurring posting settled a
-    // CONTRIBUTION occurrence with (RecurringSettlement) is the same kind of
-    // row: posting wrote the GoalContribution beside it, so it is savings, not
-    // spending, and is treated exactly like the manual twin.
-    const inSavingsOrSubscriptionCategory =
-      transaction.categoryId !== null && outsideBudgetCategoryIds.has(transaction.categoryId);
-    const isManualContributionTwin =
-      manualContributionIdFromTransaction(transaction) !== null ||
-      transaction.recurringSettlement?.kind === "CONTRIBUTION";
-    const isRecurringPosting = transaction.source === "RECURRING";
-    // A row that stands for a recurring occurrence: posting's own RECURRING
-    // row, or a charge the user entered that posting settled an occurrence
-    // with, a subscription's as much as a contribution's. The plan already
-    // reserved the occurrence (the period commitments count it at the
-    // ledger's amount), so counting the row as budget spending too took the
-    // same money twice.
-    const standsForOccurrence = isRecurringPosting || transaction.recurringSettlement !== null;
-
-    // The per-category breakdown stays complete whatever the budget covers -
-    // the Reports page and the budget rows both read it - so a manual
-    // contribution twin still appears under its own category exactly as
-    // before, as long as that is still a savings/subscription category. Only
-    // when it has been reassigned away from one (the state above) does it
-    // stop counting as spending in the new category too, rather than
-    // quietly inflating that category's total and any average built from it.
-    // A RECURRING posting stays in this figure too, on the same principle
-    // `totalSpent` already follows: this is the real, factual record of what
-    // was spent, source included. See spentByCategoryExcludingRecurring above
-    // for the figure that leaves RECURRING rows out.
-    if (!isManualContributionTwin || inSavingsOrSubscriptionCategory) {
-      const key =
-        transaction.categoryId !== null && expenseCategoryIds.has(transaction.categoryId)
-          ? transaction.categoryId
-          : null;
-      spentByCategory.set(key, (spentByCategory.get(key) ?? 0) + amount);
-      if (!isRecurringPosting) {
-        spentByCategoryExcludingRecurring.set(key, (spentByCategoryExcludingRecurring.get(key) ?? 0) + amount);
-      }
-      if (!standsForOccurrence) {
-        spentByCategoryExcludingOccurrences.set(key, (spentByCategoryExcludingOccurrences.get(key) ?? 0) + amount);
-      }
-      if (transaction.isExtraordinary) {
-        extraordinaryByCategory.set(key, (extraordinaryByCategory.get(key) ?? 0) + amount);
-      } else if (transaction.yourShare !== null) {
-        // A one-off's whole amount is already set aside above; only an
-        // ordinary shared expense has a part to report here.
-        const othersShare = amount - toDisplay(num(transaction.yourShare), transaction.currency);
-        othersShareByCategory.set(key, (othersShareByCategory.get(key) ?? 0) + othersShare);
-      }
-    }
-
-    const outsideBudget = standsForOccurrence || inSavingsOrSubscriptionCategory || isManualContributionTwin;
-    if (!outsideBudget) spent += amount;
+    if (isContributionTwin(row) && !inUnbudgetedCategory(row, categoryById)) continue;
+    const key = spendingLineKey(row, categoryById);
+    spentByCategory.set(key, (spentByCategory.get(key) ?? 0) + amount);
   }
 
-  income += (checkin?.snapshots ?? []).reduce(
-    (total, snapshot) => total + toDisplay(num(snapshot.incomeEntered), snapshot.currency),
-    0,
-  );
+  const income = incomeByPeriod.get(period.key)?.total ?? 0;
 
   // What is still to leave: the outstanding occurrences. Whatever already
   // posted or was paid by a charge the user entered is in the ledger, and an
@@ -408,7 +273,7 @@ export async function getPeriodSummary(
   const periodBudget = overallBudget ?? categoryBudgetTotal;
   const hasBudget = overallBudget !== null || categoryBudgetTotal > 0;
   const daysRemaining = daysRemainingInPeriod(context.today, period);
-  const safeToSpend = round2(periodBudget - spent);
+  const safeToSpend = round2(periodBudget - budget.total);
   const safeToSpendPerDay = round2(
     Math.max(0, safeToSpend / Math.max(1, daysRemaining)),
   );
@@ -424,10 +289,7 @@ export async function getPeriodSummary(
       name: category.name,
       color: category.color,
       spent: round2(spentByCategory.get(category.id) ?? 0),
-      extraordinarySpent: round2(extraordinaryByCategory.get(category.id) ?? 0),
-      othersShareSpent: round2(othersShareByCategory.get(category.id) ?? 0),
-      spentExcludingRecurring: round2(spentByCategoryExcludingRecurring.get(category.id) ?? 0),
-      spentExcludingOccurrences: round2(spentByCategoryExcludingOccurrences.get(category.id) ?? 0),
+      budgetSpent: budget.byCategory.get(category.id)?.spent ?? 0,
       budget: budgetByCategory.get(category.id) ?? null,
     }));
 
@@ -438,10 +300,7 @@ export async function getPeriodSummary(
       name: "Uncategorized",
       color: "#7a8590",
       spent: round2(uncategorized),
-      extraordinarySpent: round2(extraordinaryByCategory.get(null) ?? 0),
-      othersShareSpent: round2(othersShareByCategory.get(null) ?? 0),
-      spentExcludingRecurring: round2(spentByCategoryExcludingRecurring.get(null) ?? 0),
-      spentExcludingOccurrences: round2(spentByCategoryExcludingOccurrences.get(null) ?? 0),
+      budgetSpent: budget.byCategory.get(null)?.spent ?? 0,
       budget: null,
     });
   }
@@ -453,7 +312,7 @@ export async function getPeriodSummary(
     categoryBudgetTotal,
     periodBudget,
     hasBudget,
-    spent: round2(spent),
+    spent: budget.total,
     totalSpent: round2(totalSpent),
     income: round2(income),
     committed,

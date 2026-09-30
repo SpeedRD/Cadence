@@ -25,6 +25,7 @@ import { toISODate } from "@/lib/date";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
+import { oneOffIncomeIssue } from "@/lib/period-income";
 import {
   availableForFlexibleCategories,
   draftAccountBuffers,
@@ -304,8 +305,13 @@ export function PaydayCheckinDialog({
     }
   }
 
+  // Step 2 holds until every one-off part is between 0 and its income - the
+  // same rule the confirm's schema applies (oneOffIncomeIssue).
+  const incomeValid = plan.accounts.every((a) => oneOffIncomeIssue(a.incomeEntered, a.oneOffIncome) === null);
   const canConfirm =
-    (!needsDeficitAck || acknowledgedDeficit) && (!needsZeroBufferAck || acknowledgedZeroBuffer);
+    incomeValid &&
+    (!needsDeficitAck || acknowledgedDeficit) &&
+    (!needsZeroBufferAck || acknowledgedZeroBuffer);
 
   const payload = JSON.stringify({
     year: plan.periodRef.year,
@@ -315,6 +321,7 @@ export function PaydayCheckinDialog({
       accountId: a.accountId,
       reportedBalance: a.reportedBalance,
       incomeEntered: a.incomeEntered,
+      oneOffIncome: a.oneOffIncome,
       incomeNote: a.incomeNote || null,
     })),
     // What is on screen: every row of every goal, in each account's own currency.
@@ -507,7 +514,7 @@ export function PaydayCheckinDialog({
               )}
             </div>
             {step < STEP_COUNT ? (
-              <Button type="button" onClick={() => goToStep(step + 1)}>
+              <Button type="button" disabled={step === 2 && !incomeValid} onClick={() => goToStep(step + 1)}>
                 {t.next}
               </Button>
             ) : (
