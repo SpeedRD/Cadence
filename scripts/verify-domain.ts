@@ -174,8 +174,10 @@ async function main() {
   eq("days left on the last day", daysRemainingInPeriod(civilDate(2026, 8, 31)), 1);
   eq("days left on the 16th", daysRemainingInPeriod(civilDate(2026, 8, 16)), 16);
   eq("days left mid period A", daysRemainingInPeriod(civilDate(2026, 8, 10)), 6);
-  eq("periods until year end", periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 12, 31)), 9);
-  eq("target inside the current period", periodsRemaining(civilDate(2026, 8, 20), civilDate(2026, 8, 25)), 0);
+  // Flipped deliberately with K3 (D9, B43): a period counts when its pay lands
+  // by the target date. Was 9 (Jan 1-15, paid Thu Dec 31, left out) and 0.
+  eq("periods until year end: Aug 16-31 through Jan 1-15, whose pay lands Dec 31", periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 12, 31)), 10);
+  eq("target inside the current period: its pay landed Aug 14, so it counts", periodsRemaining(civilDate(2026, 8, 20), civilDate(2026, 8, 25)), 1);
   const series = periodSeries(periodForDate(civilDate(2026, 1, 20)), 3);
   eq("series spans a year boundary", series.map((p) => p.key).join(","), "2025-12-B,2026-01-A,2026-01-B");
 
@@ -646,8 +648,10 @@ async function main() {
   const { listGoals } = await import("../src/lib/data/goals");
   const goals = await listGoals(context);
   const verifyGoal = goals.find((g) => g.id === goal.id)!;
-  eq("periods left to the target date", verifyGoal.periodsLeft, 9);
-  eq("per period = remaining / periods left", verifyGoal.perPeriod, Math.round((800 / 9) * 100) / 100);
+  // Flipped deliberately with K3 (D9, B43): Jan 1-15's pay lands Dec 31, the
+  // target date, so it is a tenth period to fund. Was 9 and 88.89.
+  eq("periods left to the target date", verifyGoal.periodsLeft, 10);
+  eq("per period = remaining / periods left", verifyGoal.perPeriod, Math.round((800 / 10) * 100) / 100);
 
   console.log("\n== external transfer: manual create/update/delete invariants ==");
   {
@@ -2376,7 +2380,8 @@ async function main() {
   await prisma.account.delete({ where: { id: openingBalanceAccount.id } });
 
   console.log("\n== payday check-in (database) ==");
-  const { getPaydayCheckinDraft, confirmPaydayCheckin, getCategorySuggestions, checkinDateForNewCheckin, planPeriodRef, goalRoadmapAmount, getGoalRoadmapAmount } = await import(
+  const { goalRoadmapAmount } = await import("../src/lib/goal-plan");
+  const { getPaydayCheckinDraft, confirmPaydayCheckin, getCategorySuggestions, checkinDateForNewCheckin, planPeriodRef, getGoalRoadmapAmount } = await import(
     "../src/lib/data/payday"
   );
   const { getSettings } = await import("../src/lib/auth");
@@ -3333,8 +3338,12 @@ async function main() {
   eq("and the goal's total sums both draws into the display currency", splitGoal.plannedAmount, round2(5 + convert(4, "EUR", "USD", rates)));
 
   console.log("\n-- the goal page measures a plan against the real pace, not against what the accounts could fund --");
-  eq("goalRoadmapAmount is remaining over the periods left, net of contributions already due", goalRoadmapAmount({ displayRemaining: 1000, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16), 50), round2(1000 / periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 10, 15)) - 50));
-  eq("it never goes below zero when contributions already cover the pace", goalRoadmapAmount({ displayRemaining: 100, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16), 500), 0);
+  // Flipped deliberately with K3: goalRoadmapAmount is the gross pace from the
+  // balance at the pace start (src/lib/goal-plan.ts); netting recurring
+  // contributions is the plan's byHand, checked in the K3 section. Was
+  // remaining / periods - due contributions (1000 / 4 - 50).
+  eq("goalRoadmapAmount is what was left at the pace start over the periods left", goalRoadmapAmount({ target: 1000, savedBefore: 0, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16)), round2(1000 / periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 10, 15))));
+  eq("it never goes below zero when the goal was already over its target", goalRoadmapAmount({ target: 100, savedBefore: 500, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16)), 0);
   eq("the live roadmap figure for the plan period is the one the draft recommends", await getGoalRoadmapAmount(datedGoal.id, draftForConfirm.periodRef, paydayContext), datedGoalDraft.recommendedAmount);
   // Income too small to fund the pace: the rows' recommendations are capped
   // by the account's room, while the roadmap figure stays the real pace.
@@ -3466,9 +3475,10 @@ async function main() {
     // recommendation is the whole remaining balance, and planGoalFunding caps
     // it by the room the dated goals above it leave - the same machinery.
     const { logManualContribution: logForUndated, rebuildGoalSaved: rebuildForUndated } = await import("../src/lib/goals");
-    eq("goalRoadmapAmount with no target date is the whole remaining balance, net of contributions already due", goalRoadmapAmount({ displayRemaining: 1000, targetDate: null }, civilDate(2026, 8, 16), 50), 950);
-    eq("and never below zero", goalRoadmapAmount({ displayRemaining: 100, targetDate: null }, civilDate(2026, 8, 16), 500), 0);
-    eq("a dated goal's pace is untouched", goalRoadmapAmount({ displayRemaining: 1000, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16), 50), round2(1000 / periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 10, 15)) - 50));
+    // Flipped deliberately with K3, as above: the netting moved to byHand. Was 950, 0 and 1000 / 4 - 50.
+    eq("goalRoadmapAmount with no target date is the whole remaining balance at the pace start", goalRoadmapAmount({ target: 1000, savedBefore: 50, targetDate: null }, civilDate(2026, 8, 16)), 950);
+    eq("and never below zero", goalRoadmapAmount({ target: 100, savedBefore: 500, targetDate: null }, civilDate(2026, 8, 16)), 0);
+    eq("a dated goal's pace is untouched", goalRoadmapAmount({ target: 1000, savedBefore: 50, targetDate: civilDate(2026, 10, 15) }, civilDate(2026, 8, 16)), round2(950 / periodsRemaining(civilDate(2026, 8, 16), civilDate(2026, 10, 15))));
 
     const beforeUndated = await getPaydayCheckinDraft(paydayContext);
     const datedBefore = beforeUndated.goals.find((g) => g.goalId === datedGoal.id);
@@ -3512,8 +3522,12 @@ async function main() {
     const reopened = (await getPaydayCheckinDraft(paydayContext)).goals.find((g) => g.goalId === undatedGoal.id);
     eq("reopening the plan holds the undated goal's draw", JSON.stringify(reopened?.funding), JSON.stringify([{ accountId: paydayChecking.id, plannedAmount: 700, held: true }]));
 
-    // Half of it paid back: the recommendation follows the reduced balance.
-    const partial = await logForUndated({ goalId: undatedGoal.id, accountId: paydayChecking.id, amount: 400, date: civilDate(2026, 8, 15), note: null }, rates);
+    // Half of it paid back before the plan period's payday: the
+    // recommendation follows the reduced balance. Dated Aug 13 since K3's
+    // payday anchoring (was Aug 15): Aug 16-31 is paid Fri Aug 14, and money
+    // moved from that payday on is Aug 16-31's own, which leaves that
+    // period's figure where it was fixed.
+    const partial = await logForUndated({ goalId: undatedGoal.id, accountId: paydayChecking.id, amount: 400, date: civilDate(2026, 8, 13), note: null }, rates);
     await rebuildForUndated(undatedGoal.id);
     const afterPartial = (await getPaydayCheckinDraft(paydayContext)).goals.find((g) => g.goalId === undatedGoal.id);
     eq("after a partial contribution the recommendation is the reduced remaining balance", afterPartial?.recommendedAmount, 600);
@@ -6597,24 +6611,29 @@ async function main() {
       // room there either - so, exactly as Step 3 would recommend nothing
       // from accounts with nothing to spare, nothing is estimated.
       const openPace = await roadmapForAfford(openGoal.id, planRefForAfford(affordContext), affordContext);
-      eq("the open goal's pace as of today is 5,000 over 20 periods", openPace, 250);
+      // Flipped deliberately with K3 (D9, B43): Jul 1-15, 2027 is paid on Jun
+      // 30, the target date, so the pace spreads over 21 periods, not 20. The
+      // estimates below follow: 238.10 where they read 250, and the second
+      // goal (Mar 31, 2027: Apr 1-15 is paid that day) 3,000 over 15 = 200
+      // where it read 214.29 over 14.
+      eq("the open goal's pace as of today is 5,000 over 21 periods", openPace, 238.1);
       const octEstimated = baseline.get("2026-10-B")!;
       const octNoGoals = noGoals.get("2026-10-B")!;
-      eq("a period with no check-in carries that pace as a named estimate", JSON.stringify(octEstimated.estimatedGoals), JSON.stringify([{ goalId: openGoal.id, name: "Verify Afford Goal Open", amount: 250 }]));
+      eq("a period with no check-in carries that pace as a named estimate", JSON.stringify(octEstimated.estimatedGoals), JSON.stringify([{ goalId: openGoal.id, name: "Verify Afford Goal Open", amount: 238.1 }]));
       eq("an achieved goal is estimated nothing", octEstimated.estimatedGoals.some((goal) => goal.goalId === achievedGoal.id), false);
-      eq("the estimate is in the period-wide commitments", round2(octEstimated.flexible.committed - octNoGoals.flexible.committed), 250);
-      eq("and reported apart as their estimated share", octEstimated.flexible.estimatedGoalFunding, 250);
-      check("the account's share of it is committed against its buffer", octEstimated.account.estimatedGoalFunding > 0 && octEstimated.account.estimatedGoalFunding <= 250, octEstimated.account.estimatedGoalFunding);
+      eq("the estimate is in the period-wide commitments", round2(octEstimated.flexible.committed - octNoGoals.flexible.committed), 238.1);
+      eq("and reported apart as their estimated share", octEstimated.flexible.estimatedGoalFunding, 238.1);
+      check("the account's share of it is committed against its buffer", octEstimated.account.estimatedGoalFunding > 0 && octEstimated.account.estimatedGoalFunding <= 238.1, octEstimated.account.estimatedGoalFunding);
       eq("the account's commitments grew by exactly that share", round2(octEstimated.account.committed - octNoGoals.account.committed), octEstimated.account.estimatedGoalFunding);
       const estimatePurchase = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Estimate Purchase", firstDate: civilDate(2026, 10, 20), totalAmount: 100, installments: 1 }), affordContext);
       if (!estimatePurchase.ok) throw new Error("estimate purchase evaluation refused");
       const estimateVerdict = estimatePurchase.verdict.periods[0];
       const noGoalsVerdict = affordLib.evaluateAffordability({ installments: estimatePurchase.verdict.installments, currency: "USD", projections: noGoals, rates }).periods[0];
       eq("the purchase lands in Oct 16-31", estimateVerdict.key, "2026-10-B");
-      eq("the estimate shrinks the room a purchase is judged against, period-wide", round2(noGoalsVerdict.flexible.availableBefore - estimateVerdict.flexible.availableBefore), 250);
+      eq("the estimate shrinks the room a purchase is judged against, period-wide", round2(noGoalsVerdict.flexible.availableBefore - estimateVerdict.flexible.availableBefore), 238.1);
       eq("and on the account, by its share", round2(noGoalsVerdict.account.headroomBefore - estimateVerdict.account.headroomBefore), octEstimated.account.estimatedGoalFunding);
       eq("the verdict carries the named estimate through for the results page", JSON.stringify(estimateVerdict.estimatedGoals), JSON.stringify(octEstimated.estimatedGoals));
-      eq("and the estimated share of each check's commitments", `${estimateVerdict.account.estimatedGoalFunding}:${estimateVerdict.flexible.estimatedGoalFunding}`, `${octEstimated.account.estimatedGoalFunding}:250`);
+      eq("and the estimated share of each check's commitments", `${estimateVerdict.account.estimatedGoalFunding}:${estimateVerdict.flexible.estimatedGoalFunding}`, `${octEstimated.account.estimatedGoalFunding}:238.1`);
       // The pace is spread over the accounts exactly as a check-in spreads a
       // goal's roadmap amount: planGoalFunding over each account's projected
       // headroom (income - scheduled commitments - buffer), never more than
@@ -6625,9 +6644,9 @@ async function main() {
           const own = perAccount[index].get(key)!.account;
           return { accountId: account.id, name: account.name, currency: account.currency, headroom: round2(own.income - scheduledOf(own) - own.buffer) };
         });
-      const expectedDraws = planFundingForAfford([{ goalId: openGoal.id, amount: 250 }], headroomsIn("2026-10-B"), { displayCurrency: "USD", rates })[0].draws;
+      const expectedDraws = planFundingForAfford([{ goalId: openGoal.id, amount: 238.1 }], headroomsIn("2026-10-B"), { displayCurrency: "USD", rates })[0].draws;
       eq("each account's share is planGoalFunding's draw over the accounts' projected headroom", activeForAfford.map((_, index) => perAccount[index].get("2026-10-B")!.account.estimatedGoalFunding).join(","), activeForAfford.map((account) => expectedDraws.find((draw) => draw.accountId === account.id)?.recommendedAmount ?? 0).join(","));
-      eq("the shares sum to the period-wide estimate", round2(activeForAfford.reduce((sum, account, index) => sum + convert(perAccount[index].get("2026-10-B")!.account.estimatedGoalFunding, account.currency, "USD", rates), 0)), 250);
+      eq("the shares sum to the period-wide estimate", round2(activeForAfford.reduce((sum, account, index) => sum + convert(perAccount[index].get("2026-10-B")!.account.estimatedGoalFunding, account.currency, "USD", rates), 0)), 238.1);
       check("Oct 1-15 leaves no account any room above its buffer", headroomsIn("2026-10-A").every((account) => account.headroom <= 0), JSON.stringify(headroomsIn("2026-10-A")));
       eq("so nothing is estimated there: the estimate never plans money that is not there", `${baseline.get("2026-10-A")!.flexible.estimatedGoalFunding}:${baseline.get("2026-10-A")!.estimatedGoals.length}`, "0:0");
       // A second open goal: each contributes its own pace, oldest goal first
@@ -6636,9 +6655,9 @@ async function main() {
         data: { name: "Verify Afford Goal Second", targetAmount: 3000, currency: "USD", targetDate: civilDate(2027, 3, 31) },
       });
       const twoGoals = (await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext)).get("2026-10-B")!;
-      eq("a second open goal is estimated at its own pace (3,000 over 14 periods) beside the first", JSON.stringify(twoGoals.estimatedGoals), JSON.stringify([{ goalId: openGoal.id, name: "Verify Afford Goal Open", amount: 250 }, { goalId: secondGoal.id, name: "Verify Afford Goal Second", amount: 214.29 }]));
-      eq("the period-wide estimate is the two paces summed", twoGoals.flexible.estimatedGoalFunding, 464.29);
-      eq("and the commitments grew by that sum", round2(twoGoals.flexible.committed - octNoGoals.flexible.committed), 464.29);
+      eq("a second open goal is estimated at its own pace (3,000 over 15 periods) beside the first", JSON.stringify(twoGoals.estimatedGoals), JSON.stringify([{ goalId: openGoal.id, name: "Verify Afford Goal Open", amount: 238.1 }, { goalId: secondGoal.id, name: "Verify Afford Goal Second", amount: 200 }]));
+      eq("the period-wide estimate is the two paces summed", twoGoals.flexible.estimatedGoalFunding, 438.1);
+      eq("and the commitments grew by that sum", round2(twoGoals.flexible.committed - octNoGoals.flexible.committed), 438.1);
       // An undated goal: its roadmap figure is its whole remaining balance -
       // right for the one period a check-in plans, and what the Goals page
       // and the wizard keep recommending - but repeated in every period ahead
@@ -6651,8 +6670,8 @@ async function main() {
       const spanning = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Spanning", firstDate: civilDate(2026, 10, 20), totalAmount: 300, installments: 3 }), affordContext);
       if (!spanning.ok) throw new Error("spanning evaluation refused");
       eq("a purchase spanning three unconfirmed periods", spanning.verdict.periods.map((p) => p.key).join(","), "2026-10-B,2026-11-B,2026-12-B");
-      eq("estimates the two dated goals at their paces in every one of them and the undated goal in none", spanning.verdict.periods.map((p) => p.estimatedGoals.map((goal) => `${goal.name}:${goal.amount}`).join("+")).join(" | "), Array(3).fill("Verify Afford Goal Open:250+Verify Afford Goal Second:214.29").join(" | "));
-      eq("so each period's estimated commitment is the dated paces alone, never the undated balance", spanning.verdict.periods.map((p) => p.flexible.estimatedGoalFunding).join(","), "464.29,464.29,464.29");
+      eq("estimates the two dated goals at their paces in every one of them and the undated goal in none", spanning.verdict.periods.map((p) => p.estimatedGoals.map((goal) => `${goal.name}:${goal.amount}`).join("+")).join(" | "), Array(3).fill("Verify Afford Goal Open:238.1+Verify Afford Goal Second:200").join(" | "));
+      eq("so each period's estimated commitment is the dated paces alone, never the undated balance", spanning.verdict.periods.map((p) => p.flexible.estimatedGoalFunding).join(","), "438.1,438.1,438.1");
       await prisma.goal.delete({ where: { id: undatedGoal.id } });
       const withoutUndated = await affordData.evaluateAffordRequest(affordInput({ name: "Verify Afford Spanning", firstDate: civilDate(2026, 10, 20), totalAmount: 300, installments: 3 }), affordContext);
       if (!withoutUndated.ok) throw new Error("spanning re-evaluation refused");
@@ -6670,7 +6689,10 @@ async function main() {
       const octFlexibleDelta = round2(scheduledOf(withGoals.get("2026-10-A")!.flexible) - scheduledOf(baseline.get("2026-10-A")!.flexible));
       eq("a contribution to an achieved goal is not a commitment; one to an open goal is", `${octAccountDelta}:${octFlexibleDelta}`, "80:80");
       eq("neither contribution touches the half of the month it is not due in", round2(scheduledOf(withGoals.get("2026-10-B")!.account) - scheduledOf(baseline.get("2026-10-B")!.account)), 0);
-      eq("the scheduled contribution does not change the goal's estimated pace beside it", withGoals.get("2026-10-B")!.flexible.estimatedGoalFunding, 250);
+      // With K3 (D5) each period is estimated its own by-hand figure: Oct 16-31
+      // has no occurrence of the 80 contribution (due on the 9th), so it keeps
+      // the whole pace, and Oct 1-15, which holds it, would be asked 80 less.
+      eq("the scheduled contribution does not change the goal's estimate in a period it is not due in", withGoals.get("2026-10-B")!.flexible.estimatedGoalFunding, 238.1);
       await prisma.goal.update({ where: { id: achievedGoal.id }, data: { achievedAt: null } });
       const reopened = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
       eq("clearing achievedAt (raising the target) brings the contribution back, as posting would pick it up again", round2(scheduledOf(reopened.get("2026-10-A")!.account) - scheduledOf(baseline.get("2026-10-A")!.account)), 150);
@@ -6690,7 +6712,7 @@ async function main() {
       if (!beforeCheckin.ok) throw new Error("september evaluation refused");
       eq("the purchase lands in the current period only", beforeCheckin.verdict.periods.map((p) => p.key).join(","), "2026-09-A");
       const sepBefore = beforeCheckin.verdict.periods[0];
-      check("before the check-in, the current period carries the open goal's estimate", sepBefore.account.estimatedGoalFunding > 0 && sepBefore.flexible.estimatedGoalFunding === 250 && sepBefore.estimatedGoals.length === 1, JSON.stringify({ account: sepBefore.account.estimatedGoalFunding, flexible: sepBefore.flexible.estimatedGoalFunding }));
+      check("before the check-in, the current period carries the open goal's estimate", sepBefore.account.estimatedGoalFunding > 0 && sepBefore.flexible.estimatedGoalFunding === 238.1 && sepBefore.estimatedGoals.length === 1, JSON.stringify({ account: sepBefore.account.estimatedGoalFunding, flexible: sepBefore.flexible.estimatedGoalFunding }));
       const goalPlanResult = await confirmCheckinForAfford(
         {
           year: currentRef.year,
@@ -6723,7 +6745,7 @@ async function main() {
       eq("income is still projected from history, not read from the check-in", sepAfter.account.income, sepBefore.account.income);
       const octoberAfterCheckin = await affordData.projectPeriods(octoberRefs, chosenForAfford, activeForAfford, affordContext);
       eq("a period with no check-in is untouched", `${round2(scheduledOf(octoberAfterCheckin.get("2026-10-A")!.account) - scheduledOf(reopened.get("2026-10-A")!.account) + 70)}:${round2(scheduledOf(octoberAfterCheckin.get("2026-10-A")!.flexible) - scheduledOf(reopened.get("2026-10-A")!.flexible) + 70)}`, "0:0");
-      eq("and still carries its estimate: the check-in confirmed a different period", octoberAfterCheckin.get("2026-10-B")!.flexible.estimatedGoalFunding, 250);
+      eq("and still carries its estimate: the check-in confirmed a different period", octoberAfterCheckin.get("2026-10-B")!.flexible.estimatedGoalFunding, 238.1);
       // A GOAL row from before per-account funding existed has no account: it
       // counts period-wide, against no account's buffer, like an unlinked item.
       const accountlessRow = await prisma.paydayPlanAllocation.create({
@@ -6739,15 +6761,19 @@ async function main() {
       eq("a draft check-in commits nothing", `${round2(scheduledOf(draftOnly.verdict.periods[0].account) - scheduledOf(sepBefore.account))}:${round2(scheduledOf(draftOnly.verdict.periods[0].flexible) - scheduledOf(sepBefore.flexible))}`, "0:0");
 
       console.log("\n-- a goal's estimate stops at the end of its roadmap window --");
-      // The roadmap spreads a dated goal's pace over the periods that end on
-      // or before its target date, counted from the plan period (Sep 1-15).
+      // The roadmap spreads a dated goal's pace over the periods whose pay
+      // lands by its target date, counted from the plan period (Sep 1-15).
       // Past that the pace has no meaning, so no later period is estimated
       // anything for the goal: the estimate follows goalWindow exactly.
+      // Flipped deliberately with K3 (D9, B43): Nov 16-30 is paid Fri Nov 13
+      // (Nov 15 is a Sunday), before a Nov 20 target, so it is in the window
+      // now; a target of Sat Oct 31 keeps Nov 1-15, paid Fri Oct 30. Was
+      // Sep A-Nov A, Sep A-Oct B and 5:5:1.
       const windowKeys = (target: Date) => goalWindow(civilDate(2026, 9, 1), target).map((period) => period.key).join(",");
-      eq("a target date in the middle of Nov 16-30 leaves that period out: the window ends with Nov 1-15", windowKeys(civilDate(2026, 11, 20)), "2026-09-A,2026-09-B,2026-10-A,2026-10-B,2026-11-A");
-      eq("a target date on a period's last day keeps that period in", windowKeys(civilDate(2026, 10, 31)), "2026-09-A,2026-09-B,2026-10-A,2026-10-B");
+      eq("a target date in the middle of Nov 16-30 keeps that period: its pay lands Nov 13", windowKeys(civilDate(2026, 11, 20)), "2026-09-A,2026-09-B,2026-10-A,2026-10-B,2026-11-A,2026-11-B");
+      eq("a target date on a period's last day keeps the next period when its pay lands by then", windowKeys(civilDate(2026, 10, 31)), "2026-09-A,2026-09-B,2026-10-A,2026-10-B,2026-11-A");
       eq("a target date already behind the plan period still has the plan period", windowKeys(civilDate(2026, 8, 20)), "2026-09-A");
-      eq("the window is as long as the roadmap's own period count", `${goalWindow(civilDate(2026, 9, 1), civilDate(2026, 11, 20)).length}:${goalPeriodsLeft(civilDate(2026, 9, 1), civilDate(2026, 11, 20))}:${goalPeriodsLeft(civilDate(2026, 9, 1), civilDate(2026, 8, 20))}`, "5:5:1");
+      eq("the window is as long as the roadmap's own period count", `${goalWindow(civilDate(2026, 9, 1), civilDate(2026, 11, 20)).length}:${goalPeriodsLeft(civilDate(2026, 9, 1), civilDate(2026, 11, 20))}:${goalPeriodsLeft(civilDate(2026, 9, 1), civilDate(2026, 8, 20))}`, "6:6:1");
 
       const windowGoal = await prisma.goal.create({ data: { name: "Verify Afford Goal Window", targetAmount: 1000, currency: "USD", targetDate: civilDate(2026, 11, 20) } });
       const edgeGoal = await prisma.goal.create({ data: { name: "Verify Afford Goal Edge", targetAmount: 600, currency: "USD", targetDate: civilDate(2026, 10, 31) } });
@@ -6761,21 +6787,28 @@ async function main() {
       const walked = await affordData.projectPeriods(windowRefs, chosenForAfford, activeForAfford, affordContext);
       const planned = (goalId: string) => windowRefs.map((ref) => walked.get(`${ref.year}-${String(ref.month).padStart(2, "0")}-${ref.period}`)!.goalPlans.some((plan) => plan.goalId === goalId) ? "1" : "0").join(",");
       const paceOf = async (goalId: string) => roadmapForAfford(goalId, planRefForAfford(affordContext), affordContext);
-      eq("the window goal's pace is 1,000 over its 5 periods", await paceOf(windowGoal.id), 200);
-      eq("it is planned in Sep 1-15 through Nov 1-15 and in none after", planned(windowGoal.id), "1,1,1,1,1,0,0");
-      eq("a target date on the last day of Oct 16-31 keeps Oct 16-31 and drops Nov 1-15", planned(edgeGoal.id), "1,1,1,1,0,0,0");
+      // Flipped deliberately with K3 (D9), as above. Was 200 over 5, Sep A-Nov A
+      // and Sep A-Oct B.
+      eq("the window goal's pace is 1,000 over its 6 periods", await paceOf(windowGoal.id), 166.67);
+      eq("it is planned in Sep 1-15 through Nov 16-30 and in none after", planned(windowGoal.id), "1,1,1,1,1,1,0");
+      eq("a target date on Sat Oct 31 keeps Nov 1-15, paid Fri Oct 30, and drops Nov 16-30", planned(edgeGoal.id), "1,1,1,1,1,0,0");
       eq("a target date already behind us keeps only the plan period", planned(pastGoal.id), "1,0,0,0,0,0,0");
       eq("a goal dated beyond the horizon (Jun 30, 2027) is planned in every period, as before", planned(openGoal.id), "1,1,1,1,1,1,1");
       const paces = (key: string, goalId: string) => walked.get(key)!.goalPlans.find((plan) => plan.goalId === goalId)?.pace;
       eq("inside its window each goal keeps the pace the roadmap shows", `${paces("2026-09-B", windowGoal.id)}:${paces("2026-11-A", windowGoal.id)}:${paces("2026-10-B", edgeGoal.id)}:${paces("2026-09-A", pastGoal.id)}`, `${await paceOf(windowGoal.id)}:${await paceOf(windowGoal.id)}:${await paceOf(edgeGoal.id)}:${await paceOf(pastGoal.id)}`);
       const estimatedIn = (key: string) => walked.get(key)!.estimatedGoals.map((goal) => `${goal.name.replace("Verify Afford Goal ", "")}:${goal.amount}`).join("+");
-      eq("Oct 16-31 estimates the open, window and edge goals at their paces", estimatedIn("2026-10-B"), "Open:250+Window:200+Edge:150");
-      eq("Nov 1-15 has lost the edge goal, whose window ended on Oct 31", estimatedIn("2026-11-A"), "Open:250+Window:200");
-      eq("Nov 16-30, where the window goal's target date falls, has lost it too", estimatedIn("2026-11-B"), "Open:250");
-      eq("and Dec 1-15 is estimated only the goal dated beyond the horizon", estimatedIn("2026-12-A"), "Open:250");
-      eq("the period-wide estimate falls with each goal that leaves", ["2026-10-B", "2026-11-A", "2026-11-B", "2026-12-A"].map((key) => walked.get(key)!.flexible.estimatedGoalFunding).join(","), "600,450,250,250");
-      eq("and so do the period's commitments, by exactly the goal's pace", round2(walked.get("2026-11-A")!.flexible.committed - walked.get("2026-11-B")!.flexible.committed - (scheduledOf(walked.get("2026-11-A")!.flexible) - scheduledOf(walked.get("2026-11-B")!.flexible))), 200);
-      eq("a goal's window is the same whichever account is chosen", JSON.stringify((await affordData.projectPeriods(windowRefs, activeForAfford.find((a) => a.id !== affordAccount.id) ?? chosenForAfford, activeForAfford, affordContext)).get("2026-11-B")!.goalPlans.map((plan) => plan.goalId)), JSON.stringify([openGoal.id]));
+      // Flipped deliberately with K3 (D9 for the windows, D5 for the open
+      // goal): each period is estimated its own by-hand figure, so the open
+      // goal is asked 80 less (238.10 - 80 = 158.10) in Nov 1-15 and Dec 1-15,
+      // where its 80 contribution on the 9th is due, and its whole pace in the
+      // B periods. Was Open:250 everywhere, 600,450,250,250 and 200.
+      eq("Oct 16-31 estimates the open, window and edge goals at their paces", estimatedIn("2026-10-B"), "Open:238.1+Window:166.67+Edge:120");
+      eq("Nov 1-15 keeps the edge goal (paid Oct 30, before its Oct 31 target) and asks the open goal 80 less, its contribution being due there", estimatedIn("2026-11-A"), "Open:158.1+Window:166.67+Edge:120");
+      eq("Nov 16-30, paid Nov 13, still funds the window goal due Nov 20 and has lost the edge goal", estimatedIn("2026-11-B"), "Open:238.1+Window:166.67");
+      eq("and Dec 1-15 is estimated only the goal dated beyond the horizon, less its contribution due there", estimatedIn("2026-12-A"), "Open:158.1");
+      eq("the period-wide estimate is the sum of each period's own figures", ["2026-10-B", "2026-11-A", "2026-11-B", "2026-12-A"].map((key) => walked.get(key)!.flexible.estimatedGoalFunding).join(","), "524.77,444.77,404.77,158.1");
+      eq("and the period's commitments move by exactly the estimates", round2(walked.get("2026-11-A")!.flexible.committed - walked.get("2026-11-B")!.flexible.committed - (scheduledOf(walked.get("2026-11-A")!.flexible) - scheduledOf(walked.get("2026-11-B")!.flexible))), 40);
+      eq("a goal's window is the same whichever account is chosen", JSON.stringify((await affordData.projectPeriods(windowRefs, activeForAfford.find((a) => a.id !== affordAccount.id) ?? chosenForAfford, activeForAfford, affordContext)).get("2026-11-B")!.goalPlans.map((plan) => plan.goalId)), JSON.stringify([openGoal.id, windowGoal.id]));
 
       // An undated goal stays out of every period, inside any window or not.
       const undatedWindow = await prisma.goal.create({ data: { name: "Verify Afford Goal Undated Window", targetAmount: 900, currency: "USD" } });
@@ -6793,7 +6826,7 @@ async function main() {
       eq("the periods after it are estimated exactly as when nothing was confirmed", ["2026-09-B", "2026-10-B", "2026-11-A", "2026-11-B"].map((key) => withConfirmed.get(key)!.flexible.estimatedGoalFunding === walked.get(key)!.flexible.estimatedGoalFunding).join(","), "true,true,true,true");
       await prisma.paydayCheckin.update({ where: { id: goalPlanCheckin.id }, data: { status: "DRAFT" } });
       await prisma.goal.deleteMany({ where: { id: { in: [windowGoal.id, edgeGoal.id, pastGoal.id] } } });
-      eq("and leaves the period unconfirmed, so the estimate is back exactly as before", `${draftOnly.verdict.periods[0].account.estimatedGoalFunding}:${draftOnly.verdict.periods[0].flexible.estimatedGoalFunding}`, `${sepBefore.account.estimatedGoalFunding}:250`);
+      eq("and leaves the period unconfirmed, so the estimate is back exactly as before", `${draftOnly.verdict.periods[0].account.estimatedGoalFunding}:${draftOnly.verdict.periods[0].flexible.estimatedGoalFunding}`, `${sepBefore.account.estimatedGoalFunding}:238.1`);
 
       await prisma.transaction.deleteMany({ where: { source: "PAYDAY_CHECKIN", accountId: { in: activeForAfford.map((a) => a.id) }, date: periodRange(periodInfo(currentRef)) } });
       await prisma.budget.deleteMany({ where: { year: currentRef.year, month: currentRef.month, period: currentRef.period } });
@@ -7350,7 +7383,7 @@ async function main() {
         check("B48.3 es: the same three facts", roomEs.includes("un solo cobro llega a DOP 10,000 o cuando su total mensual") && roomEs.includes("aporte a metas") && roomEs.includes("dos veces al mes no se comprueban"), roomEs.slice(0, 120));
       }
 
-      console.log("\n-- B34: from payday to period end, the unconfirmed current period keeps its goal estimate --");
+      console.log("\n-- B34 / D10: from payday to period end, the current period is outside the roadmap's window --");
       const pace = await prisma.account.create({ data: { name: "Verify Proj Pace", currency: "USD", type: "CHECKING" } });
       await payHistory(pace.id, "USD", 10000, 5, [3, 4, 5, 6, 7, 8]);
       await payHistory(pace.id, "USD", 10000, 20, [3, 4, 5, 6, 7, 8]);
@@ -7362,10 +7395,16 @@ async function main() {
       const estimateIn = async (context: ReturnType<typeof contextOn>, ref: typeof sepA | typeof sepB) =>
         (await affordData.projectPeriods([ref], paceOnly[0], paceOnly, context)).get(periodInfo(ref).key)!.estimatedGoals.find((estimate) => estimate.goalId === goal.id)?.amount ?? 0;
       const paceOn15 = await payday.getGoalRoadmapAmount(goal.id, payday.planPeriodRef(sep15), sep15);
-      eq("the goal's pace as of the Sep 15 payday is 3,000 over the 13 periods from Sep 16-30 to Mar 31", paceOn15, 230.77);
-      eq("on Sep 14, before payday, Sep 1-15 is the plan period and carries the goal's pace (3,000 over 14: 214.29)", await estimateIn(sep14, sepA), 214.29);
-      eq("B34: on the Sep 15 payday, Sep 1-15 (unconfirmed, before the plan period) keeps an estimate at the pace: 230.77, not 0", await estimateIn(sep15, sepA), 230.77);
-      eq("B34: the plan period after it is estimated as before", await estimateIn(sep15, sepB), 230.77);
+      // Flipped deliberately with K3. D9: Apr 1-15, 2027 is paid Mar 31, the
+      // target date, so the counts are 14 from Sep 16 and 15 from Sep 1 (were
+      // 13 and 14: 230.77 and 214.29). D10 (user decision): Afford's goal
+      // window is the roadmap's, from the plan period on, so today's period is
+      // no longer estimated from payday to its end - B34's current-period
+      // estimate is removed on purpose (was 230.77).
+      eq("the goal's pace as of the Sep 15 payday is 3,000 over the 14 periods from Sep 16-30 to Apr 1-15 (paid Mar 31)", paceOn15, 214.29);
+      eq("on Sep 14, before payday, Sep 1-15 is the plan period and carries the goal's pace (3,000 over 15: 200)", await estimateIn(sep14, sepA), 200);
+      eq("D10: on the Sep 15 payday, Sep 1-15 precedes the plan period and is outside the roadmap's window: no estimate", await estimateIn(sep15, sepA), 0);
+      eq("D10: the plan period after it is estimated at the pace", await estimateIn(sep15, sepB), 214.29);
       const pastDue = await prisma.goal.create({ data: { name: "Verify Proj Goal Past", targetAmount: 500, currency: "USD", targetDate: civilDate(2026, 9, 10) } });
       const pastIn = async (ref: typeof sepA | typeof sepB) => (await affordData.projectPeriods([ref], paceOnly[0], paceOnly, sep15)).get(periodInfo(ref).key)!.estimatedGoals.find((estimate) => estimate.goalId === pastDue.id)?.amount ?? 0;
       eq("B34: a goal already past its date asks its whole balance of the plan period only, never of today's period too", `${await pastIn(sepA)}:${await pastIn(sepB)}`, "0:500");
@@ -9696,24 +9735,40 @@ async function main() {
 
     console.log("-- goal behind: the goal page's roadmap status --");
     const sepB = periodInfo({ year: 2026, month: 9, period: "B" });
-    const goalStatus = (over: Partial<import("../src/lib/data/payday").GoalRoadmapStatus>): import("../src/lib/data/payday").GoalRoadmapStatus => ({
-      goalId: "goal_1", name: "Emergency Fund", targetDate: civilDate(2027, 3, 31), period: sepB, roadmapAmount: 307.69, planned: { plannedAmount: 100, recommendedAmount: 100 }, ...over,
-    });
+    // Flipped deliberately with K3: a status is the goal's period plan
+    // (src/lib/goal-plan.ts) with its two statements read off it, and the
+    // planning statement is keyed `:plan` beside the period so the
+    // follow-through statement (`:contributed`) is dismissed apart from it.
+    // Was roadmapAmount / planned { plannedAmount, recommendedAmount }, the
+    // key without `:plan`, the title "Emergency Fund is behind its roadmap"
+    // and the labels "Roadmap this period" / "Planned this period" (B48.9:
+    // the period is named by its own evidence line).
+    const goalPlanLib = await import("../src/lib/goal-plan");
+    const goalStatus = (over: { goalId?: string; targetDate?: Date | null; period?: typeof sepB; pace?: number; planned?: number | null; recommended?: number | null; open?: boolean }): import("../src/lib/data/payday").GoalRoadmapStatus => {
+      const figures = goalPlanLib.goalPeriodFigures({ pace: over.pace ?? 307.69, scheduled: 0, outstandingScheduled: 0, planned: over.planned === undefined ? 100 : over.planned, recommended: over.recommended === undefined ? 100 : over.recommended, contributed: 0 });
+      const targetDate = over.targetDate === undefined ? civilDate(2027, 3, 31) : over.targetDate;
+      const judged = (over.open ?? true) && targetDate !== null;
+      return {
+        ...figures, goalId: over.goalId ?? "goal_1", name: "Emergency Fund", currency: "USD", targetDate, achievedAt: null, open: over.open ?? true,
+        period: over.period ?? sepB, periodsLeft: 13, nativePace: figures.pace, nativeByHand: figures.byHand, role: "plan",
+        planningShortfall: judged ? goalPlanLib.planningShortfall(figures) : 0, roomShortfall: judged ? goalPlanLib.roomShortfall(figures) : 0, followThroughShortfall: 0,
+      };
+    };
     const behind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({})] });
-    eq("a dated goal planned under its roadmap is an advisory insight keyed by the goal", `${behind[0].id}|${behind[0].severity}|${behind[0].title}|${behind[0].actionHref}`, "goal_behind:goal_1:2026-09-B|advisory|Emergency Fund is behind its roadmap|/goals/goal_1");
-    eq("behind by exactly the page's figure, beside the roadmap, the plan, the period and the target date", behind[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Behind by=207.69;Roadmap this period=307.69;Planned this period=100;Period=Sep 16-30;Target date=2027-03-31;Room couldn't cover=207.69");
-    eq("the room shortfall is left out when the accounts could have covered the pace", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: { plannedAmount: 100, recommendedAmount: 400 } })] })[0].evidence.length, 5);
-    eq("a plan on the roadmap (or ahead) is nothing to notice", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: { plannedAmount: 307.69, recommendedAmount: 307.69 } }), goalStatus({ goalId: "g2", planned: { plannedAmount: 400, recommendedAmount: 400 } })] }).length, 0);
-    eq("a difference within half a cent is on the roadmap - the page's own tolerance", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: { plannedAmount: 307.686, recommendedAmount: 307.686 } })] }).length, 0);
+    eq("a dated goal planned under its roadmap is an advisory insight keyed by the goal, the period and the statement", `${behind[0].id}|${behind[0].severity}|${behind[0].title}|${behind[0].actionHref}`, "goal_behind:goal_1:2026-09-B:plan|advisory|The plan for Emergency Fund is behind its roadmap|/goals/goal_1");
+    eq("behind by exactly the page's figure, beside the roadmap, the plan, the period and the target date", behind[0].evidence.map((e) => (e.kind === "money" ? `${e.label}=${e.amount}` : e.kind === "date" ? `${e.label}=${e.date}` : `${e.label}=${e.value}`)).join(";"), "Behind by=207.69;Roadmap, by hand=307.69;Planned=100;Period=Sep 16-30;Target date=2027-03-31;Room couldn't cover=207.69");
+    eq("the room shortfall is left out when the accounts could have covered the pace", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ recommended: 400 })] })[0].evidence.length, 5);
+    eq("a plan on the roadmap (or ahead) is nothing to notice", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: 307.69, recommended: 307.69 }), goalStatus({ goalId: "g2", planned: 400, recommended: 400 })] }).length, 0);
+    eq("a difference within half a cent is on the roadmap - the page's own tolerance", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: 307.686, recommended: 307.686 })] }).length, 0);
     eq("an undated goal has no roadmap to be behind", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ targetDate: null })] }).length, 0);
-    eq("a goal with no confirmed plan this period, or no pace, is not behind anything", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: null }), goalStatus({ goalId: "g3", roadmapAmount: null })] }).length, 0);
+    eq("a goal with no confirmed plan this period, or none left to save, is not behind anything", insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ planned: null, recommended: null }), goalStatus({ goalId: "g3", open: false })] }).length, 0);
 
     console.log("-- goal forecast risk: Afford's projection walked to the target date --");
     const forecastLib = await import("../src/lib/goal-forecast");
     const roomDraw = (headroom: number, recommendedAmount: number): import("../src/lib/payday").GoalFundingDraw => ({ accountId: "acc", name: "Checking", currency: "USD", headroom, share: 1, recommendedAmount });
     const forecastPeriod = (key: string, over: Partial<import("../src/lib/goal-forecast").GoalForecastPeriod> = {}): import("../src/lib/goal-forecast").GoalForecastPeriod => ({
       period: periodInfo({ year: Number(key.slice(0, 4)), month: Number(key.slice(5, 7)), period: key.slice(8) as "A" | "B" }),
-      pace: 307.69, recommended: 307.69, shortfall: 0, draws: [roomDraw(1500, 307.69)], ...over,
+      pace: 307.69, scheduled: 0, byHand: 307.69, recommended: 307.69, shortfall: 0, draws: [roomDraw(1500, 307.69)], ...over,
     });
     const forecast = (over: Partial<import("../src/lib/goal-forecast").GoalForecast> = {}): import("../src/lib/goal-forecast").GoalForecast => ({
       goalId: "goal_1", name: "Emergency Fund", targetDate: civilDate(2027, 3, 31), currency: "USD",
@@ -9747,18 +9802,18 @@ async function main() {
       goalForecasts: [forecast()],
     });
     eq("all five sources appear", [...new Set(all.map((i) => i.source))].sort().join(","), "afford_viability,goal_behind,goal_forecast_risk,not_posting,recurring_suggestion");
-    eq("critical insights lead, then advisory; registry order and each detector's own order within", all.map((i) => i.id).join(","), "not_posting:item_gym:missing_account,not_posting:item_fund:failed,afford_viability:plan_laptop:2026-10-A,recurring_suggestion:acc_1:NETFLIX COM,goal_behind:goal_1:2026-09-B,goal_forecast_risk:goal_1:2026-11-A");
+    eq("critical insights lead, then advisory; registry order and each detector's own order within", all.map((i) => i.id).join(","), "not_posting:item_gym:missing_account,not_posting:item_fund:failed,afford_viability:plan_laptop:2026-10-A,recurring_suggestion:acc_1:NETFLIX COM,goal_behind:goal_1:2026-09-B:plan,goal_forecast_risk:goal_1:2026-11-A");
     eq("only the two not-posting insights are critical now; Afford's is advisory and leaves the Needs attention group (B47b)", all.filter((i) => i.severity === "critical").map((i) => i.source).join(","), "not_posting,not_posting");
     eq("every id is unique across sources", new Set(all.map((i) => i.id)).size, all.length);
-    const kept = insights.withoutDismissed(all, [{ source: "not_posting", key: "item_gym:missing_account" }, { source: "goal_behind", key: "goal_1:2026-09-B" }]);
+    const kept = insights.withoutDismissed(all, [{ source: "not_posting", key: "item_gym:missing_account" }, { source: "goal_behind", key: "goal_1:2026-09-B:plan" }]);
     eq("a dismissal removes exactly the insight with that source and key - the same goal's forecast insight, under its own source, stays", kept.map((i) => i.id).join(","), "not_posting:item_fund:failed,afford_viability:plan_laptop:2026-10-A,recurring_suggestion:acc_1:NETFLIX COM,goal_forecast_risk:goal_1:2026-11-A");
     eq("a dismissal for a key under another source does not match", insights.withoutDismissed(all, [{ source: "afford_viability", key: "item_gym:missing_account" }]).length, all.length);
     console.log("-- dismissals hide only the evidence they were made on (B32) --");
     const dismissedRefs = (list: import("../src/lib/insights").Insight[]) => list.map((i) => ({ source: i.source, key: i.key }));
     // The finding's repro: Sep B 10 behind, dismissed; Dec A 400 behind.
-    const sepBehind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ roadmapAmount: 110, planned: { plannedAmount: 100, recommendedAmount: 110 } })] });
+    const sepBehind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ pace: 110, planned: 100, recommended: 110 })] });
     const decA = periodInfo({ year: 2026, month: 12, period: "A" });
-    const decBehind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ period: decA, roadmapAmount: 500, planned: { plannedAmount: 100, recommendedAmount: 500 } })] });
+    const decBehind = insights.detectGoalsBehind({ ...emptyContext, goalRoadmaps: [goalStatus({ period: decA, pace: 500, planned: 100, recommended: 500 })] });
     eq("Sep B, 10 behind: one insight", sepBehind.map((i) => i.evidence[0].kind === "money" ? i.evidence[0].amount : -1).join(","), "10");
     eq("the same goal, same period, still behind: the dismissal still hides it", insights.withoutDismissed(sepBehind, dismissedRefs(sepBehind)).length, 0);
     eq("REPRO: Dec A, 400 behind after the Sep B dismissal shows (it was 0 insights)", insights.withoutDismissed(decBehind, dismissedRefs(sepBehind)).map((i) => i.evidence[0].kind === "money" ? i.evidence[0].amount : -1).join(","), "400");
@@ -9859,17 +9914,22 @@ async function main() {
     const statuses = await getGoalRoadmapStatuses(insightContext);
     const goalStatus = statuses.find((s) => s.goalId === insightGoal.id);
     const liveRoadmap = await roadmapForInsights(insightGoal.id, insightPlanRef, insightContext);
-    eq("the status carries the live roadmap figure the goal page measures against", goalStatus?.roadmapAmount, liveRoadmap);
-    eq("... which is the remaining 4,000 over the 13 periods to March 31", liveRoadmap, 307.69);
-    eq("and the confirmed plan's GOAL rows summed: planned and recommended", `${goalStatus?.planned?.plannedAmount}:${goalStatus?.planned?.recommendedAmount}`, "100:100");
+    // Flipped deliberately with K3. D9: Apr 1-15, 2027 is paid Mar 31, so the
+    // 4,000 spreads over 14 periods (was 13: 307.69). The status is the
+    // goal's period plan: byHand / planned / recommended (was roadmapAmount
+    // and planned { plannedAmount, recommendedAmount }). D8 / B29: a goal in a
+    // confirmed period with no GOAL row planned 0 (was null, never flagged).
+    eq("the status carries the live roadmap figure the goal page measures against", goalStatus?.byHand, liveRoadmap);
+    eq("... which is the remaining 4,000 over the 14 periods paid by March 31", liveRoadmap, 285.71);
+    eq("and the confirmed plan's GOAL rows summed: planned and recommended", `${goalStatus?.planned}:${goalStatus?.recommended}`, "100:100");
     eq("the plan period and the goal's own details ride along", `${goalStatus?.period.key}:${goalStatus?.name}:${goalStatus?.targetDate ? toISODate(goalStatus.targetDate) : null}`, "2026-09-B:Verify Insight Goal:2027-03-31");
-    eq("a goal with a pace but no confirmed plan rows has planned = null", statuses.filter((s) => s.goalId !== insightGoal.id).every((s) => s.planned === null), true);
+    eq("a goal in the confirmed plan period with no GOAL row planned 0 for it (D8)", statuses.filter((s) => s.goalId !== insightGoal.id && s.role === "plan").every((s) => s.planned === 0), true);
 
     console.log("-- every source at once, through the same inputs the pages use --");
     const loaded = await loadInsightContext(insightContext);
     eq("the loaded context holds this run's posting summary, the tracker's verdicts, the suggestions and the goal statuses", `${loaded.recurringPosting === postingRun}:${loaded.affordRechecks.some((t) => t.itemId === laptopItem.id)}:${loaded.recurringSuggestions.some((s) => s.merchantKey === "VERIFY INSIGHT NETFLIX COM")}:${loaded.goalRoadmaps.some((s) => s.goalId === insightGoal.id)}`, "true:true:true:true");
     const collected = await collectInsights(insightContext);
-    const mine = collected.filter((i) => i.title.startsWith("Verify Insight"));
+    const mine = collected.filter((i) => i.title.includes("Verify Insight"));
     // The goal also trips the forecast detector: its account has no room
     // above its buffer in Oct 1-15 (rent and the laptop take all of it), so
     // nothing can be put toward the goal there - the goal forecast section
@@ -9884,7 +9944,7 @@ async function main() {
     eq("afford: keyed by the plan and the failing period, short in Oct 1-15 on the account check", `${laptopInsight?.key === `${laptopItem.id}:2026-10-A`}:${laptopInsight?.evidence[1].kind === "text" ? laptopInsight.evidence[1].value : "?"}:${laptopInsight?.evidence[4].kind === "text" ? laptopInsight.evidence[4].value : "?"}`, "true:Oct 1-15:Verify Insight Account would end the period below its buffer");
     eq("... by the amount the tracker's own badge reports", laptopInsight?.evidence[0].kind === "money" ? laptopInsight.evidence[0].amount : -1, (() => { const t = loaded.affordRechecks.find((r) => r.itemId === laptopItem.id)!; const s = tracking.summarizeAffordViability(t.verdict); return s.status === "short" ? s.shortfall : -1; })());
     eq("looks recurring: keyed by account + merchant key, three charges", `${netflixInsight?.key}:${netflixInsight?.evidence[2].kind === "text" ? netflixInsight.evidence[2].value : "?"}`, `${insightAccount.id}:VERIFY INSIGHT NETFLIX COM:3, Jul 12, 2026 to Sep 12, 2026`);
-    eq("goal: keyed by the goal and the plan period, behind by the page's own figure", `${goalInsight?.key === `${insightGoal.id}:2026-09-B`}:${goalInsight?.evidence[0].kind === "money" ? goalInsight.evidence[0].amount : -1}`, "true:207.69");
+    eq("goal: keyed by the goal, the plan period and the planning statement, behind by the page's own figure", `${goalInsight?.key === `${insightGoal.id}:2026-09-B:plan`}:${goalInsight?.evidence[0].kind === "money" ? goalInsight.evidence[0].amount : -1}`, "true:185.71");
     eq("every insight links somewhere", collected.every((i) => i.actionHref.startsWith("/")), true);
 
     console.log("-- dismissing: permanent, idempotent, one row per insight --");
@@ -9899,7 +9959,7 @@ async function main() {
     await dismissInsight({ source: "recurring_suggestion", key: netflixInsight!.key });
     eq("dismissing twice keeps one row", (await listInsightDismissals()).length, dismissalsBefore + 1);
     await prisma.insightDismissal.createMany({ data: [{ source: "goal_behind", key: insightGoal.id }, { source: "not_posting", key: gymItem.id }, { source: "afford_viability", key: laptopItem.id }] });
-    eq("rows written under the old keys (the bare goal or item id) match none of the new ones: those insights show again once (B32)", (await collectInsights(insightContext)).filter((i) => i.title.startsWith("Verify Insight")).map((i) => i.source).sort().join(","), "afford_viability,goal_behind,goal_forecast_risk,not_posting");
+    eq("rows written under the old keys (the bare goal or item id) match none of the new ones: those insights show again once (B32)", (await collectInsights(insightContext)).filter((i) => i.title.includes("Verify Insight")).map((i) => i.source).sort().join(","), "afford_viability,goal_behind,goal_forecast_risk,not_posting");
     await prisma.insightDismissal.deleteMany({ where: { key: { in: [insightGoal.id, gymItem.id, laptopItem.id] } } });
     await dismissInsight({ source: "afford_viability", key: gymInsight!.key });
     eq("a dismissal is keyed by source too: the gym item's key under another source leaves its not-posting insight in place", (await collectInsights(insightContext)).some((i) => i.id === gymInsight!.id), true);
@@ -9910,7 +9970,7 @@ async function main() {
     eq("dismissing the goal's behind-roadmap insight leaves its forecast insight - a different source for the same goal", (await collectInsights(insightContext)).filter((i) => i.key.startsWith(`${insightGoal.id}:`)).map((i) => i.source).join(","), "goal_forecast_risk");
     await dismissInsight({ source: "goal_forecast_risk", key: forecastInsightForGoal!.key });
     const afterAll = await collectInsights(insightContext);
-    eq("with all five dismissed none of the fixtures remain, whatever else is in the database", afterAll.some((i) => i.title.startsWith("Verify Insight")), false);
+    eq("with all five dismissed none of the fixtures remain, whatever else is in the database", afterAll.some((i) => i.title.includes("Verify Insight")), false);
     const stateAll = typeof collectInsightState === "function" ? await collectInsightState(insightContext) : undefined;
     eq("the state the Inbox reads counts the five current dismissed insights it hides", stateAll?.dismissedCount, 5);
     eq("... and lists the same visible insights as collectInsights", stateAll?.insights.map((i) => i.id).join(","), afterAll.map((i) => i.id).join(","));
@@ -9981,27 +10041,31 @@ async function main() {
     const forecast = (await forecastGoalFunding(forecastContext)).find((f) => f.goalId === forecastGoal.id);
     check("the dated goal has a forecast", forecast !== undefined);
     eq("it carries the goal's name, target date and the display currency", `${forecast?.name}:${forecast?.targetDate ? toISODate(forecast.targetDate) : null}:${forecast?.currency}`, "Verify Forecast Goal:2027-03-31:USD");
-    eq("it walks the 12 projected periods from Oct 1-15 to Mar 16-31 - the periods the pace is spread over, less the confirmed one", forecast?.periods.map((p) => p.period.key).join(","), "2026-10-A,2026-10-B,2026-11-A,2026-11-B,2026-12-A,2026-12-B,2027-01-A,2027-01-B,2027-02-A,2027-02-B,2027-03-A,2027-03-B");
+    // Flipped deliberately with K3 (D9, B43): Apr 1-15, 2027 is paid Mar 31,
+    // the target date, so the walk ends there and the 4,000 spreads over 14
+    // periods: 285.71 where it read 307.69 over 13, and the figures below
+    // follow (Dec 1-15 short by 85.71, not 107.69).
+    eq("it walks the 13 projected periods from Oct 1-15 to Apr 1-15 - the periods the pace is spread over, less the confirmed one", forecast?.periods.map((p) => p.period.key).join(","), "2026-10-A,2026-10-B,2026-11-A,2026-11-B,2026-12-A,2026-12-B,2027-01-A,2027-01-B,2027-02-A,2027-02-B,2027-03-A,2027-03-B,2027-04-A");
     eq("the plan period, confirmed, is not in the walk: its GOAL rows are the real plan and the goal page's own signal", forecast?.periods.some((p) => p.period.key === "2026-09-B"), false);
-    eq("every period asks the goal's pace as of today", [...new Set(forecast?.periods.map((p) => p.pace))].join(","), "307.69");
+    eq("every period asks the goal's pace as of today", [...new Set(forecast?.periods.map((p) => p.pace))].join(","), "285.71");
     const decA = forecast?.periods.find((p) => p.period.key === "2026-12-A");
-    eq("Dec 1-15: the room gives 200 of the 307.69 and is short by 107.69 - planGoalFunding's own figures for that period", `${decA?.recommended}:${decA?.shortfall}`, "200:107.69");
+    eq("Dec 1-15: the room gives 200 of the 285.71 and is short by 85.71 - planGoalFunding's own figures for that period", `${decA?.recommended}:${decA?.shortfall}`, "200:85.71");
     eq("... drawn from the one account with room there, at all the room it has", decA?.draws.filter((d) => d.headroom > 0).map((d) => `${d.name}:${d.headroom}:${d.recommendedAmount}`).join(","), "Verify Forecast Account:200:200");
-    eq("every other period covers the pace in full", forecast?.periods.filter((p) => p.period.key !== "2026-12-A").map((p) => `${p.recommended}:${p.shortfall}`).join(","), Array(11).fill("307.69:0").join(","));
+    eq("every other period covers the pace in full", forecast?.periods.filter((p) => p.period.key !== "2026-12-A").map((p) => `${p.recommended}:${p.shortfall}`).join(","), Array(12).fill("285.71:0").join(","));
     const decProjection = (await affordForForecast.projectPeriods([{ year: 2026, month: 12, period: "A" }], { id: forecastAccount.id, name: forecastAccount.name, currency: "USD" }, activeForForecast, forecastContext)).get("2026-12-A")!;
     eq("the figures are the projection's own goal plan for the period, not a second computation", JSON.stringify({ pace: decA?.pace, recommended: decA?.recommended, shortfall: decA?.shortfall, draws: decA?.draws }), JSON.stringify((({ pace, recommended, shortfall, draws }) => ({ pace, recommended, shortfall, draws }))(decProjection.goalPlans.find((g) => g.goalId === forecastGoal.id)!)));
     eq("... whose account figures put the room at exactly 200: 2,000 in, 1,300 owed, 500 kept back", `${decProjection.account.income}:${round2(decProjection.account.committed - decProjection.account.estimatedGoalFunding)}:${decProjection.account.buffer}`, "2000:1300:500");
     eq("and the estimate Afford itself carries for the goal there is the same 200", decProjection.estimatedGoals.find((g) => g.goalId === forecastGoal.id)?.amount, 200);
     const summary = summarizeGoalForecast(forecast!);
-    eq("the summary names the first short period", summary.status === "short" ? `${summary.period.period.label}:${summary.period.shortfall}` : "on_track", "Dec 1-15:107.69");
+    eq("the summary names the first short period", summary.status === "short" ? `${summary.period.period.label}:${summary.period.shortfall}` : "on_track", "Dec 1-15:85.71");
 
     console.log("-- the two goal signals are independent: at risk ahead, on the roadmap now --");
     const roadmapStatus = (await statusesForForecast(forecastContext)).find((s) => s.goalId === forecastGoal.id);
-    eq("the goal page's status: 310 planned against a 307.69 roadmap", `${roadmapStatus?.roadmapAmount}:${roadmapStatus?.planned?.plannedAmount}`, "307.69:310");
+    eq("the goal page's status: 310 planned against a 285.71 roadmap", `${roadmapStatus?.byHand}:${roadmapStatus?.planned}`, "285.71:310");
     let current = await collectForForecast(forecastContext);
     const riskInsight = current.find((i) => i.source === "goal_forecast_risk" && i.key.startsWith(`${forecastGoal.id}:`));
     eq("the forecast detector fires for the goal: advisory, titled after it, linking to it", `${riskInsight?.severity}|${riskInsight?.title}|${riskInsight?.actionHref}`, `advisory|Verify Forecast Goal is at risk before its target date|/goals/${forecastGoal.id}`);
-    eq("naming Dec 1-15 and the 107.69, beside the pace, the room, the account with room and the target date", evidenceOf(riskInsight), "Short by=107.69 USD;In=Dec 1-15;Roadmap pace=307.69 USD;Room could give=200 USD;Room on Verify Forecast Account=200 USD;Target date=2027-03-31");
+    eq("naming Dec 1-15 and the 85.71, beside the pace, the room, the account with room and the target date", evidenceOf(riskInsight), "Short by=85.71 USD;In=Dec 1-15;Roadmap pace=285.71 USD;Room could give=200 USD;Room on Verify Forecast Account=200 USD;Target date=2027-03-31");
     eq("while the behind-roadmap detector does not fire for it: the confirmed plan is on the roadmap", current.some((i) => i.source === "goal_behind" && i.key.startsWith(`${forecastGoal.id}:`)), false);
     eq("it is in the one list the Inbox shows and the nav badge counts, among the advisory insights after every critical one", current.findIndex((i) => i.id === riskInsight?.id) >= current.filter((i) => i.severity === "critical").length, true);
 
@@ -10018,11 +10082,11 @@ async function main() {
     await prisma.recurringItem.delete({ where: { id: premium.id } });
     await prisma.paydayPlanAllocation.updateMany({ where: { paydayCheckinId: forecastCheckin.id, type: "GOAL", goalId: forecastGoal.id }, data: { plannedAmount: 100 } });
     const roomy = (await forecastGoalFunding(forecastContext)).find((f) => f.goalId === forecastGoal.id);
-    eq("with the premium gone every projected period covers the pace", roomy?.periods.map((p) => p.shortfall).join(","), Array(12).fill("0").join(","));
+    eq("with the premium gone every projected period covers the pace", roomy?.periods.map((p) => p.shortfall).join(","), Array(13).fill("0").join(","));
     eq("so the forecast is on track", summarizeGoalForecast(roomy!).status, "on_track");
     current = await collectForForecast(forecastContext);
     const behindInsight = current.find((i) => i.source === "goal_behind" && i.key.startsWith(`${forecastGoal.id}:`));
-    eq("the behind-roadmap detector fires: 100 planned against 307.69", behindInsight?.evidence[0].kind === "money" ? behindInsight.evidence[0].amount : -1, 207.69);
+    eq("the behind-roadmap detector fires: 100 planned against 285.71", behindInsight?.evidence[0].kind === "money" ? behindInsight.evidence[0].amount : -1, 185.71);
     eq("and the forecast detector does not", current.some((i) => i.source === "goal_forecast_risk" && i.key.startsWith(`${forecastGoal.id}:`)), false);
 
     console.log("-- an undated goal is never walked --");
@@ -10168,8 +10232,12 @@ async function main() {
     eq("... and absent (a form without the toggle) means not a debt", goalSchema.safeParse(form).data?.isDebt, false);
 
     console.log("-- which goals the comparator reads --");
-    const card = await prisma.goal.create({ data: { name: "Verify Debt Card", targetAmount: 1000, currency: "USD", savedAmount: 300, targetDate: civilDate(2026, 12, 31), isDebt: true } });
-    const loan = await prisma.goal.create({ data: { name: "Verify Debt Loan", targetAmount: 3000, currency: "USD", savedAmount: 400, targetDate: civilDate(2027, 3, 31), isDebt: true } });
+    // Dated the day before a month's last day since K3 (D9, B43): a period
+    // counts when its pay lands by the target date, and Jan 1-15 / Apr 1-15
+    // are paid on Dec 31 / Mar 31. The day before keeps the 7 and 13 periods
+    // this scenario's figures are built on. Were Dec 31 and Mar 31.
+    const card = await prisma.goal.create({ data: { name: "Verify Debt Card", targetAmount: 1000, currency: "USD", savedAmount: 300, targetDate: civilDate(2026, 12, 30), isDebt: true } });
+    const loan = await prisma.goal.create({ data: { name: "Verify Debt Loan", targetAmount: 3000, currency: "USD", savedAmount: 400, targetDate: civilDate(2027, 3, 30), isDebt: true } });
     const family = await prisma.goal.create({ data: { name: "Verify Debt Family", targetAmount: 500, currency: "USD", savedAmount: 0, isDebt: true } });
     await prisma.goal.create({ data: { name: "Verify Debt Savings", targetAmount: 800, currency: "USD", savedAmount: 0, targetDate: civilDate(2026, 12, 31) } });
     await prisma.goal.create({ data: { name: "Verify Debt Settled", targetAmount: 100, currency: "USD", savedAmount: 100, achievedAt: debtToday, isDebt: true } });
@@ -10184,10 +10252,12 @@ async function main() {
     eq("nothing else in the database is marked", debts.length, mine.length);
     const byId = new Map(mine.map((d) => [d.goalId, d]));
     eq("each debt's balance is what is still to go, in the display currency", `${byId.get(card.id)?.balance}:${byId.get(loan.id)?.balance}:${byId.get(family.id)?.balance}`, "700:2600:500");
-    eq("a dated debt's minimum is its roadmap pace for the plan period: 700 over the 7 periods to Dec 31, 2,600 over the 13 to Mar 31", `${byId.get(card.id)?.minimum}:${byId.get(loan.id)?.minimum}`, "100:200");
-    eq("... the very figure the goal page measures against", `${byId.get(card.id)?.minimum === await roadmapForDebts(card.id, debtPlanRef, debtContext)}:${byId.get(loan.id)?.minimum === await roadmapForDebts(loan.id, debtPlanRef, debtContext)}`, "true:true");
+    eq("a dated debt's minimum is its roadmap pace for the plan period: 700 over the 7 periods to Dec 30, 2,600 over the 13 to Mar 30", `${byId.get(card.id)?.minimum}:${byId.get(loan.id)?.minimum}`, "100:200");
+    // With K3 the minimum is the plan's gross pace (D6), which equals the
+    // by-hand figure the goal page funds only because nothing is scheduled.
+    eq("... the goal's own plan-period pace, which here is also what the check-in funds by hand", `${byId.get(card.id)?.minimum === summaries.find((g) => g.id === card.id)?.plan.pace}:${byId.get(loan.id)?.minimum === await roadmapForDebts(loan.id, debtPlanRef, debtContext)}`, "true:true");
     eq("a debt with no target date has no pace of its own: minimum 0", byId.get(family.id)?.minimum, 0);
-    eq("the target date rides along for the page", `${byId.get(card.id)?.targetDate ? toISODate(byId.get(card.id)!.targetDate!) : null}:${byId.get(family.id)?.targetDate}`, "2026-12-31:null");
+    eq("the target date rides along for the page", `${byId.get(card.id)?.targetDate ? toISODate(byId.get(card.id)!.targetDate!) : null}:${byId.get(family.id)?.targetDate}`, "2026-12-30:null");
     eq("in the goal list's order (oldest first)", mine.map((d) => d.goalId).join(","), [card.id, loan.id, family.id].join(","));
 
     console.log("-- end to end: the page's comparison on these inputs, 150 extra --");
@@ -11062,14 +11132,19 @@ async function main() {
         const sep30 = kContext(civilDate(2026, 9, 30));
         const listed = (await kGoals(sep30)).find((g) => g.id === goal.id);
         const roadmap = (await kPaces(kPlanRef(sep30), sep30)).find((pace) => pace.goalId === goal.id)?.amount;
+        // Flipped deliberately with K3. D2: the pace is fixed at the plan
+        // period's start, so the Oct 1 contribution no longer lowers Oct 1-15's
+        // own bar (16,713.97 still to go on Oct 1). D9 / B43: Nov 16-30 is paid
+        // Fri Nov 13, before the Sun Nov 15 target, so it is a fourth period.
+        // Was 3,714.22 x 3 (11,142.65 over Oct 1-15, Oct 16-31, Nov 1-15).
         eq(
-          "D1: on Wed Sep 30 (payday) the Goals page asks 3,714.22 per pay period over 3 periods, counted from Oct 1 (was 2,785.66 x 4, counted from today)",
+          "D1: on Wed Sep 30 (payday) the Goals page asks 4,178.49 per pay period over 4 periods, counted from Oct 1 (was 2,785.66 x 4 counted from today, then 3,714.22 x 3)",
           `${listed?.displayPerPeriod}:${listed?.periodsLeft}`,
-          "3714.22:3",
+          "4178.49:4",
         );
-        eq("D1: ... the same figure the check-in's roadmap asks for the plan period", roadmap, 3714.22);
+        eq("D1: ... the same figure the check-in's roadmap asks for the plan period", roadmap, 4178.49);
         const oct5 = kContext(civilDate(2026, 10, 5));
-        eq("D1: a day that is not between payday and period end reads the same either way", (await kGoals(oct5)).find((g) => g.id === goal.id)?.displayPerPeriod, 3714.22);
+        eq("D1: a day that is not between payday and period end reads the same either way", (await kGoals(oct5)).find((g) => g.id === goal.id)?.displayPerPeriod, 4178.49);
         await kWipe();
       }
 
@@ -11096,10 +11171,13 @@ async function main() {
         );
         const listed = (await kGoals(sep30)).find((g) => g.id === open.id);
         const roadmap = (await kPaces(kPlanRef(sep30), sep30)).find((pace) => pace.goalId === open.id)?.amount;
+        // 1,200 over 7 periods since K3's D9 (Jan 1-15 is paid Dec 31, the
+        // target date; was 6 periods, 200): the 100 with no account still nets
+        // nothing.
         eq(
-          "D7: a contribution with no account no longer nets the 1,200 goal's pace: 200 a period on the Goals page and in the roadmap (was 100)",
+          "D7: a contribution with no account no longer nets the 1,200 goal's pace: 171.43 a period on the Goals page and in the roadmap (was 100, then 200 over 6)",
           `${listed?.displayPerPeriod}:${roadmap}`,
-          "200:200",
+          "171.43:171.43",
         );
         const afford = (await kProject([kRef(2026, 10, "A")], card, [card], sep30)).get("2026-10-A")!;
         eq(
@@ -11188,7 +11266,9 @@ async function main() {
         const categoryId = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
         const [subscriptions, groceries, dining] = [await categoryId("Subscriptions"), await categoryId("Groceries"), await categoryId("Dining")];
         await prisma.category.update({ where: { id: billsForK.id }, data: { isEssentialFixed: true } });
-        const thirty = await prisma.goal.create({ data: { name: "Verify K Thirty", targetAmount: 30000, currency: "DOP", targetDate: civilDate(2026, 12, 31) } });
+        // Due Dec 30 since K3 (D9): with Dec 31, Jan 1-15 (paid that day)
+        // would be a seventh period. Dec 30 keeps the trace's six.
+        const thirty = await prisma.goal.create({ data: { name: "Verify K Thirty", targetAmount: 30000, currency: "DOP", targetDate: civilDate(2026, 12, 30) } });
         await kItem({ name: "Netflix", amount: 600, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 5), accountId: salary.id, categoryId: subscriptions });
         await kItem({ name: "Thirty Contribution", amount: 2000, kind: "CONTRIBUTION", nextDate: civilDate(2026, 10, 10), accountId: salary.id, goalId: thirty.id });
         const sep30 = kContext(civilDate(2026, 9, 30));
@@ -11289,7 +11369,9 @@ async function main() {
         const a = await kAccount("A");
         const b = await kAccount("B");
         const x = await prisma.goal.create({ data: { name: "Verify K X", targetAmount: 100000, currency: "DOP", targetDate: civilDate(2026, 12, 31) } });
-        const y = await prisma.goal.create({ data: { name: "Verify K Y", targetAmount: 30000, currency: "DOP", targetDate: civilDate(2026, 10, 15) } });
+        // Due Oct 14 since K3 (D9): Oct 16-31 is paid Oct 15, so an Oct 15
+        // target would spread Y over two periods; Oct 14 keeps the one.
+        const y = await prisma.goal.create({ data: { name: "Verify K Y", targetAmount: 30000, currency: "DOP", targetDate: civilDate(2026, 10, 14) } });
         await kItem({ name: "A Subscription", amount: 10000, kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 5), accountId: a.id });
         await kItem({ name: "A Contribution", amount: 20000, kind: "CONTRIBUTION", nextDate: civilDate(2026, 10, 10), accountId: a.id, goalId: x.id });
         const sep30 = kContext(civilDate(2026, 9, 30));
@@ -11524,6 +11606,489 @@ async function main() {
       await dWipe();
       await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForD20 } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForD20 } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== a goal's period plan (K3): D2 D3 D4 D5 D6 D8 D9 D10 D11 D13 D14, the user's case (B11 B12 B13 B14 B29 B43) ==");
+  {
+    // QUANTITIES_MAP.md K3: one plan per goal and period - the pace fixed at
+    // the period's start (the plan period's for one not yet reached), the
+    // period's own recurring contributions, what is left by hand, what the
+    // confirmed check-in planned and what was contributed - read by the Goals
+    // pages and card, the check-in, the Inbox, the forecast, Afford and the
+    // debt comparator. Public APIs only, every field K3 added read through ?.,
+    // and the one new module imported with a fallback, so this block also
+    // runs against the code before K3 and fails there on each divergence it
+    // names. Display DOP, rates USD 1 / DOP 60 / EUR 0.9, buffer 10% with a
+    // 2,000 DOP floor. Fixtures `Verify K3 ...`, removed after each case;
+    // every other active item is paused and every other open goal parked
+    // meanwhile, both restored in the finally.
+    const { getGoalRoadmapStatuses: gStatuses, getGoalRoadmapAmounts: gPaces, getPaydayCheckinDraft: gDraft, confirmPaydayCheckin: gConfirm, planPeriodRef: gPlanRef } = await import("../src/lib/data/payday");
+    const { listGoals: gGoals } = await import("../src/lib/data/goals");
+    const { projectPeriods: gProject } = await import("../src/lib/data/afford");
+    const { forecastGoalFunding: gForecast } = await import("../src/lib/data/goal-forecast");
+    const { listDebtGoals: gDebts } = await import("../src/lib/data/debt-payoff");
+    const { collectInsights: gCollect, dismissInsight: gDismiss } = await import("../src/lib/data/insights");
+    const { postDueRecurringItems: gPost } = await import("../src/lib/recurring-posting");
+    const { getDictionary: gDictionary } = await import("../src/lib/i18n");
+    const goalPlanLib = (await import("../src/lib/goal-plan").catch(() => null)) as null | typeof import("../src/lib/goal-plan");
+    const gRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+    const gContext = (today: Date) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: gRates,
+      today,
+      currentPeriod: periodForDate(today),
+      recurringPosting: null,
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    });
+    const gRef = (year: number, month: number, half: "A" | "B") => ({ year, month, period: half });
+    const gAccount = async (name: string) => {
+      const row = await prisma.account.create({ data: { name: `Verify K3 ${name}`, currency: "DOP", type: "CHECKING" } });
+      return { id: row.id, name: row.name, currency: row.currency };
+    };
+    // A goal and its contributions, dated as given, with savedAmount their sum.
+    const gGoal = async (data: { name: string; target: number; currency?: string; targetDate: Date | null; isDebt?: boolean; contributions?: [number, Date][] }) => {
+      const contributions = data.contributions ?? [];
+      const goal = await prisma.goal.create({
+        data: {
+          name: `Verify K3 ${data.name}`,
+          targetAmount: data.target,
+          currency: data.currency ?? "DOP",
+          targetDate: data.targetDate,
+          isDebt: data.isDebt ?? false,
+          savedAmount: round2(contributions.reduce((sum, [amount]) => sum + amount, 0)),
+        },
+      });
+      if (contributions.length > 0) {
+        await prisma.goalContribution.createMany({
+          data: contributions.map(([amount, date]) => ({ goalId: goal.id, amount, currency: data.currency ?? "DOP", date })),
+        });
+      }
+      return goal;
+    };
+    const gItem = (data: { name: string; amount: number; nextDate: Date; goalId: string; accountId?: string }) =>
+      prisma.recurringItem.create({
+        data: { currency: "DOP", frequency: "MONTHLY", anchorDay: data.nextDate.getUTCDate(), active: true, kind: "CONTRIBUTION", ...data, name: `Verify K3 ${data.name}` },
+      });
+    // A confirmed check-in holding the given GOAL rows, as confirm writes them.
+    const gCheckin = (ref: { year: number; month: number; period: "A" | "B" }, rows: { goalId: string; accountId: string; planned: number; recommended: number }[]) =>
+      prisma.paydayCheckin.create({
+        data: {
+          ...ref,
+          checkinDate: paydayDateFor(ref),
+          currency: "DOP",
+          totalIncome: 0,
+          protectedBuffer: 2000,
+          status: "CONFIRMED",
+          allocations: { create: rows.map((row) => ({ type: "GOAL" as const, goalId: row.goalId, accountId: row.accountId, plannedAmount: row.planned, recommendedAmount: row.recommended, currency: "DOP" })) },
+        },
+      });
+    const gWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify K3 " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { year: 2026, month: { in: [9, 10, 11] } } });
+      await prisma.budget.deleteMany({ where: { year: 2026, month: { in: [9, 10, 11] } } });
+      await prisma.insightDismissal.deleteMany({ where: { source: "goal_behind" } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify K3 " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify K3 " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify K3 " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    type GStatus = Awaited<ReturnType<typeof gStatuses>>[number];
+    // The fields K3 added, read through ?. so the old shapes read as missing.
+    const k3 = (value: unknown) => value as Record<string, unknown> | undefined;
+    const planOf = (goal: unknown) => k3(k3(goal)?.plan);
+    const goalInsights = async (context: ReturnType<typeof gContext>, goalId: string) =>
+      (await gCollect(context)).filter((insight) => insight.source === "goal_behind" && insight.key.startsWith(`${goalId}:`));
+    const amountOf = (insight: import("../src/lib/insights").Insight | undefined) =>
+      insight?.evidence[0]?.kind === "money" ? insight.evidence[0].amount : undefined;
+    check(
+      "K3: no confirmed check-in for Sep-Nov 2026 is left over from an earlier section",
+      (await prisma.paydayCheckin.count({ where: { year: 2026, month: { in: [9, 10, 11] } } })) === 0,
+    );
+    const pausedForK3 = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForK3 = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK3 } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK3 } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    try {
+      console.log("-- the rules of the plan (pure) --");
+      eq("K3: the follow-through alert waits for the last 3 days of the plan period (a documented constant)", goalPlanLib?.FOLLOW_THROUGH_ALERT_DAYS, 3);
+      const octA = periodInfo(gRef(2026, 10, "A"));
+      eq(
+        "K3: for Oct 1-15 that is Oct 13, 14 and 15, and every day after it ends",
+        [12, 13, 15, 20].map((day) => goalPlanLib?.followThroughDue(octA, civilDate(2026, 10, day))).join(","),
+        "false,true,true,true",
+      );
+
+      console.log("-- the user's case (trace (a)): Pay back money, 29,000 due Sun Nov 15 2026 --");
+      {
+        const main = await gAccount("Main");
+        // As in production: 12,286.03 in before Sep 30, the 5,571.32 moved ON
+        // Sep 30 - the payday Oct 1-15's check-in was confirmed on - and
+        // 5,571.32 planned for Oct 1-15.
+        const payBack = await gGoal({ name: "Pay back money", target: 29000, targetDate: civilDate(2026, 11, 15), isDebt: true, contributions: [[8285.94, civilDate(2026, 9, 15)], [4000.09, civilDate(2026, 9, 15)], [5571.32, civilDate(2026, 9, 30)]] });
+        // D2 as the map ran trace (a): the 5,571.32 dated Oct 1, and due Thu
+        // Nov 12 so its pay periods are Oct 1-15, Oct 16-31 and Nov 1-15.
+        const threePeriods = await gGoal({ name: "Pay back money (3 periods)", target: 29000, targetDate: civilDate(2026, 11, 12), contributions: [[12286.03, civilDate(2026, 9, 1)], [5571.32, civilDate(2026, 10, 1)]] });
+        // D2's variant (and D11): planned and contributed 4,000 against the
+        // 5,571.32 the roadmap asks, the room at confirm covering only 4,000.
+        const variant = await gGoal({ name: "Variant", target: 29000, targetDate: civilDate(2026, 11, 12), isDebt: true, contributions: [[12286.03, civilDate(2026, 9, 1)], [4000, civilDate(2026, 10, 1)]] });
+        // D3: 5,000 planned for a 30,000 goal due Dec 31, nothing contributed.
+        const thirty = await gGoal({ name: "Thirty", target: 30000, targetDate: civilDate(2026, 12, 31) });
+        await gCheckin(gRef(2026, 10, "A"), [
+          { goalId: payBack.id, accountId: main.id, planned: 5571.32, recommended: 5571.32 },
+          { goalId: threePeriods.id, accountId: main.id, planned: 5571.32, recommended: 5571.32 },
+          { goalId: variant.id, accountId: main.id, planned: 4000, recommended: 4000 },
+          { goalId: thirty.id, accountId: main.id, planned: 5000, recommended: 5000 },
+        ]);
+        const sep30 = gContext(civilDate(2026, 9, 30));
+        const listed = await gGoals(sep30);
+        const payBackRow = listed.find((goal) => goal.id === payBack.id);
+        const threeRow = listed.find((goal) => goal.id === threePeriods.id);
+        // Oct 1-15's money is in hand from its payday, Sep 30: a contribution
+        // made that day is Oct 1-15's, and the pace is fixed before it.
+        eq(
+          "user's case: on Sep 30 Oct 1-15 shows 5,571.32 planned and the 5,571.32 moved on its Sep 30 payday as contributed (was 0.00, dated before Oct 1)",
+          `${k3(planOf(payBackRow)?.period)?.key}:${planOf(payBackRow)?.planned}:${planOf(payBackRow)?.contributed}`,
+          "2026-10-A:5571.32:5571.32",
+        );
+        eq(
+          "user's case: Oct 1-15's pace is fixed before its payday - 16,713.97 over 4 periods (Nov 16-30 is paid Fri Nov 13), 4,178.49 (was 2,785.66, the Sep 30 money counted as already saved)",
+          `${payBackRow?.displayPerPeriod}:${payBackRow?.periodsLeft}`,
+          "4178.49:4",
+        );
+        const days: Date[] = [];
+        for (let day = civilDate(2026, 9, 30); day.getTime() <= civilDate(2026, 10, 31).getTime(); day = addDays(day, 1)) days.push(day);
+        const followThroughDays: string[] = [];
+        for (const day of days) {
+          const statuses = (await gStatuses(gContext(day))).filter((status) => status.goalId === payBack.id && k3(status)?.period && (k3(k3(status)?.period)?.key === "2026-10-A"));
+          if (statuses.some((status) => Number(k3(status)?.followThroughShortfall ?? 0) > 0)) followThroughDays.push(toISODate(day));
+        }
+        eq("user's case: no follow-through shortfall for Oct 1-15 on any day from its Sep 30 payday to Oct 31 (was Oct 13 onward, 5,571.32)", followThroughDays.join(","), "");
+        eq(
+          "user's case: the Inbox raises nothing for the goal on Oct 13, Oct 15 or Oct 16",
+          `${(await goalInsights(gContext(civilDate(2026, 10, 13)), payBack.id)).length}:${(await goalInsights(gContext(civilDate(2026, 10, 15)), payBack.id)).length}:${(await goalInsights(gContext(civilDate(2026, 10, 16)), payBack.id)).length}`,
+          "0:0:0",
+        );
+        const oct15 = gContext(civilDate(2026, 10, 15));
+        const payBackOct15 = (await gGoals(oct15)).find((goal) => goal.id === payBack.id);
+        eq("user's case: from the Oct 15 payday, 3,714.22 per period over 3 periods", `${payBackOct15?.displayPerPeriod}:${payBackOct15?.periodsLeft}`, "3714.22:3");
+        eq(
+          "user's case: ... and the forecast asks 3,714.22 of each of Oct 16-31, Nov 1-15 and Nov 16-30",
+          (await gForecast(oct15)).find((forecast) => forecast.goalId === payBack.id)?.periods.map((period) => `${period.period.key}=${period.pace}`).join(","),
+          "2026-10-B=3714.22,2026-11-A=3714.22,2026-11-B=3714.22",
+        );
+        eq(
+          "D2 (the map's trace (a), contributed Oct 1, due Nov 12): 5,571.32 asked of Oct 1-15, planned and contributed - on Sep 30 (was 3,714.22)",
+          `${threeRow?.displayPerPeriod}:${threeRow?.periodsLeft}:${planOf(threeRow)?.planned}:${planOf(threeRow)?.contributed}`,
+          "5571.32:3:5571.32:5571.32",
+        );
+        const oct5 = gContext(civilDate(2026, 10, 5));
+        eq(
+          "D2: the Oct 1-15 contributions do not move Oct 1-15's bar - on Oct 5 still 5,571.32 and 4,178.49 (was 3,714.22 and 2,785.66 on the roadmap)",
+          (await gPaces(gPlanRef(oct5), oct5)).filter((pace) => pace.goalId === threePeriods.id || pace.goalId === payBack.id).map((pace) => pace.amount).sort().join(","),
+          "4178.49,5571.32",
+        );
+        const fromOct15 = (await gGoals(oct15)).find((goal) => goal.id === threePeriods.id);
+        eq(
+          "D2: from the Oct 15 payday Oct 16-31 recomputes from its own payday: 5,571.33 over the 2 periods left",
+          `${fromOct15?.displayPerPeriod}:${fromOct15?.periodsLeft}`,
+          "5571.33:2",
+        );
+        const forecastOct15 = (await gForecast(oct15)).find((forecast) => forecast.goalId === threePeriods.id);
+        eq(
+          "D2: ... and the forecast asks 5,571.33 of each of Oct 16-31 and Nov 1-15",
+          forecastOct15?.periods.map((period) => `${period.period.key}=${period.pace}`).join(","),
+          "2026-10-B=5571.33,2026-11-A=5571.33",
+        );
+        eq(
+          "D2: nothing to flag for the map's trace either - planned covers the roadmap and the plan went in (Oct 14)",
+          (await goalInsights(gContext(civilDate(2026, 10, 14)), threePeriods.id)).length,
+          0,
+        );
+
+        console.log("-- D2: a contribution inside the plan period no longer lowers the plan period's pace --");
+        const reopened = await gDraft(sep30);
+        eq(
+          "D2: the wizard re-opened on Sep 30 recommends 5,571.32 for Oct 1-15 - what was confirmed, so on track (was 3,714.22, '1,857.10 ahead')",
+          reopened.goals.find((goal) => goal.goalId === threePeriods.id)?.recommendedAmount,
+          5571.32,
+        );
+        const forecastSep30 = (await gForecast(sep30)).find((forecast) => forecast.goalId === threePeriods.id);
+        eq(
+          "D2: the forecast asks the plan period's 5,571.32 of Oct 16-31 and Nov 1-15, 11,142.64 for the 11,142.65 still needed (was 3,714.22 each, 7,428.44)",
+          `${forecastSep30?.periods.map((period) => period.pace).join(",")}:${round2((forecastSep30?.periods ?? []).reduce((sum, period) => sum + period.pace, 0))}`,
+          "5571.32,5571.32:11142.64",
+        );
+        const afford = await gProject([gRef(2026, 10, "B"), gRef(2026, 11, "A")], main, [main], sep30);
+        eq(
+          "D2: Afford estimates 5,571.32 of Oct 16-31 and Nov 1-15 for it (was 3,714.22, overstating the room by 1,857.10 each)",
+          ["2026-10-B", "2026-11-A"].map((key) => afford.get(key)!.goalPlans.find((plan) => plan.goalId === threePeriods.id)?.pace).join(","),
+          "5571.32,5571.32",
+        );
+        const variantStatus = (await gStatuses(sep30)).find((status) => status.goalId === variant.id && k3(status)?.role !== "earlier") as GStatus | undefined;
+        eq(
+          "D2 variant: 4,000 planned and contributed against a 5,571.32 roadmap - the plan is 1,571.32 behind, the follow-through is complete (was '237.99 behind the roadmap' once the 4,000 went in)",
+          `${k3(variantStatus)?.byHand}:${k3(variantStatus)?.planningShortfall}:${k3(variantStatus)?.contributed}:${k3(variantStatus)?.followThroughShortfall}`,
+          "5571.32:1571.32:4000:0",
+        );
+        eq(
+          "D11: the room note is the roadmap less the room recorded at confirm, 1,571.32, all period (was 237.99 after the contribution)",
+          k3(variantStatus)?.roomShortfall,
+          1571.32,
+        );
+        const variantInsight = (await goalInsights(sep30, variant.id))[0];
+        eq(
+          "D2 variant: the Inbox says the plan is behind by 1,571.32, keyed by the goal, the period and the planning statement",
+          `${variantInsight?.key === `${variant.id}:2026-10-A:plan`}:${amountOf(variantInsight)}`,
+          "true:1571.32",
+        );
+
+        console.log("-- D3: planned is compared with contributed, in the plan period's last days and after it ends --");
+        const thirtyRow = listed.find((goal) => goal.id === thirty.id);
+        eq("D3: Oct 1-15 shows 5,000 planned and 0 contributed", `${planOf(thirtyRow)?.planned}:${planOf(thirtyRow)?.contributed}`, "5000:0");
+        eq("D3: on Oct 1 and Oct 12 there is nothing to flag yet: the period is still running", `${(await goalInsights(gContext(civilDate(2026, 10, 1)), thirty.id)).length}:${(await goalInsights(gContext(civilDate(2026, 10, 12)), thirty.id)).length}`, "0:0");
+        const oct13 = await goalInsights(gContext(civilDate(2026, 10, 13)), thirty.id);
+        eq(
+          "D3: on Oct 13, three days before the end, '5,000 planned but not yet contributed' (was no insight all period)",
+          `${oct13.map((insight) => insight.key.replace(thirty.id, "goal")).join(",")}:${amountOf(oct13[0])}`,
+          "goal:2026-10-A:contributed:5000",
+        );
+        const oct16 = await goalInsights(gContext(civilDate(2026, 10, 16)), thirty.id);
+        eq("D3: once Oct 1-15 has ended it is still flagged for that period", `${oct16.map((insight) => insight.key.replace(thirty.id, "goal")).join(",")}:${amountOf(oct16[0])}`, "goal:2026-10-A:contributed:5000");
+        await prisma.goalContribution.create({ data: { goalId: thirty.id, amount: 5000, currency: "DOP", date: civilDate(2026, 10, 14) } });
+        await prisma.goal.update({ where: { id: thirty.id }, data: { savedAmount: 5000 } });
+        eq("D3: logged on Oct 14, the plan went in and nothing is flagged on Oct 16", (await goalInsights(gContext(civilDate(2026, 10, 16)), thirty.id)).length, 0);
+
+        console.log("-- D6: the debt comparator runs on the gross pace, without paying the plan period twice --");
+        const debts = await gDebts(sep30);
+        const payBackDebt = debts.find((debt) => debt.goalId === payBack.id);
+        eq(
+          "D6: the Nov 15 goal marked as a debt: minimum 4,178.49, the 5,571.32 already paid in Oct 1-15 beside it (was 3,714.22 and nothing)",
+          `${payBackDebt?.balance}:${payBackDebt?.minimum}:${k3(payBackDebt)?.paidThisPeriod}`,
+          "11142.65:4178.49:5571.32",
+        );
+        const payoff = compareDebtStrategies(debts.filter((debt) => debt.goalId === payBack.id || debt.goalId === variant.id), 0);
+        eq(
+          "D6: ... paid off in period 4, Nov 16-30, its target's last pay - not in period 3 by counting a second Oct 1-15 payment",
+          payoff.avalanche.payoffs.find((row) => row.goalId === payBack.id)?.period,
+          4,
+        );
+        eq(
+          "D6: the 3-period variant still owing 5,571.32 in Oct 1-15 is paid in period 3, its target's last pay, cents included",
+          payoff.avalanche.payoffs.find((row) => row.goalId === variant.id)?.period,
+          3,
+        );
+        await gWipe();
+      }
+
+      console.log("-- D4 and D5 (B13, B11): a monthly contribution to a 30,000 goal due Dec 30 --");
+      {
+        const card = await gAccount("Card");
+        // Dec 30, not Dec 31: Jan 1-15 is paid Dec 31, so the map's six
+        // periods (Oct 1-15 to Dec 16-31) and 5,000 pace hold.
+        const goal = await gGoal({ name: "Monthly", target: 30000, targetDate: civilDate(2026, 12, 30) });
+        await gItem({ name: "Monthly 2,000", amount: 2000, nextDate: civilDate(2026, 10, 10), goalId: goal.id, accountId: card.id });
+        await gCheckin(gRef(2026, 10, "A"), [{ goalId: goal.id, accountId: card.id, planned: 3000, recommended: 3000 }]);
+        const sep30 = gContext(civilDate(2026, 9, 30));
+        const oct9 = gContext(civilDate(2026, 10, 9));
+        const before = (await gGoals(oct9)).find((row) => row.id === goal.id);
+        eq("D4: on Oct 9 the goal asks 3,000 by hand beside 2,000 scheduled, and nothing is flagged", `${before?.displayPerPeriod}:${planOf(before)?.scheduled}:${(await goalInsights(oct9, goal.id)).length}`, "3000:2000:0");
+        const forecast = (await gForecast(sep30)).find((row) => row.goalId === goal.id);
+        eq(
+          "D5: on Sep 30 the forecast asks each period its own figure - 5,000 in the B periods, 3,000 beside the contribution in the A periods (was 3,000 in every period)",
+          forecast?.periods.map((period) => `${period.period.key}=${k3(period)?.byHand}`).join(","),
+          "2026-10-B=5000,2026-11-A=3000,2026-11-B=5000,2026-12-A=3000,2026-12-B=5000",
+        );
+        const afford = await gProject([gRef(2026, 10, "B"), gRef(2026, 11, "A")], card, [card], sep30);
+        eq(
+          "B11: Afford's estimate follows each period's own contribution: 5,000 in Oct 16-31, 3,000 in Nov 1-15",
+          ["2026-10-B", "2026-11-A"].map((key) => k3(afford.get(key)!.goalPlans.find((plan) => plan.goalId === goal.id))?.byHand).join(","),
+          "5000,3000",
+        );
+        const oct10 = gContext(civilDate(2026, 10, 10));
+        const run = await gPost(civilDate(2026, 10, 10));
+        eq("D4: the contribution posts on Oct 10", run.goalContributionsCreated, 1);
+        const after = (await gGoals(oct10)).find((row) => row.id === goal.id);
+        eq("D4: after it posts, still 3,000 by hand on the Goals page (was 4,666.67)", `${after?.savedAmount}:${after?.displayPerPeriod}`, "2000:3000");
+        eq("B13: ... and no 'behind its roadmap' insight (was 1,666.67 behind)", (await goalInsights(oct10, goal.id)).map((insight) => amountOf(insight)).join(","), "");
+        eq(
+          "D5: after it posts the later periods keep their own figures (was 4,666.67 in every period)",
+          (await gForecast(oct10)).find((row) => row.goalId === goal.id)?.periods.map((period) => k3(period)?.byHand).join(","),
+          "5000,3000,5000,3000,5000",
+        );
+        await gWipe();
+      }
+
+      console.log("-- D6 (B12): two debts paid by recurring contributions --");
+      {
+        const card = await gAccount("Debt Payments");
+        // Due Sun Nov 15: before K3 three periods (4,000 and 1,000 asked, the
+        // same as the contributions); from K3 four (Nov 16-30 is paid Nov 13).
+        const car = await gGoal({ name: "Car loan", target: 12000, targetDate: civilDate(2026, 11, 15), isDebt: true });
+        const cardDebt = await gGoal({ name: "Credit card", target: 3000, targetDate: civilDate(2026, 11, 15), isDebt: true });
+        await gItem({ name: "Car payment", amount: 4000, nextDate: civilDate(2026, 10, 5), goalId: car.id, accountId: card.id });
+        await gItem({ name: "Card payment", amount: 1000, nextDate: civilDate(2026, 10, 5), goalId: cardDebt.id, accountId: card.id });
+        const sep30 = gContext(civilDate(2026, 9, 30));
+        const debts = (await gDebts(sep30)).filter((debt) => debt.goalId === car.id || debt.goalId === cardDebt.id);
+        eq("D6: each debt's minimum is its gross pace, 3,000 and 750 (was 0 and 0: the pace net of the contributions that pay it)", debts.map((debt) => debt.minimum).join(","), "3000,750");
+        const comparison = compareDebtStrategies(debts, 0);
+        eq("D6: 3,750 reaches them every period and both are paid off in period 4, Nov 16-30 (was flow 0, never)", `${comparison.perPeriodFlow}:${comparison.avalanche.totalPeriods}:${comparison.snowball.totalPeriods}`, "3750:4:4");
+        await gWipe();
+      }
+
+      console.log("-- D8 (B29): a goal the accounts had no room for is flagged --");
+      {
+        const tight = await gAccount("Tight");
+        const goal = await gGoal({ name: "No Room", target: 30000, targetDate: civilDate(2026, 12, 30) });
+        const sep30 = gContext(civilDate(2026, 9, 30));
+        const confirmed = await gConfirm(
+          {
+            year: 2026,
+            month: 10,
+            period: "A",
+            accounts: [{ accountId: tight.id, reportedBalance: 0, incomeEntered: 1500, incomeNote: null }],
+            goals: [{ goalId: goal.id, funding: [] }],
+            essentialCategories: [],
+            flexibleCategories: [],
+            includedCarryover: 0,
+            acknowledgedDeficit: true,
+            acknowledgedZeroBuffer: true,
+          },
+          sep30,
+        );
+        check("D8: Oct 1-15 confirmed with 1,500 of income against the 2,000 floor", confirmed.ok === true);
+        eq("D8: confirm stores no GOAL row for it", await prisma.paydayPlanAllocation.count({ where: { goalId: goal.id } }), 0);
+        const status = (await gStatuses(sep30)).find((row) => row.goalId === goal.id) as GStatus | undefined;
+        eq("D8: its plan reads 0 planned, 5,000 behind, all of it beyond the room (was planned = null)", `${k3(status)?.planned}:${k3(status)?.planningShortfall}:${k3(status)?.roomShortfall}`, "0:5000:5000");
+        const insight = (await goalInsights(sep30, goal.id))[0];
+        eq("B29: the Inbox flags it, behind by 5,000 (was no insight)", `${insight?.key === `${goal.id}:2026-10-A:plan`}:${amountOf(insight)}`, "true:5000");
+        await gWipe();
+      }
+
+      console.log("-- D9 (B43): a period counts when its pay lands by the target date --");
+      {
+        eq("D9: plan Sep 16, target Oct 14: Sep 16-30 and Oct 1-15 (paid Sep 30) - 2 periods (was 1)", periodsRemaining(civilDate(2026, 9, 16), civilDate(2026, 10, 14)), 2);
+        eq("D9: target Oct 15: Oct 16-31 is paid that day - 3 (was 2)", periodsRemaining(civilDate(2026, 9, 16), civilDate(2026, 10, 15)), 3);
+        eq("D9: from Oct 1, target Oct 20: Oct 16-31 is paid Oct 15 - 2 (was 1)", periodsRemaining(civilDate(2026, 10, 1), civilDate(2026, 10, 20)), 2);
+        eq("D9: from Oct 1, target Sun Nov 15: Nov 16-30 is paid Fri Nov 13 - 4 (was 3)", goalPeriodsLeft(civilDate(2026, 10, 1), civilDate(2026, 11, 15)), 4);
+        const goal = await gGoal({ name: "Mid Period", target: 1000, targetDate: civilDate(2026, 10, 14) });
+        const oct2 = gContext(civilDate(2026, 10, 2));
+        const row = (await gGoals(oct2)).find((listed) => listed.id === goal.id);
+        eq("D9: on Oct 2 with a target of Oct 14 the Goals page counts 1 period and asks 1,000 of it, the roadmap's own figure (was 0, 'due this period')", `${row?.periodsLeft}:${row?.displayPerPeriod}:${(await gPaces(gPlanRef(oct2), oct2)).find((pace) => pace.goalId === goal.id)?.amount}`, "1:1000:1000");
+        await gWipe();
+      }
+
+      console.log("-- D10: Afford's goal window is the roadmap's --");
+      {
+        const main = await gAccount("Window");
+        const goal = await gGoal({ name: "Window", target: 29000, targetDate: civilDate(2026, 11, 15), contributions: [[17857.35, civilDate(2026, 9, 1)]] });
+        const sep30 = gContext(civilDate(2026, 9, 30));
+        const refs = [gRef(2026, 9, "B"), gRef(2026, 10, "A"), gRef(2026, 10, "B"), gRef(2026, 11, "A"), gRef(2026, 11, "B")];
+        const projected = await gProject(refs, main, [main], sep30);
+        const keys = refs.map((ref) => periodInfo(ref).key).filter((key) => projected.get(key)!.goalPlans.some((plan) => plan.goalId === goal.id));
+        const paces = keys.map((key) => projected.get(key)!.goalPlans.find((plan) => plan.goalId === goal.id)!.pace);
+        eq(
+          "D10: on Sep 30 with no check-in, the 11,142.65 is estimated in Oct 1-15 to Nov 16-30 at 2,785.66, 11,142.64 in all - not in Sep 16-30 (was Sep 16-30 to Nov 1-15 at 3,714.22: 14,856.88)",
+          `${keys.join(",")}:${paces[0]}:${round2(paces.reduce((sum, pace) => sum + pace, 0))}`,
+          "2026-10-A,2026-10-B,2026-11-A,2026-11-B:2785.66:11142.64",
+        );
+        const oct30 = gContext(civilDate(2026, 10, 30));
+        eq(
+          "D10: on Fri Oct 30, Nov 1-15's payday, Oct 16-31 carries no estimate, as the forecast starts at Nov 1-15 (was an estimate there)",
+          `${(await gProject([gRef(2026, 10, "B")], main, [main], oct30)).get("2026-10-B")!.goalPlans.some((plan) => plan.goalId === goal.id)}:${(await gForecast(oct30)).find((row) => row.goalId === goal.id)?.periods[0]?.period.key}`,
+          "false:2026-11-A",
+        );
+        await gWipe();
+      }
+
+      console.log("-- D13: an undated goal's pace means one thing --");
+      {
+        const debt = await gGoal({ name: "Undated Debt", target: 10000, targetDate: null, isDebt: true, contributions: [[1000, civilDate(2026, 9, 5)]] });
+        const once = await gGoal({ name: "Undated Once", target: 10000, targetDate: null, contributions: [[1000, civilDate(2026, 9, 2)]] });
+        const oct20 = gContext(civilDate(2026, 10, 20));
+        eq(
+          "D13: seen Oct 20, 1,000 over the 3 completed periods since Sep 5 averages 333.33 (was 250, dividing by Oct 16-31, 5 days in)",
+          (await gGoals(oct20)).find((row) => row.id === debt.id)?.displayPacePerPeriod,
+          333.33,
+        );
+        const averageOn = async (day: Date) => (await gGoals(gContext(day))).find((row) => row.id === once.id)?.displayPacePerPeriod;
+        eq("D13: one 1,000 on Sep 2 averages 1,000 on Sep 15 and still on Sep 16 (was 500 overnight)", `${await averageOn(civilDate(2026, 9, 15))}:${await averageOn(civilDate(2026, 9, 16))}`, "1000:1000");
+        eq("D13: the figure is labelled as the average it is, not a pace (was 'Pace' / 'Ritmo')", `${gDictionary("en").goals.pace}|${gDictionary("es").goals.pace}`, "Average so far|Promedio hasta ahora");
+        eq(
+          "D13: the pace (K3) of an undated goal is its remaining balance, asked of the plan period only: the wizard 9,000, the comparator no per-period minimum",
+          `${(await gDraft(oct20)).goals.find((row) => row.goalId === debt.id)?.recommendedAmount}:${(await gDebts(oct20)).find((row) => row.goalId === debt.id)?.minimum}`,
+          "9000:0",
+        );
+        await gWipe();
+      }
+
+      console.log("-- D14: both paces convert on one path --");
+      {
+        const goal = await gGoal({ name: "Dollars", target: 1000, currency: "USD", targetDate: civilDate(2026, 12, 31) });
+        const oct1 = gContext(civilDate(2026, 10, 1));
+        const listed = (await gGoals(oct1)).find((row) => row.id === goal.id);
+        const drafted = (await gDraft(oct1)).goals.find((row) => row.goalId === goal.id);
+        eq(
+          "D14: a 1,000 USD goal due Dec 31 on DOP display: the Goals page and the wizard both ask 8,571.43 (60,000 over 7 periods; was 10,000.20 against 10,000.00)",
+          `${listed?.displayPerPeriod}:${drafted?.recommendedAmount}`,
+          "8571.43:8571.43",
+        );
+        await gWipe();
+      }
+
+      console.log("-- B14: an item that will not post never lowers a pace --");
+      {
+        const card = await gAccount("B14");
+        const goal = await gGoal({ name: "Twelve Hundred", target: 1200, targetDate: civilDate(2026, 12, 30) });
+        await gItem({ name: "No Account", amount: 100, nextDate: civilDate(2026, 10, 10), goalId: goal.id });
+        const sep30 = gContext(civilDate(2026, 9, 30));
+        const row = (await gGoals(sep30)).find((listed) => listed.id === goal.id);
+        eq("B14: the Goals page and the roadmap ask 200 (1,200 over 6), none of it scheduled", `${row?.displayPerPeriod}:${planOf(row)?.scheduled}:${(await gPaces(gPlanRef(sep30), sep30)).find((pace) => pace.goalId === goal.id)?.amount}`, "200:0:200");
+        const forecast = (await gForecast(sep30)).find((listed) => listed.goalId === goal.id);
+        eq("B14: the forecast asks 200 by hand in Oct 1-15, where the item would have been due", k3(forecast?.periods.find((period) => period.period.key === "2026-10-A"))?.byHand, 200);
+        eq("B14: ... and so does Afford's estimate", k3((await gProject([gRef(2026, 10, "A")], card, [card], sep30)).get("2026-10-A")!.goalPlans.find((plan) => plan.goalId === goal.id))?.byHand, 200);
+        await gWipe();
+      }
+
+      console.log("-- the two statements are dismissed apart, per period --");
+      {
+        const card = await gAccount("Both");
+        const goal = await gGoal({ name: "Both", target: 30000, targetDate: civilDate(2026, 12, 30) });
+        await gCheckin(gRef(2026, 10, "A"), [{ goalId: goal.id, accountId: card.id, planned: 1000, recommended: 1000 }]);
+        const oct14 = gContext(civilDate(2026, 10, 14));
+        const both = await goalInsights(oct14, goal.id);
+        eq(
+          "on Oct 14 the goal has both: the plan 4,000 behind a 5,000 roadmap, and 1,000 planned but not contributed",
+          both.map((insight) => `${insight.key.replace(goal.id, "goal")}=${amountOf(insight)}`).join(","),
+          "goal:2026-10-A:plan=4000,goal:2026-10-A:contributed=1000",
+        );
+        eq(
+          "titled apart, in both languages",
+          `${both.map((insight) => insight.title).join(" | ")} || ${gDictionary("es").inbox.goalTitle("X")} | ${k3(gDictionary("es").inbox)?.goalFollowThroughTitle ? (gDictionary("es").inbox as { goalFollowThroughTitle: (name: string) => string }).goalFollowThroughTitle("X") : "missing"}`,
+          "The plan for Verify K3 Both is behind its roadmap | Verify K3 Both: planned but not yet contributed || El plan para X va por detrás de su hoja de ruta | X: planificado pero aún sin aportar",
+        );
+        await gDismiss({ source: "goal_behind", key: `${goal.id}:2026-10-A:contributed` });
+        eq("dismissing the follow-through statement leaves the planning one", (await goalInsights(oct14, goal.id)).map((insight) => insight.key.replace(goal.id, "goal")).join(","), "goal:2026-10-A:plan");
+        await gDismiss({ source: "goal_behind", key: `${goal.id}:2026-10-A:plan` });
+        eq("once Oct 1-15 has ended its dismissed follow-through stays hidden", (await goalInsights(gContext(civilDate(2026, 10, 16)), goal.id)).length, 0);
+        await gCheckin(gRef(2026, 10, "B"), [{ goalId: goal.id, accountId: card.id, planned: 1000, recommended: 1000 }]);
+        eq(
+          "Oct 16-31's own statements are new ones: on Oct 29 its plan is 5,000 behind (6,000 over 5 from Oct 16) and its 1,000 not yet contributed",
+          (await goalInsights(gContext(civilDate(2026, 10, 29)), goal.id)).map((insight) => `${insight.key.replace(goal.id, "goal")}=${amountOf(insight)}`).join(","),
+          "goal:2026-10-B:plan=5000,goal:2026-10-B:contributed=1000",
+        );
+        await prisma.insightDismissal.create({ data: { source: "goal_behind", key: `${goal.id}:2026-10-B` } });
+        eq("a dismissal under the old key (goal and period only) hides neither", (await goalInsights(gContext(civilDate(2026, 10, 29)), goal.id)).length, 2);
+        await gWipe();
+      }
+    } finally {
+      await gWipe();
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK3 } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK3 } }, data: { active: true } });
     }
   }
 

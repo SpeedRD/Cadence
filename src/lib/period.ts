@@ -227,9 +227,11 @@ export function daysElapsedInPeriod(date: Date, info?: PeriodInfo): number {
 }
 
 /**
- * How many pay periods a plan still has to run: every period that ends on or
- * after `from` and on or before `to`. The current (partly elapsed) period counts
- * when its end date still fits inside the deadline.
+ * How many pay periods a plan still has to run, from the period containing
+ * `from`: every period whose pay lands (paydayDateFor) on or before `to`.
+ * A period's money is in hand from its payday, so a target date in the middle
+ * of a period - or on a weekend its pay was pulled back from - still has that
+ * period's pay to fund it. 0 when `to` is before `from`.
  */
 export function periodsRemaining(from: Date, to: Date): number {
   const target = startOfDay(to);
@@ -238,7 +240,7 @@ export function periodsRemaining(from: Date, to: Date): number {
   let count = 0;
   // Guard against runaway loops on absurd target dates (~40 years).
   for (let i = 0; i < 1000; i += 1) {
-    if (cursor.end.getTime() > target.getTime()) break;
+    if (paydayDateFor(cursor).getTime() > target.getTime()) break;
     count += 1;
     cursor = periodInfo(nextPeriod(cursor));
   }
@@ -258,9 +260,8 @@ export function goalPeriodsLeft(planStart: Date, targetDate: Date): number {
 
 /**
  * The periods a dated goal's roadmap pace covers: goalPeriodsLeft() of them,
- * from the plan period on. A period after the last of them lies past the
- * goal's target date (or holds it part-way through), where the pace has no
- * meaning.
+ * from the plan period on. A period after the last of them is paid after the
+ * goal's target date, where the pace has no meaning.
  */
 export function goalWindow(planStart: Date, targetDate: Date): PeriodInfo[] {
   const window: PeriodInfo[] = [];

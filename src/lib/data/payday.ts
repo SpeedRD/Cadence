@@ -36,13 +36,17 @@ import {
   type CommitmentOccurrence,
 } from "@/lib/period-commitments";
 import {
+  followThroughDue,
+  followThroughShortfall,
+  planningShortfall,
+  roomShortfall,
+} from "@/lib/goal-plan";
+import {
   daysRemainingInPeriod,
   paydayDateFor,
   periodClock,
   periodInfo,
   periodKey,
-  goalPeriodsLeft,
-  periodsRemaining,
   previousComparablePeriod,
   previousPeriod,
   type PeriodInfo,
@@ -54,7 +58,8 @@ import type { paydayConfirmSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAccountBalances } from "@/lib/data/accounts";
-import { getPeriodSummary, type CommittedItem } from "@/lib/data/period-summary";
+import { goalPeriodPlans, loadGoalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
+import { getPeriodSummary } from "@/lib/data/period-summary";
 import { listGoals } from "@/lib/data/goals";
 
 import type { AppContext } from "@/lib/data/context";
@@ -172,8 +177,17 @@ export interface PaydayGoalFundingDraft {
 export interface PaydayGoalDraft {
   goalId: string;
   name: string;
-  /** The roadmap pace: what reaching the target on time asks for this period. */
+  /**
+   * What the check-in should fund by hand this period: the goal's pace less
+   * the recurring contributions scheduled in the period (the plan's `byHand`,
+   * src/lib/goal-plan.ts). For a goal with no target date, its whole remaining
+   * balance less the same.
+   */
   recommendedAmount: number;
+  /** The gross pace, recurring contributions included (the plan's `pace`). */
+  pace: number;
+  /** The goal's recurring contributions in the period. */
+  scheduled: number;
   /**
    * The goal's total this period: `funding` summed into the display currency.
    * Assembled here for summarizePaydayDraft's readers (the dashboard summary
@@ -395,84 +409,48 @@ export async function getCategorySuggestions(
  * measure against. Clamped at 0: an overspent prior period carries nothing
  * forward rather than compounding a deficit into the new plan.
  */
-/**
- * A goal's roadmap pace for the plan period, in the display currency: what
- * reaching the target by its date asks for, spread over the pay periods left
- * counted from the plan period's start, net of the recurring contributions
- * already due to it this period. Independent of any account's room - it is
- * the bar a goal is "on track" or "behind" against, never lowered by what the
- * accounts can currently fund.
- *
- * A goal with no target date has no pace to spread over - paying back
- * borrowed money, say, is simply done as fast as possible - so its figure is
- * the whole remaining balance, net of the same due contributions. What the
- * accounts can actually put toward it this period is planGoalFunding's cap.
- */
-export function goalRoadmapAmount(
-  goal: { displayRemaining: number; targetDate: Date | null },
-  planStart: Date,
-  dueContribution: number,
-): number {
-  const periodsLeft = goal.targetDate ? goalPeriodsLeft(planStart, goal.targetDate) : 1;
-  return round2(Math.max(0, goal.displayRemaining / periodsLeft - dueContribution));
-}
-
-/** The recurring contributions due to each goal in the period, in the display currency. */
-function dueContributionsByGoal(committedItems: CommittedItem[]): Map<string, number> {
-  const byGoal = new Map<string, number>();
-  for (const item of committedItems) {
-    if (item.kind !== "CONTRIBUTION" || !item.goalId) continue;
-    byGoal.set(item.goalId, (byGoal.get(item.goalId) ?? 0) + item.amount);
-  }
-  return byGoal;
-}
-
-/** One goal still being saved for and its roadmap pace for a plan period, in the display currency. */
+/** One goal still being saved for and its roadmap for a plan period, in the display currency. */
 export interface GoalRoadmapPace {
   goalId: string;
   name: string;
+  /** What the check-in funds by hand: the plan's `byHand` (src/lib/goal-plan.ts). */
   amount: number;
+  /** The gross pace, recurring contributions included. */
+  pace: number;
+  /** The goal's recurring contributions in the period. */
+  scheduled: number;
   /** Null for a goal with no target date - `amount` is then its whole remaining balance, a figure for the one period being planned rather than a per-period pace. */
   targetDate: Date | null;
 }
 
 /**
- * goalRoadmapAmount() for every goal still being saved for, from live data -
- * the same figure the check-in draft and confirm compute for each - in the
- * order the check-in funds them (listGoals: oldest goal first). A goal that
- * is achieved or has none left to save is left out; a goal with no target
- * date gets its whole remaining balance, as goalRoadmapAmount describes. One
- * read of the goals and one of the plan period's summary however many goals
- * there are. Afford reads this to estimate what a period with no confirmed
- * check-in will keep putting toward each goal (dated goals only - see
- * projectPeriods for why a whole-balance figure cannot be repeated).
+ * Every goal still being saved for, with its plan for `planRef` (see
+ * loadGoalPeriodPlans): the figure the check-in draft and confirm recommend,
+ * in the order the check-in funds them (oldest goal first). A goal that is
+ * achieved or has none left to save is left out; a goal with no target date
+ * asks its whole remaining balance.
  */
 export async function getGoalRoadmapAmounts(
   planRef: PeriodRef,
   context: AppContext,
 ): Promise<GoalRoadmapPace[]> {
-  const plan = periodInfo(planRef);
-  const [goals, planSummary] = await Promise.all([listGoals(context), getPeriodSummary(plan, context)]);
-  const dueByGoal = dueContributionsByGoal(planSummary.committedItems);
-  return goals
-    .filter((goal) => !goal.achievedAt && goal.remaining > 0)
-    .map((goal) => ({
-      goalId: goal.id,
-      name: goal.name,
-      amount: goalRoadmapAmount(
-        { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate },
-        plan.start,
-        dueByGoal.get(goal.id) ?? 0,
-      ),
-      targetDate: goal.targetDate,
+  const plans = await goalPeriodPlans(periodInfo(planRef), context);
+  return plans
+    .filter((plan) => plan.open)
+    .map((plan) => ({
+      goalId: plan.goalId,
+      name: plan.name,
+      amount: plan.byHand,
+      pace: plan.pace,
+      scheduled: plan.scheduled,
+      targetDate: plan.targetDate,
     }));
 }
 
 /**
- * getGoalRoadmapAmounts() for one goal, so the goal page measures a confirmed
- * plan against the real pace rather than against whatever the accounts' room
- * let the plan schedule. Null for a goal that is achieved or has none left to
- * save (or does not exist).
+ * getGoalRoadmapAmounts() for one goal: what the check-in funds by hand for
+ * it in `planRef`. Null for a goal that is achieved or has none left to save
+ * (or does not exist).
  */
 export async function getGoalRoadmapAmount(
   goalId: string,
@@ -484,121 +462,74 @@ export async function getGoalRoadmapAmount(
 }
 
 /**
- * One goal's standing this plan period: its roadmap pace beside what the
- * period's confirmed check-in actually set aside for it. What the goal page's
- * "planned this period" line and its "behind the roadmap" / room-shortfall
- * notes read, and what the Inbox's goal detector (src/lib/insights.ts) reads
- * to say the same thing - one computation, two surfaces.
+ * One goal's standing in one period: its plan (pace, scheduled, by hand,
+ * planned, contributed) with the two statements read off it (decision 5.3,
+ * option C). What the goal page's notes read, and what the Inbox's goal
+ * detector (src/lib/insights.ts) reads to say the same thing - one
+ * computation, two surfaces.
+ *
+ *   "plan"     the plan period (periodClock's `plan`): its planning
+ *              statement, and its follow-through once its last days come
+ *   "earlier"  the current period while it precedes the plan period (from
+ *              payday to its end) and the period before it, once ended:
+ *              their follow-through statement only
  */
-export interface GoalRoadmapStatus {
-  goalId: string;
-  name: string;
-  targetDate: Date | null;
-  /** The plan period the check-in and the pace are for. */
-  period: PeriodInfo;
-  /** getGoalRoadmapAmount() for the plan period, in the display currency; null for a goal that is achieved or has none left to save. */
-  roadmapAmount: number | null;
-  /**
-   * The confirmed check-in's GOAL rows for the goal - one per account it draws
-   * on, each in that account's currency, or a single accountless row from a
-   * check-in confirmed before funding was per-account - summed into the
-   * display currency. `plannedAmount` is what the user chose; `recommendedAmount`
-   * summed the same way is what the accounts' room let the plan schedule.
-   * Null when the plan period has no confirmed check-in with rows for it.
-   */
-  planned: { plannedAmount: number; recommendedAmount: number } | null;
+export interface GoalRoadmapStatus extends GoalPeriodPlan {
+  role: "plan" | "earlier";
+  /** byHand - planned, for a dated goal with a confirmed plan in the plan period; 0 otherwise. */
+  planningShortfall: number;
+  /** byHand - what the room let the plan recommend at confirm, for the same goals; 0 otherwise. */
+  roomShortfall: number;
+  /** Planned (by hand and scheduled) but neither contributed nor still to post; 0 unless the period is in its last days or over (followThroughDue). */
+  followThroughShortfall: number;
 }
 
 /**
- * getGoalRoadmapStatus() for every goal that has either a roadmap pace or a
- * GOAL row on the plan period's confirmed check-in, in pace order (the
- * check-in's funding order) with plan-only goals after. One read of the
- * check-in's GOAL rows and one getGoalRoadmapAmounts() walk however many
- * goals there are.
+ * Every goal's status in the periods the goal notes speak about: the plan
+ * period for each goal still being saved for or with a confirmed plan there,
+ * and each earlier period (see GoalRoadmapStatus) where a confirmed plan's
+ * follow-through is due and short. Plan-period statuses first, in the
+ * check-in's funding order.
  */
 export async function getGoalRoadmapStatuses(context: AppContext): Promise<GoalRoadmapStatus[]> {
-  const planRef = planPeriodRef(context);
-  const period = periodInfo(planRef);
-  const [checkin, paces] = await Promise.all([
-    prisma.paydayCheckin.findFirst({
-      where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
-      select: {
-        allocations: {
-          where: { type: "GOAL", goalId: { not: null } },
-          select: {
-            goalId: true,
-            plannedAmount: true,
-            recommendedAmount: true,
-            currency: true,
-            goal: { select: { name: true, targetDate: true } },
-          },
-        },
-      },
-    }),
-    getGoalRoadmapAmounts(planRef, context),
-  ]);
+  const clock = periodClock(context.today);
+  const earlier = [
+    ...(clock.current.key !== clock.plan.key ? [clock.current] : []),
+    periodInfo(previousPeriod(clock.current)),
+  ];
+  const plans = await loadGoalPeriodPlans([clock.plan, ...earlier], context);
 
-  // The goal's figure is its rows summed into the display currency, rounded
-  // as each row lands - the same fold the goal page always ran.
-  const plannedByGoal = new Map<
-    string,
-    { name: string; targetDate: Date | null; plannedAmount: number; recommendedAmount: number }
-  >();
-  for (const allocation of checkin?.allocations ?? []) {
-    if (!allocation.goalId || !allocation.goal) continue;
-    const sum = plannedByGoal.get(allocation.goalId) ?? {
-      name: allocation.goal.name,
-      targetDate: allocation.goal.targetDate,
-      plannedAmount: 0,
-      recommendedAmount: 0,
-    };
-    plannedByGoal.set(allocation.goalId, {
-      ...sum,
-      plannedAmount: round2(
-        sum.plannedAmount +
-          convert(num(allocation.plannedAmount), allocation.currency, context.displayCurrency, context.rates),
-      ),
-      recommendedAmount: round2(
-        sum.recommendedAmount +
-          convert(num(allocation.recommendedAmount), allocation.currency, context.displayCurrency, context.rates),
-      ),
-    });
-  }
-
-  const statuses: GoalRoadmapStatus[] = paces.map((pace) => {
-    const planned = plannedByGoal.get(pace.goalId);
-    plannedByGoal.delete(pace.goalId);
+  const statuses: GoalRoadmapStatus[] = [];
+  const statusOf = (plan: GoalPeriodPlan, role: GoalRoadmapStatus["role"]): GoalRoadmapStatus => {
+    const judged = role === "plan" && plan.open && plan.targetDate !== null;
     return {
-      goalId: pace.goalId,
-      name: pace.name,
-      targetDate: pace.targetDate,
-      period,
-      roadmapAmount: pace.amount,
-      planned: planned
-        ? { plannedAmount: planned.plannedAmount, recommendedAmount: planned.recommendedAmount }
-        : null,
+      ...plan,
+      role,
+      planningShortfall: judged ? planningShortfall(plan) : 0,
+      roomShortfall: judged ? roomShortfall(plan) : 0,
+      followThroughShortfall:
+        !plan.achievedAt && followThroughDue(plan.period, clock.today) ? followThroughShortfall(plan) : 0,
     };
-  });
-  for (const [goalId, planned] of plannedByGoal) {
-    statuses.push({
-      goalId,
-      name: planned.name,
-      targetDate: planned.targetDate,
-      period,
-      roadmapAmount: null,
-      planned: { plannedAmount: planned.plannedAmount, recommendedAmount: planned.recommendedAmount },
-    });
+  };
+  for (const plan of plans.get(clock.plan.key) ?? []) {
+    if (plan.open || plan.planned !== null && plan.planned > 0) statuses.push(statusOf(plan, "plan"));
+  }
+  for (const period of earlier) {
+    for (const plan of plans.get(period.key) ?? []) {
+      const status = statusOf(plan, "earlier");
+      if (status.followThroughShortfall > 0) statuses.push(status);
+    }
   }
   return statuses;
 }
 
-/** getGoalRoadmapStatuses() for one goal; null when it has neither a pace nor a confirmed plan this period (or does not exist). */
+/** The plan-period status of one goal; null when it has neither a pace nor a confirmed plan this period (or does not exist). */
 export async function getGoalRoadmapStatus(
   goalId: string,
   context: AppContext,
 ): Promise<GoalRoadmapStatus | null> {
   const statuses = await getGoalRoadmapStatuses(context);
-  return statuses.find((status) => status.goalId === goalId) ?? null;
+  return statuses.find((status) => status.goalId === goalId && status.role === "plan") ?? null;
 }
 
 export async function getAvailableCarryover(
@@ -824,6 +755,7 @@ export async function getPaydayCheckinDraft(
     settings,
     existing,
     existingBudgetRows,
+    goalPlans,
   ] = await Promise.all([
     // Every account, not only the active ones: a check-in that recorded income
     // for an account archived since must keep showing it, or that income
@@ -848,6 +780,7 @@ export async function getPaydayCheckinDraft(
     prisma.budget.findMany({
       where: { year: planRef.year, month: planRef.month, period: planRef.period, categoryId: { not: null } },
     }),
+    goalPeriodPlans(plan, context),
   ]);
 
   // Category budgets already saved for the plan period - set by hand on the
@@ -922,11 +855,6 @@ export async function getPaydayCheckinDraft(
   const subscriptionsTotal = round2(subscriptions.reduce((sum, i) => sum + i.amount, 0));
   const contributionsTotal = round2(contributions.reduce((sum, i) => sum + i.amount, 0));
 
-  // A goal already fed by a recurring contribution this period does not also
-  // need its full roadmap amount set aside: reserving both put the same goal in
-  // the plan twice and shrank what was left for the flexible categories.
-  const dueContributionByGoal = dueContributionsByGoal(planSummary.committedItems);
-
   // The buffer is a recommendation per income account, not a stored choice, so
   // it is always recomputed from the income in this draft - never read back
   // from the confirmed check-in's BUFFER allocations. Goal funding below draws
@@ -946,21 +874,17 @@ export async function getPaydayCheckinDraft(
   // Every goal still being saved for, dated or not: an undated goal has no
   // pace, so its recommendation is the whole remaining balance and the
   // funding split below caps it by whatever room the goals before it leave.
+  // Each goal's plan for the period being planned (K3): what it asks by hand,
+  // net of the recurring contributions already scheduled in it - a goal fed
+  // automatically does not also need that much set aside, or the plan would
+  // hold the same money twice.
+  const planByGoal = new Map(goalPlans.map((goalPlan) => [goalPlan.goalId, goalPlan]));
   const roadmapGoals = allGoals
-    .filter((g) => !g.achievedAt && g.remaining > 0)
+    .filter((g) => !g.achievedAt && g.remaining > 0 && planByGoal.has(g.id))
     .map((g) => {
-      // listGoals()'s perPeriod/periodsLeft are anchored to context.today (right
-      // for the goals page's "time until target" display), but the payday
-      // planner reserves money for the PLAN period, which can be tomorrow's
-      // period rather than today's (see planPeriodRef()) - so recompute here
-      // anchored to plan.start instead of trusting the pre-computed fields.
-      const periodsLeft = g.targetDate ? Math.max(1, periodsRemaining(plan.start, g.targetDate)) : null;
-      const recommendedAmount = goalRoadmapAmount(
-        { displayRemaining: g.displayRemaining, targetDate: g.targetDate },
-        plan.start,
-        dueContributionByGoal.get(g.id) ?? 0,
-      );
-      return { goal: g, periodsLeft, recommendedAmount };
+      const goalPlan = planByGoal.get(g.id)!;
+      const periodsLeft = goalPlan.periodsLeft === null ? null : Math.max(1, goalPlan.periodsLeft);
+      return { goal: g, periodsLeft, recommendedAmount: goalPlan.byHand, pace: goalPlan.pace, scheduled: goalPlan.scheduled };
     });
   const reachedGoals = reachedGoalDrafts(
     existingGoalAllocations,
@@ -982,7 +906,7 @@ export async function getPaydayCheckinDraft(
     ).map((fundingPlan) => [fundingPlan.goalId, fundingPlan]),
   );
   const accountCurrencyById = new Map(accountDrafts.map((account) => [account.accountId, account.currency]));
-  const goals: PaydayGoalDraft[] = roadmapGoals.map(({ goal: g, periodsLeft, recommendedAmount }) => {
+  const goals: PaydayGoalDraft[] = roadmapGoals.map(({ goal: g, periodsLeft, recommendedAmount, pace, scheduled }) => {
     const funding = seedGoalFunding(
       fundingPlanByGoal.get(g.id)!,
       existingGoalAllocations.get(g.id) ?? [],
@@ -1003,6 +927,8 @@ export async function getPaydayCheckinDraft(
       funding,
       targetDate: g.targetDate,
       periodsLeft,
+      pace,
+      scheduled,
     };
   });
 
@@ -1181,6 +1107,7 @@ export async function confirmPaydayCheckin(
     flexibleCategories,
     carryover,
     existingCheckin,
+    goalPlans,
   ] = await Promise.all([
     getAccountBalances(context, { status: "ALL" }),
     getPeriodSummary(plan, context),
@@ -1206,6 +1133,7 @@ export async function confirmPaydayCheckin(
         },
       },
     }),
+    goalPeriodPlans(plan, context),
   ]);
   // Only an active account can be edited; the rest are carried as they stand.
   const liveAccountById = new Map(
@@ -1258,7 +1186,6 @@ export async function confirmPaydayCheckin(
     const goal = goalById.get(g.goalId);
     return Boolean(goal && !goal.achievedAt);
   });
-  const dueContributionByGoal = dueContributionsByGoal(planSummary.committedItems);
 
   const essentialInputs = input.essentialCategories.filter((c) => essentialById.has(c.categoryId));
   const essentialFixedTotal = round2(essentialInputs.reduce((sum, c) => sum + c.plannedAmount, 0));
@@ -1289,9 +1216,8 @@ export async function confirmPaydayCheckin(
   );
   const protectedBuffer = bufferPlan.total;
 
-  // Each goal's roadmap amount, plan-anchored and netted against the recurring
-  // contributions already aimed at it exactly as getPaydayCheckinDraft does -
-  // never listGoals()'s today-anchored perPeriod - and then where that amount
+  // Each goal's roadmap amount for the period being confirmed - its plan's
+  // byHand, exactly as getPaydayCheckinDraft reads it - and then where that amount
   // is recommended to come from: the same headroom Step 3 showed, shared
   // between the goals in this order (see planGoalFunding). Each goal's
   // submitted rows go in as held, exactly what the wizard fed the live pool:
@@ -1299,19 +1225,8 @@ export async function confirmPaydayCheckin(
   // goals above it were edited, not a context-free figure. An unedited row's
   // submitted amount is that recommendation itself, so passing every row as
   // held draws the same pool the client did.
-  const roadmapByGoal = new Map(
-    goalInputs.map((g) => {
-      const goal = goalById.get(g.goalId)!;
-      return [
-        g.goalId,
-        goalRoadmapAmount(
-          { displayRemaining: goal.displayRemaining, targetDate: goal.targetDate },
-          plan.start,
-          dueContributionByGoal.get(goal.id) ?? 0,
-        ),
-      ];
-    }),
-  );
+  const byHandByGoal = new Map(goalPlans.map((goalPlan) => [goalPlan.goalId, goalPlan.byHand]));
+  const roadmapByGoal = new Map(goalInputs.map((g) => [g.goalId, byHandByGoal.get(g.goalId) ?? 0]));
   // A goal reached since the check-in was confirmed keeps its confirmed draws,
   // as the draft showed them: written back unchanged below, and taken from
   // the pool before the goals still being funded share what is left.

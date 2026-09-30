@@ -5,9 +5,9 @@
  * An insight is a *standing* signal: something the app has already noticed
  * that stays true until the user resolves it (a recurring item that cannot
  * post, an Afford plan that no longer fits, a charge pattern that looks like
- * an untracked bill, a goal whose confirmed plan is behind its roadmap, a
- * goal whose pace outruns the accounts' projected room before its target
- * date). The Inbox page lists every current one and the nav badge counts
+ * an untracked bill, a goal whose confirmed plan is behind its roadmap or was
+ * not carried out, a goal whose pace outruns the accounts' projected room
+ * before its target date). The Inbox page lists every current one and the nav badge counts
  * them; each also keeps appearing where it always did (the Dashboard alerts,
  * the Recurring page's badges and "Looks recurring" card, the goal page's
  * roadmap note) - except the goal forecast, which Afford's projection
@@ -37,7 +37,6 @@ import {
 import { formatDate, toISODate } from "@/lib/date";
 import { summarizeGoalForecast, type GoalForecast } from "@/lib/goal-forecast";
 import type { Dictionary } from "@/lib/i18n";
-import { round2 } from "@/lib/money";
 import type { RecurringSuggestion } from "@/lib/recurring-detection";
 import type { RecurringPostingSummary, RecurringSkipReason } from "@/lib/recurring-posting";
 
@@ -89,7 +88,7 @@ export type InsightEvidence =
  * instance of it different from the next:
  *   not_posting          `${itemId}:${reason}` - the skip reason, or `failed`
  *   afford_viability     `${itemId}:${periodKey}` - the first failing period
- *   goal_behind          `${goalId}:${periodKey}` - the plan period
+ *   goal_behind          `${goalId}:${periodKey}:plan` or `:contributed` - the period and the statement
  *   goal_forecast_risk   `${goalId}:${periodKey}` - the first short period
  *   recurring_suggestion `${accountId}:${merchantKey}` - permanent, like its own table
  *   posting_run_failed   `run` - not dismissible
@@ -120,7 +119,7 @@ export function insightId(ref: InsightRef): string {
  *   recurringPostingFailure  why that run threw, when it did (AppContext.recurringPostingFailure)
  *   affordRechecks       the Afford tracker's re-check of every recorded plan (recheckAffordItems)
  *   recurringSuggestions the pattern detector's current suggestions (findRecurringSuggestions)
- *   goalRoadmaps         every goal's roadmap pace beside its confirmed plan (getGoalRoadmapStatuses)
+ *   goalRoadmaps         every goal's period plan and its two statements (getGoalRoadmapStatuses)
  *   goalForecasts        every dated goal's walk to its target date through Afford's projection (forecastGoalFunding)
  * plus the dictionary the titles and labels are written in and the display
  * currency the roadmap figures are in.
@@ -320,56 +319,71 @@ export const detectRecurringSuggestions: InsightDetector = ({ dictionary, recurr
 };
 
 /**
- * The goal page's "behind the roadmap" note: a dated goal whose confirmed
- * plan for the plan period sets aside less than its roadmap pace - the same
- * `roadmapAmount - plannedAmount > 0.005` test, over the same status. An
- * undated goal has no roadmap to be behind (its figure is its whole
- * remaining balance), so it is never one of these. When the accounts' room
- * could not even cover the pace, that shortfall rides along as evidence,
- * as the page's own room-shortfall note does. Keyed by the goal and the plan
- * period: being behind in one period says nothing about the next.
+ * The goal page's two notes about a confirmed plan (decision 5.3, option C),
+ * each read off the same GoalRoadmapStatus the page reads:
+ *
+ *   planning        the plan period's confirmed plan funds less by hand than
+ *                   the roadmap asks (planningShortfall): a dated goal only -
+ *                   an undated goal's figure is its whole remaining balance,
+ *                   not a pace to be behind. A goal the plan gave nothing,
+ *                   because the accounts had no room, counts as planned 0 and
+ *                   is flagged like any other. When the room could not cover
+ *                   the roadmap, that rides along as evidence.
+ *   follow-through  a period's plan was not carried out: what was planned
+ *                   (by hand and scheduled) is neither contributed nor still
+ *                   due to post (followThroughShortfall). Raised only in the
+ *                   period's last FOLLOW_THROUGH_ALERT_DAYS or once it has
+ *                   ended (the status carries 0 before then), for any goal
+ *                   not reached.
+ *
+ * Keyed by the goal, the period and the statement, so dismissing one hides
+ * neither the other nor the same statement in another period.
  */
 export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency, goalRoadmaps }) => {
   const t = dictionary.inbox;
+  const money = (label: string, amount: number): InsightEvidence => ({ kind: "money", label, amount, currency: displayCurrency });
   return goalRoadmaps.flatMap((status) => {
-    if (!status.targetDate || status.roadmapAmount === null || !status.planned) return [];
-    const behind = round2(status.roadmapAmount - status.planned.plannedAmount);
-    if (behind <= 0.005) return [];
-    const roomShortfall = round2(status.roadmapAmount - status.planned.recommendedAmount);
-    const key = `${status.goalId}:${status.period.key}`;
-    return [
-      {
+    const found: Insight[] = [];
+    if (status.planningShortfall > 0 && status.planned !== null) {
+      const key = `${status.goalId}:${status.period.key}:plan`;
+      found.push({
         id: insightId({ source: "goal_behind", key }),
         source: "goal_behind",
         key,
         severity: "advisory",
         title: t.goalTitle(status.name),
         evidence: [
-          { kind: "money", label: t.goalBehindBy, amount: behind, currency: displayCurrency },
-          { kind: "money", label: t.goalRoadmap, amount: status.roadmapAmount, currency: displayCurrency },
-          {
-            kind: "money",
-            label: t.goalPlanned,
-            amount: status.planned.plannedAmount,
-            currency: displayCurrency,
-          },
+          money(t.goalBehindBy, status.planningShortfall),
+          money(t.goalRoadmap, status.byHand),
+          money(t.goalPlanned, status.planned),
           { kind: "text", label: t.goalPeriod, value: status.period.label },
-          { kind: "date", label: t.goalTarget, date: toISODate(status.targetDate) },
-          ...(roomShortfall > 0.005
-            ? [
-                {
-                  kind: "money",
-                  label: t.goalRoomShortfall,
-                  amount: roomShortfall,
-                  currency: displayCurrency,
-                } satisfies InsightEvidence,
-              ]
-            : []),
+          ...(status.targetDate ? [{ kind: "date", label: t.goalTarget, date: toISODate(status.targetDate) } satisfies InsightEvidence] : []),
+          ...(status.roomShortfall > 0 ? [money(t.goalRoomShortfall, status.roomShortfall)] : []),
         ],
         actionHref: `/goals/${status.goalId}`,
         dismissible: true,
-      } satisfies Insight,
-    ];
+      });
+    }
+    if (status.followThroughShortfall > 0 && status.planned !== null) {
+      const key = `${status.goalId}:${status.period.key}:contributed`;
+      found.push({
+        id: insightId({ source: "goal_behind", key }),
+        source: "goal_behind",
+        key,
+        severity: "advisory",
+        title: t.goalFollowThroughTitle(status.name),
+        evidence: [
+          money(t.goalNotContributed, status.followThroughShortfall),
+          money(t.goalPlanned, status.planned),
+          ...(status.scheduled > 0 ? [money(t.goalScheduled, status.scheduled)] : []),
+          money(t.goalContributed, status.contributed),
+          { kind: "text", label: t.goalPeriod, value: status.period.label },
+        ],
+        actionHref: `/goals/${status.goalId}`,
+        dismissible: true,
+      });
+    }
+    return found;
   });
 };
 
@@ -381,8 +395,9 @@ export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency
  * figure Step 3 reports as "room couldn't cover", here for a period that has
  * not happened yet), reduced exactly as summarizeGoalForecast reduces it.
  * The evidence is Afford's kind: the shortfall and the period first, then
- * the pace asked, what the room could give, each account with room there and
- * the target date. Not the goal page's "behind the roadmap" note, which
+ * the pace asked, the goal's recurring contributions due there (the room is
+ * asked only for the rest), what the room could give, each account with room
+ * there and the target date. Not the goal page's "behind the roadmap" note, which
  * measures what the plan period's confirmed check-in set aside
  * (detectGoalsBehind): this asks whether the periods ahead can keep the pace
  * up at all. A confirmed period is never in the walk, and an undated goal
@@ -411,6 +426,9 @@ export const detectGoalForecastRisk: InsightDetector = ({ dictionary, goalForeca
           { kind: "money", label: t.forecastShortfall, amount: period.shortfall, currency: forecast.currency },
           { kind: "text", label: t.forecastPeriod, value: period.period.label },
           { kind: "money", label: t.forecastPace, amount: period.pace, currency: forecast.currency },
+          ...(period.scheduled > 0
+            ? [{ kind: "money", label: t.forecastScheduled, amount: period.scheduled, currency: forecast.currency } satisfies InsightEvidence]
+            : []),
           { kind: "money", label: t.forecastRoom, amount: period.recommended, currency: forecast.currency },
           ...(withRoom.length > 0
             ? withRoom.map(

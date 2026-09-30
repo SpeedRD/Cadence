@@ -56,7 +56,8 @@ export function GoalCard({
             <span className="text-foreground figure">
               {formatMoney(goal.displayPerPeriod, displayCurrency)}
             </span>{" "}
-            {t.perPayPeriod} ·{" "}
+            {goal.plan.scheduled > 0 ? t.perPayPeriodByHand : t.perPayPeriod} ·{" "}
+            {goal.plan.scheduled > 0 ? `${t.fromRecurring(formatMoney(goal.plan.scheduled, displayCurrency))} · ` : ""}
             {goal.periodsLeft === 0
               ? t.dueThisPeriod
               : t.periodsTo(goal.periodsLeft!, formatDate(goal.targetDate))}
@@ -73,6 +74,19 @@ export function GoalCard({
         ) : (
           <p className="text-xs text-muted-foreground">{t.noContributionsYet}</p>
         )}
+        {goal.plan.planned !== null && (goal.plan.planned > 0 || goal.plan.contributed > 0) ? (
+          <p className="text-xs text-muted-foreground">
+            {t.planVersusContributed(
+              goal.plan.period.label,
+              formatMoney(goal.plan.planned, displayCurrency),
+              formatMoney(goal.plan.contributed, displayCurrency),
+            )}
+          </p>
+        ) : goal.plan.contributed > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {t.contributedInPeriod(goal.plan.period.label, formatMoney(goal.plan.contributed, displayCurrency))}
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

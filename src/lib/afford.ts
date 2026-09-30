@@ -132,18 +132,21 @@ export interface EstimatedGoalFunding {
  * recommendation for the goal in a period with no confirmed check-in, against
  * the room each account has left there after its scheduled commitments, its
  * buffer and the goals ahead of this one. `pace` is what the goal's roadmap
- * asks of the period; `recommended` what the room could give (the
- * `estimatedGoals` figure when positive); `shortfall` the rest - what Step 3
- * would report as "room couldn't cover", here for a period that has not
- * happened yet. Display currency throughout; each draw in its account's own.
- * Afford's two checks never read it. The Insight Engine's goal-forecast
- * detector (src/lib/goal-forecast.ts) does, to see whether the periods up to a
- * goal's target date can carry its pace at all.
+ * asks of the period, recurring contributions included; `scheduled` the
+ * goal's own recurring contributions in that period (already among its
+ * scheduled commitments); `byHand` the rest, max(0, pace - scheduled) - what
+ * the room is asked for. `recommended` is what the room could give (the
+ * `estimatedGoals` figure when positive); `shortfall` the rest of `byHand` -
+ * what Step 3 would report as "room couldn't cover", here for a period that
+ * has not happened yet. Display currency throughout; each draw in its
+ * account's own.
  */
 export interface ProjectedGoalPlan {
   goalId: string;
   name: string;
   pace: number;
+  scheduled: number;
+  byHand: number;
   recommended: number;
   shortfall: number;
   draws: GoalFundingDraw[];

@@ -11,7 +11,7 @@ import { EmptyState } from "@/components/stat";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { convert, formatMoney } from "@/lib/currency";
+import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { listDebtGoals } from "@/lib/data/debt-payoff";
 import { listGoals } from "@/lib/data/goals";
@@ -19,7 +19,6 @@ import { planPeriodRef } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
 import { MIN_DEBTS_TO_COMPARE } from "@/lib/debt-payoff";
 import { getDictionary } from "@/lib/i18n";
-import { num, round2 } from "@/lib/money";
 import { periodKey } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 
@@ -39,29 +38,9 @@ export default async function GoalsPage() {
   const t = getDictionary(context.language).goals;
   const common = getDictionary(context.language).common;
   const planRef = planPeriodRef(context);
-  const [confirmedCheckin, debts] = await Promise.all([
-    prisma.paydayCheckin.findFirst({
-      where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
-      include: { allocations: { where: { type: "GOAL" } } },
-    }),
-    // The comparator's inputs; with fewer than two debts marked there is no
-    // order to compare and the page shows nothing for it.
-    goals.some((goal) => goal.isDebt) ? listDebtGoals(context) : [],
-  ]);
-  // A goal's plan is one GOAL row per account it draws on, each in that
-  // account's currency (a check-in confirmed before that: a single accountless
-  // row in the check-in's currency). Either way the goal's figure is their sum.
-  const plannedByGoalId = new Map<string, number>();
-  for (const allocation of confirmedCheckin?.allocations ?? []) {
-    if (!allocation.goalId) continue;
-    plannedByGoalId.set(
-      allocation.goalId,
-      round2(
-        (plannedByGoalId.get(allocation.goalId) ?? 0) +
-          convert(num(allocation.plannedAmount), allocation.currency, context.displayCurrency, context.rates),
-      ),
-    );
-  }
+  // The comparator's inputs; with fewer than two debts marked there is no
+  // order to compare and the page shows nothing for it.
+  const debts = goals.some((goal) => goal.isDebt) ? await listDebtGoals(context) : [];
 
   return (
     <div className="space-y-5">
@@ -175,7 +154,10 @@ export default async function GoalsPage() {
                         <span className="figure text-foreground">
                           {formatMoney(goal.displayPerPeriod, goal.displayCurrency)}
                         </span>{" "}
-                        {t.perPayPeriod}
+                        {goal.plan.scheduled > 0 ? t.perPayPeriodByHand : t.perPayPeriod}
+                        {goal.plan.scheduled > 0
+                          ? ` · ${t.fromRecurring(formatMoney(goal.plan.scheduled, goal.displayCurrency))}`
+                          : ""}
                         {goal.periodsLeft !== null
                           ? goal.periodsLeft === 0
                             ? ` · ${t.dueThisPeriod}`
@@ -212,10 +194,19 @@ export default async function GoalsPage() {
                   />
                 </div>
 
-                {plannedByGoalId.has(goal.id) ? (
+                {goal.plan.planned !== null && (goal.plan.planned > 0 || goal.plan.contributed > 0) ? (
                   <p className="text-xs text-muted-foreground">
-                    {t.plannedThisPeriod(
-                      formatMoney(plannedByGoalId.get(goal.id)!, context.displayCurrency),
+                    {t.planVersusContributed(
+                      goal.plan.period.label,
+                      formatMoney(goal.plan.planned, context.displayCurrency),
+                      formatMoney(goal.plan.contributed, context.displayCurrency),
+                    )}
+                  </p>
+                ) : goal.plan.contributed > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {t.contributedInPeriod(
+                      goal.plan.period.label,
+                      formatMoney(goal.plan.contributed, context.displayCurrency),
                     )}
                   </p>
                 ) : null}
@@ -232,6 +223,8 @@ export default async function GoalsPage() {
             name: debt.name,
             balance: debt.balance,
             minimum: debt.minimum,
+            paidThisPeriod: debt.paidThisPeriod,
+            targetPeriod: debt.targetPeriod,
             targetDate: debt.targetDate ? toISODate(debt.targetDate) : null,
           }))}
           currency={context.displayCurrency}

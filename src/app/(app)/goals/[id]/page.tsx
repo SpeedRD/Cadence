@@ -25,7 +25,7 @@ import {
 import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getGoalDetail } from "@/lib/data/goals";
-import { getGoalRoadmapStatus } from "@/lib/data/payday";
+import { getGoalRoadmapStatuses } from "@/lib/data/payday";
 import { formatDate, toISODate } from "@/lib/date";
 import { getDictionary } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
@@ -57,17 +57,16 @@ export default async function GoalDetailPage({
     }),
   ]);
   if (!detail) notFound();
-  // The real pace for the plan period, computed live - or, for a goal with
-  // no target date, its whole remaining balance - beside what the period's
-  // confirmed check-in planned for the goal (its GOAL rows summed into the
-  // display currency). The rows' own recommendedAmount is each account's
-  // share of that figure capped by the account's room, so summing them says
-  // what the accounts could fund - not what the goal needs. "Behind" is
-  // measured against the figure itself. The Inbox's goal detector reads the
-  // same status, so the two never disagree.
-  const roadmapStatus = await getGoalRoadmapStatus(id, context);
-  const roadmapAmount = roadmapStatus?.roadmapAmount ?? null;
-  const plannedAllocation = roadmapStatus?.planned ?? null;
+  // The goal's plan for the plan period (K3): its pace fixed at the period's
+  // start, what the check-in funds by hand, what the confirmed check-in
+  // planned and what has gone in, with the two statements read off it - the
+  // planning shortfall (and what the room could not cover at confirm) and the
+  // follow-through shortfall once the period's last days come. The Inbox's
+  // goal detector reads the same statuses, so the two never disagree. An
+  // earlier period's plan that was not carried out is noted too.
+  const statuses = (await getGoalRoadmapStatuses(context)).filter((status) => status.goalId === id);
+  const roadmapStatus = statuses.find((status) => status.role === "plan") ?? null;
+  const earlierStatuses = statuses.filter((status) => status.role === "earlier");
 
   const { summary, contributions, contributionTotal, displayContributionTotal } = detail;
   const today = toISODate(context.today);
@@ -151,13 +150,12 @@ export default async function GoalDetailPage({
             />
             {summary.displayPerPeriod !== null ? (
               <Stat
-                label={t.perPayPeriodLabel}
+                label={summary.plan.scheduled > 0 ? t.perPayPeriodByHandLabel : t.perPayPeriodLabel}
                 value={formatMoney(summary.displayPerPeriod, display)}
-                hint={
-                  summary.periodsLeft === 0
-                    ? t.dueThisPeriod
-                    : t.periodsToTarget(summary.periodsLeft ?? 0)
-                }
+                hint={[
+                  ...(summary.plan.scheduled > 0 ? [t.fromRecurring(formatMoney(summary.plan.scheduled, display))] : []),
+                  summary.periodsLeft === 0 ? t.dueThisPeriod : t.periodsToTarget(summary.periodsLeft ?? 0),
+                ].join(" · ")}
               />
             ) : (
               <Stat
@@ -189,23 +187,43 @@ export default async function GoalDetailPage({
             </p>
           ) : null}
 
-          {plannedAllocation ? (
+          {summary.plan.planned !== null ? (
             <p className="text-xs text-muted-foreground">
-              {t.plannedThisPeriod(formatMoney(plannedAllocation.plannedAmount, display))}
-              {roadmapAmount !== null && roadmapAmount - plannedAllocation.plannedAmount > 0.005
-                ? ` · ${(summary.targetDate ? t.plannedBehindRoadmap : t.plannedBehindRemaining)(
-                    formatMoney(round2(roadmapAmount - plannedAllocation.plannedAmount), display),
-                  )}`
+              {t.planVersusContributed(
+                summary.plan.period.label,
+                formatMoney(summary.plan.planned, display),
+                formatMoney(summary.plan.contributed, display),
+              )}
+              {roadmapStatus && roadmapStatus.planningShortfall > 0
+                ? ` · ${t.plannedBehindRoadmap(formatMoney(roadmapStatus.planningShortfall, display))}`
+                : ""}
+              {!summary.targetDate && summary.plan.open && summary.plan.byHand - summary.plan.planned > 0.005
+                ? ` · ${t.plannedBehindRemaining(formatMoney(round2(summary.plan.byHand - summary.plan.planned), display))}`
                 : ""}
             </p>
+          ) : summary.plan.contributed > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t.contributedInPeriod(summary.plan.period.label, formatMoney(summary.plan.contributed, display))}
+            </p>
           ) : null}
-          {plannedAllocation && roadmapAmount !== null && roadmapAmount - plannedAllocation.recommendedAmount > 0.005 ? (
+          {roadmapStatus && roadmapStatus.roomShortfall > 0 ? (
             <p className="text-xs text-[var(--warning)]">
-              {(summary.targetDate ? t.roomShortfallThisPeriod : t.roomShortfallRemainingThisPeriod)(
-                formatMoney(round2(roadmapAmount - plannedAllocation.recommendedAmount), display),
+              {t.roomShortfallThisPeriod(formatMoney(roadmapStatus.roomShortfall, display), roadmapStatus.period.label)}
+            </p>
+          ) : null}
+          {!summary.targetDate && summary.plan.open && summary.plan.recommended !== null && summary.plan.byHand - summary.plan.recommended > 0.005 ? (
+            <p className="text-xs text-[var(--warning)]">
+              {t.roomShortfallRemainingThisPeriod(
+                formatMoney(round2(summary.plan.byHand - summary.plan.recommended), display),
+                summary.plan.period.label,
               )}
             </p>
           ) : null}
+          {[...(roadmapStatus && roadmapStatus.followThroughShortfall > 0 ? [roadmapStatus] : []), ...earlierStatuses].map((status) => (
+            <p key={status.period.key} className="text-xs text-[var(--warning)]">
+              {t.notYetContributed(formatMoney(status.followThroughShortfall, display), status.period.label)}
+            </p>
+          ))}
         </CardContent>
       </Card>
 

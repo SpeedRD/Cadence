@@ -43,11 +43,28 @@ export interface DebtInput {
   balance: number;
   /**
    * What the debt receives on its own every period, in the display
-   * currency - its roadmap pace this period. 0 for a debt with no pace of
-   * its own (no target date), which is then paid only by the extra and by
-   * the minimums other debts free up.
+   * currency - its roadmap pace (src/lib/goal-plan.ts), gross of the
+   * recurring contributions that pay into it, since the simulation adds
+   * nothing else. 0 for a debt with no pace of its own (no target date),
+   * which is then paid only by the extra and by the minimums other debts free
+   * up.
    */
   minimum: number;
+  /**
+   * What already went into the debt in period 1 (the plan period), in the
+   * display currency. `balance` is what is still owed after it, so period 1's
+   * minimum is only the rest of it - the payment is not counted twice.
+   * Absent means nothing.
+   */
+  paidThisPeriod?: number;
+  /**
+   * The simulation period whose pay is the last one before the target date
+   * (goalPeriodsLeft). The roadmap asks the whole remainder there, so the debt
+   * receives whatever it still owes in that period, not a pace rounded to the
+   * cent that could leave a cent for one more period. Absent for a debt with
+   * no target date.
+   */
+  targetPeriod?: number;
 }
 
 /** One debt reaching zero: the period (1 = the plan period) it did so in. */
@@ -99,6 +116,8 @@ export function simulateDebtPayoff<T extends DebtInput>(
   const extra = Math.max(0, toCents(extraPerPeriod));
   const balances = order.map((debt) => toCents(debt.balance));
   const minimums = order.map((debt) => Math.max(0, toCents(debt.minimum)));
+  const paidFirst = order.map((debt) => Math.max(0, toCents(debt.paidThisPeriod ?? 0)));
+  const targetPeriods = order.map((debt) => debt.targetPeriod ?? 0);
   const done = order.map(() => false);
   const payoffs: DebtPayoff[] = [];
 
@@ -113,13 +132,21 @@ export function simulateDebtPayoff<T extends DebtInput>(
     period += 1;
     let pool = extra + freed;
 
-    // Every open debt receives its own minimum first; whatever a minimum
-    // cannot use (the debt had less left than that) joins this period's pool.
+    // Every open debt receives its own minimum first - in period 1 less what
+    // already went into it there, and in its target period all it still owes;
+    // whatever a minimum cannot use (the debt had less left than that) joins
+    // this period's pool.
     for (let i = 0; i < order.length; i += 1) {
       if (done[i]) continue;
-      const paid = Math.min(minimums[i], balances[i]);
+      const due =
+        period === targetPeriods[i]
+          ? Math.max(minimums[i], balances[i])
+          : period === 1
+            ? Math.max(0, minimums[i] - paidFirst[i])
+            : minimums[i];
+      const paid = Math.min(due, balances[i]);
       balances[i] -= paid;
-      pool += minimums[i] - paid;
+      pool += due - paid;
     }
 
     // The pool - the extra, the freed minimums and any spill - goes to the

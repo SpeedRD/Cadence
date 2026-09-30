@@ -1,41 +1,20 @@
 import { convert } from "@/lib/currency";
 import { addDays } from "@/lib/date";
+import { savedFromContributions } from "@/lib/goals";
 import { num, round2 } from "@/lib/money";
-import { outstanding } from "@/lib/period-commitments";
 import {
   nextPeriod,
   periodClock,
   periodForDate,
   periodInfo,
-  periodsRemaining,
+  previousPeriod,
   type PeriodInfo,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 
-import { periodCommitments } from "@/lib/data/period-commitments";
+import { goalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
 
 import type { AppContext } from "@/lib/data/context";
-
-/** One goal's scheduled recurring funding for the plan period, per occurrence currency. */
-type DueContributions = Map<string, { amount: number; currency: string }[]>;
-
-/**
- * What the recurring contributions aimed at each goal will still put into it
- * in the plan period (periodClock's `plan`): its outstanding occurrences
- * (src/lib/period-commitments.ts), so one posting will skip counts for
- * nothing. A goal being fed automatically needs that much less set aside by
- * hand, and counting both made the payday planner reserve the same goal twice.
- */
-async function loadDueContributionsByGoal(context: AppContext): Promise<DueContributions> {
-  const byGoal: DueContributions = new Map();
-  for (const occurrence of outstanding(await periodCommitments(periodClock(context.today).plan, context))) {
-    if (occurrence.kind !== "CONTRIBUTION" || !occurrence.goalId) continue;
-    const entries = byGoal.get(occurrence.goalId) ?? [];
-    entries.push({ amount: occurrence.amount, currency: occurrence.currency });
-    byGoal.set(occurrence.goalId, entries);
-  }
-  return byGoal;
-}
 
 /**
  * Native fields (targetAmount/savedAmount/remaining/perPeriod/pacePerPeriod)
@@ -56,13 +35,24 @@ export interface GoalSummary {
   achievedAt: Date | null;
   /** Marked as a debt on the goal form; what the Goals page's payoff comparator reads. */
   isDebt: boolean;
-  /** Contribution needed per pay period to land on the target date. */
+  /**
+   * What the check-in funds by hand in the plan period to land on the target
+   * date: the plan's `byHand` (src/lib/goal-plan.ts). Null for a goal with no
+   * target date or none left to save.
+   */
   perPeriod: number | null;
+  /** Periods whose pay lands by the target date, from the plan period; 0 when the target is already behind it. */
   periodsLeft: number | null;
-  /** Averaged from history when there is no target date. */
+  /**
+   * No target date: the average contributed per completed pay period since
+   * the first contribution (the current period's own contributions and days
+   * are not counted until it ends). Not a pace the roadmap asks for.
+   */
   pacePerPeriod: number | null;
   projectedEnd: Date | null;
   contributionCount: number;
+  /** The goal's plan for the plan period (periodClock's `plan`): pace, scheduled, by hand, planned, contributed. */
+  plan: GoalPeriodPlan;
   /**
    * The global display currency every `display*` field below is expressed in.
    * Always derived from the stored native amount, never from another
@@ -88,46 +78,28 @@ function summarize(
     createdAt: Date;
     isDebt: boolean;
   },
-  contributions: { amount: unknown; date: Date }[],
+  contributions: { amount: unknown; currency: string; date: Date }[],
   context: AppContext,
-  dueContributions: DueContributions,
+  plan: GoalPeriodPlan,
 ): GoalSummary {
   const targetAmount = num(goal.targetAmount as never);
   const savedAmount = num(goal.savedAmount as never);
   const remaining = Math.max(0, round2(targetAmount - savedAmount));
   const progress = targetAmount > 0 ? Math.min(1, savedAmount / targetAmount) : 0;
 
-  let perPeriod: number | null = null;
-  let periodsLeft: number | null = null;
-  if (goal.targetDate && remaining > 0) {
-    // Counted from the plan period, the period the money in hand is for -
-    // the count the check-in and the roadmap use - so from payday to the end
-    // of the period the one ending tonight is not counted as a period still
-    // to fund. 0 means the target falls before the plan period ends.
-    periodsLeft = periodsRemaining(periodClock(context.today).plan.start, goal.targetDate);
-    // Net of whatever a recurring contribution is still putting in during the
-    // plan period, so this figure is what still has to be found by hand.
-    const scheduled = (dueContributions.get(goal.id) ?? []).reduce(
-      (total, entry) => total + convert(entry.amount, entry.currency, goal.currency, context.rates),
-      0,
-    );
-    perPeriod = round2(Math.max(0, remaining / Math.max(1, periodsLeft) - scheduled));
-  }
+  // The plan period's own figures (K3): what the check-in funds by hand, net
+  // of the recurring contributions scheduled in it, over the periods whose pay
+  // lands by the target date - the same plan the check-in recommends from.
+  const dated = Boolean(goal.targetDate) && remaining > 0;
+  const perPeriod = dated ? plan.nativeByHand : null;
+  const periodsLeft = dated ? plan.periodsLeft : null;
 
-  // No target date: infer pace from history and project a finish date.
+  // No target date: the average per completed period since the first
+  // contribution, projected forward to a finish date.
   let pacePerPeriod: number | null = null;
   let projectedEnd: Date | null = null;
   if (!goal.targetDate && contributions.length > 0) {
-    const earliest = contributions.reduce(
-      (oldest, contribution) =>
-        contribution.date < oldest ? contribution.date : oldest,
-      contributions[0].date,
-    );
-    const elapsed = Math.max(
-      1,
-      countPeriodsInclusive(periodForDate(earliest), context.currentPeriod),
-    );
-    pacePerPeriod = round2(savedAmount / elapsed);
+    pacePerPeriod = averagePerCompletedPeriod(contributions, goal.currency, context);
     if (pacePerPeriod > 0 && remaining > 0) {
       const periodsNeeded = Math.ceil(remaining / pacePerPeriod);
       let cursor: PeriodInfo = context.currentPeriod;
@@ -157,13 +129,39 @@ function summarize(
     pacePerPeriod,
     projectedEnd,
     contributionCount: contributions.length,
+    plan,
     displayCurrency: context.displayCurrency,
     displayTarget: toDisplay(targetAmount),
     displaySaved: toDisplay(savedAmount),
     displayRemaining: toDisplay(remaining),
-    displayPerPeriod: perPeriod === null ? null : toDisplay(perPeriod),
+    displayPerPeriod: dated ? plan.byHand : null,
     displayPacePerPeriod: pacePerPeriod === null ? null : toDisplay(pacePerPeriod),
   };
+}
+
+/**
+ * An undated goal's average, in its own currency: what was contributed in
+ * the completed periods from the first contribution's period on, over how
+ * many of them there were. The period in progress is left out of both until
+ * it ends, so the figure does not halve overnight when a new period starts.
+ * With no completed period yet, it is what the current period holds.
+ */
+function averagePerCompletedPeriod(
+  contributions: { amount: unknown; currency: string; date: Date }[],
+  currency: string,
+  context: AppContext,
+): number {
+  const rows = contributions.map((row) => ({ amount: num(row.amount as never), currency: row.currency, date: row.date }));
+  const earliest = rows.reduce((oldest, row) => (row.date < oldest ? row.date : oldest), rows[0].date);
+  const lastCompleted = periodInfo(previousPeriod(context.currentPeriod));
+  if (earliest.getTime() > lastCompleted.end.getTime()) {
+    return savedFromContributions(rows, currency, context.rates);
+  }
+  const completed = rows.filter((row) => row.date.getTime() < addDays(lastCompleted.end, 1).getTime());
+  return round2(
+    savedFromContributions(completed, currency, context.rates) /
+      countPeriodsInclusive(periodForDate(earliest), lastCompleted),
+  );
 }
 
 function countPeriodsInclusive(from: PeriodInfo, to: PeriodInfo): number {
@@ -178,29 +176,35 @@ function countPeriodsInclusive(from: PeriodInfo, to: PeriodInfo): number {
 }
 
 export async function listGoals(context: AppContext): Promise<GoalSummary[]> {
-  const [goals, dueContributions] = await Promise.all([
+  const [goals, plans] = await Promise.all([
     prisma.goal.findMany({
-      include: { contributions: { select: { amount: true, date: true } } },
+      include: { contributions: { select: { amount: true, currency: true, date: true } } },
       orderBy: [{ achievedAt: "asc" }, { createdAt: "asc" }],
     }),
-    loadDueContributionsByGoal(context),
+    goalPeriodPlans(periodClock(context.today).plan, context),
   ]);
-  return goals.map((goal) => summarize(goal, goal.contributions, context, dueContributions));
+  const planByGoal = new Map(plans.map((plan) => [plan.goalId, plan]));
+  return goals.flatMap((goal) => {
+    const plan = planByGoal.get(goal.id);
+    // A goal created between the two reads has no plan yet; the next request has it.
+    return plan ? [summarize(goal, goal.contributions, context, plan)] : [];
+  });
 }
 
 export async function getGoalDetail(id: string, context: AppContext) {
-  const [goal, dueContributions] = await Promise.all([
+  const [goal, plans] = await Promise.all([
     prisma.goal.findUnique({
       where: { id },
       include: {
         contributions: { orderBy: [{ date: "desc" }, { createdAt: "desc" }] },
       },
     }),
-    loadDueContributionsByGoal(context),
+    goalPeriodPlans(periodClock(context.today).plan, context),
   ]);
-  if (!goal) return null;
+  const plan = plans.find((candidate) => candidate.goalId === id);
+  if (!goal || !plan) return null;
 
-  const summary = summarize(goal, goal.contributions, context, dueContributions);
+  const summary = summarize(goal, goal.contributions, context, plan);
   const contributions = goal.contributions.map((contribution) => ({
     id: contribution.id,
     amount: num(contribution.amount),

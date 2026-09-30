@@ -564,6 +564,7 @@ export function StepCommitments({
                     <p className={cn("text-xs text-muted-foreground", folded(key))}>
                       {t.roadmapAmount}:{" "}
                       <span className="figure">{formatMoney(goal.recommendedAmount, displayCurrency)}</span>
+                      {goal.scheduled > 0 ? ` ${t.roadmapScheduled(formatMoney(goal.scheduled, displayCurrency))}` : ""}
                     </p>
                   ) : (
                     <p className={cn("text-xs text-muted-foreground", folded(key))}>

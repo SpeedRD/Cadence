@@ -27,11 +27,15 @@ import type { PeriodInfo } from "@/lib/period";
 /** One projected period of a goal's walk: its plan for the goal, from PeriodProjection.goalPlans. */
 export interface GoalForecastPeriod {
   period: PeriodInfo;
-  /** What the goal's roadmap asks of the period, in the display currency - its pace as of today (getGoalRoadmapAmounts), the same for every period of the walk. */
+  /** What the goal's roadmap asks of the period, in the display currency, recurring contributions included - the plan period's pace (src/lib/goal-plan.ts), the same for every period of the walk. */
   pace: number;
+  /** The goal's own recurring contributions due in the period - already among its scheduled commitments. Display currency. */
+  scheduled: number;
+  /** max(0, pace - scheduled): what the room is asked to give. Display currency. */
+  byHand: number;
   /** What the accounts' projected room could put toward it, in the display currency - the estimate Afford itself carries for the goal in the period. */
   recommended: number;
-  /** pace - recommended when the room could not cover the pace, 0 otherwise. Display currency. */
+  /** byHand - recommended when the room could not cover it, 0 otherwise. Display currency. */
   shortfall: number;
   /** Each account with room in the period and what the goal draws from it, in the account's own currency - planGoalFunding's draws; an account earlier goals used up is here with room 0. */
   draws: GoalFundingDraw[];
@@ -45,9 +49,9 @@ export interface GoalForecast {
   /** What `pace`, `recommended` and `shortfall` are in: the display currency. */
   currency: string;
   /**
-   * The projected periods from the plan period through the one the target
-   * date falls in, in order - the periods the pace is spread over
-   * (goalRoadmapAmount's own count), less any with a confirmed check-in,
+   * The projected periods from the plan period through the last one paid by
+   * the target date, in order - the periods the pace is spread over
+   * (goalPeriodsLeft), less any with a confirmed check-in,
    * which Afford does not estimate and the goal page already measures.
    * Empty when every period of the walk is confirmed.
    */

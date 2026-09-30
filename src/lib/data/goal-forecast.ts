@@ -5,11 +5,12 @@
  *
  * Nothing here projects anything itself. The periods a goal's pace is spread
  * over - from the period a check-in opened today would plan for through the
- * one its target date falls in, goalRoadmapAmount's own count - are projected
+ * last one paid by its target date, goalPeriodsLeft's count - are projected
  * with projectPeriods() (src/lib/data/afford.ts): income averaged from
  * comparable history, commitments enumerated from every active item's
- * schedule, the per-account buffer, and each dated goal's pace spread over
- * the accounts' remaining room exactly as the check-in's Step 3 spreads it.
+ * schedule, the per-account buffer, and each dated goal's pace - less that
+ * period's own recurring contributions to it - spread over the accounts'
+ * remaining room exactly as the check-in's Step 3 spreads it.
  * That last step is the forecast: the plan projectPeriods makes for each goal
  * in each period (PeriodProjection.goalPlans) already says what the room
  * could give the goal and what it could not. This module only lines those
@@ -52,7 +53,7 @@ export async function forecastGoalFunding(context: AffordContext): Promise<GoalF
   if (dated.length === 0 || accounts.length === 0) return [];
 
   // How many periods each goal's pace is spread over, counted from the plan
-  // period's start as goalRoadmapAmount counts them - at least the plan
+  // period's start as the roadmap counts them - at least the plan
   // period itself for a target date already behind us.
   const lengths = dated.map((goal) => goalPeriodsLeft(plan.start, goal.targetDate));
   const horizon: PeriodInfo[] = [];
@@ -77,6 +78,8 @@ export async function forecastGoalFunding(context: AffordContext): Promise<GoalF
             {
               period,
               pace: goalPlan.pace,
+              scheduled: goalPlan.scheduled,
+              byHand: goalPlan.byHand,
               recommended: goalPlan.recommended,
               shortfall: goalPlan.shortfall,
               draws: goalPlan.draws,

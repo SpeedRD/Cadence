@@ -171,6 +171,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** anyone with a dated goal that is also auto-funded. Afford understates room in half the periods and overstates it in the other half, by the contribution amount each time. The Inbox forecast raises or misses "can't keep the pace" accordingly.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** give Afford the gross pace (remaining ÷ periods left). Per period, subtract that period's own scheduled contributions to the goal, floored at 0.
+- **Status:** fixed (K3, QUANTITIES_MAP.md D5). Afford and the goal forecast ask each period its own by-hand figure: the pace fixed at the plan period's start, less that period's own recurring contributions to the goal (already among its commitments). Harness ("a goal's period plan (K3)", D5 / B11): a 30,000 goal due Dec 30 with a 2,000 contribution on the 10th is asked 5,000 in the B periods and 3,000 in the A periods, by the forecast and by Afford, before and after the contribution posts (was 3,000, then 4,666.67, in every period).
 
 ### B12. The debt comparator reads the netted pace as the minimum payment, so a debt paid by an auto-contribution shows as never paid off
 - **What:** `listDebtGoals` sets each dated debt's `minimum` to the roadmap pace. That pace is net of recurring contributions, and the simulation never adds those contributions back. The minimum also flips between the A and B plan halves (see B11).
@@ -181,6 +182,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** debts funded by recurring contributions. The time to payoff is overstated, up to "never".
 - **Severity / confidence:** Medium / High. Evidence: pure run on the real `goalRoadmapAmount` and `compareDebtStrategies`.
 - **Fix:** use the gross pace (or the pace plus the scheduled contribution) as the minimum, and fix the `debtNothingFlowing` condition.
+- **Status:** fixed (K3, D6). The comparator's minimum is the gross pace; what already went into a debt in the plan period is passed beside it (period 1 is not paid twice), and a debt's target period asks whatever it still owes. Two debts paid by 4,000 and 1,000 contributions: minimums 3,000 and 750, both paid off in period 4 (was flow 0, "never"). The "nothing flowing" note is now true when it shows: only undated debts and no extra leave the flow at 0.
 
 ### B13. The roadmap is recomputed live, so a recurring contribution posting mid-period raises a false "behind roadmap"
 - **What:** the pace is (live remaining ÷ periods left from the plan start) − (contributions still due in the plan period). When the plan period's contribution C posts, remaining drops by C and the "still due" offset drops to 0, but the period count stays the same. The pace therefore rises by C·(n−1)/n. A confirmed plan that followed the roadmap exactly is then flagged.
@@ -192,6 +194,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** every dated goal with a recurring contribution, every period. A false alarm; it also claims the room could not cover the pace, which is false.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** measure a period's roadmap against the balance at the plan period's start, adding back contributions dated inside the plan period, so it stays fixed through the period.
+- **Status:** fixed (K3, D4). The pace is fixed at the plan period's start and the period's scheduled contributions are counted whole, so a posting mid-period moves neither: 3,000 by hand before and after the Oct 10 posting, no "behind" insight.
 
 ### B14. Items that will never post still count as committed and still net the roadmap, and the alert says the opposite
 - **What:** `getPeriodSummary`, the check-in draft and confirm, and the Goals page's due-contribution netting all include items that posting skips forever:
@@ -208,6 +211,7 @@ Confidence is about whether the defect is real, not how often it happens.
   - The roadmap and "per pay period" understate what the goal needs, and the goal falls behind silently.
 - **Severity / confidence:** Medium / High. Evidence: DB runs.
 - **Fix:** apply posting's `skipReasonFor` in `getPeriodSummary`, in `loadDueContributionsByGoal` and in the check-in. List skipped items separately rather than silently leaving them out. Fix the alert copy to match.
+- **Status:** fixed. The committed half was fixed with K2 (D7); the goal-netting half holds under K3: a goal's `scheduled` is K2's whole occurrences, which leave out every item posting will skip, so such an item lowers no pace - the Goals page, the roadmap, the forecast and Afford all ask 200 of the 1,200 goal next to a 100 contribution with no account.
 
 ### B15. A posting backlog keeps contributing after the goal is reached part-way through the run
 - **What:** `skipReasonFor` is evaluated once per item, from the row loaded before the loop, and the backlog walk never re-checks `achievedAt`.
@@ -366,6 +370,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** exactly the goals in the worst shape, with no room at all, get no signal.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** treat "dated goal, confirmed check-in, no row" as planned 0 in `getGoalRoadmapStatuses`.
+- **Status:** fixed (K3, D8). A confirmed period with no GOAL row for a goal reads planned 0, and the planning statement flags it ("The plan for X is behind its roadmap", 5,000 behind, all of it beyond the room at confirm).
 
 ### B30. The monthly average counts a partial first month as a full month
 - **What:** `computeCompletedMonthWindows` includes the first-activity month in full.
@@ -411,6 +416,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Severity / confidence:** Low / High. Evidence: DB run.
 - **Fix:** estimate the pace for an unconfirmed current period too, or accept it and document it. The pay for it has landed, so the user is planning the next one.
 - **Status:** fixed. From payday to period end, an unconfirmed current period is added to each dated goal's window, except a goal whose target date falls before the plan period ends, whose whole balance stays in the plan period alone.
+- **Status (K3, 2026-09-30):** the current-period estimate this fix added is removed on purpose (QUANTITIES_MAP.md D10, a user decision): Afford's goal window is the roadmap's, from the plan period on, so from payday to the end of its period today's period carries no goal estimate.
 
 ### B35. Category suggestions average an in-progress comparable period when planning two or more periods ahead
 - **What:** `getCategorySuggestions` starts at `previousComparablePeriod(planRef)` without the "has ended" rule that Afford's `comparableHistory` applies. The Budgets page can open the wizard for any future period.
@@ -492,6 +498,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** goals dated mid-period. The pace is overstated (here the whole balance in one period, not half in each of two).
 - **Severity / confidence:** Low / Medium. The rule is documented, but it ignores when pay arrives. Evidence: pure run.
 - **Fix:** count a period if its payday (`paydayDateFor`) falls on or before the target.
+- **Status:** fixed (K3, D9). `periodsRemaining` counts a period when its pay (`paydayDateFor`) lands on or before the target date: plan Sep 16 / target Oct 14 counts 2 periods. A target on a pay boundary now includes the period paid that day (Dec 31 includes Jan 1-15; a Sunday Nov 15 includes Nov 16-30, paid Fri Nov 13).
 
 ### B44. Banco Popular rates: the sell rate is used in both directions, and a rate up to 7 days old wins over a fresh market rate
 - **What:** `toRateTableEntries` sets DOP to `dollarSellRate`, so USD→DOP conversions (USD income shown in DOP) use the bank's sell side. A stored BPD rate up to `BPD_RATE_MAX_AGE_DAYS = 7` overrides a fresh open.er-api rate, with `stale` left unchanged.
@@ -554,6 +561,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Severity / confidence:** Low / High. Evidence: code path.
 - **Fix:** one wording pass driven by the computations. Item 3's threshold should be checked on the monthly equivalent.
 - **Status:** items 1, 2, 3, 4, 5, 8, 10, 11 and 12 fixed (copy, English and Spanish; item 1 also carries a `confirmed` flag from the projection so the note can say whether check-ins exist for none, all or some of the evaluated periods; item 5 adds a hint under the field). Item 3's behavior and item 7 were fixed earlier: the room check runs when one charge or the monthly equivalent reaches the threshold (SEMI_MONTHLY stays unchecked), and "Next 7 days" covers today and the following six. Still open: items 6 and 9 (payday wizard and goals-roadmap strings, out of scope here). No string used by the wizard was needed for the other items.
+- **Status (K3, 2026-09-30):** item 9 fixed. The Goals list, detail and Dashboard card name the period ("Oct 1-15: 5,571.32 planned · 5,571.32 contributed"), and the Inbox shows the period as its own evidence line beside "Planned" (the labels no longer say "this period"). Item 6 is still open.
 
 ---
 

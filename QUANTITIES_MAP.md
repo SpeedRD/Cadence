@@ -422,6 +422,7 @@ database-free function.
 - **Who / direction:** every dated goal, from payday to the end of the period (1-3 days each period). The Goals page understates the pace, and "this period" names a different period than "planned this period" on the same card.
 - **Severity:** Low (display). **Confidence:** High. **Relates to:** B24.
 - **Status (2026-09-30, K1/K2):** removed. `summarize` in `lib/data/goals.ts` counts periods from `periodClock(today).plan.start` and nets the plan period's outstanding contributions (K2). Trace (a) on Sep 30: 3,714.22 × 3 on the Goals page, the same as the roadmap (was 2,785.66 × 4). "due this period" now names the plan period, so the Nov 13 / Nov 14 case reads the period the wizard plans it in; D9 (mid-period target) and D14 (currency path) remain. Harness: "period clock and period commitments (K1 K2)", D1.
+- **Status (2026-09-30, K3):** the figures moved again with K3. The Goals page now reads the plan's by-hand figure, fixed at the plan period's start (D2) and counted by payday (D9): trace (a) on Sep 30 reads 4,178.49 x 4 on the Goals page and the roadmap alike.
 
 #### D2. The roadmap still counts the plan period as a period to fund after money was contributed inside it
 - **Quantities:** Q34 in all its readers (wizard "Roadmap amount" and "ahead", Inbox, forecast pace, Afford estimate, debt comparator), against what the target still needs.
@@ -429,6 +430,7 @@ database-free function.
 - **Repro (DB, trace (a)):** plan Oct 1-15 confirmed at 5,571.32; logging 5,571.32 on Oct 1 drops the Oct 1-15 roadmap to **3,714.22**. The wizard then reads "1,857.10 ahead of the target roadmap"; the forecast asks 3,714.22 of Oct 16-31 and of Nov 1-15, **7,428.44** in total against the **11,142.65** still needed; Afford estimates 3,714.22 in those periods where 5,571.33 is needed (room overstated by 1,857.11 each); the debt comparator pays 3,714.22 in period 1 on top of the contribution. Variant (DB): plan 4,000 against a 5,571.32 roadmap; after the user contributes exactly 4,000 the roadmap becomes 4,237.99 and the goal page says "237.99 behind the roadmap".
 - **Who / direction:** anyone who contributes to a dated goal during the period the plan covers. The forecast and Afford under-reserve for the later periods; the wizard reports "ahead" for a user who is exactly on plan.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** new (the same mechanism as B13, reached by a manual contribution and by every reader, not only the Goals page).
+- **Status (2026-09-30, K3):** removed. `goalPeriodPlan` (`lib/data/goal-plan.ts`, its rules in `lib/goal-plan.ts`) fixes the pace on the period's payday, the day its money is in hand - (target - saved from contributions dated before that payday) / periods left - and a period not yet reached is asked the plan period's pace. Production's trace (a), with the 5,571.32 moved on the Sep 30 payday: Oct 1-15 asks 4,178.49 over 4 periods and holds 5,571.32 planned and contributed, and from the Oct 15 payday each period asks 3,714.22 over 3. Trace (a) with the contribution dated Oct 1 and a target giving the trace's three periods (Nov 12): Oct 1-15 stays 5,571.32 on Oct 5 (was 3,714.22), the re-opened wizard recommends 5,571.32 beside the 5,571.32 held (was "1,857.10 ahead"), the forecast and Afford ask 5,571.32 of Oct 16-31 and Nov 1-15 (was 3,714.22), and from the Oct 15 payday each of them asks 5,571.33. Variant: 4,000 planned and contributed reads "1,571.32 behind" (was 237.99). Harness: "a goal's period plan (K3)", D2 and the user's case.
 
 #### D3. "Planned" is never compared with "contributed"
 - **Quantities:** Q35 "planned this period", Q36 behind, Inbox `goal_behind`, against Q38 contributions in the period.
@@ -436,6 +438,7 @@ database-free function.
 - **Repro (DB):** Oct 1-15 confirmed with 5,000 planned for a 30,000 goal due Dec 31 and nothing contributed: on Oct 1 and on Oct 14 the roadmap is 5,000, planned 5,000, saved 0, and **no `goal_behind` insight**. In trace (a), where the planned money *was* contributed, the Goals page keeps saying "5,571.32 planned this period".
 - **Who / direction:** every goal with a confirmed plan. A plan that was not carried out is never flagged; one that was carried out is still shown as a plan.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K3):** removed. The plan carries `planned` and `contributed` side by side - contributed counting from the period's payday up to the next period's, so money moved on payday for the period being planned is that period's ("Oct 1-15: 5,000.00 planned · 0.00 contributed" on the Goals list, detail and Dashboard card), and the Inbox has a second statement, "planned but not yet contributed", raised in the last `FOLLOW_THROUGH_ALERT_DAYS` (3) of the period or once it has ended: the repro is flagged on Oct 13 and Oct 16 for 5,000, and not on Oct 1 or Oct 12.
 
 #### D4. A recurring contribution that posts mid-period raises the roadmap and triggers a false "behind"
 - **Quantities:** Q34 for the plan period, Q36.
@@ -443,6 +446,7 @@ database-free function.
 - **Repro (DB):** goal 30,000 due Dec 31 with a 2,000 contribution on Oct 10; plan Oct 1-15 confirmed at the roadmap, 3,000. On Oct 9: roadmap 3,000, no alert. On Oct 10 after posting: saved 2,000, roadmap **4,666.67**, "behind by **1,666.67**" in the Inbox; the Goals page per period rises from 3,000 to 4,666.67.
 - **Who / direction:** goals fed by recurring contributions. A false alert every period the contribution posts.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** B13.
+- **Status (2026-09-30, K3):** removed. The pace no longer moves when the contribution posts, and the plan period's own scheduled contributions are whole (posted ones included). Repro (target Dec 30 so the map's six periods hold under D9): 3,000 by hand before and after the Oct 10 posting (was 4,666.67), no "behind" insight (was 1,666.67).
 
 #### D5. The pace net of the plan period's contributions is repeated in every later period
 - **Quantities:** Q39 forecast pace, Q40 Afford estimate, against each period's own scheduled contributions.
@@ -450,6 +454,7 @@ database-free function.
 - **Repro (DB, same goal as D4):** on Sep 30 the forecast asks 3,000 of every period Oct 16-31 … Dec 16-31, although the B periods have no contribution (they need 5,000). After the Oct 10 posting every period becomes 4,666.67.
 - **Who / direction:** goals with a monthly contribution; the A and B periods are misjudged in opposite directions.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** B11.
+- **Status (2026-09-30, K3):** removed. The forecast and Afford ask each period its own by-hand figure, the pace less that period's own recurring contributions: 5,000 in the B periods and 3,000 in the A periods, before and after the posting (was 3,000, then 4,666.67, everywhere).
 
 #### D6. The debt comparator uses the net, live roadmap as each debt's minimum
 - **Quantities:** Q72 against Q33 and against the real payments.
@@ -457,6 +462,7 @@ database-free function.
 - **Repro (DB):** car loan 12,000 and card 3,000, both fed by recurring contributions (4,000 and 1,000) due in the plan period: minimums **0 and 0**, flow 0, no payoff under either order. Trace (a) marked as a debt: the Goals card says 2,785.66 per pay period and the comparator on the same page says **3,714.22** "per pay period on its own", paid off in period 3 counting a second payment in Oct 1-15.
 - **Who / direction:** users with two or more debts. Payoff times are overstated (up to never) when contributions fund the debts, and a phantom payment is counted when a contribution already went in.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** B12, plus new (period 1 paid twice).
+- **Status (2026-09-30, K3):** removed. The comparator's minimum is the gross pace, with what already went in during the plan period (period 1) passed beside it and the debt's target period asking whatever is left. Repro (both due Sun Nov 15): minimums 3,000 and 750, 3,750 a period, both paid off in period 4 (was 0 and 0, never). Trace (a) as a debt: minimum 4,178.49 with 5,571.32 already paid, paid off in period 4 (was 3,714.22, period 3 counting a second Oct 1-15 payment).
 
 #### D7. Items that will never post are still committed and still net the pace
 - **Quantities:** Q7, Q8, Q33, Q34 against posting and Q9.
@@ -472,6 +478,7 @@ database-free function.
 - **Repro (DB):** income 1,500 against a 2,000 floor, so no room; planned 0: `planned = null`, roadmap 4,237.99, **no insight**. With room, a planned 0 is flagged (200 behind), so this is now limited to the no-room case.
 - **Who / direction:** exactly the goals in the worst shape get no signal.
 - **Severity:** Low. **Confidence:** High. **Relates to:** B29 (narrowed).
+- **Status (2026-09-30, K3):** removed. A confirmed period with no GOAL row for a goal reads `planned = 0`, so the planning statement flags it: the repro reads 0 planned, 5,000 behind, 5,000 beyond the room, and the Inbox raises it (was `planned = null`, no insight).
 
 #### D9. A target date in the middle of a period drops that period, although its pay arrives before the target
 - **Quantities:** Q65 in Q33, Q34, Q39, Q40.
@@ -479,6 +486,7 @@ database-free function.
 - **Repro (pure):** plan Sep 16, target Oct 14 → 1 period (Oct 15 → 2). On Oct 2, target Oct 20 → 1, though Oct 16-31's pay lands Oct 15. On Oct 2 with target Oct 14 the Goals page counts 0 and the roadmap 1.
 - **Who / direction:** goals dated mid-period; the pace is overstated.
 - **Severity:** Low. **Confidence:** Medium (the rule is documented). **Relates to:** B43.
+- **Status (2026-09-30, K3):** removed, by decision: `periodsRemaining` counts a period when its pay (`paydayDateFor`) lands on or before the target date. Plan Sep 16 / target Oct 14: 2 (was 1); target Oct 15: 3 (was 2); Oct 2 / Oct 20: 2 (was 1); the Goals page and the roadmap both read 1 period on Oct 2 for Oct 14 (was 0 and 1). This also moves every target on a period boundary: a Dec 31 target now includes Jan 1-15 (paid Dec 31), and trace (a)'s Sun Nov 15 includes Nov 16-30 (paid Fri Nov 13), four periods instead of three.
 
 #### D10. Afford's goal window is not the roadmap's window, and the forecast skips a period Afford estimates
 - **Quantities:** Q40 against Q34's count and Q39.
@@ -486,12 +494,14 @@ database-free function.
 - **Repro (DB):** today Sep 30, no confirmed check-ins, 11,142.65 due Nov 15: Afford estimates 3,714.22 in each of Sep 16-30, Oct 1-15, Oct 16-31 and Nov 1-15, **14,856.88** for a goal that needs 11,142.65. On Fri Oct 30 Afford carries a 3,000 estimate in Oct 16-31 while the forecast walks only Nov 1-15 onward.
 - **Who / direction:** purchases judged in the 1-3 days between payday and period end; that period's room is understated by one pace (conservative).
 - **Severity:** Low. **Confidence:** High (the code comment calls the extra period deliberate). **Relates to:** B34 (introduced by its fix).
+- **Status (2026-09-30, K3):** removed. Afford's goal window is `goalWindow` from the plan period, like the roadmap and the forecast; today's period from payday to its end is no longer estimated (this deliberately removes the current-period estimate B34 added). Repro: 11,142.65 due Nov 15 is estimated in Oct 1-15 to Nov 16-30 at 2,785.66, 11,142.64 in all (was four periods from Sep 16-30 at 3,714.22, 14,856.88); on Oct 30 Oct 16-31 carries no estimate.
 
 #### D11. "Room couldn't cover" mixes today's roadmap with the room recorded at confirm time
 - **Quantities:** Q36 room shortfall.
 - **Rules:** `roadmap(live) − Σ recommendedAmount(stored at confirm)` (`goals/[id]/page.tsx:202-207`; `lib/insights.ts:338`).
 - **Repro (DB):** confirm-time room 4,000 against a 5,571.32 roadmap: shortfall 1,571.32. After the user contributes the 4,000 the page says **237.99** couldn't be covered: neither the confirm-time figure nor a current one.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new (inherits D2/D4).
+- **Status (2026-09-30, K3):** removed. Both sides are fixed for the period: the note is byHand less the room recorded at confirm, and reads 1,571.32 before and after the 4,000 goes in (was 237.99 after).
 
 #### D12. When a goal is completed mid-period, the confirmed card forgets its plan and Afford keeps it
 - **Quantities:** Q23 on the Dashboard card against Q9 / Q25.
@@ -506,12 +516,14 @@ database-free function.
 - **Rules:** Goals page: saved / periods since the first contribution including the current one (`lib/data/goals.ts:132-151, 181-190`); wizard: the whole remaining balance (`lib/data/payday.ts:362`); comparator: 0, "no pace of its own" (`lib/data/debt-payoff.ts:44`); Afford and the Inbox: nothing.
 - **Repro (DB):** an undated 10,000 debt with 1,000 contributed on Sep 5, seen Oct 20: Goals page pace **250** per period, done around Apr 30 2028; wizard recommends **9,000**; comparator minimum **0**. One 1,000 contribution on Sep 2: pace 1,000 on Sep 15 and **500** on Sep 16, and the projected end moves from Jan 31 to Jun 30 2027 overnight.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K3):** removed. The pace (K3) of an undated goal is its remaining balance at the period's start, asked of the plan period only (the wizard), and never repeated as a per-period figure (Afford, the forecast and the comparator give it none, the planning statement does not judge it). The Goals page's history figure is labelled for what it is, "Average so far" / "Promedio hasta ahora" (was "Pace" / "Ritmo"), and divides by the completed periods since the first contribution: 333.33 on Oct 20 (was 250), and 1,000 on both Sep 15 and Sep 16 (was 500 overnight).
 
 #### D14. The two goal paces convert currency along different paths
 - **Quantities:** Q33 against Q34 for a goal in another currency.
 - **Rules:** Q33 computes in the goal's currency, rounds, then converts (`lib/data/goals.ts:126, 176`); Q34 divides the already converted remaining (`lib/data/payday.ts:363`).
 - **Repro (DB):** a 1,000 USD goal due Dec 31 on DOP display, Oct 1 (current = plan period): Goals page **10,000.20**, wizard **10,000.00**.
 - **Severity:** Very low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K3):** removed. Every goal figure comes from one plan computed in the display currency from the unrounded remainder; the Goals page and the wizard both read 8,571.43 for 1,000 USD due Dec 31 (was 10,000.20 against 10,000.00; seven periods since D9).
 
 ### Committed, income, spent and budgets
 
