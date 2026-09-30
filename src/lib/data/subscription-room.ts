@@ -6,8 +6,8 @@
  * Nothing here projects anything itself. An open-ended subscription has no
  * schedule to walk, so the one period the form's "Next due" date lands in is
  * projected for every active account with Afford's own projectPeriods() -
- * income averaged from comparable history, commitments enumerated from every
- * other active item's schedule (achieved-goal contributions left out), the
+ * income averaged from comparable history, the period's commitments (every
+ * other item's occurrences posting will charge or already has), the
  * per-account buffer - and this subscription's charge(s) in that period are
  * judged with Afford's evaluateAffordability(), so "room" means exactly what
  * Afford's account check means. A positive headroom says the account's
@@ -26,13 +26,14 @@ import {
 } from "@/lib/afford";
 import { convert } from "@/lib/currency";
 import { maxDate, startOfDay } from "@/lib/date";
-import { num, round2 } from "@/lib/money";
+import { round2 } from "@/lib/money";
 import { periodForDate, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { owedOccurrences } from "@/lib/recurring";
+import { sumOccurrences, whole, wholeAmount } from "@/lib/period-commitments";
 import { isLargeSubscription } from "@/lib/subscription-room";
 
 import { projectPeriods, type AffordContext } from "@/lib/data/afford";
+import { periodCommitments } from "@/lib/data/period-commitments";
 
 import type { RecurringFrequency } from "@/generated/prisma/enums";
 
@@ -154,11 +155,12 @@ export async function checkSubscriptionRoom(
 }
 
 /**
- * What the item being edited already commits to `period` on its funding
- * account, in that account's currency - counted exactly as Afford's
- * loadScheduledCommitments counts it (same owedOccurrences walk, same
- * overdue-lands-now rule, same achieved-goal and inactive exclusions), so
- * taking it back out leaves the period as if the item did not exist yet.
+ * What the item being edited still commits to `period` on its funding
+ * account, in that account's currency: its occurrences there from the
+ * period's commitments (src/lib/period-commitments.ts) that the schedule
+ * still holds - not the ones posting already wrote, which stay in the ledger
+ * whatever the edit - so taking it back out leaves the period as if the item
+ * did not exist yet. An item posting will skip commits nothing.
  */
 async function ownCommitmentInPeriod(
   itemId: string | null | undefined,
@@ -168,33 +170,21 @@ async function ownCommitmentInPeriod(
 ): Promise<{ accountId: string | null; amount: number }> {
   const none = { accountId: null, amount: 0 };
   if (!itemId) return none;
-  const item = await prisma.recurringItem.findUnique({
-    where: { id: itemId },
-    select: {
-      active: true,
-      amount: true,
-      currency: true,
-      frequency: true,
-      nextDate: true,
-      anchorDay: true,
-      secondAnchorDay: true,
-      remainingOccurrences: true,
-      accountId: true,
-      kind: true,
-      goal: { select: { achievedAt: true } },
-    },
-  });
-  if (!item || !item.active || !item.accountId) return none;
-  if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) return none;
-  const account = accounts.find((candidate) => candidate.id === item.accountId);
+  const own = whole(await periodCommitments(period, context)).filter(
+    (occurrence) => occurrence.itemId === itemId && occurrence.source === "schedule",
+  );
+  const accountId = own[0]?.accountId;
+  const account = accounts.find((candidate) => candidate.id === accountId);
   if (!account) return none;
-  const dues = owedOccurrences(item, context.today, period.end).filter((due) => {
-    const key = due.getTime() < context.today.getTime() ? context.currentPeriod.key : periodForDate(due).key;
-    return key === period.key;
-  });
-  if (dues.length === 0) return none;
   return {
     accountId: account.id,
-    amount: round2(convert(num(item.amount), item.currency, account.currency, context.rates) * dues.length),
+    amount: round2(
+      sumOccurrences(
+        own.filter((occurrence) => occurrence.accountId === account.id),
+        account.currency,
+        context.rates,
+        wholeAmount,
+      ),
+    ),
   };
 }

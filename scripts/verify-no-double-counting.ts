@@ -18,7 +18,8 @@
  *           whose contribution is gone must not vanish from both.
  *   pair 2  a SEMI_MONTHLY RecurringItem's two monthly anchors. Every reader
  *           that walks a schedule (owedOccurrences / advanceDate in
- *           src/lib/recurring.ts) must see both realizations each month, and
+ *           src/lib/recurring.ts, the period commitments' walk in
+ *           src/lib/period-commitments.ts) must see both realizations each month, and
  *           each real occurrence must reach the ledger exactly once - not
  *           once through posting and again through a hand-logged charge, and
  *           not through two items covering the same bill.
@@ -26,9 +27,10 @@
  *           confirmed check-in versus the real GOAL allocation rows of a
  *           period that has one (projectPeriods in src/lib/data/afford.ts):
  *           a confirmed period's commitments must decompose exactly into
- *           scheduled occurrences plus its GOAL rows, with no estimate on
- *           top, and an unconfirmed period's into schedule plus estimate,
- *           with nothing leaking in from a DRAFT check-in.
+ *           the period's recurring commitments (whole() of
+ *           src/lib/period-commitments.ts) plus its GOAL rows, with no
+ *           estimate on top, and an unconfirmed period's into commitments
+ *           plus estimate, with nothing leaking in from a DRAFT check-in.
  *   pair 4  a row Cadence wrote itself - an occurrence's RECURRING row, or
  *           the paycheck a payday check-in recorded - versus a charge or
  *           deposit brought in for the same money (a CSV row, an approved
@@ -78,7 +80,6 @@ import {
   civilDate,
   daysInMonth,
   fromISODate,
-  maxDate,
   today as appToday,
   toISODate,
 } from "../src/lib/date";
@@ -94,7 +95,8 @@ import {
   type PeriodInfo,
   type PeriodRef,
 } from "../src/lib/period";
-import { monthlyEquivalent, owedOccurrences, type ScheduledItem } from "../src/lib/recurring";
+import { whole } from "../src/lib/period-commitments";
+import { monthlyEquivalent, owedOccurrences, skipReasonFor, type ScheduledItem } from "../src/lib/recurring";
 import {
   manualContributionExternalId,
   manualContributionIdFromTransaction,
@@ -238,6 +240,21 @@ function independentOwed(item: SemiMonthlyShape, from: Date, to: Date): Date[] {
   return owed;
 }
 
+/**
+ * Where the period commitments should file a SEMI_MONTHLY item's schedule
+ * through `to`, from the definition rather than the walk: nextDate itself and
+ * every anchor realization after it, capped at the countdown, each in its own
+ * period - one due before `today` in the current period.
+ */
+function independentFiled(item: SemiMonthlyShape, today: Date, currentKey: string, to: Date): { due: Date; key: string }[] {
+  const remaining = item.remainingOccurrences ?? Number.POSITIVE_INFINITY;
+  if (remaining <= 0) return [];
+  return [item.nextDate, ...anchorRealizations(item.anchors, addDays(item.nextDate, 1), to)]
+    .slice(0, Number.isFinite(remaining) ? remaining : undefined)
+    .filter((date) => date.getTime() <= to.getTime())
+    .map((due) => ({ due, key: due.getTime() < today.getTime() ? currentKey : periodForDate(due).key }));
+}
+
 function isoList(dates: Date[]): string {
   return dates.length === 0 ? "(none)" : dates.map(toISODate).join(", ");
 }
@@ -299,12 +316,12 @@ function topLevelSelect(call: string, source: string): string | null {
 }
 
 function scanScheduleReaders(root: string): { files: string[]; scanned: number; offenders: string[] } {
-  const walkers = /\b(owedOccurrences|advanceDate|remainingInstallments)\s*\(/;
+  const walkers = /\b(owedOccurrences|advanceDate|remainingInstallments|planCommitments)\s*\(/;
   const offenders: string[] = [];
   const files: string[] = [];
   let scanned = 0;
   for (const file of listSourceFiles(root)) {
-    if (file.endsWith("lib/recurring.ts") || file.endsWith("lib/afford-tracking.ts")) continue;
+    if (file.endsWith("lib/recurring.ts") || file.endsWith("lib/afford-tracking.ts") || file.endsWith("lib/period-commitments.ts")) continue;
     const source = stripComments(readFileSync(file, "utf8"));
     if (!walkers.test(source)) continue;
     files.push(relative(process.cwd(), file));
@@ -391,6 +408,7 @@ async function main(): Promise<number> {
   const { getPeriodSummary } = await import("../src/lib/data/period-summary");
   const { matchRecurringToTransactions } = await import("../src/lib/data/monthly");
   const { getGoalRoadmapAmounts, planPeriodRef } = await import("../src/lib/data/payday");
+  const { loadCommitments } = await import("../src/lib/data/period-commitments");
 
   const categories = await prisma.category.findMany({
     select: { id: true, name: true, isSavingsDefault: true, isSubscriptionDefault: true },
@@ -555,18 +573,27 @@ async function main(): Promise<number> {
     const periodsWithTwins = new Map<string, PeriodInfo>();
     for (const { twin } of budgetPairs) periodsWithTwins.set(periodForDate(twin.date).key, periodForDate(twin.date));
     for (const [key, period] of [...periodsWithTwins.entries()].sort()) {
-      const [summary, expenses] = await Promise.all([
+      const [summary, expenses, settledForSubscriptions] = await Promise.all([
         getPeriodSummary(period, context as AppContext),
         prisma.transaction.findMany({
           where: { date: periodRange(period), type: "EXPENSE" },
           select: { id: true, amount: true, currency: true, source: true, categoryId: true, externalId: true },
         }),
+        // A charge that paid a subscription occurrence stands for that
+        // occurrence, which the plan already reserved: like posting's own
+        // RECURRING row, it is not budget spending (D20). A charge that paid
+        // a contribution occurrence is a twin, checked below as one.
+        prisma.recurringSettlement.findMany({
+          where: { kind: "SUBSCRIPTION", transaction: { date: periodRange(period) } },
+          select: { transactionId: true },
+        }),
       ]);
+      const settledSubscriptionCharges = new Set(settledForSubscriptions.map((row) => row.transactionId));
       const twinIds = new Set(budgetPairs.map(({ twin }) => twin.id));
       let spentWithoutTwins = 0;
       const twinsInsideByRule: { id: string; amount: number }[] = [];
       for (const tx of expenses) {
-        if (tx.source === "RECURRING" || outsideBudget(tx.categoryId)) continue;
+        if (tx.source === "RECURRING" || settledSubscriptionCharges.has(tx.id) || outsideBudget(tx.categoryId)) continue;
         const amount = toDisplay(num(tx.amount), tx.currency);
         if (twinIds.has(tx.id)) twinsInsideByRule.push({ id: tx.id, amount });
         else spentWithoutTwins += amount;
@@ -830,15 +857,19 @@ async function main(): Promise<number> {
       }
 
       // --- live readers agree with the independent count -----------------------
-      if (item.active && !degraded && (item.kind !== "CONTRIBUTION" || !item.goal?.achievedAt)) {
+      if (item.active && !degraded && skipReasonFor(item) === null) {
+        const liveEnd = livePeriods[livePeriods.length - 1].end;
         for (const period of livePeriods) {
-          const owedFrom = maxDate(today, period.start);
-          const expected = independentOwed(shape, owedFrom, period.end).length;
-          const live = liveSummaries.get(period.key)?.committedItems.find((row) => row.id === item.id)?.occurrenceCount ?? 0;
-          if (live !== expected) {
-            flag(2, live < expected ? "DROP" : "DOUBLE", `${label}: getPeriodSummary(${period.key}) owes ${live} occurrence${live === 1 ? "" : "s"}, the anchors say ${expected}`, [
-              `independent: ${isoList(independentOwed(shape, owedFrom, period.end))}`,
-              `the committed figure, the payday check-in's subscription rows and the goal roadmap all read this count`,
+          const expectedDates = independentFiled(shape, today, context.currentPeriod.key, liveEnd)
+            .filter((entry) => entry.key === period.key)
+            .map((entry) => entry.due);
+          const live = (liveSummaries.get(period.key)?.commitments ?? []).filter(
+            (occurrence) => occurrence.itemId === item.id && occurrence.source === "schedule",
+          ).length;
+          if (live !== expectedDates.length) {
+            flag(2, live < expectedDates.length ? "DROP" : "DOUBLE", `${label}: getPeriodSummary(${period.key}) holds ${live} scheduled occurrence${live === 1 ? "" : "s"}, the anchors say ${expectedDates.length}`, [
+              `independent: ${isoList(expectedDates)}`,
+              `the committed figure, the payday check-in's subscription rows and the goal roadmap all read these occurrences`,
             ]);
           }
         }
@@ -851,8 +882,7 @@ async function main(): Promise<number> {
             projectPeriods(refs, chosen, activeAccounts, context, { excludeItemId: item.id }),
           ]);
           const filed = new Map<string, number>();
-          for (const due of independentOwed(shape, today, horizonEnd)) {
-            const key = due.getTime() < today.getTime() ? context.currentPeriod.key : periodForDate(due).key;
+          for (const { key } of independentFiled(shape, today, context.currentPeriod.key, horizonEnd)) {
             filed.set(key, (filed.get(key) ?? 0) + 1);
           }
           for (const period of livePeriods) {
@@ -867,7 +897,7 @@ async function main(): Promise<number> {
               const kind: FindingKind = deltaFlexible < expectedFlexible ? "DROP" : "DOUBLE";
               flag(2, kind, `${label}: Afford commits ${money(deltaFlexible, displayCurrency)} to ${period.key} for it, the anchors say ${money(expectedFlexible, displayCurrency)} (${count} occurrence${count === 1 ? "" : "s"})`, [
                 `per account "${chosen.name}": ${money(deltaAccount, chosen.currency)} vs ${money(expectedAccount, chosen.currency)}`,
-                `measured as projectPeriods with and without excludeItemId, net of the goal estimate (loadScheduledCommitments in src/lib/data/afford.ts)`,
+                `measured as projectPeriods with and without excludeItemId, net of the goal estimate (loadScheduledCommitments in src/lib/data/afford.ts, over the period commitments)`,
               ]);
             }
           }
@@ -919,57 +949,23 @@ async function main(): Promise<number> {
       }
       const periods = [...refsByKey.values()].sort((a, b) => a.start.getTime() - b.start.getTime());
       const refs: PeriodRef[] = periods.map(({ year, month, period }) => ({ year, month, period }));
-      const horizonEnd = periods[periods.length - 1].end;
 
-      // Independent scheduled commitments per period: the same walk Afford
-      // documents (every active item due by the horizon, an achieved goal's
-      // contribution left out, an overdue date filed under the current period).
-      // The current period is counted in full: the occurrences already behind
-      // today are read straight from the ledger - its RECURRING rows and the
-      // charges that settled an occurrence (RecurringSettlement), each
-      // occurrence key once - and an owed date whose key is among them is not
-      // counted again.
+      // The period's recurring commitments, as the app defines them: whole()
+      // of the period commitments (src/lib/period-commitments.ts) - pair 2
+      // checks that walk against an independent anchor count; this pair is
+      // about what Afford adds on top of it. Each occurrence counts on the
+      // account the money leaves (the ledger row's, the paying charge's, else
+      // the item's), and only an active account carries a per-account figure.
       const scheduledTotal = new Map<string, number>();
       const scheduledByAccount = new Map<string, Map<string, number>>();
-      const addScheduled = (key: string, amount: number, currency: string, accountId: string | null) => {
-        scheduledTotal.set(key, (scheduledTotal.get(key) ?? 0) + toDisplay(amount, currency));
-        const account = accountId ? activeAccounts.find((candidate) => candidate.id === accountId) : undefined;
-        if (account) {
+      for (const [key, occurrences] of await loadCommitments(periods, context)) {
+        for (const occurrence of whole(occurrences)) {
+          scheduledTotal.set(key, (scheduledTotal.get(key) ?? 0) + toDisplay(occurrence.amount, occurrence.currency));
+          const account = occurrence.accountId ? activeAccounts.find((candidate) => candidate.id === occurrence.accountId) : undefined;
+          if (!account) continue;
           const byAccount = scheduledByAccount.get(key) ?? new Map<string, number>();
-          byAccount.set(account.id, (byAccount.get(account.id) ?? 0) + convert(amount, currency, account.currency, rates));
+          byAccount.set(account.id, (byAccount.get(account.id) ?? 0) + convert(occurrence.amount, occurrence.currency, account.currency, rates));
           scheduledByAccount.set(key, byAccount);
-        }
-      };
-      const currentKey = context.currentPeriod.key;
-      const behindToday = new Set<string>();
-      const [currentPosted, currentSettled] = await Promise.all([
-        prisma.transaction.findMany({
-          where: { source: "RECURRING", type: "EXPENSE", date: periodRange(context.currentPeriod) },
-          select: { externalId: true, amount: true, currency: true, accountId: true },
-        }),
-        prisma.recurringSettlement.findMany({
-          where: { dueDate: periodRange(context.currentPeriod) },
-          select: { occurrenceKey: true, transaction: { select: { amount: true, currency: true, accountId: true } } },
-        }),
-      ]);
-      for (const row of currentPosted) {
-        if (row.externalId && behindToday.has(row.externalId)) continue;
-        if (row.externalId) behindToday.add(row.externalId);
-        addScheduled(currentKey, num(row.amount), row.currency, row.accountId);
-      }
-      for (const settlement of currentSettled) {
-        if (behindToday.has(settlement.occurrenceKey)) continue;
-        behindToday.add(settlement.occurrenceKey);
-        addScheduled(currentKey, num(settlement.transaction.amount), settlement.transaction.currency, settlement.transaction.accountId);
-      }
-      for (const item of allItems) {
-        if (!item.active || item.nextDate.getTime() > horizonEnd.getTime()) continue;
-        if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) continue;
-        for (const due of owedOccurrences(item, today, horizonEnd)) {
-          const key = due.getTime() < today.getTime() ? currentKey : periodForDate(due).key;
-          if (!refsByKey.has(key)) continue;
-          if (behindToday.has(`${item.id}:${toISODate(due)}`)) continue;
-          addScheduled(key, num(item.amount), item.currency, item.accountId);
         }
       }
 
@@ -1053,7 +1049,7 @@ async function main(): Promise<number> {
         if (Math.abs(residual) >= 0.01) {
           const draftHint = draftRows.length > 0 && sameCents(residual, draftRowsTotal) ? ` - exactly the ${money(draftRowsTotal, displayCurrency)} of GOAL rows on a non-confirmed check-in, which must not count` : "";
           flag(3, residual > 0 ? "DOUBLE" : "DROP", `${key}: period-wide committed ${money(anyProjection.flexible.committed, displayCurrency)} does not decompose into schedule + confirmed GOAL rows + estimate`, [
-            `schedule (owedOccurrences over active items, plus the current period's RECURRING rows and settled charges): ${money(scheduled, displayCurrency)}; confirmed GOAL rows: ${money(goalRowsTotal, displayCurrency)}; estimate: ${money(estimate, displayCurrency)}; unexplained: ${money(residual, displayCurrency)}${draftHint}`,
+            `recurring commitments (whole() of the period commitments): ${money(scheduled, displayCurrency)}; confirmed GOAL rows: ${money(goalRowsTotal, displayCurrency)}; estimate: ${money(estimate, displayCurrency)}; unexplained: ${money(residual, displayCurrency)}${draftHint}`,
           ]);
         }
 

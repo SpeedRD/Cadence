@@ -421,6 +421,7 @@ database-free function.
 - **Repro (DB, trace (a)):** on Wed Sep 30, after the Oct 1 contribution, the Goals page shows **2,785.66 × 4 periods** and the wizard **3,714.22 × 3**; before the contribution, 4,178.49 × 4 against the check-in's 5,571.32 × 3. On Fri Nov 13 with a target of Sat Nov 14 the Goals page says "due this period" (Nov 1-15, 3,000) while the wizard puts the whole 3,000 in Nov 16-30, after the target date. With a target of Sep 10 seen on Sep 30, the Goals page says "due this period" (Sep 16-30) while the wizard plans it in Oct 1-15.
 - **Who / direction:** every dated goal, from payday to the end of the period (1-3 days each period). The Goals page understates the pace, and "this period" names a different period than "planned this period" on the same card.
 - **Severity:** Low (display). **Confidence:** High. **Relates to:** B24.
+- **Status (2026-09-30, K1/K2):** removed. `summarize` in `lib/data/goals.ts` counts periods from `periodClock(today).plan.start` and nets the plan period's outstanding contributions (K2). Trace (a) on Sep 30: 3,714.22 × 3 on the Goals page, the same as the roadmap (was 2,785.66 × 4). "due this period" now names the plan period, so the Nov 13 / Nov 14 case reads the period the wizard plans it in; D9 (mid-period target) and D14 (currency path) remain. Harness: "period clock and period commitments (K1 K2)", D1.
 
 #### D2. The roadmap still counts the plan period as a period to fund after money was contributed inside it
 - **Quantities:** Q34 in all its readers (wizard "Roadmap amount" and "ahead", Inbox, forecast pace, Afford estimate, debt comparator), against what the target still needs.
@@ -463,6 +464,7 @@ database-free function.
 - **Repro (DB):** a 200 contribution to an achieved goal: Oct 1-15 committed **200**, the wizard reserves 200, Afford **0**, posting reports `goal_achieved`. A 100 contribution with no account to a 1,200 goal due Dec 31: roadmap and Goals page **100** where 200 is needed; posting reports `missing_account`.
 - **Who / direction:** the plan under-allocates flexible money by charges that will never leave; the pace understates what the goal needs.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** B14.
+- **Status (2026-09-30, K1/K2):** removed. An item `skipReasonFor` skips is `wont_post` in K2: out of Committed, the check-in, Afford, the room check, the monthly pace and the goal netting, and listed with its reason in Step 3 ("Not counted: posting will skip these"), in Next 7 days and as a count on the Budgets page. Repro: Oct 1-15 committed 0 (was 300), the check-in reserves 0 (was 300), the 1,200 goal's pace 200 on the Goals page and roadmap (was 171.43 and 100), Afford 0 (was 100). `dashboard.notPostingDescription` ("missing from your committed total") is now true.
 
 #### D8. A goal the accounts had no room for is never flagged
 - **Quantities:** Q36 / Inbox `goal_behind` against Q34.
@@ -497,6 +499,7 @@ database-free function.
 - **Repro (DB):** Oct 1-15 confirmed with 5,000 for a 5,000 goal; the card reads 49,000 available. After the 5,000 is logged and the goal is achieved, the card reads **54,000**; Afford still counts 5,000 committed.
 - **Who / direction:** the card overstates flexible money by the finished goal's plan.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K1/K2):** counting half removed. A goal reached since the plan was confirmed keeps its confirmed GOAL rows in the rebuilt draft (`reachedGoals`), read-only, counted in the goal plan and taken from the pool first; confirm writes them back unchanged. Repro: the card reads 49,000 before and after (was 54,000), as Afford counts the 5,000. The card still rebuilds its other figures from live data (D32, K4).
 
 #### D13. An undated goal's "pace" means four things, and its average divides by the period in progress
 - **Quantities:** Q41 against Q34 and Q72.
@@ -521,6 +524,7 @@ database-free function.
   - Trace (c): after the first Klarna payment posts, the Oct 16-31 wizard lists no installment while Afford counts it.
 - **Who / direction:** any check-in opened after its period started (the Budgets page allows it), and every confirmed card. A late plan writes flexible budgets overstated by every charge already posted.
 - **Severity:** High. **Confidence:** High. **Relates to:** B38 and the check-in side of B1 (new).
+- **Status (2026-09-30, K1/K2):** removed. The wizard, confirm, the confirmed card and "Recommended" count K2's `whole` (posted and settled occurrences at the ledger's amount plus outstanding); Committed shows `outstanding`. Late check-in: 34,000 (was 54,000), Afford 20,000 committed, the same. Trace (b): 43,400 on Oct 1 and on Oct 11 (was 46,000 on Oct 11); Budgets "Committed" 2,600 then 0. Afford's own "Available" (34,400 in trace (b)) still differs by income and buffer: D17, K4. Until K6 (D20), a subscription paid by a charge the user entered is now both reserved by the plan and counted in budget spending.
 
 #### D16. A future period counts every item due before it starts as "overdue" in it
 - **Quantities:** Q7 and Q8 for any period after the current one, against Q9 and against the current period's own Q7.
@@ -528,6 +532,7 @@ database-free function.
 - **Repro (DB):** Netflix 600 due Oct 5, viewed on Oct 2: Oct 1-15 committed 600; **Oct 16-31 committed 600** (flagged overdue, no occurrence in that period; Afford 0); **Nov 1-15 committed 1,200** (Afford 600). The Budgets-page wizard for those periods reserves the same amounts. Weekend case: on Fri Nov 13, a 50 item due Sat Nov 14 is committed in Nov 1-15 and again, "Overdue", in Nov 16-30. An item due Sat Oct 31 is listed in both the Oct 16-31 plan and, "Overdue", in the Nov 1-15 plan opened on Fri Oct 30.
 - **Who / direction:** every check-in on a Friday payday before a weekend period end, and every plan or Budgets view of a period after the current one. Flexible money is understated (conservative), items are called overdue before they are due.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** B23, generalized (new: any future period, not only the weekend gap).
+- **Status (2026-09-30, K1/K2):** removed. Only a genuine backlog (due before today) is filed in the current period. Repro on Oct 2: 600 / 0 / 600 for Oct 1-15, Oct 16-31, Nov 1-15 (was 600 / 600 / 1,200); the Oct 16-31 wizard reserves 0 (was 600); on Fri Nov 13 the Sat Nov 14 item is not in the Nov 16-30 plan (was listed "Overdue"). `owedOccurrences` keeps its old branch for its remaining callers (the posting preview, the audit), which pass `from = nextDate`.
 
 #### D17. Afford's "Available for flexible categories" for a confirmed period ignores the period's confirmed income, buffer and carryover
 - **Quantities:** Q25 against Q23, same label, same period.
@@ -555,6 +560,7 @@ database-free function.
 - **Repro (DB):** Oct 1-15 confirmed with Netflix 600 reserved. The user enters "Fict Netflix" 600 under Entertainment on Oct 5; posting settles the occurrence with it. Spent **600**, safe to spend **15,400**. Same period with posting writing the row: spent 0, safe to spend **16,000**.
 - **Who / direction:** users who import or type subscription charges before posting runs. The charge is subtracted twice from the plan and inflates the next suggestion.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** new (the subscription twin of the contribution-settlement fix in B16).
+- **Status (2026-09-30, K6 settled-charge part only):** the settled-charge part is done; the rest of K6 is not. Every row that stands for a recurring occurrence - a RECURRING row, or a charge that settled an occurrence (RecurringSettlement, either kind) - is left out of budget spending by `outsideBudget` in `getPeriodSummary`, and the Budgets page's category rows read `CategoryLine.spentExcludingOccurrences`, the same test, so they agree with the overall "spent" for these rows (Reports keeps the factual `spent`). Repro: spent 0 and safe to spend 16,000 (was 600 and 15,400), the same as when posting writes the row; the carryover offered to Oct 16-31 is 16,000 (was 15,400); the plan reserves the 600 once and budget spending takes none of it. The category suggestion (Q27) now averages `spentExcludingOccurrences` too, so a settled charge no longer raises the next suggestion (repro: 1,000, was 1,600). D21's other rows, D22, D30 and D31 are untouched.
 
 #### D21. The Budgets page's category rows count recurring charges; its overall "spent" does not
 - **Quantities:** Q18 against Q16 on one page.
@@ -587,6 +593,7 @@ database-free function.
 - **Rules:** Q8 subtracts occurrences the settlement plan already pairs (`lib/data/payday.ts:593-630`); Q7 subtracts nothing.
 - **Repro (DB):** Phone 2,000 due Oct 17, a CSV row for it on Oct 14. On Oct 16 Step 3 shows the Phone as already paid (0); the Dashboard's committed is **2,000** (Afford 2,000) until posting settles it on Oct 17.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K1/K2):** removed. An occurrence posting's settlement plan already pairs is `settled`, so it leaves Committed and Next 7 days as soon as the charge is entered. Repro on Oct 16: Step 3 paid, Committed 0 (was 2,000), Next 7 days no longer lists it.
 
 #### D26. Period income depends on the screen: planned period, date, or estimate
 - **Quantities:** Q1, Q5, Q6.
@@ -606,6 +613,7 @@ database-free function.
 - **Rules:** `bufferInputs` passes subscriptions only (`lib/data/payday.ts:633-654`).
 - **Repro (DB):** account A: 50,000 income, a 10,000 subscription and a 20,000 recurring contribution; account B: 20,000 income; goal Y roadmap 30,000. Confirm recommends **A 19,811.32 / B 10,188.68**, leaving A at 188.68 against a 5,000 buffer; Afford counts **30,000** committed on A.
 - **Severity:** Medium. **Confidence:** High. **Relates to:** B9.
+- **Status (2026-09-30, K1/K2):** removed. Step 3's per-account room (`commitmentPortions`, `AccountBufferPlan.commitmentsTotal`) takes each account's subscriptions and recurring contributions, posted and paid ones on the account they left. Repro: goal Y recommended A 13,636.36 / B 16,363.64 (was 19,811.32 / 10,188.68); A's room 15,000 after the 30,000 Afford counts.
 
 #### D29. Category suggestions average a comparable period that has not ended
 - **Quantities:** Q27 against Q6's history rule.
@@ -702,11 +710,13 @@ database-free function.
 - **Repro (pure):** 5 payments left, `nextDate` Jul 10, today Sep 28: commitments Jul 10, Oct 10, Nov 10 (**3**); tracker **5** rows, three filed in Sep 16-30.
 - **Rules:** `lib/recurring.ts:218-219` against `lib/afford-tracking.ts:39-47`.
 - **Severity:** Low. **Confidence:** High. **Relates to:** B42.
+- **Status (2026-09-30, K1/K2):** removed. K2 counts every backlog occurrence up to the countdown, and the tracker's `remainingInstallments` walks with K2's `scheduleDates`. Repro on Sep 28: 10,500 / 3,500 / 3,500 in Sep 16-30, Oct 1-15, Nov 1-15 and 3 occurrences in Sep 16-30 (was 3,500 and 1), the tracker's 5 rows.
 
 #### D45. The monthly pace ignores a plan's countdown
 - **Rules:** `loadActiveRecurringForMatch` selects no `remainingOccurrences` (`lib/data/monthly.ts:214-232`).
 - **Repro (DB):** a biweekly plan with 1 payment left, due Oct 5, seen Oct 2: monthly "still due" **7,000** (Oct 5 and Oct 19) where 3,500 will post.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
+- **Status (2026-09-30, K1/K2):** removed. The monthly still-due figure is K2's outstanding subscription occurrences in the month's periods, countdown included. Repro: 3,500 (was 7,000).
 
 #### D46. A past first payment: Afford treats it as paid, the Recurring form posts it
 - **Repro (DB):** 4 × 3,500 from Sep 10, on Oct 2: Afford would record **3** payments from Oct 10 (1 treated as paid); the same plan entered on the form posts a Sep 10 row and leaves 3.
@@ -719,6 +729,7 @@ database-free function.
 #### D48. The cover-transfer dialog pre-fills the browser's UTC date
 - **Repro (pure):** at 21:30 on Oct 14 in Santo Domingo, the app's today is **2026-10-14**; the dialog's default is **2026-10-15** (`payday-checkin-dialog.tsx:517`).
 - **Severity:** Low. **Confidence:** High. **Relates to:** B36.
+- **Status (2026-09-30, K1/K2):** removed. The draft carries the server's `today` and the dialog pre-fills `toISODate(draft.today)`. Repro at 21:30 on Oct 14 in Santo Domingo: 2026-10-14 (was 2026-10-15).
 
 ---
 

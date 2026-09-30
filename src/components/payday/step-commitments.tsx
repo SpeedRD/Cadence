@@ -34,6 +34,8 @@ import type {
   PaydayCategoryDraft,
   PaydayCommittedDraft,
   PaydayGoalDraft,
+  PaydayReachedGoalDraft,
+  PaydayWontPostDraft,
 } from "@/lib/data/payday";
 
 function AlreadyLoggedBadge({ label }: { label: string }) {
@@ -91,8 +93,8 @@ function SubscriptionRow({
         {item.name}{" "}
         <span className="text-xs text-muted-foreground">
           {formatDayMonth(item.nextDate)}
-          {item.occurrenceCount > 1
-            ? ` · ${t.chargesThisPeriod(item.occurrenceCount, formatMoney(item.perOccurrenceAmount, item.currency))}`
+          {item.occurrenceCount + item.ledgerOccurrences > 1
+            ? ` · ${t.chargesThisPeriod(item.occurrenceCount + item.ledgerOccurrences, formatMoney(item.perOccurrenceAmount, item.currency))}`
             : ""}
         </span>
       </span>
@@ -226,7 +228,10 @@ export function StepCommitments({
   accounts,
   subscriptions,
   contributions,
+  wontPost,
+  reasonText,
   goals,
+  reachedGoals,
   essentialCategories,
   displayCurrency,
   bufferPlan,
@@ -254,7 +259,13 @@ export function StepCommitments({
   accounts: PaydayAccountDraft[];
   subscriptions: PaydayCommittedDraft[];
   contributions: PaydayCommittedDraft[];
+  /** Items posting will skip this period: listed with their reason, counted in no figure here. */
+  wontPost: PaydayWontPostDraft[];
+  /** The words for a RecurringSkipReason. */
+  reasonText: (reason: string) => string;
   goals: PaydayGoalDraft[];
+  /** Goals reached since the plan was confirmed, whose confirmed draws stay in the plan. */
+  reachedGoals: PaydayReachedGoalDraft[];
   essentialCategories: PaydayCategoryDraft[];
   displayCurrency: string;
   bufferPlan: AccountBufferBreakdown;
@@ -336,7 +347,7 @@ export function StepCommitments({
                     </span>
                     <span>
                       {t.accountSubscriptionsDue}:{" "}
-                      <span className="figure">-{formatMoney(plan.subscriptionsTotal, plan.currency)}</span>
+                      <span className="figure">-{formatMoney(plan.commitmentsTotal, plan.currency)}</span>
                     </span>
                     <span>
                       {t.accountLeftAfterSubscriptions}:{" "}
@@ -466,7 +477,7 @@ export function StepCommitments({
             <p className="text-xs text-muted-foreground">{t.noContributionsDue}</p>
           ) : (
             contributions.map((item) => (
-              <div key={item.recurringItemId} className="flex items-center justify-between text-sm">
+              <div key={item.recurringItemId} className="flex items-center justify-between gap-2 text-sm">
                 <span>
                   {item.name}{" "}
                   <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate)}</span>
@@ -482,13 +493,49 @@ export function StepCommitments({
         </CardContent>
       </Card>
 
+      {wontPost.length > 0 ? (
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>{t.wontPostHeading}</CardTitle>
+            <CardDescription>{t.wontPostDescription}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1.5">
+            {wontPost.map((item) => (
+              <div key={item.recurringItemId} className="flex flex-wrap items-center justify-between gap-x-2 text-sm">
+                <span className="min-w-0 flex-1">
+                  {item.name}{" "}
+                  <span className="text-xs text-muted-foreground">
+                    {formatDayMonth(item.nextDate)} · {reasonText(item.reason)}
+                  </span>
+                </span>
+                <span className="figure text-muted-foreground">{formatMoney(item.nativeAmount, item.currency)}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card size="sm">
         <CardHeader>
           <CardTitle>{t.goalsHeading}</CardTitle>
           <CardDescription>{t.goalsDescription}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {goals.length === 0 ? (
+          {reachedGoals.map((goal) => (
+            <div key={goal.goalId} className="space-y-1 rounded-lg border border-border/70 p-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm font-medium">{goal.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t.goalPlannedTotal}:{" "}
+                  <span className="figure">{formatMoney(goal.plannedAmount, displayCurrency)}</span>
+                </p>
+              </div>
+              <p className="text-xs text-[var(--good)]">
+                {t.goalReachedKept(formatMoney(goal.plannedAmount, displayCurrency))}
+              </p>
+            </div>
+          ))}
+          {goals.length === 0 && reachedGoals.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t.noGoalsToReserve}</p>
           ) : (
             goals.map((goal) => {

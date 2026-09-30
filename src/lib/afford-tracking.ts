@@ -8,24 +8,22 @@
  */
 import { type AffordVerdict, type Installment } from "@/lib/afford";
 import { round2 } from "@/lib/money";
-import { periodForDate } from "@/lib/period";
-import { advanceDate, type ScheduledItem } from "@/lib/recurring";
+import { scheduleDates } from "@/lib/period-commitments";
+import { type ScheduledItem } from "@/lib/recurring";
 
 /** The From Afford card's id on the Recurring page; the Dashboard alert and the nav badge link straight to it. */
 export const FROM_AFFORD_SECTION_ID = "from-afford";
 export const FROM_AFFORD_HREF = `/recurring#${FROM_AFFORD_SECTION_ID}`;
 
 /**
- * The dates an installment plan still owes, one row per remaining occurrence,
- * walked from nextDate exactly as posting will walk them: the stored anchor
- * day keeps a monthly plan on the 31st through a short February, and a row
- * written outside the app (no anchor) falls back to the date's own day. Each
- * row carries the item's amount - the one figure it will post.
- *
- * An occurrence already past `today` is owed now, so it is filed under the
- * current period rather than the period its date names - the rule Afford's
- * own commitment walk (loadScheduledCommitments) applies to an overdue item,
- * so the re-check and the commitments it is judged against agree.
+ * The dates an installment plan still owes, one row per remaining occurrence:
+ * the period commitments' own schedule walk (scheduleDates in
+ * src/lib/period-commitments.ts), so the stored anchor day keeps a monthly
+ * plan on the 31st through a short February, a row written outside the app
+ * (no anchor) falls back to the date's own day, and an occurrence already
+ * past `today` is owed now and filed under the current period - every one of
+ * them, exactly as the commitments the re-check is judged against count them.
+ * Each row carries the item's amount - the one figure it will post.
  */
 export function remainingInstallments(
   item: ScheduledItem,
@@ -33,19 +31,13 @@ export function remainingInstallments(
   today: Date,
   currentPeriodKey: string,
 ): Installment[] {
-  const remaining = item.remainingOccurrences ?? 0;
-  const rows: Installment[] = [];
-  let cursor = item.nextDate;
-  for (let i = 0; i < remaining; i += 1) {
-    rows.push({
-      index: i + 1,
-      date: cursor,
-      amount: round2(amount),
-      periodKey: cursor.getTime() < today.getTime() ? currentPeriodKey : periodForDate(cursor).key,
-    });
-    cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
-  }
-  return rows;
+  if (!item.remainingOccurrences || item.remainingOccurrences <= 0) return [];
+  return scheduleDates(item, today, { currentPeriodKey }).map((date, index) => ({
+    index: index + 1,
+    date: date.dueDate,
+    amount: round2(amount),
+    periodKey: date.periodKey,
+  }));
 }
 
 /**

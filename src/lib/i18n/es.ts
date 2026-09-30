@@ -253,6 +253,7 @@ export const es = {
     affordShortLink: "Verlas en la página de recurrentes",
     goalsHeading: "Metas",
     overdueNotPosted: "vencido, aún sin registrar",
+    wontPostNotCounted: (reason: string) => `no se registrará: ${reason}`,
     plusOutsideBudget: (amount: string) =>
       `más ${amount} en suscripciones y ahorro, que el presupuesto no cubre`,
     allGoals: "Todas las metas",
@@ -710,6 +711,8 @@ export const es = {
     committed: "Comprometido",
     recurringStillToCome: (n: number) =>
       `${n} elemento${n === 1 ? "" : "s"} recurrente${n === 1 ? "" : "s"} por llegar`,
+    wontPostLeftOut: (n: number) =>
+      n === 1 ? "1 más no se registrará y queda fuera" : `${n} más no se registrarán y quedan fuera`,
     safeToSpend: "Disponible para gastar",
     perDay: (amount: string, days: number) => `${amount} al día durante ${days} día${days === 1 ? "" : "s"}`,
     forWholePeriod: "para todo el periodo",
@@ -1453,8 +1456,8 @@ export const es = {
     noIncomeAccountsYet:
       "Aún no hay ingresos registrados - anota en el paso 2 lo que recibió cada cuenta para ver su colchón.",
     accountIncomeReceived: "Ingreso recibido",
-    accountSubscriptionsDue: "Suscripciones por pagar",
-    accountLeftAfterSubscriptions: "Queda tras las suscripciones",
+    accountSubscriptionsDue: "Suscripciones y aportes",
+    accountLeftAfterSubscriptions: "Queda tras suscripciones y aportes",
     accountReportedSupports: "Alcanza (según tu saldo reportado)",
     accountReportedBelowProjection: (amount: string) =>
       `Tu saldo reportado alcanza para ${amount} menos de lo que proyecta el ingreso de este periodo - probablemente dinero que ya salió de esta cuenta antes de este chequeo.`,
@@ -1475,12 +1478,17 @@ export const es = {
     unfundedSubscriptionsDescription:
       "Vencen antes del próximo pago pero su cuenta no recibió ingreso en este chequeo. Muévelas a una que sí.",
     alreadyPaidThisPeriod: "Ya pagado este período",
+    wontPostHeading: "Sin contar: el registro automático las omite",
+    wontPostDescription:
+      "No se cobrará nada por ellas hasta que corrijas el motivo en la página de recurrentes, así que este plan las deja fuera.",
+    goalReachedKept: (amount: string) =>
+      `Alcanzada desde que se confirmó este plan - sus ${amount} siguen en el plan.`,
     archivedAccountNote: "archivada, se conserva como registro",
     overdueBadge: "Vencido",
     chargesThisPeriod: (count: number, each: string) => `${count} cargos de ${each}`,
     goalsHeading: "Hoja de ruta de metas",
     goalsDescription:
-      "Cada meta se financia desde las cuentas a las que les sobra dinero tras sus suscripciones y su colchón, en proporción al margen de cada una. Ajusta la parte de cualquier cuenta; el total de la meta es la suma.",
+      "Cada meta se financia desde las cuentas a las que les sobra dinero tras sus suscripciones, aportes recurrentes y su colchón, en proporción al margen de cada una. Ajusta la parte de cualquier cuenta; el total de la meta es la suma.",
     noGoalsToReserve: "No hay metas que reservar en este periodo.",
     roadmapAmount: "Monto de la hoja de ruta",
     remainingBalanceNoDate: "Saldo restante (sin fecha objetivo)",
@@ -1492,14 +1500,14 @@ export const es = {
     goalFundingAccountLabel: (goalName: string, accountName: string) =>
       `${goalName} desde ${accountName}`,
     goalFundingRoom: (amount: string, sharePercent: number) =>
-      `${amount} de sobra tras sus suscripciones y colchón · ${sharePercent}% del margen`,
+      `${amount} de sobra tras sus suscripciones, aportes y colchón · ${sharePercent}% del margen`,
     goalFundingRoomAfterEarlierGoals: (amount: string, sharePercent: number) =>
       `${amount} aún de sobra tras las metas de arriba · ${sharePercent}% del margen`,
     goalFundingNoRoomLeft: "No queda nada de sobra tras las metas de arriba",
     goalFundingLeadAccount: (accountName: string) =>
-      `${accountName} tiene más margen este periodo tras sus suscripciones y colchón, así que toma la parte mayor.`,
+      `${accountName} tiene más margen este periodo tras sus suscripciones, aportes y colchón, así que toma la parte mayor.`,
     goalFundingNoRoom:
-      "A ninguna cuenta le sobra dinero tras sus suscripciones y colchón este periodo, así que no se puede reservar nada para esta meta del excedente.",
+      "A ninguna cuenta le sobra dinero tras sus suscripciones, aportes y colchón este periodo, así que no se puede reservar nada para esta meta del excedente.",
     goalFundingShortfall: (free: string, short: string) =>
       `Solo sobran ${free} entre tus cuentas - ${short} del monto de la hoja de ruta de esta meta no se puede cubrir con el excedente este periodo.`,
     goalOnTrack: "Al día con la hoja de ruta",

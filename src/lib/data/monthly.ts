@@ -62,16 +62,19 @@
  * history of when an item was paused.
  */
 import { convert } from "@/lib/currency";
-import { addDays, appTimeZone, civilDateInZone, minDate, startOfDay } from "@/lib/date";
+import { appTimeZone, civilDateInZone, minDate, startOfDay } from "@/lib/date";
 import { num, round2, sum } from "@/lib/money";
 import { daysElapsedInMonth, monthForDate, monthWindow, nextMonth, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
-import { monthlyEquivalent, owedOccurrences } from "@/lib/recurring";
+import { nextPeriod, periodForDate, periodInfo } from "@/lib/period";
+import { outstanding, outstandingAmount, sumOccurrences } from "@/lib/period-commitments";
+import { monthlyEquivalent } from "@/lib/recurring";
 import { chargeMatchesItem, itemsWithAmbiguousCategory } from "@/lib/recurring-settlement";
 import { ownShare } from "@/lib/shared-expense";
 import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
+import { loadCommitments } from "@/lib/data/period-commitments";
 import type { CategoryLine } from "@/lib/data/period-summary";
 import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
 
@@ -601,6 +604,7 @@ async function computeMonthActuals(
       // (built above) skips them before this map is built - so there is
       // nothing left to exclude here.
       spentExcludingRecurring: round2(value.total),
+      spentExcludingOccurrences: round2(value.total),
       budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
@@ -771,6 +775,7 @@ export async function getHistoricalMonthlyAverage(context: AppContext): Promise<
       // Same as lifestyleByCategory above: RECURRING rows never reach this
       // total in the first place.
       spentExcludingRecurring: round2(value.total / n),
+      spentExcludingOccurrences: round2(value.total / n),
       budget: null,
     }))
     .sort((a, b) => b.spent - a.spent);
@@ -823,31 +828,29 @@ export async function getCurrentMonthPace(context: AppContext): Promise<MonthlyP
 
   const [recurringItems, categories] = await Promise.all([loadActiveRecurringForMatch(), loadCategoryMeta()]);
   const actuals = await computeMonthActuals(window, context.today, context, recurringItems, categories);
-  const toDisplay = (amount: number, currency: string) =>
-    convert(amount, currency, context.displayCurrency, context.rates);
-
   const projectedLifestyle = round2((actuals.typicalLifestyle / Math.max(daysElapsed, 1)) * window.totalDays);
 
-  // Every occurrence still ahead this month, not just the next one: a weekly
-  // subscription owes the rest of its month, and an item that has already been
-  // charged once keeps whatever it owes after that. Occurrences already posted
-  // are behind nextDate and so are never counted twice.
-  const stillDueFrom = addDays(context.today, 1);
-  let committedStillDueThisMonth = 0;
-  for (const item of recurringItems) {
-    if (item.kind !== "SUBSCRIPTION") continue;
-    const occurrences = owedOccurrences(item, stillDueFrom, window.end);
-    // owedOccurrences also reports an outstanding date behind the window, which
-    // is right for "what is owed" but not here: if the item has already been
-    // charged this month, that charge is in committedSpentSoFar and the
-    // outstanding occurrence it settled would be counted a second time. Only
-    // that one occurrence is dropped - everything still ahead stays.
-    const stillDue = actuals.actualSubscriptionItemIds.has(item.id)
-      ? occurrences.filter((due) => due.getTime() >= stillDueFrom.getTime())
-      : occurrences;
-    committedStillDueThisMonth += stillDue.length * toDisplay(item.amount, item.currency);
-  }
-  committedStillDueThisMonth = round2(committedStillDueThisMonth);
+  // Every subscription occurrence still to leave this month: the outstanding
+  // ones in the month's pay periods from today's on (src/lib/period-
+  // commitments.ts) - a weekly subscription owes the rest of its month, a
+  // finite plan stops at its countdown, a backlog posting will still charge
+  // counts in full, and an occurrence already posted or paid by a charge the
+  // user entered is in committedSpentSoFar, never here. An item posting will
+  // skip charges nothing.
+  const current = periodForDate(context.today);
+  const monthPeriods = [current];
+  if (current.period === "A") monthPeriods.push(periodInfo(nextPeriod(current)));
+  const commitments = await loadCommitments(monthPeriods, context);
+  const committedStillDueThisMonth = round2(
+    sumOccurrences(
+      monthPeriods
+        .flatMap((period) => outstanding(commitments.get(period.key) ?? []))
+        .filter((occurrence) => occurrence.kind === "SUBSCRIPTION"),
+      context.displayCurrency,
+      context.rates,
+      outstandingAmount,
+    ),
+  );
 
   const committedSpentSoFar = round2(actuals.committedActual);
   const savingsInvestingSoFar = round2(

@@ -1,13 +1,22 @@
 import { convert } from "@/lib/currency";
-import { maxDate } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import { daysRemainingInPeriod, periodRange, type PeriodInfo } from "@/lib/period";
+import {
+  byItem,
+  outstanding,
+  outstandingAmount,
+  sumOccurrences,
+  wontPost,
+  type CommitmentOccurrence,
+} from "@/lib/period-commitments";
 import { prisma } from "@/lib/prisma";
-import { owedOccurrences } from "@/lib/recurring";
+import type { RecurringSkipReason } from "@/lib/recurring";
 import { manualContributionIdFromTransaction } from "@/lib/transactions";
 
+import { periodCommitments } from "@/lib/data/period-commitments";
+
 import type { AppContext } from "@/lib/data/context";
-import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
+import type { RecurringKind } from "@/generated/prisma/enums";
 
 export interface CategoryLine {
   categoryId: string | null;
@@ -44,33 +53,105 @@ export interface CategoryLine {
    * (e.g. monthly.ts's lifestyleByCategory, which excludes them earlier).
    */
   spentExcludingRecurring: number;
+  /**
+   * `spent` minus every row that stands for a recurring occurrence - a
+   * RECURRING row, or a charge the user entered that settled an occurrence
+   * (RecurringSettlement, either kind) - which the period's plan already
+   * reserved, so budget spending leaves them out (see outsideBudget in
+   * getPeriodSummary). What the Budgets page's category rows show, so they
+   * agree with the overall "spent" for these rows; `spent` stays the factual
+   * figure Reports reads. Equal to `spent` on a line built from rows that
+   * already leave recurring occurrences out (monthly.ts's lines).
+   */
+  spentExcludingOccurrences: number;
   budget: number | null;
 }
 
+/**
+ * One item's outstanding occurrences in the period (see
+ * src/lib/period-commitments.ts): what "Committed" still expects to leave.
+ */
 export interface CommittedItem {
   id: string;
   name: string;
   kind: RecurringKind;
-  frequency: RecurringFrequency;
-  /** Every occurrence owed in this window, in the display currency. */
+  /** Every outstanding occurrence in the period, in the display currency. */
   amount: number;
   /** The same total in the item's own currency. */
   nativeAmount: number;
   /** One occurrence's charge in the item's own currency. */
   perOccurrenceAmount: number;
-  /** How many occurrences of this item the window owes. */
+  /** How many outstanding occurrences of this item the period holds. */
   occurrenceCount: number;
-  /** Their due dates (occurrenceCount of them), in order - an overdue item's outstanding one first. */
+  /** Their due dates (occurrenceCount of them), in order - a backlog first. */
   occurrenceDates: Date[];
   currency: string;
+  /** The first of occurrenceDates. */
   nextDate: Date;
-  /** The item's due date has passed and posting has not been able to clear it. */
+  /** One of them was due before today and posting has not cleared it. */
   overdue: boolean;
-  categoryName: string | null;
   /** The account this item is funded from, if one is set - the payday planner groups due items by it. */
   accountId: string | null;
   /** CONTRIBUTION only: the goal it pays into, so a goal is not reserved for twice. */
   goalId: string | null;
+}
+
+/** An item with occurrences in the period that posting will skip: listed, never counted. */
+export interface WontPostItem {
+  id: string;
+  name: string;
+  kind: RecurringKind;
+  reason: RecurringSkipReason;
+  dueDates: Date[];
+  /** What its occurrences would have cost, in the display currency - counted nowhere. */
+  amount: number;
+  nativeAmount: number;
+  currency: string;
+}
+
+/** Occurrences of one item grouped into a CommittedItem, amounts summed as they stand. */
+export function committedItemFrom(
+  group: readonly CommitmentOccurrence[],
+  context: Pick<AppContext, "displayCurrency" | "rates">,
+  amountOf: (occurrence: CommitmentOccurrence) => number = outstandingAmount,
+): CommittedItem {
+  const first = group[0];
+  return {
+    id: first.itemId,
+    name: first.name,
+    kind: first.kind,
+    amount: round2(sumOccurrences(group, context.displayCurrency, context.rates, amountOf)),
+    nativeAmount: round2(sumOccurrences(group, first.itemCurrency, context.rates, amountOf)),
+    perOccurrenceAmount: first.itemAmount,
+    occurrenceCount: group.length,
+    occurrenceDates: group.map((occurrence) => occurrence.dueDate),
+    currency: first.itemCurrency,
+    nextDate: first.dueDate,
+    overdue: group.some((occurrence) => occurrence.backlog),
+    accountId: first.accountId,
+    goalId: first.goalId,
+  };
+}
+
+/** The period's wont_post occurrences, one row per item with the reason posting gives. */
+export function wontPostItemsFrom(
+  occurrences: readonly CommitmentOccurrence[],
+  context: Pick<AppContext, "displayCurrency" | "rates">,
+): WontPostItem[] {
+  return byItem(wontPost(occurrences)).map((group) => {
+    const first = group[0];
+    const amountOf = (occurrence: CommitmentOccurrence) => occurrence.amount;
+    return {
+      id: first.itemId,
+      name: first.name,
+      kind: first.kind,
+      reason: first.wontPostReason as RecurringSkipReason,
+      dueDates: group.map((occurrence) => occurrence.dueDate),
+      amount: round2(sumOccurrences(group, context.displayCurrency, context.rates, amountOf)),
+      nativeAmount: round2(sumOccurrences(group, first.itemCurrency, context.rates, amountOf)),
+      currency: first.itemCurrency,
+    };
+  });
 }
 
 export interface PeriodSummary {
@@ -84,15 +165,22 @@ export interface PeriodSummary {
   hasBudget: boolean;
   /**
    * Spending the period budget is answerable for. Excludes what the budget was
-   * never asked to cover: automatically posted recurring charges, and anything
-   * in a subscription or savings category. See the note above safeToSpend.
+   * never asked to cover: every row that stands for a recurring occurrence
+   * (an automatically posted charge, or a charge the user entered that paid
+   * one), and anything in a subscription or savings category. See the note
+   * above safeToSpend.
    */
   spent: number;
   /** Every expense in the period, whether budgeted or not. */
   totalSpent: number;
   income: number;
+  /** What the period's recurring items still expect to leave: its outstanding occurrences. */
   committed: number;
   committedItems: CommittedItem[];
+  /** Every occurrence the period holds (src/lib/period-commitments.ts) - posted, settled, outstanding and wont_post. A plan for the period counts whole() of it. */
+  commitments: CommitmentOccurrence[];
+  /** Items posting will skip, left out of `committed`. */
+  wontPostItems: WontPostItem[];
   safeToSpend: number;
   safeToSpendPerDay: number;
   daysRemaining: number;
@@ -102,8 +190,11 @@ export interface PeriodSummary {
 /**
  * Everything the dashboard and the budgets page need for one pay period.
  *
- *   committedOutflows = active recurring items (subscriptions + contributions)
- *                       still owed before the period ends
+ *   committed         = the period's outstanding occurrences
+ *                       (src/lib/period-commitments.ts): recurring items,
+ *                       subscriptions and contributions, still to leave
+ *                       before the period ends; what posted or was paid is
+ *                       not, and neither is anything posting will skip
  *   safeToSpend       = periodBudget - spent
  *
  * The budget is a *net* figure: it denominates category spending, which is what
@@ -124,7 +215,7 @@ export async function getPeriodSummary(
   const { rates, displayCurrency } = context;
   const range = periodRange(period);
 
-  const [budgets, transactions, categories, recurring, checkin] = await Promise.all([
+  const [budgets, transactions, categories, commitments, checkin] = await Promise.all([
     prisma.budget.findMany({
       where: { year: period.year, month: period.month, period: period.period },
     }),
@@ -143,15 +234,7 @@ export async function getPeriodSummary(
       },
     }),
     prisma.category.findMany({ orderBy: { name: "asc" } }),
-    // Overdue items are still owed. The posting job leaves an item it cannot
-    // post (no account, archived account, no goal) exactly where it is, so
-    // filtering on nextDate >= today made it disappear from this figure the day
-    // after it fell due, with no charge to replace it.
-    prisma.recurringItem.findMany({
-      where: { active: true, nextDate: { lte: period.end } },
-      include: { category: { select: { name: true } } },
-      orderBy: { nextDate: "asc" },
-    }),
+    periodCommitments(period, context),
     // A paycheck belongs to the period its check-in planned, not to the day it
     // landed: pay for the 16th-31st arrives on the 15th, which is the period
     // before. The Transaction keeps the real date so the ledger still matches
@@ -225,6 +308,10 @@ export async function getPeriodSummary(
   // computeMonthActuals in monthly.ts, which already skips every RECURRING
   // row before building its own category map.
   const spentByCategoryExcludingRecurring = new Map<string | null, number>();
+  // spentByCategory minus every row that stands for a recurring occurrence
+  // (see standsForOccurrence below): CategoryLine.spentExcludingOccurrences,
+  // what the Budgets page's category rows show.
+  const spentByCategoryExcludingOccurrences = new Map<string | null, number>();
   let spent = 0;
   let totalSpent = 0;
   let income = 0;
@@ -259,6 +346,13 @@ export async function getPeriodSummary(
       manualContributionIdFromTransaction(transaction) !== null ||
       transaction.recurringSettlement?.kind === "CONTRIBUTION";
     const isRecurringPosting = transaction.source === "RECURRING";
+    // A row that stands for a recurring occurrence: posting's own RECURRING
+    // row, or a charge the user entered that posting settled an occurrence
+    // with, a subscription's as much as a contribution's. The plan already
+    // reserved the occurrence (the period commitments count it at the
+    // ledger's amount), so counting the row as budget spending too took the
+    // same money twice.
+    const standsForOccurrence = isRecurringPosting || transaction.recurringSettlement !== null;
 
     // The per-category breakdown stays complete whatever the budget covers -
     // the Reports page and the budget rows both read it - so a manual
@@ -280,6 +374,9 @@ export async function getPeriodSummary(
       if (!isRecurringPosting) {
         spentByCategoryExcludingRecurring.set(key, (spentByCategoryExcludingRecurring.get(key) ?? 0) + amount);
       }
+      if (!standsForOccurrence) {
+        spentByCategoryExcludingOccurrences.set(key, (spentByCategoryExcludingOccurrences.get(key) ?? 0) + amount);
+      }
       if (transaction.isExtraordinary) {
         extraordinaryByCategory.set(key, (extraordinaryByCategory.get(key) ?? 0) + amount);
       } else if (transaction.yourShare !== null) {
@@ -290,7 +387,7 @@ export async function getPeriodSummary(
       }
     }
 
-    const outsideBudget = isRecurringPosting || inSavingsOrSubscriptionCategory || isManualContributionTwin;
+    const outsideBudget = standsForOccurrence || inSavingsOrSubscriptionCategory || isManualContributionTwin;
     if (!outsideBudget) spent += amount;
   }
 
@@ -299,35 +396,14 @@ export async function getPeriodSummary(
     0,
   );
 
-  // From today when the period is under way, from its start when it is still
-  // ahead; an already-finished period owes nothing.
-  const owedFrom = maxDate(context.today, period.start);
-  const committedItems: CommittedItem[] = recurring
-    .map((item) => {
-      const occurrences = owedOccurrences(item, owedFrom, period.end);
-      const perOccurrenceAmount = num(item.amount);
-      return {
-        id: item.id,
-        name: item.name,
-        kind: item.kind,
-        frequency: item.frequency,
-        amount: round2(toDisplay(perOccurrenceAmount, item.currency) * occurrences.length),
-        nativeAmount: round2(perOccurrenceAmount * occurrences.length),
-        perOccurrenceAmount,
-        occurrenceCount: occurrences.length,
-        occurrenceDates: occurrences,
-        currency: item.currency,
-        nextDate: item.nextDate,
-        overdue: item.nextDate.getTime() < owedFrom.getTime(),
-        categoryName: item.category?.name ?? null,
-        accountId: item.accountId,
-        goalId: item.kind === "CONTRIBUTION" ? item.goalId : null,
-      };
-    })
-    .filter((item) => item.occurrenceCount > 0);
+  // What is still to leave: the outstanding occurrences. Whatever already
+  // posted or was paid by a charge the user entered is in the ledger, and an
+  // item posting will skip is listed apart rather than counted.
+  const committedItems = byItem(outstanding(commitments)).map((group) => committedItemFrom(group, context));
   const committed = round2(
     committedItems.reduce((total, item) => total + item.amount, 0),
   );
+  const wontPostItems = wontPostItemsFrom(commitments, context);
 
   const periodBudget = overallBudget ?? categoryBudgetTotal;
   const hasBudget = overallBudget !== null || categoryBudgetTotal > 0;
@@ -351,6 +427,7 @@ export async function getPeriodSummary(
       extraordinarySpent: round2(extraordinaryByCategory.get(category.id) ?? 0),
       othersShareSpent: round2(othersShareByCategory.get(category.id) ?? 0),
       spentExcludingRecurring: round2(spentByCategoryExcludingRecurring.get(category.id) ?? 0),
+      spentExcludingOccurrences: round2(spentByCategoryExcludingOccurrences.get(category.id) ?? 0),
       budget: budgetByCategory.get(category.id) ?? null,
     }));
 
@@ -364,6 +441,7 @@ export async function getPeriodSummary(
       extraordinarySpent: round2(extraordinaryByCategory.get(null) ?? 0),
       othersShareSpent: round2(othersShareByCategory.get(null) ?? 0),
       spentExcludingRecurring: round2(spentByCategoryExcludingRecurring.get(null) ?? 0),
+      spentExcludingOccurrences: round2(spentByCategoryExcludingOccurrences.get(null) ?? 0),
       budget: null,
     });
   }
@@ -380,6 +458,8 @@ export async function getPeriodSummary(
     income: round2(income),
     committed,
     committedItems,
+    commitments,
+    wontPostItems,
     safeToSpend,
     safeToSpendPerDay,
     daysRemaining,

@@ -9,7 +9,12 @@ import { convert, type RateTable } from "@/lib/currency";
 import { round2 } from "@/lib/money";
 import type { PeriodInfo } from "@/lib/period";
 
-import type { PaydayCheckinDraft, PaydayGoalFundingDraft } from "@/lib/data/payday";
+import type {
+  PaydayCheckinDraft,
+  PaydayCommittedDraft,
+  PaydayGoalFundingDraft,
+  PaydayReachedGoalDraft,
+} from "@/lib/data/payday";
 
 /**
  * Whether a comparable period is on the counted side of Settings'
@@ -72,6 +77,19 @@ export function availableForFlexibleCategories(input: FlexibleInput): number {
   return round2(projected - Math.max(0, input.reconciliationGap ?? 0));
 }
 
+/** A reached goal's confirmed draws as planGoalFunding input: held on the accounts they came from, so the goals after it share what is left. */
+export function reachedGoalFunding(
+  reached: readonly Pick<PaydayReachedGoalDraft, "goalId" | "plannedAmount" | "rows">[],
+): { goalId: string; amount: number; funding: PaydayGoalFundingDraft[] }[] {
+  return reached.map((goal) => ({
+    goalId: goal.goalId,
+    amount: goal.plannedAmount,
+    funding: goal.rows
+      .filter((row): row is typeof row & { accountId: string } => row.accountId !== null)
+      .map((row) => ({ accountId: row.accountId, plannedAmount: row.plannedAmount, held: true })),
+  }));
+}
+
 export interface PaydayDraftSummary {
   /** Every account's entered income converted into draft.displayCurrency. */
   totalIncome: number;
@@ -85,14 +103,43 @@ export interface PaydayDraftSummary {
 }
 
 /**
+ * What each committed row takes from which account this period, in the
+ * shape planAccountBuffers() reads: its outstanding occurrences from the
+ * item's own account (so reassigning the item in Step 3 moves them), and each
+ * occurrence already posted or paid from the account the money actually left
+ * (which reassigning cannot change). Subscriptions and recurring
+ * contributions alike: both leave the account out of the income being
+ * planned.
+ */
+export function commitmentPortions(
+  rows: readonly Pick<
+    PaydayCommittedDraft,
+    "recurringItemId" | "accountId" | "outstandingNativeAmount" | "currency" | "paidPortions"
+  >[],
+): AccountBufferSubscription[] {
+  return rows.flatMap((row) => [
+    ...(row.outstandingNativeAmount > 0
+      ? [{ recurringItemId: row.recurringItemId, accountId: row.accountId, nativeAmount: row.outstandingNativeAmount, currency: row.currency }]
+      : []),
+    ...row.paidPortions.map((portion) => ({
+      recurringItemId: row.recurringItemId,
+      accountId: portion.accountId,
+      nativeAmount: portion.amount,
+      currency: portion.currency,
+    })),
+  ]);
+}
+
+/**
  * The per-account buffer view for a draft, from the same rows the wizard
- * shows: each account's Step 2 income and Step 1 reported balance, and the
- * subscriptions still to be paid from it. The one mapping the dialog's live
- * Step 3 and summarizePaydayDraft's read-only summary both use, so the gap
- * that caps the summary is the gap Step 3 showed.
+ * shows: each account's Step 2 income and Step 1 reported balance, and what
+ * the period's subscriptions and recurring contributions take from it (see
+ * commitmentPortions). The one mapping the dialog's live Step 3 and
+ * summarizePaydayDraft's read-only summary both use, so the gap that caps the
+ * summary is the gap Step 3 showed.
  */
 export function draftAccountBuffers(
-  draft: Pick<PaydayCheckinDraft, "accounts" | "subscriptions" | "bufferPercent" | "displayCurrency">,
+  draft: Pick<PaydayCheckinDraft, "accounts" | "subscriptions" | "contributions" | "bufferPercent" | "displayCurrency">,
   rates: RateTable,
 ): AccountBufferBreakdown {
   return planAccountBuffers(
@@ -104,14 +151,7 @@ export function draftAccountBuffers(
       bufferFloor: account.bufferFloor,
       reportedBalance: account.reportedBalance,
     })),
-    draft.subscriptions.map((item) => ({
-      recurringItemId: item.recurringItemId,
-      accountId: item.accountId,
-      // Only the occurrences not yet in the ledger count against the account.
-      nativeAmount: item.outstandingNativeAmount,
-      currency: item.currency,
-      alreadyLogged: item.alreadyLogged,
-    })),
+    commitmentPortions([...draft.subscriptions, ...draft.contributions]),
     { bufferPercent: draft.bufferPercent, displayCurrency: draft.displayCurrency, rates },
   );
 }
@@ -131,7 +171,12 @@ export function summarizePaydayDraft(draft: PaydayCheckinDraft, rates: RateTable
     ),
   );
   // Goal and category planned amounts are already in draft.displayCurrency.
-  const goalPlanTotal = round2(draft.goals.reduce((sum, g) => sum + g.plannedAmount, 0));
+  // A goal reached since the plan was confirmed keeps its confirmed draw:
+  // that money was committed, and most likely moved, in this period.
+  const goalPlanTotal = round2(
+    draft.goals.reduce((sum, g) => sum + g.plannedAmount, 0) +
+      draft.reachedGoals.reduce((sum, g) => sum + g.plannedAmount, 0),
+  );
   const essentialFixedTotal = round2(
     draft.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0),
   );
@@ -252,15 +297,18 @@ export interface AccountBufferAccount {
   reportedBalance?: number | null;
 }
 
+/**
+ * What one subscription or recurring contribution takes from one account this
+ * period (see commitmentPortions): a row may have several, one per account
+ * its occurrences leave from.
+ */
 export interface AccountBufferSubscription {
   recurringItemId: string;
-  /** The recurring item's funding account - null while it has none. */
+  /** The account this part leaves from - null while the item has none. */
   accountId: string | null;
-  /** What the account still has to cover this period, in `currency` (the item's own): its occurrences not yet in the ledger. */
+  /** In `currency`. */
   nativeAmount: number;
   currency: string;
-  /** Every owed occurrence is already paid this period, so counting it again would double-count it. */
-  alreadyLogged: boolean;
 }
 
 /** One account's own protected buffer and how its due subscriptions sit against it. Every amount is in the account's own currency. */
@@ -269,11 +317,11 @@ export interface AccountBufferPlan {
   name: string;
   currency: string;
   income: number;
-  /** This account's still-unpaid due subscriptions, converted to its currency. */
-  subscriptionsTotal: number;
+  /** What this period's subscriptions and recurring contributions take from this account, posted and paid ones included, converted to its currency. */
+  commitmentsTotal: number;
   /** defaultProtectedBuffer() applied to this account's income alone. */
   suggestedBuffer: number;
-  /** income - subscriptionsTotal: what posting them all would leave. */
+  /** income - commitmentsTotal: what the period's commitments leave. */
   remaining: number;
   /** remaining - suggestedBuffer. Negative means the buffer would be breached. */
   headroom: number;
@@ -288,7 +336,7 @@ export interface AccountBufferPlan {
   reportedBalance: number | null;
   /**
    * What the account can really put toward goals and categories this period:
-   * reportedBalance + income - subscriptionsTotal - suggestedBuffer. The same
+   * reportedBalance + income - commitmentsTotal - suggestedBuffer. The same
    * shape as `headroom`, but starting from what the account actually held
    * before the pay landed instead of assuming it held nothing it owed. Null
    * when there is no reported balance to start from.
@@ -308,7 +356,7 @@ export interface AccountBufferPlan {
 export interface AccountBufferBreakdown {
   /** One row per account with income entered, in the order the accounts were given. */
   accounts: AccountBufferPlan[];
-  /** Due subscriptions funded by no account, or by one with no income this check-in - shown so they can still be reassigned. */
+  /** Items with a part funded by no account, or by one with no income this check-in - shown so they can still be reassigned. */
   unassignedRecurringItemIds: string[];
   /** Every account's suggested buffer summed into `displayCurrency` - the plan's single protectedBuffer figure. */
   total: number;
@@ -324,7 +372,10 @@ export interface AccountBufferBreakdown {
 /**
  * The per-account view of the protected buffer: each account's own suggested
  * buffer (the same defaultProtectedBuffer() formula applied to that account's
- * income instead of the total) measured against the subscriptions it funds.
+ * income instead of the total) measured against the period's commitments it
+ * funds - its subscriptions and recurring contributions, what already posted
+ * or was paid included: the paycheck being planned is the whole period's, so
+ * whatever left the account this period came out of it.
  *
  * Buffers are computed and summed in each account's own currency; only the
  * cross-account comparison (which account has the most room) and `total` go
@@ -342,16 +393,11 @@ export function planAccountBuffers(
 
   const plans: AccountBufferPlan[] = funded.map((account) => {
     const own = subscriptions.filter((s) => s.accountId === account.accountId);
-    // Already-paid items are excluded from the total for the same reason the
-    // step's subscriptions total excludes them: that money is already gone,
-    // counting it again would invent a shortfall.
-    const subscriptionsTotal = round2(
-      own
-        .filter((s) => !s.alreadyLogged)
-        .reduce((sum, s) => sum + convert(s.nativeAmount, s.currency, account.currency, rates), 0),
+    const commitmentsTotal = round2(
+      own.reduce((sum, s) => sum + convert(s.nativeAmount, s.currency, account.currency, rates), 0),
     );
     const suggestedBuffer = defaultProtectedBuffer(account.income, bufferPercent, account.bufferFloor);
-    const remaining = round2(account.income - subscriptionsTotal);
+    const remaining = round2(account.income - commitmentsTotal);
     const headroom = round2(remaining - suggestedBuffer);
     const reportedBalance = account.reportedBalance ?? null;
     const reportedSupports = reportedBalance === null ? null : round2(reportedBalance + headroom);
@@ -361,7 +407,7 @@ export function planAccountBuffers(
       name: account.name,
       currency: account.currency,
       income: account.income,
-      subscriptionsTotal,
+      commitmentsTotal,
       suggestedBuffer,
       remaining,
       headroom,
@@ -369,7 +415,7 @@ export function planAccountBuffers(
       belowBuffer: headroom < 0,
       suggestedAccountId: null,
       suggestedAccountName: null,
-      recurringItemIds: own.map((s) => s.recurringItemId),
+      recurringItemIds: [...new Set(own.map((s) => s.recurringItemId))],
       reportedBalance,
       reportedSupports,
       reportedGap,
@@ -392,9 +438,11 @@ export function planAccountBuffers(
 
   return {
     accounts: plans,
-    unassignedRecurringItemIds: subscriptions
-      .filter((s) => !s.accountId || !fundedIds.has(s.accountId))
-      .map((s) => s.recurringItemId),
+    unassignedRecurringItemIds: [
+      ...new Set(
+        subscriptions.filter((s) => !s.accountId || !fundedIds.has(s.accountId)).map((s) => s.recurringItemId),
+      ),
+    ],
     total: round2(
       plans.reduce(
         (sum, plan) => sum + convert(plan.suggestedBuffer, plan.currency, displayCurrency, rates),
@@ -494,7 +542,7 @@ export interface GoalFundingAccount {
   accountId: string;
   name: string;
   currency: string;
-  /** What the account has to spare after its subscriptions and its own buffer, in its own currency: AccountBufferPlan.headroom, less whatever earlier goals already claimed. */
+  /** What the account has to spare after its commitments and its own buffer, in its own currency: AccountBufferPlan.headroom, less whatever earlier goals already claimed. */
   headroom: number;
 }
 
@@ -524,7 +572,7 @@ export interface GoalFundingPlan {
 
 /**
  * Where to draw one goal's amount from: each account with positive headroom
- * (what is left after its subscriptions and its own buffer - see
+ * (what is left after its commitments and its own buffer - see
  * planAccountBuffers) takes a share proportional to its headroom, never more
  * than that headroom. When every account's room together is less than the goal
  * needs, each account gives all it has and the rest is reported as `shortfall`

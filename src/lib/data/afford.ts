@@ -19,22 +19,19 @@
  *               periods since the oldest one with income in any account
  *               (incomeHistoryDepth), so pay that moved from one account to
  *               another is a real zero in the old one, not a gap to skip.
- *   committed   known exactly, not estimated: every active RecurringItem has a
- *               schedule, so its occurrences in the period are enumerated with
- *               owedOccurrences() - the walk getPeriodSummary's committed
- *               figure uses, over the same set of items (every active one,
- *               either kind) - and summed. A finite item stops at its
- *               countdown, and a contribution to a goal that has already
- *               reached its target is left out, exactly as posting skips it.
- *               This is what lets a purchase recorded here a minute ago count
- *               against the next one before a single installment of it has
- *               posted. The period containing today is counted in full, like
- *               the income set against it: what already posted in it (its
- *               RECURRING rows) or was paid by a charge the user entered (its
- *               RecurringSettlement rows), plus what is still owed from
- *               today. A period that already has a confirmed check-in adds
- *               the goal funding that check-in planned: money the user has
- *               committed to move toward a goal but may not have logged yet.
+ *   committed   known exactly, not estimated: the period's commitments
+ *               (src/lib/period-commitments.ts), whole - what already posted
+ *               or was paid in it, at the ledger's amount, and every
+ *               occurrence still ahead - the one definition the check-in,
+ *               the period summary and every other reader of a period's
+ *               recurring items share. A finite item stops at its
+ *               countdown, and an item posting will skip is left out, as it
+ *               will never charge anything. This is what lets a purchase
+ *               recorded here a minute ago count against the next one
+ *               before a single installment of it has posted. A period that
+ *               already has a confirmed check-in adds the goal funding that
+ *               check-in planned: money the user has committed to move
+ *               toward a goal but may not have logged yet.
  *   goals       a period with no confirmed check-in has no such plan, but
  *               the user will most likely keep funding each dated goal: its
  *               current pace (getGoalRoadmapAmounts, the same "remaining
@@ -85,14 +82,12 @@ import {
 import { remainingInstallments, type AffordTrackedItem } from "@/lib/afford-tracking";
 import { getSettings } from "@/lib/auth";
 import { convert } from "@/lib/currency";
-import { maxDate } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import { countsInIncomeHistory, defaultProtectedBuffer, planGoalFunding } from "@/lib/payday";
 import {
   goalWindow,
   nextPeriod,
   parsePeriodKey,
-  periodForDate,
   periodInfo,
   periodRange,
   periodsRemaining,
@@ -101,13 +96,13 @@ import {
   type PeriodRef,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { owedOccurrences } from "@/lib/recurring";
-import { recurringExternalId } from "@/lib/recurring-settlement";
+import { whole } from "@/lib/period-commitments";
 import { reimbursedExpenseIdFromTransaction } from "@/lib/transactions";
 import type { affordInputSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAppContext } from "@/lib/data/context";
+import { loadCommitments } from "@/lib/data/period-commitments";
 import {
   getCategorySuggestions,
   getGoalRoadmapAmounts,
@@ -285,31 +280,17 @@ interface ScheduledCommitments {
 }
 
 /**
- * The exact commitments of every evaluated period, from the schedules
- * themselves. Same item set as getPeriodSummary's committed figure - every
- * active item, subscription or contribution, whether or not it has a funding
- * account - and the same walk, owedOccurrences(), which also stops a finite
- * item at its countdown. One walk per item from today to the furthest period,
- * with each due date filed under the period it lands in; an overdue date is
- * owed now, so it lands in the current period, exactly as getPeriodSummary
- * treats it. A contribution whose goal has been achieved is left out
- * entirely: postDueRecurringItems skips it (skipReasonFor's "goal_achieved"
- * in src/lib/recurring-posting.ts, the same condition as here), so it never
- * posts and never advances until the goal's target is raised again.
- *
- * The period containing today is counted in full, not from today: its
- * income is a whole-period average, so its commitments must be too, or rent
- * posted on the 16th would vanish from a purchase judged on the 28th. The
- * occurrences already behind today are not re-derived from schedules (a
- * schedule only knows what is still ahead); they are read from what posting
- * left - each RECURRING row dated in the period, on the account it charged,
- * and each RecurringSettlement whose occurrence falls in it, at the charge
- * the user entered for it, on that charge's account. Both carry the
- * occurrence's key (recurringExternalId), and the walk skips an owed date
- * whose key is already counted, so no occurrence is counted twice. They are
- * ledger facts, so they count whatever the item's state now: paused,
- * finished, deleted or its goal since achieved, the money still left in this
- * period.
+ * The exact commitments of every evaluated period: whole() of the period's
+ * commitments (src/lib/period-commitments.ts) - every occurrence posting will
+ * charge or already has, subscription or contribution, each filed in the
+ * period its due date falls in (a backlog in the current period, every
+ * occurrence of it up to the countdown), at the ledger's amount once posting
+ * has written or settled it, on the account the money left. The period
+ * containing today is therefore counted in full, not from today: its income
+ * is a whole-period average, so its commitments must be too, or rent posted
+ * on the 16th would vanish from a purchase judged on the 28th. An item
+ * posting will skip (no account, an archived account, a goal already
+ * reached) is left out entirely - it will never charge anything.
  *
  * A period that already has a CONFIRMED check-in also owes the goal funding
  * that check-in planned - its GOAL allocation rows, one per goal and account
@@ -319,13 +300,13 @@ interface ScheduledCommitments {
  * confirmed check-in has nothing of the kind to add here; projectPeriods
  * estimates its goal funding instead, and `confirmed` tells it which is which.
  *
- * An item or GOAL row with no account (or one on an archived account) counts
- * period-wide but against no account's buffer.
+ * A GOAL row with no account (or a ledger row on an account archived since)
+ * counts period-wide but against no active account's buffer.
  *
- * `excludeItemId` leaves one item out of the walk: the tracker's re-check of
+ * `excludeItemId` leaves one item's schedule out: the tracker's re-check of
  * a recorded plan judges that plan's own installments, which are by then
  * among the active items and would otherwise be counted as a commitment and
- * subtracted again on top. Only the walk: an installment of it already
+ * subtracted again on top. Only the schedule: an installment of it already
  * posted in the current period is not among the ones re-judged (those start
  * at its nextDate), so it stays counted here, as the posted charge it is -
  * which keeps the re-check's period total what the confirmed verdict judged.
@@ -341,7 +322,6 @@ async function loadScheduledCommitments(
     periods.map((period) => [period.key, { byAccount: new Map<string, number>(), total: 0, confirmed: false }]),
   );
   if (periods.length === 0) return result;
-  const horizonEnd = periods.reduce((latest, period) => maxDate(latest, period.end), periods[0].end);
   const currencyByAccount = new Map(accounts.map((account) => [account.id, account.currency]));
 
   const add = (bucket: ScheduledCommitments, amount: number, currency: string, accountId: string | null) => {
@@ -355,28 +335,8 @@ async function loadScheduledCommitments(
     }
   };
 
-  const current = periods.find((period) => period.key === context.currentPeriod.key);
-  const [items, checkins, postedRows, settlements] = await Promise.all([
-    prisma.recurringItem.findMany({
-      where: {
-        active: true,
-        nextDate: { lte: horizonEnd },
-        ...(excludeItemId ? { id: { not: excludeItemId } } : {}),
-      },
-      select: {
-        id: true,
-        amount: true,
-        currency: true,
-        frequency: true,
-        nextDate: true,
-        anchorDay: true,
-        secondAnchorDay: true,
-        remainingOccurrences: true,
-        accountId: true,
-        kind: true,
-        goal: { select: { achievedAt: true } },
-      },
-    }),
+  const [commitments, checkins] = await Promise.all([
+    loadCommitments(periods, context, { excludeItemId }),
     prisma.paydayCheckin.findMany({
       where: {
         status: "CONFIRMED",
@@ -392,51 +352,11 @@ async function loadScheduledCommitments(
         },
       },
     }),
-    current
-      ? prisma.transaction.findMany({
-          where: { source: "RECURRING", type: "EXPENSE", date: periodRange(current) },
-          select: { externalId: true, amount: true, currency: true, accountId: true },
-        })
-      : [],
-    current
-      ? prisma.recurringSettlement.findMany({
-          where: { dueDate: periodRange(current) },
-          select: {
-            occurrenceKey: true,
-            transaction: { select: { amount: true, currency: true, accountId: true } },
-          },
-        })
-      : [],
   ]);
-  // The current period's occurrences already behind us, each once by its key.
-  const counted = new Set<string>();
-  const currentBucket = current ? result.get(current.key) : undefined;
-  if (currentBucket) {
-    for (const row of postedRows) {
-      if (row.externalId) {
-        if (counted.has(row.externalId)) continue;
-        counted.add(row.externalId);
-      }
-      add(currentBucket, num(row.amount), row.currency, row.accountId);
-    }
-    for (const settlement of settlements) {
-      if (counted.has(settlement.occurrenceKey)) continue;
-      counted.add(settlement.occurrenceKey);
-      const charge = settlement.transaction;
-      add(currentBucket, num(charge.amount), charge.currency, charge.accountId);
-    }
-  }
-  for (const item of items) {
-    if (item.kind === "CONTRIBUTION" && item.goal?.achievedAt) continue;
-    const amount = num(item.amount);
-    for (const due of owedOccurrences(item, context.today, horizonEnd)) {
-      const key =
-        due.getTime() < context.today.getTime() ? context.currentPeriod.key : periodForDate(due).key;
-      const bucket = result.get(key);
-      if (!bucket) continue;
-      if (counted.has(recurringExternalId(item.id, due))) continue;
-      add(bucket, amount, item.currency, item.accountId);
-    }
+  for (const [key, occurrences] of commitments) {
+    const bucket = result.get(key);
+    if (!bucket) continue;
+    for (const occurrence of whole(occurrences)) add(bucket, occurrence.amount, occurrence.currency, occurrence.accountId);
   }
   for (const checkin of checkins) {
     const bucket = result.get(periodInfo(checkin).key);

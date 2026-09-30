@@ -1,0 +1,350 @@
+/**
+ * A pay period's commitments, one occurrence at a time - the one definition
+ * of "what the recurring items ask of this period" that the period summary,
+ * the payday check-in, Afford, the room check, the From Afford tracker, the
+ * monthly pace and Next 7 days all read. Pure and database-free: the loader
+ * is src/lib/data/period-commitments.ts.
+ *
+ * The rules:
+ *
+ *   - An occurrence belongs to the period its due date falls in.
+ *   - A backlog - an occurrence due before today and not yet paid - is owed
+ *     now, so it is filed in the current period. Every backlog occurrence
+ *     counts, up to the item's countdown, because posting will charge each
+ *     of them; a period after the current one never holds an occurrence due
+ *     before it starts.
+ *   - What posting already did is read from the ledger, at the ledger's
+ *     amount: a RECURRING row is "posted", a RecurringSettlement (a charge
+ *     the user entered that paid the occurrence) is "settled". Both carry the
+ *     occurrence's key (recurringExternalId), so nothing is counted twice.
+ *   - An occurrence still ahead on the schedule is "settled" when posting's
+ *     settlement plan (planSettlements in src/lib/recurring-settlement.ts)
+ *     already pairs a charge with it, "posted" when its RECURRING row already
+ *     exists (a nextDate moved back onto a posted day), otherwise
+ *     "outstanding".
+ *   - An item posting will skip (skipReasonFor: no account, no goal, an
+ *     archived account, a goal already reached) is "wont_post", with its
+ *     reason. It is left out of every total and listed where items are
+ *     listed, so a charge that will never leave is neither counted nor
+ *     hidden.
+ *
+ * whole() is what the period costs: posted + settled + outstanding. A plan
+ * for the period subtracts it from the period's whole income. outstanding()
+ * is what is still to leave: the "Committed" figure. Each occurrence's
+ * outstanding amount is taken through outstandingAmount(), the one place a
+ * later reduction of what an occurrence still asks would apply.
+ */
+import { convert, type RateTable } from "@/lib/currency";
+import { periodForDate, type PeriodInfo } from "@/lib/period";
+import {
+  advanceDate,
+  skipReasonFor,
+  type PostingLinks,
+  type RecurringSkipReason,
+  type ScheduledItem,
+} from "@/lib/recurring";
+import { recurringExternalId } from "@/lib/recurring-settlement";
+
+import type { RecurringKind } from "@/generated/prisma/enums";
+
+export type OccurrenceStatus = "posted" | "settled" | "outstanding" | "wont_post";
+
+/** The charge the user entered that paid an occurrence. */
+export interface OccurrenceCharge {
+  transactionId: string;
+  date: Date;
+  amount: number;
+  currency: string;
+  accountId: string | null;
+}
+
+export interface CommitmentOccurrence {
+  /** recurringExternalId(itemId, dueDate): the RECURRING row's externalId, the settlement's occurrenceKey. */
+  key: string;
+  itemId: string;
+  name: string;
+  kind: RecurringKind;
+  /** CONTRIBUTION only: the goal it pays into. */
+  goalId: string | null;
+  dueDate: Date;
+  /** The period it is filed in: its due date's, or the current period for a backlog occurrence. */
+  periodKey: string;
+  /** Due before today and still unpaid, so filed in the current period. */
+  backlog: boolean;
+  status: OccurrenceStatus;
+  /** Set on a wont_post occurrence: why posting skips the item. */
+  wontPostReason: RecurringSkipReason | null;
+  /**
+   * "ledger": read from what posting already wrote (a RECURRING row or a
+   * RecurringSettlement); the item's schedule has moved past it. "schedule":
+   * walked from the item's nextDate.
+   */
+  source: "ledger" | "schedule";
+  /** The account the money leaves: the ledger row's or charge's, else the item's. Null when none is set. */
+  accountId: string | null;
+  /** What the occurrence costs, in `currency` - the funding account's currency, or the item's own when it has no account. */
+  amount: number;
+  currency: string;
+  /** The same as recorded: the ledger row or charge in its own currency for a posted or settled one, the item's charge otherwise. */
+  sourceAmount: number;
+  sourceCurrency: string;
+  /** One charge of the item as scheduled, in the item's currency. */
+  itemAmount: number;
+  itemCurrency: string;
+  /** Set on a settled occurrence: the charge that paid it. */
+  settledBy: OccurrenceCharge | null;
+}
+
+/** An active item with what the walk and the skip rule need. */
+export interface CommitmentItem extends ScheduledItem, PostingLinks {
+  id: string;
+  name: string;
+  amount: number;
+  currency: string;
+}
+
+/** An occurrence posting already consumed: its RECURRING row, or the settlement it persisted. */
+export interface LedgerFact {
+  key: string;
+  itemId: string;
+  dueDate: Date;
+  status: "posted" | "settled";
+  amount: number;
+  currency: string;
+  accountId: string | null;
+  settledBy: OccurrenceCharge | null;
+}
+
+/** Name, kind and schedule charge of an item a ledger fact belongs to, when it is not among the active items (paused, finished or deleted since). */
+export interface LedgerItemInfo {
+  name: string;
+  kind: RecurringKind;
+  goalId: string | null;
+  amount: number;
+  currency: string;
+}
+
+/** posting's settlement plan (loadSettlementPlan), in the shape the planner reads. */
+export interface CommitmentSettlementPlan {
+  posted: ReadonlySet<string>;
+  settledBy: ReadonlyMap<string, OccurrenceCharge>;
+}
+
+/** Never walk more occurrences of one item than this, however far behind it has fallen. */
+const MAX_SCHEDULE_WALK = 400;
+
+/** One date an item's schedule still owes, and the period it is filed in. */
+export interface ScheduledDate {
+  dueDate: Date;
+  periodKey: string;
+  /** Due before today, so filed in the current period. */
+  backlog: boolean;
+}
+
+/**
+ * The dates `item` still owes, walked from its nextDate exactly as posting
+ * walks them (advanceDate: the stored anchor, SEMI_MONTHLY's two anchors,
+ * month-end clamping), each filed in its period - a date before today in the
+ * current period. A finite item stops at its countdown, spent the way posting
+ * spends it: a date `alreadyPosted` names (its RECURRING row exists) is rolled
+ * past without spending an installment. `through` bounds the walk; without
+ * it, only the countdown (or the walk cap) does.
+ */
+export function scheduleDates(
+  item: ScheduledItem,
+  today: Date,
+  options: { through?: Date; currentPeriodKey?: string; alreadyPosted?: (due: Date) => boolean } = {},
+): ScheduledDate[] {
+  const currentKey = options.currentPeriodKey ?? periodForDate(today).key;
+  let left = item.remainingOccurrences ?? Number.POSITIVE_INFINITY;
+  const dates: ScheduledDate[] = [];
+  let cursor = item.nextDate;
+  for (let i = 0; i < MAX_SCHEDULE_WALK && left > 0; i += 1) {
+    if (options.through && cursor.getTime() > options.through.getTime()) break;
+    const posted = options.alreadyPosted?.(cursor) ?? false;
+    const backlog = !posted && cursor.getTime() < today.getTime();
+    dates.push({ dueDate: cursor, periodKey: backlog ? currentKey : periodForDate(cursor).key, backlog });
+    if (!posted) left -= 1;
+    cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
+  }
+  return dates;
+}
+
+export interface PlanCommitmentsInput {
+  periods: readonly PeriodInfo[];
+  today: Date;
+  /** Every active item with anything due by the last period's end. */
+  items: readonly CommitmentItem[];
+  /** What posting already consumed in the periods' date range. */
+  facts: readonly LedgerFact[];
+  /** Items the facts belong to that are not in `items`, by id. */
+  ledgerItems: ReadonlyMap<string, LedgerItemInfo>;
+  settlement: CommitmentSettlementPlan;
+  /** Every account's currency, archived ones included. */
+  accountCurrency: ReadonlyMap<string, string>;
+  rates: RateTable;
+  /** Leaves one item's schedule out (never its ledger facts): the tracker's re-check of a plan judges the plan's own installments. */
+  excludeItemId?: string | null;
+}
+
+/**
+ * Every period's occurrences, keyed by period key, in due-date order. A
+ * period in `periods` with nothing owed has an empty list.
+ */
+export function planCommitments(input: PlanCommitmentsInput): Map<string, CommitmentOccurrence[]> {
+  const result = new Map<string, CommitmentOccurrence[]>(input.periods.map((period) => [period.key, []]));
+  if (input.periods.length === 0) return result;
+  const through = input.periods.reduce(
+    (latest, period) => (period.end.getTime() > latest.getTime() ? period.end : latest),
+    input.periods[0].end,
+  );
+  const currentKey = periodForDate(input.today).key;
+  const itemById = new Map(input.items.map((item) => [item.id, item]));
+  const inAccountCurrency = (amount: number, currency: string, accountId: string | null) => {
+    const accountCurrency = accountId ? input.accountCurrency.get(accountId) : undefined;
+    return accountCurrency
+      ? { amount: convert(amount, currency, accountCurrency, input.rates), currency: accountCurrency }
+      : { amount, currency };
+  };
+
+  const counted = new Set<string>();
+  for (const fact of input.facts) {
+    if (counted.has(fact.key)) continue;
+    const bucket = result.get(periodForDate(fact.dueDate).key);
+    if (!bucket) continue;
+    counted.add(fact.key);
+    const item = itemById.get(fact.itemId);
+    const info = item
+      ? { name: item.name, kind: item.kind, goalId: item.goalId, amount: item.amount, currency: item.currency }
+      : input.ledgerItems.get(fact.itemId);
+    bucket.push({
+      key: fact.key,
+      itemId: fact.itemId,
+      name: info?.name ?? "",
+      kind: info?.kind ?? "SUBSCRIPTION",
+      goalId: info?.kind === "CONTRIBUTION" ? (info.goalId ?? null) : null,
+      dueDate: fact.dueDate,
+      periodKey: periodForDate(fact.dueDate).key,
+      backlog: false,
+      status: fact.status,
+      wontPostReason: null,
+      source: "ledger",
+      accountId: fact.accountId,
+      ...inAccountCurrency(fact.amount, fact.currency, fact.accountId),
+      sourceAmount: fact.amount,
+      sourceCurrency: fact.currency,
+      itemAmount: info?.amount ?? fact.amount,
+      itemCurrency: info?.currency ?? fact.currency,
+      settledBy: fact.settledBy,
+    });
+  }
+
+  for (const item of input.items) {
+    if (item.id === input.excludeItemId) continue;
+    const reason = skipReasonFor(item);
+    const dates = scheduleDates(item, input.today, {
+      through,
+      currentPeriodKey: currentKey,
+      alreadyPosted: (due) => input.settlement.posted.has(recurringExternalId(item.id, due)),
+    });
+    for (const date of dates) {
+      const key = recurringExternalId(item.id, date.dueDate);
+      if (counted.has(key)) continue;
+      const settledBy = reason ? undefined : input.settlement.settledBy.get(key);
+      const status: OccurrenceStatus = reason
+        ? "wont_post"
+        : input.settlement.posted.has(key)
+          ? "posted"
+          : settledBy
+            ? "settled"
+            : "outstanding";
+      // Paid is paid: a settled or posted occurrence stays in its own period
+      // whatever today is; only an unpaid one due before today is a backlog.
+      const paid = status === "posted" || status === "settled";
+      const periodKey = paid ? periodForDate(date.dueDate).key : date.periodKey;
+      const bucket = result.get(periodKey);
+      if (!bucket) continue;
+      counted.add(key);
+      const accountId = settledBy ? settledBy.accountId : item.accountId;
+      const sourceAmount = settledBy ? settledBy.amount : item.amount;
+      const sourceCurrency = settledBy ? settledBy.currency : item.currency;
+      bucket.push({
+        key,
+        itemId: item.id,
+        name: item.name,
+        kind: item.kind,
+        goalId: item.kind === "CONTRIBUTION" ? item.goalId : null,
+        dueDate: date.dueDate,
+        periodKey,
+        backlog: !paid && date.backlog,
+        status,
+        wontPostReason: reason,
+        source: "schedule",
+        accountId,
+        ...inAccountCurrency(sourceAmount, sourceCurrency, accountId),
+        sourceAmount,
+        sourceCurrency,
+        itemAmount: item.amount,
+        itemCurrency: item.currency,
+        settledBy: settledBy ?? null,
+      });
+    }
+  }
+
+  for (const bucket of result.values()) {
+    bucket.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime() || a.itemId.localeCompare(b.itemId));
+  }
+  return result;
+}
+
+/** What the period costs: every occurrence posting will charge or already has - wont_post left out. */
+export function whole(occurrences: readonly CommitmentOccurrence[]): CommitmentOccurrence[] {
+  return occurrences.filter((occurrence) => occurrence.status !== "wont_post");
+}
+
+/** What is still to leave: the occurrences neither posted nor paid. */
+export function outstanding(occurrences: readonly CommitmentOccurrence[]): CommitmentOccurrence[] {
+  return occurrences.filter((occurrence) => occurrence.status === "outstanding");
+}
+
+/** The occurrences posting will skip, each with its reason. */
+export function wontPost(occurrences: readonly CommitmentOccurrence[]): CommitmentOccurrence[] {
+  return occurrences.filter((occurrence) => occurrence.status === "wont_post");
+}
+
+/** What an occurrence still asks of the period, in its `currency`: its amount while outstanding, nothing once posted, paid or skipped. */
+export function outstandingAmount(occurrence: CommitmentOccurrence): number {
+  return occurrence.status === "outstanding" ? occurrence.amount : 0;
+}
+
+/** What an occurrence costs the period, in its `currency`: nothing for one posting will skip. */
+export function wholeAmount(occurrence: CommitmentOccurrence): number {
+  return occurrence.status === "wont_post" ? 0 : occurrence.amount;
+}
+
+/** Occurrences summed into `currency` through `amountOf` (wholeAmount or outstandingAmount), unrounded. */
+export function sumOccurrences(
+  occurrences: readonly CommitmentOccurrence[],
+  currency: string,
+  rates: RateTable,
+  amountOf: (occurrence: CommitmentOccurrence) => number,
+): number {
+  return occurrences.reduce(
+    (total, occurrence) => total + convert(amountOf(occurrence), occurrence.currency, currency, rates),
+    0,
+  );
+}
+
+/** Occurrences grouped by item, items in the order of their first due date. */
+export function byItem(occurrences: readonly CommitmentOccurrence[]): CommitmentOccurrence[][] {
+  const groups = new Map<string, CommitmentOccurrence[]>();
+  const ordered = [...occurrences].sort(
+    (a, b) => a.dueDate.getTime() - b.dueDate.getTime() || a.itemId.localeCompare(b.itemId),
+  );
+  for (const occurrence of ordered) {
+    const group = groups.get(occurrence.itemId);
+    if (group) group.push(occurrence);
+    else groups.set(occurrence.itemId, [occurrence]);
+  }
+  return [...groups.values()];
+}

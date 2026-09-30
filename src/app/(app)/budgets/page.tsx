@@ -93,8 +93,11 @@ export default async function BudgetsPage({
       .filter((line) => line.categoryId !== null)
       .map((line) => [line.categoryId as string, line.budget]),
   );
+  // Each row's spending leaves out what stands for a recurring occurrence
+  // (posting's rows and the charges that paid an occurrence), exactly as the
+  // overall "spent" above does: the period's plan already reserved them.
   const spentByCategory = new Map(
-    summary.categories.map((line) => [line.categoryId ?? "none", line.spent]),
+    summary.categories.map((line) => [line.categoryId ?? "none", line.spentExcludingOccurrences]),
   );
 
   const rows = categories
@@ -259,7 +262,11 @@ export default async function BudgetsPage({
             <Stat
               label={t.committed}
               value={formatMoney(summary.committed, summary.currency)}
-              hint={t.recurringStillToCome(summary.committedItems.length)}
+              hint={
+                summary.wontPostItems.length > 0
+                  ? `${t.recurringStillToCome(summary.committedItems.length)} · ${t.wontPostLeftOut(summary.wontPostItems.length)}`
+                  : t.recurringStillToCome(summary.committedItems.length)
+              }
             />
             <Stat
               label={t.safeToSpend}
@@ -344,7 +351,7 @@ export default async function BudgetsPage({
                     </TableCell>
                     <TableCell className="hidden sm:table-cell" />
                     <TableCell className="figure text-right text-sm">
-                      {formatMoney(uncategorized.spent, summary.currency)}
+                      {formatMoney(uncategorized.spentExcludingOccurrences, summary.currency)}
                     </TableCell>
                     <TableCell />
                   </TableRow>
@@ -404,7 +411,7 @@ export default async function BudgetsPage({
                 <li className="flex items-start justify-between gap-3 px-4 py-3">
                   <span className="text-sm text-muted-foreground">{t.uncategorized}</span>
                   <span className="figure text-sm">
-                    {formatMoney(uncategorized.spent, summary.currency)}
+                    {formatMoney(uncategorized.spentExcludingOccurrences, summary.currency)}
                   </span>
                 </li>
               ) : null}

@@ -264,6 +264,7 @@ export const en = {
     affordShortLink: "See them on the recurring page",
     goalsHeading: "Goals",
     overdueNotPosted: "overdue, not posted yet",
+    wontPostNotCounted: (reason: string) => `won't post: ${reason}`,
     plusOutsideBudget: (amount: string) =>
       `plus ${amount} on subscriptions and savings, which the budget does not cover`,
     allGoals: "All goals",
@@ -719,6 +720,8 @@ export const en = {
     committed: "Committed",
     recurringStillToCome: (n: number) =>
       `${n} recurring item${n === 1 ? "" : "s"} still to come`,
+    wontPostLeftOut: (n: number) =>
+      `${n} more won't post and ${n === 1 ? "is" : "are"} left out`,
     safeToSpend: "Safe to spend",
     perDay: (amount: string, days: number) => `${amount} a day for ${days} day${days === 1 ? "" : "s"}`,
     forWholePeriod: "for the whole period",
@@ -1466,8 +1469,8 @@ export const en = {
     noIncomeAccountsYet:
       "No income recorded yet - enter what each account received in step 2 to see its buffer.",
     accountIncomeReceived: "Income received",
-    accountSubscriptionsDue: "Subscriptions due",
-    accountLeftAfterSubscriptions: "Left after subscriptions",
+    accountSubscriptionsDue: "Subscriptions and contributions",
+    accountLeftAfterSubscriptions: "Left after subscriptions and contributions",
     accountReportedSupports: "Supports (from your reported balance)",
     accountReportedBelowProjection: (amount: string) =>
       `Your reported balance supports ${amount} less than this period's income projection - likely money that already left this account before this check-in.`,
@@ -1488,12 +1491,17 @@ export const en = {
     unfundedSubscriptionsDescription:
       "These are due before next payday but their account received no income this check-in. Move them to an account that did.",
     alreadyPaidThisPeriod: "Already paid this period",
+    wontPostHeading: "Not counted: posting will skip these",
+    wontPostDescription:
+      "Nothing will be charged for them until the reason is fixed on the Recurring page, so this plan leaves them out.",
+    goalReachedKept: (amount: string) =>
+      `Reached since this plan was confirmed - its ${amount} stays in the plan.`,
     archivedAccountNote: "archived, kept for the record",
     overdueBadge: "Overdue",
     chargesThisPeriod: (count: number, each: string) => `${count} charges of ${each}`,
     goalsHeading: "Goal roadmap",
     goalsDescription:
-      "Each goal is funded from the accounts with money to spare after their subscriptions and buffer, in proportion to how much room each one has. Adjust any account's share; the goal's total is their sum.",
+      "Each goal is funded from the accounts with money to spare after their subscriptions, recurring contributions and buffer, in proportion to how much room each one has. Adjust any account's share; the goal's total is their sum.",
     noGoalsToReserve: "No goals to reserve for this period.",
     roadmapAmount: "Roadmap amount",
     remainingBalanceNoDate: "Remaining balance (no target date)",
@@ -1505,14 +1513,14 @@ export const en = {
     goalFundingAccountLabel: (goalName: string, accountName: string) =>
       `${goalName} from ${accountName}`,
     goalFundingRoom: (amount: string, sharePercent: number) =>
-      `${amount} to spare after its subscriptions and buffer · ${sharePercent}% of the room`,
+      `${amount} to spare after its subscriptions, contributions and buffer · ${sharePercent}% of the room`,
     goalFundingRoomAfterEarlierGoals: (amount: string, sharePercent: number) =>
       `${amount} still to spare after the goals above · ${sharePercent}% of the room`,
     goalFundingNoRoomLeft: "Nothing left to spare after the goals above",
     goalFundingLeadAccount: (accountName: string) =>
-      `${accountName} has more room this period after its subscriptions and buffer, so it takes the larger share.`,
+      `${accountName} has more room this period after its subscriptions, contributions and buffer, so it takes the larger share.`,
     goalFundingNoRoom:
-      "No account has money to spare after its subscriptions and buffer this period, so nothing can be set aside for this goal from surplus.",
+      "No account has money to spare after its subscriptions, contributions and buffer this period, so nothing can be set aside for this goal from surplus.",
     goalFundingShortfall: (free: string, short: string) =>
       `Only ${free} is to spare across your accounts - ${short} of this goal's roadmap amount can't be funded from surplus this period.`,
     goalOnTrack: "On track with the roadmap",

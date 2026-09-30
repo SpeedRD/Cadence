@@ -114,6 +114,35 @@ export function isAfterPaydayInPeriod(date: Date): boolean {
   return day.getUTCDate() >= paydayOfPeriod(periodForDate(day));
 }
 
+/**
+ * The period clock: one answer to "what day is it, which period are we in,
+ * and which period does the money in hand belong to".
+ *
+ *   today       the civil day, as given (today() in src/lib/date.ts for a request)
+ *   current     the calendar period containing today
+ *   plan        the period a check-in opened today plans for: the next one
+ *               from the day the current period's pay lands until it ends
+ *               (isAfterPaydayInPeriod), otherwise the current one
+ *   planPayday  the day the plan period's pay lands (paydayDateFor)
+ *
+ * Every screen that counts "this period" for money already planned - the
+ * check-in, the goal pages, the roadmap - reads `plan`; the hero, Budgets'
+ * default and anything about spending so far read `current`.
+ */
+export interface PeriodClock {
+  today: Date;
+  current: PeriodInfo;
+  plan: PeriodInfo;
+  planPayday: Date;
+}
+
+export function periodClock(today: Date): PeriodClock {
+  const day = startOfDay(today);
+  const current = periodForDate(day);
+  const plan = isAfterPaydayInPeriod(day) ? periodInfo(nextPeriod(current)) : current;
+  return { today: day, current, plan, planPayday: paydayDateFor(plan) };
+}
+
 /** Which pay period a date falls into, with that month's real start/end dates. */
 export function periodForDate(date: Date): PeriodInfo {
   const day = startOfDay(date);

@@ -29,11 +29,13 @@ import {
   availableForFlexibleCategories,
   draftAccountBuffers,
   planGoalFunding,
+  reachedGoalFunding,
   resolveFlexibleCategories,
   resolveGoalFunding,
   suggestCoverShortfall,
   type CoverShortfallSuggestion,
 } from "@/lib/payday";
+import { skipReasonLabel } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import { confirmPaydayCheckinAction } from "@/server/actions/payday";
 
@@ -128,20 +130,22 @@ export function PaydayCheckinDialog({
     ),
   );
   // Step 3's buffer is per account and computed, never typed, so it is derived
-  // here from the income entered in step 2 and each subscription's current
-  // account - exactly what confirmPaydayCheckin() recomputes server-side.
+  // here from the income entered in step 2 and what each subscription and
+  // recurring contribution takes from which account - exactly what
+  // confirmPaydayCheckin() recomputes server-side.
   const bufferPlan = useMemo(
     () =>
       draftAccountBuffers(
         {
           accounts: plan.accounts,
           subscriptions: plan.subscriptions,
+          contributions: plan.contributions,
           bufferPercent: plan.bufferPercent,
           displayCurrency: plan.displayCurrency,
         },
         rates,
       ),
-    [plan.accounts, plan.subscriptions, plan.bufferPercent, plan.displayCurrency, rates],
+    [plan.accounts, plan.subscriptions, plan.contributions, plan.bufferPercent, plan.displayCurrency, rates],
   );
   const plannedBuffer = bufferPlan.total;
   // Each goal's per-account draws come from the headroom the buffer view
@@ -151,17 +155,23 @@ export function PaydayCheckinDialog({
   // below it see taken from the pool, so editing one goal's row recomputes
   // every goal after it. Server-side, confirmPaydayCheckin() runs the same
   // planGoalFunding() over the draft alone for the recommended figures.
+  // A goal reached since the plan was confirmed takes its confirmed draws from
+  // the pool first, as confirm does, and is not offered for editing.
   const goalFunding = useMemo(() => {
     const options = { displayCurrency: plan.displayCurrency, rates };
+    const reached = reachedGoalFunding(plan.reachedGoals);
     const fundingPlans = planGoalFunding(
-      plan.goals.map((g) => ({ goalId: g.goalId, amount: g.recommendedAmount, funding: g.funding })),
+      [...reached, ...plan.goals.map((g) => ({ goalId: g.goalId, amount: g.recommendedAmount, funding: g.funding }))],
       bufferPlan.accounts,
       options,
     );
     return new Map(
-      plan.goals.map((g, index) => [g.goalId, resolveGoalFunding(fundingPlans[index], g.funding, options)]),
+      plan.goals.map((g, index) => [
+        g.goalId,
+        resolveGoalFunding(fundingPlans[reached.length + index], g.funding, options),
+      ]),
     );
-  }, [plan.goals, bufferPlan.accounts, plan.displayCurrency, rates]);
+  }, [plan.goals, plan.reachedGoals, bufferPlan.accounts, plan.displayCurrency, rates]);
   // Which other account to draw from to close each flagged account's
   // reconciliation gap - see suggestCoverShortfall. Keyed by the flagged
   // account so Step 3 can look its suggestion up next to that account's
@@ -179,7 +189,10 @@ export function PaydayCheckinDialog({
   }, [bufferPlan.accounts, plan.displayCurrency, rates]);
   const [coverTransfer, setCoverTransfer] = useState<CoverShortfallSuggestion | null>(null);
   // A goal's total is the live sum of its rows, never entered on its own.
-  const goalPlanTotal = round2([...goalFunding.values()].reduce((sum, funding) => sum + funding.total, 0));
+  const goalPlanTotal = round2(
+    [...goalFunding.values()].reduce((sum, funding) => sum + funding.total, 0) +
+      plan.reachedGoals.reduce((sum, goal) => sum + goal.plannedAmount, 0),
+  );
   const essentialFixedTotal = round2(plan.essentialCategories.reduce((sum, c) => sum + c.plannedAmount, 0));
   const available = availableForFlexibleCategories({
     income: totalIncome,
@@ -406,7 +419,10 @@ export function PaydayCheckinDialog({
                 accounts={plan.accounts}
                 subscriptions={plan.subscriptions}
                 contributions={plan.contributions}
+                wontPost={plan.wontPost}
+                reasonText={(reason) => skipReasonLabel(reason, getDictionary(locale).dashboard)}
                 goals={plan.goals}
+                reachedGoals={plan.reachedGoals}
                 essentialCategories={plan.essentialCategories}
                 displayCurrency={plan.displayCurrency}
                 bufferPlan={bufferPlan}
@@ -514,7 +530,9 @@ export function PaydayCheckinDialog({
           open
           onOpenChange={(next) => !next && setCoverTransfer(null)}
           values={{
-            date: toISODate(new Date()),
+            // The server's today, not the browser's UTC date: after 8pm in
+            // Santo Domingo the two are different days.
+            date: toISODate(draft.today),
             fromAccountId: coverTransfer.sourceAccountId,
             toAccountId: coverTransfer.gapAccountId,
             amount: coverTransfer.amount,

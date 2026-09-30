@@ -17,19 +17,28 @@ import { convert, isSameMoney } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import {
   availableForFlexibleCategories,
+  commitmentPortions,
   countsInIncomeHistory,
+  draftAccountBuffers,
   planAccountBuffers,
   planGoalFunding,
+  reachedGoalFunding,
   scaleFlexibleSuggestions,
-  type AccountBufferAccount,
-  type AccountBufferSubscription,
   type GoalFundingPlan,
 } from "@/lib/payday";
 import {
+  byItem,
+  outstandingAmount,
+  sumOccurrences,
+  whole,
+  wholeAmount,
+  wontPost,
+  type CommitmentOccurrence,
+} from "@/lib/period-commitments";
+import {
   daysRemainingInPeriod,
-  isAfterPaydayInPeriod,
-  nextPeriod,
   paydayDateFor,
+  periodClock,
   periodInfo,
   periodKey,
   goalPeriodsLeft,
@@ -40,14 +49,13 @@ import {
   type PeriodRef,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { recurringExternalId } from "@/lib/recurring-settlement";
+import type { RecurringSkipReason } from "@/lib/recurring";
 import type { paydayConfirmSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAccountBalances } from "@/lib/data/accounts";
 import { getPeriodSummary, type CommittedItem } from "@/lib/data/period-summary";
 import { listGoals } from "@/lib/data/goals";
-import { isAlreadyInLedger, loadSettlementPlan, type SettlementPlan } from "@/lib/data/recurring-settlement";
 
 import type { AppContext } from "@/lib/data/context";
 
@@ -70,35 +78,75 @@ export interface PaydayAccountDraft {
   readOnly: boolean;
 }
 
+/**
+ * One item's occurrences in the plan period (src/lib/period-commitments.ts),
+ * wont_post ones aside. The plan counts all of them - `amount` - whether
+ * still to come or already posted or paid, because the income it is set
+ * against is the whole period's paycheck.
+ */
 export interface PaydayCommittedDraft {
   recurringItemId: string;
   name: string;
-  /** Everything this item owes in the plan period, in the display currency. */
+  /** Everything this item costs the plan period, posted and paid occurrences included, in the display currency. */
   amount: number;
-  /** The same total in the item's own currency - what its account has to cover. */
+  /** The same total in the item's own currency. */
   nativeAmount: number;
   /** One charge in the item's own currency, for a row that owes several. */
   perOccurrenceAmount: number;
-  /** How many charges the plan period owes. */
+  /** How many charges the item's schedule still holds in the plan period (the ones posting has not moved past). */
   occurrenceCount: number;
   currency: string;
+  /** The first due date in the plan period. */
   nextDate: Date;
-  /** Its due date has passed and automatic posting has not cleared it. */
+  /** One of its dates is before today and automatic posting has not cleared it. */
   overdue: boolean;
   /**
-   * How many of those charges are already in the ledger from another route
-   * (an approved receipt, a CSV row, a manual entry) - one charge per
-   * occurrence, never more than occurrenceCount. See loggedOccurrencesByItem.
+   * How many of those scheduled charges are already in the ledger from
+   * another route (an approved receipt, a CSV row, a manual entry) or already
+   * posted - one charge per occurrence, never more than occurrenceCount:
+   * posting's own settlement plan decides it.
    */
   loggedOccurrences: number;
-  /** What the plan still has to set aside for this item: its unlogged occurrences, in the display currency. */
+  /** Occurrences in the plan period posting has already moved past: posted, or paid by a charge it paired with them. */
+  ledgerOccurrences: number;
+  /** What is still to leave for this item: its outstanding occurrences, in the display currency. */
   outstandingAmount: number;
   /** The same in the item's own currency - what its account still has to cover. */
   outstandingNativeAmount: number;
-  /** Every owed occurrence is already logged, so the plan reserves nothing for this item. */
+  /** Every occurrence in the plan period is already posted or paid. */
   alreadyLogged: boolean;
+  /** What already left for this item, per account it left from, in that account's currency. */
+  paidPortions: { accountId: string | null; amount: number; currency: string }[];
   /** The account funding this item - reassignable from Step 3, which writes RecurringItem.accountId. */
   accountId: string | null;
+}
+
+/** An item with occurrences in the plan period that posting will skip: listed with its reason, counted nowhere. */
+export interface PaydayWontPostDraft {
+  recurringItemId: string;
+  name: string;
+  kind: "SUBSCRIPTION" | "CONTRIBUTION";
+  reason: RecurringSkipReason;
+  nextDate: Date;
+  occurrenceCount: number;
+  /** What its occurrences would cost, in the display currency - left out of every total. */
+  amount: number;
+  nativeAmount: number;
+  currency: string;
+}
+
+/**
+ * A goal reached since the plan period's check-in was confirmed: its
+ * confirmed draws stay in the plan (the money was committed, and most likely
+ * moved, this period), read-only.
+ */
+export interface PaydayReachedGoalDraft {
+  goalId: string;
+  name: string;
+  /** Its confirmed GOAL rows summed into the display currency. */
+  plannedAmount: number;
+  /** The rows themselves, in each account's currency - confirming again writes them back unchanged. */
+  rows: { accountId: string | null; plannedAmount: number; recommendedAmount: number; currency: string }[];
 }
 
 /**
@@ -184,9 +232,13 @@ export interface PaydayCheckinDraft {
   accounts: PaydayAccountDraft[];
   subscriptions: PaydayCommittedDraft[];
   contributions: PaydayCommittedDraft[];
+  /** Everything the period's subscriptions cost it (their `amount`s), in the display currency. */
   subscriptionsTotal: number;
   contributionsTotal: number;
+  /** Items posting will skip this period, listed apart and counted in no total. */
+  wontPost: PaydayWontPostDraft[];
   goals: PaydayGoalDraft[];
+  reachedGoals: PaydayReachedGoalDraft[];
   essentialCategories: PaydayCategoryDraft[];
   flexibleCategories: PaydayFlexibleCategoryDraft[];
   /** Settings.bufferPercent, so Step 3 recomputes each account's buffer live as income is edited. */
@@ -203,6 +255,8 @@ export interface PaydayCheckinDraft {
   includedCarryover: number;
   /** Days left in the plan period counting today, for the safe-to-spend-per-day estimate in Step 4 - the full period length when opened exactly on a payday (the period hasn't started yet), fewer when opened partway through an already-current period. */
   daysRemainingInPlanPeriod: number;
+  /** The server's today (the request's civil day in APP_TIMEZONE), for the dates the wizard pre-fills. */
+  today: Date;
 }
 
 /**
@@ -218,9 +272,7 @@ export interface PaydayCheckinDraft {
  * period's check-in had already recorded.
  */
 export function planPeriodRef(context: AppContext): PeriodRef {
-  return isAfterPaydayInPeriod(context.today)
-    ? nextPeriod(context.currentPeriod)
-    : context.currentPeriod;
+  return periodClock(context.today).plan;
 }
 
 /**
@@ -300,17 +352,19 @@ export async function getCategorySuggestions(
         // see src/lib/extraordinary.ts), a shared expense counts only the
         // user's own part (Transaction.yourShare, see
         // src/lib/shared-expense.ts) - the rest was other people's money
-        // passing through - and spentExcludingRecurring leaves out anything
-        // already committed at payday-planning time (an auto-posted
-        // subscription or contribution charge, whatever category it happens
-        // to be filed under - see CategoryLine.spentExcludingRecurring). The
+        // passing through - and spentExcludingOccurrences leaves out anything
+        // already committed at payday-planning time, by the test budget
+        // spending uses: a row that stands for a recurring occurrence (an
+        // auto-posted charge, or a charge the user entered that paid one),
+        // whatever category it happens to be filed under - see
+        // CategoryLine.spentExcludingOccurrences. The
         // period still counts as one the category was active in - the money
         // was really spent - so the divisor below reads the real `spent`,
         // unchanged.
         historicalTotals.set(
           line.categoryId,
           (historicalTotals.get(line.categoryId) ?? 0) +
-            line.spentExcludingRecurring -
+            line.spentExcludingOccurrences -
             line.extraordinarySpent -
             line.othersShareSpent,
         );
@@ -574,82 +628,72 @@ function ledgerBefore(
 }
 
 /**
- * How many of each committed item's owed occurrences in the plan period are
- * already in the ledger, so the plan does not reserve money for a charge that
- * has already gone out.
- *
- * The verdict is recurring posting's own, occurrence by occurrence: the
- * settlement plan (loadSettlementPlan, src/lib/data/recurring-settlement.ts)
- * that postDueRecurringItems settles occurrences from - one charge the user
- * entered answers for exactly one occurrence of one item, over every account,
- * with the same window and the same look-alike guard - plus any occurrence
- * whose RECURRING row already exists. Planned through the plan period's end,
- * it names the same charge for every occurrence posting will reach, so what
- * the check-in shows as already paid is what posting will roll past without
- * a second row. The owed dates are getPeriodSummary's, from the same
- * owedOccurrences() walk the committed figure and the Afford calculator use;
- * nothing is re-enumerated.
+ * The plan period's occurrences as the wizard lists them: one row per item,
+ * subscriptions and contributions apart, plus the items posting will skip.
+ * Every figure is the period's commitments (src/lib/period-commitments.ts):
+ * an occurrence counts once, at the ledger's amount when posting has already
+ * written or settled it, and whether a charge the user entered paid it is
+ * posting's own settlement plan's verdict, never decided here.
  */
-export function loggedOccurrencesByItem(
-  items: readonly Pick<CommittedItem, "id" | "occurrenceDates">[],
-  plan: SettlementPlan,
-): Map<string, number> {
-  const logged = new Map<string, number>();
-  for (const item of items) {
-    logged.set(
-      item.id,
-      item.occurrenceDates.filter((due) => isAlreadyInLedger(plan, recurringExternalId(item.id, due))).length,
-    );
-  }
-  return logged;
-}
-
-function toCommittedDraft(item: CommittedItem, loggedByItem: ReadonlyMap<string, number>): PaydayCommittedDraft {
-  const loggedOccurrences = loggedByItem.get(item.id) ?? 0;
-  const outstanding = Math.max(0, item.occurrenceCount - loggedOccurrences);
+export function committedDrafts(
+  commitments: readonly CommitmentOccurrence[],
+  context: Pick<AppContext, "displayCurrency" | "rates">,
+): { subscriptions: PaydayCommittedDraft[]; contributions: PaydayCommittedDraft[]; wontPost: PaydayWontPostDraft[] } {
+  const rows = byItem(whole(commitments)).map((group): { kind: string; row: PaydayCommittedDraft } => {
+    const first = group[0];
+    const scheduled = group.filter((occurrence) => occurrence.source === "schedule");
+    const paid = group.filter((occurrence) => occurrence.status !== "outstanding");
+    const paidByAccount = new Map<string, { accountId: string | null; amount: number; currency: string }>();
+    for (const occurrence of paid) {
+      const key = `${occurrence.accountId ?? ""}|${occurrence.currency}`;
+      const portion = paidByAccount.get(key) ?? { accountId: occurrence.accountId, amount: 0, currency: occurrence.currency };
+      portion.amount += occurrence.amount;
+      paidByAccount.set(key, portion);
+    }
+    const inDisplay = (amountOf: (occurrence: CommitmentOccurrence) => number) =>
+      round2(sumOccurrences(group, context.displayCurrency, context.rates, amountOf));
+    const inItemCurrency = (amountOf: (occurrence: CommitmentOccurrence) => number) =>
+      round2(sumOccurrences(group, first.itemCurrency, context.rates, amountOf));
+    return {
+      kind: first.kind,
+      row: {
+        recurringItemId: first.itemId,
+        name: first.name,
+        amount: inDisplay(wholeAmount),
+        nativeAmount: inItemCurrency(wholeAmount),
+        perOccurrenceAmount: first.itemAmount,
+        occurrenceCount: scheduled.length,
+        currency: first.itemCurrency,
+        nextDate: first.dueDate,
+        overdue: group.some((occurrence) => occurrence.backlog),
+        loggedOccurrences: scheduled.filter((occurrence) => occurrence.status !== "outstanding").length,
+        ledgerOccurrences: group.length - scheduled.length,
+        outstandingAmount: inDisplay(outstandingAmount),
+        outstandingNativeAmount: inItemCurrency(outstandingAmount),
+        alreadyLogged: paid.length === group.length,
+        paidPortions: [...paidByAccount.values()].map((portion) => ({ ...portion, amount: round2(portion.amount) })),
+        accountId: scheduled.find((occurrence) => occurrence.status === "outstanding")?.accountId ?? first.accountId,
+      },
+    };
+  });
   return {
-    recurringItemId: item.id,
-    name: item.name,
-    amount: item.amount,
-    nativeAmount: item.nativeAmount,
-    perOccurrenceAmount: item.perOccurrenceAmount,
-    occurrenceCount: item.occurrenceCount,
-    currency: item.currency,
-    nextDate: item.nextDate,
-    overdue: item.overdue,
-    loggedOccurrences,
-    // item.amount is the display total for every owed occurrence; scale it
-    // rather than re-converting so a fully outstanding item keeps the exact
-    // figure the committed list shows.
-    outstandingAmount:
-      item.occurrenceCount > 0 ? round2((item.amount * outstanding) / item.occurrenceCount) : 0,
-    outstandingNativeAmount: round2(item.perOccurrenceAmount * outstanding),
-    alreadyLogged: outstanding === 0,
-    accountId: item.accountId,
-  };
-}
-
-/** The draft rows Step 3's per-account buffer view is computed from, in the shape planAccountBuffers() takes. */
-function bufferInputs(
-  accounts: PaydayAccountDraft[],
-  subscriptions: PaydayCommittedDraft[],
-): { accounts: AccountBufferAccount[]; subscriptions: AccountBufferSubscription[] } {
-  return {
-    accounts: accounts.map((account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      currency: account.currency,
-      income: account.incomeEntered,
-      bufferFloor: account.bufferFloor,
-    })),
-    subscriptions: subscriptions.map((item) => ({
-      recurringItemId: item.recurringItemId,
-      accountId: item.accountId,
-      // Only the occurrences not yet in the ledger count against the account.
-      nativeAmount: item.outstandingNativeAmount,
-      currency: item.currency,
-      alreadyLogged: item.alreadyLogged,
-    })),
+    subscriptions: rows.filter((entry) => entry.kind === "SUBSCRIPTION").map((entry) => entry.row),
+    contributions: rows.filter((entry) => entry.kind === "CONTRIBUTION").map((entry) => entry.row),
+    wontPost: byItem(wontPost(commitments)).map((group) => {
+      const first = group[0];
+      const amountOf = (occurrence: CommitmentOccurrence) => occurrence.amount;
+      return {
+        recurringItemId: first.itemId,
+        name: first.name,
+        kind: first.kind,
+        reason: first.wontPostReason as RecurringSkipReason,
+        nextDate: first.dueDate,
+        occurrenceCount: group.length,
+        amount: round2(sumOccurrences(group, context.displayCurrency, context.rates, amountOf)),
+        nativeAmount: round2(sumOccurrences(group, first.itemCurrency, context.rates, amountOf)),
+        currency: first.itemCurrency,
+      };
+    }),
   };
 }
 
@@ -657,7 +701,41 @@ function bufferInputs(
 interface ConfirmedGoalAllocation {
   accountId: string | null;
   plannedAmount: unknown;
+  recommendedAmount: unknown;
   currency: string;
+}
+
+/**
+ * The confirmed GOAL rows of goals that are no longer being saved for
+ * (reached, or with nothing left) but still exist - the plan confirmed their
+ * draws for this period, and those stay counted. `open` holds the goals the
+ * draft still funds.
+ */
+function reachedGoalDrafts(
+  confirmed: ReadonlyMap<string, ConfirmedGoalAllocation[]>,
+  goals: readonly { id: string; name: string }[],
+  open: ReadonlySet<string>,
+  context: Pick<AppContext, "displayCurrency" | "rates">,
+): PaydayReachedGoalDraft[] {
+  const nameById = new Map(goals.map((goal) => [goal.id, goal.name]));
+  return [...confirmed.entries()]
+    .filter(([goalId]) => nameById.has(goalId) && !open.has(goalId))
+    .map(([goalId, rows]) => ({
+      goalId,
+      name: nameById.get(goalId)!,
+      plannedAmount: round2(
+        rows.reduce(
+          (sum, row) => sum + convert(num(row.plannedAmount as never), row.currency, context.displayCurrency, context.rates),
+          0,
+        ),
+      ),
+      rows: rows.map((row) => ({
+        accountId: row.accountId,
+        plannedAmount: num(row.plannedAmount as never),
+        recommendedAmount: num(row.recommendedAmount as never),
+        currency: row.currency,
+      })),
+    }));
 }
 
 /**
@@ -745,7 +823,6 @@ export async function getPaydayCheckinDraft(
     carryover,
     settings,
     existing,
-    settlementPlan,
     existingBudgetRows,
   ] = await Promise.all([
     // Every account, not only the active ones: a check-in that recorded income
@@ -768,15 +845,10 @@ export async function getPaydayCheckinDraft(
       where: { year: planRef.year, month: planRef.month, period: planRef.period, status: "CONFIRMED" },
       include: { snapshots: true, allocations: true },
     }),
-    // Which owed occurrences are already paid: posting's own verdict, planned
-    // through the period's end - see loggedOccurrencesByItem.
-    loadSettlementPlan(plan.end),
     prisma.budget.findMany({
       where: { year: planRef.year, month: planRef.month, period: planRef.period, categoryId: { not: null } },
     }),
   ]);
-
-  const loggedByItem = loggedOccurrencesByItem(planSummary.committedItems, settlementPlan);
 
   // Category budgets already saved for the plan period - set by hand on the
   // Budgets page, copied forward, or written by an earlier confirmation and
@@ -843,16 +915,12 @@ export async function getPaydayCheckinDraft(
     };
   });
 
-  const subscriptions = planSummary.committedItems
-    .filter((i) => i.kind === "SUBSCRIPTION")
-    .map((item) => toCommittedDraft(item, loggedByItem));
-  const contributions = planSummary.committedItems
-    .filter((i) => i.kind === "CONTRIBUTION")
-    .map((item) => toCommittedDraft(item, loggedByItem));
-  // Per occurrence, not per item: an item with one charge already logged and
-  // another still ahead reserves the one still ahead.
-  const subscriptionsTotal = round2(subscriptions.reduce((sum, i) => sum + i.outstandingAmount, 0));
-  const contributionsTotal = round2(contributions.reduce((sum, i) => sum + i.outstandingAmount, 0));
+  // The period's whole commitments, posted and paid occurrences included:
+  // the income they are set against is the whole period's paycheck, so a
+  // check-in opened after rent posted still takes the rent out of it.
+  const { subscriptions, contributions, wontPost } = committedDrafts(planSummary.commitments, context);
+  const subscriptionsTotal = round2(subscriptions.reduce((sum, i) => sum + i.amount, 0));
+  const contributionsTotal = round2(contributions.reduce((sum, i) => sum + i.amount, 0));
 
   // A goal already fed by a recurring contribution this period does not also
   // need its full roadmap amount set aside: reserving both put the same goal in
@@ -863,12 +931,16 @@ export async function getPaydayCheckinDraft(
   // it is always recomputed from the income in this draft - never read back
   // from the confirmed check-in's BUFFER allocations. Goal funding below draws
   // on the headroom this leaves each account.
-  const bufferInput = bufferInputs(accountDrafts, subscriptions);
-  const bufferPlan = planAccountBuffers(bufferInput.accounts, bufferInput.subscriptions, {
-    bufferPercent: settings.bufferPercent,
-    displayCurrency: context.displayCurrency,
-    rates: context.rates,
-  });
+  const bufferPlan = draftAccountBuffers(
+    {
+      accounts: accountDrafts,
+      subscriptions,
+      contributions,
+      bufferPercent: settings.bufferPercent,
+      displayCurrency: context.displayCurrency,
+    },
+    context.rates,
+  );
   const plannedBuffer = bufferPlan.total;
 
   // Every goal still being saved for, dated or not: an undated goal has no
@@ -890,11 +962,21 @@ export async function getPaydayCheckinDraft(
       );
       return { goal: g, periodsLeft, recommendedAmount };
     });
+  const reachedGoals = reachedGoalDrafts(
+    existingGoalAllocations,
+    allGoals,
+    new Set(roadmapGoals.map((entry) => entry.goal.id)),
+    context,
+  );
   // Which accounts each goal's roadmap amount is recommended to come from,
-  // goals in this order sharing one pool of headroom (see planGoalFunding).
+  // goals in this order sharing one pool of headroom (see planGoalFunding),
+  // after the draws a goal reached since confirming already took from it.
   const fundingPlanByGoal = new Map(
     planGoalFunding(
-      roadmapGoals.map((entry) => ({ goalId: entry.goal.id, amount: entry.recommendedAmount })),
+      [
+        ...reachedGoalFunding(reachedGoals),
+        ...roadmapGoals.map((entry) => ({ goalId: entry.goal.id, amount: entry.recommendedAmount })),
+      ],
       bufferPlan.accounts,
       { displayCurrency: context.displayCurrency, rates: context.rates },
     ).map((fundingPlan) => [fundingPlan.goalId, fundingPlan]),
@@ -987,7 +1069,9 @@ export async function getPaydayCheckinDraft(
     contributions,
     subscriptionsTotal,
     contributionsTotal,
+    wontPost,
     goals,
+    reachedGoals,
     essentialCategories,
     flexibleCategories,
     bufferPercent: settings.bufferPercent,
@@ -996,6 +1080,7 @@ export async function getPaydayCheckinDraft(
     carryoverBasis: carryover.basis,
     includedCarryover,
     daysRemainingInPlanPeriod: daysRemainingInPeriod(context.today, plan),
+    today: context.today,
   };
 }
 
@@ -1095,8 +1180,7 @@ export async function confirmPaydayCheckin(
     essentialCategories,
     flexibleCategories,
     carryover,
-    settlementPlan,
-    existingCheckinSnapshots,
+    existingCheckin,
   ] = await Promise.all([
     getAccountBalances(context, { status: "ALL" }),
     getPeriodSummary(plan, context),
@@ -1108,14 +1192,19 @@ export async function confirmPaydayCheckin(
       where: { kind: "EXPENSE", isEssentialFixed: false, isSubscriptionDefault: false, isSavingsDefault: false },
     }),
     getAvailableCarryover(planRef, context),
-    // Which owed occurrences are already paid: posting's own verdict, planned
-    // through the period's end - see loggedOccurrencesByItem.
-    loadSettlementPlan(plan.end),
     // Read before the write so income already recorded for an account archived
-    // since can be carried into the totals rather than dropped.
+    // since can be carried into the totals rather than dropped, and so the
+    // draws of a goal reached since confirming stay in the plan.
     prisma.paydayCheckin.findFirst({
       where: { year: planRef.year, month: planRef.month, period: planRef.period },
-      select: { snapshots: { select: { accountId: true, incomeEntered: true, currency: true } } },
+      select: {
+        status: true,
+        snapshots: { select: { accountId: true, incomeEntered: true, currency: true } },
+        allocations: {
+          where: { type: "GOAL", goalId: { not: null } },
+          select: { goalId: true, accountId: true, plannedAmount: true, recommendedAmount: true, currency: true },
+        },
+      },
     }),
   ]);
   // Only an active account can be edited; the rest are carried as they stand.
@@ -1139,7 +1228,7 @@ export async function confirmPaydayCheckin(
   // Income recorded against an account that has since been archived. Its
   // snapshot is left untouched below, so the figure it holds has to keep
   // counting here too or re-confirming would quietly write it out of the plan.
-  const archivedIncome = (existingCheckinSnapshots?.snapshots ?? [])
+  const archivedIncome = (existingCheckin?.snapshots ?? [])
     .filter((snapshot) => !liveAccountById.has(snapshot.accountId))
     .reduce(
       (sum, snapshot) =>
@@ -1153,16 +1242,14 @@ export async function confirmPaydayCheckin(
     }, archivedIncome),
   );
 
-  const loggedByItem = loggedOccurrencesByItem(planSummary.committedItems, settlementPlan);
-
-  // The same per-occurrence accounting the draft showed, recomputed here from
-  // live data rather than trusted from the client.
-  const subscriptionItems = planSummary.committedItems.filter((i) => i.kind === "SUBSCRIPTION");
-  const contributionItems = planSummary.committedItems.filter((i) => i.kind === "CONTRIBUTION");
-  const subscriptionDrafts = subscriptionItems.map((item) => toCommittedDraft(item, loggedByItem));
-  const contributionDrafts = contributionItems.map((item) => toCommittedDraft(item, loggedByItem));
-  const subscriptionsTotal = round2(subscriptionDrafts.reduce((sum, i) => sum + i.outstandingAmount, 0));
-  const contributionsTotal = round2(contributionDrafts.reduce((sum, i) => sum + i.outstandingAmount, 0));
+  // The same period commitments the draft showed, recomputed here from live
+  // data rather than trusted from the client.
+  const { subscriptions: subscriptionDrafts, contributions: contributionDrafts } = committedDrafts(
+    planSummary.commitments,
+    context,
+  );
+  const subscriptionsTotal = round2(subscriptionDrafts.reduce((sum, i) => sum + i.amount, 0));
+  const contributionsTotal = round2(contributionDrafts.reduce((sum, i) => sum + i.amount, 0));
 
   const goalById = new Map(allGoals.map((g) => [g.id, g]));
   // Dated or not, as the draft lists them; an achieved goal's funding is
@@ -1197,13 +1284,7 @@ export async function confirmPaydayCheckin(
         reportedBalance: a.reportedBalance,
       };
     }),
-    subscriptionDrafts.map((item) => ({
-      recurringItemId: item.recurringItemId,
-      accountId: item.accountId,
-      nativeAmount: item.outstandingNativeAmount,
-      currency: item.currency,
-      alreadyLogged: item.alreadyLogged,
-    })),
+    commitmentPortions([...subscriptionDrafts, ...contributionDrafts]),
     { bufferPercent: context.bufferPercent, displayCurrency: context.displayCurrency, rates: context.rates },
   );
   const protectedBuffer = bufferPlan.total;
@@ -1231,15 +1312,34 @@ export async function confirmPaydayCheckin(
       ];
     }),
   );
+  // A goal reached since the check-in was confirmed keeps its confirmed draws,
+  // as the draft showed them: written back unchanged below, and taken from
+  // the pool before the goals still being funded share what is left.
+  const confirmedGoalAllocations = new Map<string, ConfirmedGoalAllocation[]>();
+  if (existingCheckin?.status === "CONFIRMED") {
+    for (const allocation of existingCheckin.allocations) {
+      const goalId = allocation.goalId as string;
+      confirmedGoalAllocations.set(goalId, [...(confirmedGoalAllocations.get(goalId) ?? []), allocation]);
+    }
+  }
+  const reachedGoals = reachedGoalDrafts(
+    confirmedGoalAllocations,
+    allGoals,
+    new Set(allGoals.filter((goal) => !goal.achievedAt && goal.remaining > 0).map((goal) => goal.id)),
+    context,
+  );
   const fundingPlanByGoal = new Map(
     planGoalFunding(
-      goalInputs.map((g) => ({
+      [
+        ...reachedGoalFunding(reachedGoals),
+        ...goalInputs.map((g) => ({
         goalId: g.goalId,
         amount: roadmapByGoal.get(g.goalId)!,
         funding: g.funding
           .filter((row) => liveAccountById.has(row.accountId))
           .map((row) => ({ accountId: row.accountId, plannedAmount: row.plannedAmount, held: true })),
-      })),
+        })),
+      ],
       bufferPlan.accounts,
       { displayCurrency: context.displayCurrency, rates: context.rates },
     ).map((fundingPlan) => [fundingPlan.goalId, fundingPlan]),
@@ -1249,7 +1349,7 @@ export async function confirmPaydayCheckin(
   // every other planned value, and sits next to what the recommendation said.
   // A row the user zeroed keeps the recommendation on record; a row for an
   // account the recommendation skipped keeps the user's figure.
-  const goalRows = goalInputs.flatMap((g) => {
+  const goalRows: { goalId: string; accountId: string | null; currency: string; recommendedAmount: number; plannedAmount: number }[] = goalInputs.flatMap((g) => {
     const recommendedByAccount = new Map(
       fundingPlanByGoal.get(g.goalId)!.draws.map((draw) => [draw.accountId, draw.recommendedAmount]),
     );
@@ -1268,6 +1368,9 @@ export async function confirmPaydayCheckin(
       }))
       .filter((row) => row.recommendedAmount > 0 || row.plannedAmount > 0);
   });
+  for (const goal of reachedGoals) {
+    for (const row of goal.rows) goalRows.push({ goalId: goal.goalId, ...row });
+  }
   const goalPlanTotal = round2(
     goalRows.reduce(
       (sum, row) => sum + convert(row.plannedAmount, row.currency, context.displayCurrency, context.rates),
@@ -1447,20 +1550,20 @@ export async function confirmPaydayCheckin(
     await tx.paydayPlanAllocation.deleteMany({ where: { paydayCheckinId: checkin.id } });
 
     const allocationRows = [
-      ...subscriptionItems.map((item) => ({
+      ...subscriptionDrafts.map((item) => ({
         paydayCheckinId: checkin.id,
         type: "SUBSCRIPTION" as const,
-        recurringItemId: item.id,
+        recurringItemId: item.recurringItemId,
         accountId: item.accountId,
         recommendedAmount: item.nativeAmount,
         plannedAmount: item.nativeAmount,
         currency: item.currency,
         basis: "recurring_item",
       })),
-      ...contributionItems.map((item) => ({
+      ...contributionDrafts.map((item) => ({
         paydayCheckinId: checkin.id,
         type: "RECURRING_CONTRIBUTION" as const,
-        recurringItemId: item.id,
+        recurringItemId: item.recurringItemId,
         recommendedAmount: item.nativeAmount,
         plannedAmount: item.nativeAmount,
         currency: item.currency,

@@ -89,3 +89,34 @@ function titleCase(value: string): string {
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }
+
+/**
+ * Why posting skips an item (RecurringSkipReason), in the words the
+ * Dashboard's not-posting alert uses - one wording wherever such an item is
+ * listed. Typed by plain string keys so client components can call it.
+ */
+export function skipReasonLabel(
+  reason: string,
+  t: {
+    notPostingReasonMissingAccount: string;
+    notPostingReasonMissingGoal: string;
+    notPostingReasonMissingAccountAndGoal: string;
+    notPostingReasonAccountArchived: string;
+    notPostingReasonGoalAchieved: string;
+  },
+): string {
+  switch (reason) {
+    case "missing_account":
+      return t.notPostingReasonMissingAccount;
+    case "missing_goal":
+      return t.notPostingReasonMissingGoal;
+    case "missing_account_and_goal":
+      return t.notPostingReasonMissingAccountAndGoal;
+    case "account_archived":
+      return t.notPostingReasonAccountArchived;
+    case "goal_achieved":
+      return t.notPostingReasonGoalAchieved;
+    default:
+      return reason;
+  }
+}

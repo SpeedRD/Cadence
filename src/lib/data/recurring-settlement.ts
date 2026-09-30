@@ -2,8 +2,10 @@
  * Loads what planSettlements (src/lib/recurring-settlement.ts) needs and runs
  * it: the verdict on every still-unclaimed occurrence of every active item,
  * due on or before `through`. Recurring posting calls it with today, the
- * payday check-in with its plan period's last day; the matcher's due-date
- * ordering is what makes the two agree on every occurrence both cover.
+ * period commitments (src/lib/data/period-commitments.ts - what the payday
+ * check-in and every other reader of a period's items use) with the last
+ * day of the periods they cover; the matcher's due-date ordering is what
+ * makes the two agree on every occurrence both cover.
  */
 import { num } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -37,11 +39,6 @@ export interface SettlementPlan {
   posted: Set<string>;
   /** The charge that already paid each settled occurrence, by recurringExternalId. */
   settledBy: Map<string, PlannedCharge>;
-}
-
-/** Whether the occurrence is already in the ledger: posted, or paid by a charge the user entered. */
-export function isAlreadyInLedger(plan: SettlementPlan, key: string): boolean {
-  return plan.posted.has(key) || plan.settledBy.has(key);
 }
 
 export async function loadSettlementPlan(through: Date): Promise<SettlementPlan> {

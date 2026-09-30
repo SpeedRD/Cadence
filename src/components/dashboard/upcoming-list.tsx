@@ -3,6 +3,7 @@ import { PiggyBank, Repeat } from "lucide-react";
 import { formatMoney } from "@/lib/currency";
 import { formatDayMonth, formatRelativeDays } from "@/lib/date";
 import type { Dictionary } from "@/lib/i18n";
+import { skipReasonLabel } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 import type { UpcomingItem } from "@/lib/data/dashboard";
@@ -47,16 +48,20 @@ export function UpcomingList({
               <p
                 className={cn(
                   "text-hint",
-                  item.overdue ? "text-[var(--warning)]" : "text-muted-foreground",
+                  item.overdue || item.wontPostReason ? "text-[var(--warning)]" : "text-muted-foreground",
                 )}
               >
                 {formatDayMonth(item.nextDate)} ·{" "}
-                {item.overdue ? t.overdueNotPosted : formatRelativeDays(today, item.nextDate, common)}
+                {item.wontPostReason
+                  ? t.wontPostNotCounted(skipReasonLabel(item.wontPostReason, t))
+                  : item.overdue
+                    ? t.overdueNotPosted
+                    : formatRelativeDays(today, item.nextDate, common)}
                 {isContribution ? t.contributionSuffix : ""}
               </p>
             </div>
             <div className="text-right">
-              <p className="figure text-sm">
+              <p className={cn("figure text-sm", item.wontPostReason ? "text-muted-foreground" : undefined)}>
                 {formatMoney(item.amount, displayCurrency)}
               </p>
               {item.currency !== displayCurrency ? (

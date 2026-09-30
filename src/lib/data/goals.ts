@@ -1,54 +1,38 @@
 import { convert } from "@/lib/currency";
-import { addDays, maxDate } from "@/lib/date";
+import { addDays } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
+import { outstanding } from "@/lib/period-commitments";
 import {
   nextPeriod,
+  periodClock,
   periodForDate,
   periodInfo,
   periodsRemaining,
   type PeriodInfo,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { owedOccurrences } from "@/lib/recurring";
+
+import { periodCommitments } from "@/lib/data/period-commitments";
 
 import type { AppContext } from "@/lib/data/context";
 
-/** One goal's scheduled recurring funding for the current period, per item currency. */
+/** One goal's scheduled recurring funding for the plan period, per occurrence currency. */
 type DueContributions = Map<string, { amount: number; currency: string }[]>;
 
 /**
- * What the recurring contributions aimed at each goal will already put into it
- * this period. A goal being fed automatically needs that much less set aside by
+ * What the recurring contributions aimed at each goal will still put into it
+ * in the plan period (periodClock's `plan`): its outstanding occurrences
+ * (src/lib/period-commitments.ts), so one posting will skip counts for
+ * nothing. A goal being fed automatically needs that much less set aside by
  * hand, and counting both made the payday planner reserve the same goal twice.
  */
 async function loadDueContributionsByGoal(context: AppContext): Promise<DueContributions> {
-  const items = await prisma.recurringItem.findMany({
-    where: {
-      active: true,
-      kind: "CONTRIBUTION",
-      goalId: { not: null },
-      nextDate: { lte: context.currentPeriod.end },
-    },
-    select: {
-      goalId: true,
-      amount: true,
-      currency: true,
-      frequency: true,
-      nextDate: true,
-      anchorDay: true,
-      secondAnchorDay: true,
-    },
-  });
-
-  const from = maxDate(context.today, context.currentPeriod.start);
   const byGoal: DueContributions = new Map();
-  for (const item of items) {
-    const goalId = item.goalId as string;
-    const occurrences = owedOccurrences(item, from, context.currentPeriod.end).length;
-    if (occurrences === 0) continue;
-    const entries = byGoal.get(goalId) ?? [];
-    entries.push({ amount: num(item.amount) * occurrences, currency: item.currency });
-    byGoal.set(goalId, entries);
+  for (const occurrence of outstanding(await periodCommitments(periodClock(context.today).plan, context))) {
+    if (occurrence.kind !== "CONTRIBUTION" || !occurrence.goalId) continue;
+    const entries = byGoal.get(occurrence.goalId) ?? [];
+    entries.push({ amount: occurrence.amount, currency: occurrence.currency });
+    byGoal.set(occurrence.goalId, entries);
   }
   return byGoal;
 }
@@ -116,9 +100,13 @@ function summarize(
   let perPeriod: number | null = null;
   let periodsLeft: number | null = null;
   if (goal.targetDate && remaining > 0) {
-    periodsLeft = periodsRemaining(context.today, goal.targetDate);
-    // Net of whatever a recurring contribution is already putting in this
-    // period, so this figure is what still has to be found by hand.
+    // Counted from the plan period, the period the money in hand is for -
+    // the count the check-in and the roadmap use - so from payday to the end
+    // of the period the one ending tonight is not counted as a period still
+    // to fund. 0 means the target falls before the plan period ends.
+    periodsLeft = periodsRemaining(periodClock(context.today).plan.start, goal.targetDate);
+    // Net of whatever a recurring contribution is still putting in during the
+    // plan period, so this figure is what still has to be found by hand.
     const scheduled = (dueContributions.get(goal.id) ?? []).reduce(
       (total, entry) => total + convert(entry.amount, entry.currency, goal.currency, context.rates),
       0,
