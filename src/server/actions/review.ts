@@ -74,7 +74,8 @@ export async function approveStagedAction(
   const { id, date, amount, currency, rawDescription, accountId, categoryId } =
     parsed.data;
   const rawResolution = String(formData.get("resolution") ?? "");
-  const resolution = rawResolution === "posted" || rawResolution === "different" ? rawResolution : null;
+  const resolution =
+    rawResolution === "posted" || rawResolution === "different" || rawResolution === "upcoming" ? rawResolution : null;
 
   const result = await approveStagedTransaction(
     { id, date, amount, currency, rawDescription, accountId, categoryId, resolution },
@@ -92,6 +93,7 @@ export async function approveStagedAction(
   }
 
   revalidateApp();
+  if (result.outcome === "kept_upcoming") return done(dictionary.transactions.upcomingKept(result.itemName));
   if (result.outcome === "kept_posted") {
     const { match } = result;
     return done(

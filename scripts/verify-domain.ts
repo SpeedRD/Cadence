@@ -1489,7 +1489,10 @@ async function main() {
     eq("only the period in progress is partial", fivePlusPartial.points.map((p) => p.partial).join(","), "false,false,false,false,false,true");
     eq("the partial period stays in the chart with its figure", fivePlusPartial.points[5].spent, 50);
     const twoPeriods = await trendCase([[civilDate(2025, 8, 20), 1000], [civilDate(2025, 9, 3), 1000], [civilDate(2025, 9, 16), 50]]);
-    eq("a two-period history divides by 2, not 6 (it read 341.67)", `${twoPeriods.average?.average}:${twoPeriods.average?.periods}`, "1000:2");
+    // Flipped for K9 (D34): the first activity, Aug 20, is day 5 of Aug 16-31 -
+    // a partial first period, left out as the monthly average leaves out a
+    // partial first month. Before K9 this read 1,000 over 2.
+    eq("a two-period history whose first period is partial divides by 1, not 6 (it read 341.67) nor 2 (before K9)", `${twoPeriods.average?.average}:${twoPeriods.average?.periods}`, "1000:1");
     const quietPeriods = await trendCase([[civilDate(2025, 7, 3), 1000], [civilDate(2025, 9, 16), 50]]);
     eq("periods with nothing after the first activity count as zero: 1,000 over 5 = 200", `${quietPeriods.average?.average}:${quietPeriods.average?.periods}`, "200:5");
     const noCompleted = await trendCase([[civilDate(2025, 9, 16), 50]]);
@@ -2740,7 +2743,11 @@ async function main() {
     await prisma.transaction.createMany({
       data: [
         { date: civilDate(2026, 7, 20), amount: 80, currency: "USD", type: "EXPENSE", accountId: recHistoryAccount.id, categoryId: transportCat.id, source: "MANUAL" },
-        { date: civilDate(2026, 5, 20), amount: 100, currency: "USD", type: "EXPENSE", accountId: recHistoryAccount.id, categoryId: transportCat.id, source: "MANUAL" },
+        // K9: this row is the database's first activity, so it sits on day 2
+        // of May 16-31 (was May 20, day 5) - a partial first period is now
+        // left out of every spending average, which is not what these
+        // checks are about.
+        { date: civilDate(2026, 5, 17), amount: 100, currency: "USD", type: "EXPENSE", accountId: recHistoryAccount.id, categoryId: transportCat.id, source: "MANUAL" },
         { date: civilDate(2026, 7, 20), amount: 500, currency: "USD", type: "EXPENSE", accountId: recHistoryAccount.id, categoryId: null, source: "MANUAL" },
       ],
     });
@@ -2811,9 +2818,17 @@ async function main() {
       JSON.stringify((await suggestFrom(civilDate(2026, 6, 1))).get(transportCat.id)),
       JSON.stringify({ amount: 80, basis: "average" }),
     );
+    // Flipped for K9 (decision 5.2): the date is applied by period, so May
+    // 16-31 - which starts before May 31 - is not walked. Before K9 it was
+    // (it ended on the date) and this read 60.
     eq(
-      "a period ending on the start date still counts: from May 31 the walk is Jul, Jun and May and the average is unchanged",
+      "a period ending on the start date is not walked: from May 31 the walk is Jul and Jun, and Transport averages its one period with spending (80 / 1)",
       JSON.stringify((await suggestFrom(civilDate(2026, 5, 31))).get(transportCat.id)),
+      JSON.stringify({ amount: 80, basis: "average" }),
+    );
+    eq(
+      "a start date on May 16, the period's first day, keeps May 16-31 and the average is unchanged",
+      JSON.stringify((await suggestFrom(civilDate(2026, 5, 16))).get(transportCat.id)),
       JSON.stringify({ amount: 60, basis: "average" }),
     );
     const fromAugust = await suggestFrom(civilDate(2026, 8, 1));
@@ -5078,7 +5093,8 @@ async function main() {
     const spentBefore = (await getPeriodSummary(augustB, augustContext)).spent;
     const augustWindow = monthWindow({ year: 2026, month: 8 });
     const autoForMatch = [{ ...auto, amount: num(auto.amount), firstPostedDate: null }];
-    const savingsBefore = (await classifyCompletedMonth(augustWindow, augustContext, autoForMatch, categoryMeta)).savingsInvesting;
+    const monthBefore = await classifyCompletedMonth(augustWindow, augustContext, autoForMatch, categoryMeta);
+    const savingsBefore = monthBefore.savingsInvesting;
     await settleRun(civilDate(2026, 8, 20));
     const fundContribution = await prisma.goalContribution.findFirst({ where: { goalId: goal.id } });
     eq("the goal counts the transfer once", `${fundContribution?.recurringExternalId}:${num(fundContribution?.amount)}`, `${auto.id}:2026-08-20:300`);
@@ -5087,10 +5103,16 @@ async function main() {
       round2(spentBefore - (await getPeriodSummary(augustB, augustContext)).spent),
       300,
     );
+    // Flipped for build part 4 (the pace's matcher reads K6's population):
+    // before posting settles it, the transfer filed under Shopping is budget
+    // spending, so the pace calls it lifestyle as the budget does - it used to
+    // match it to the item by name and count it as savings already (this read
+    // 0, savings unchanged). Settled, it is the contribution's twin in both.
+    const monthAfter = await classifyCompletedMonth(augustWindow, augustContext, autoForMatch, categoryMeta);
     eq(
-      "the monthly pace counts it once: the new GoalContribution adds nothing to August's savings/investing",
-      round2((await classifyCompletedMonth(augustWindow, augustContext, autoForMatch, categoryMeta)).savingsInvesting - savingsBefore),
-      0,
+      "the monthly pace counts it once: settling it moves the 300 from lifestyle to savings/investing, and the month's outflow is unchanged",
+      `${round2(monthAfter.savingsInvesting - savingsBefore)}:${round2(monthBefore.lifestyle - monthAfter.lifestyle)}:${round2(monthAfter.totalOutflow - monthBefore.totalOutflow)}`,
+      "300:300:0",
     );
     const { listTransactions } = await import("../src/lib/data/transactions");
     const listed = (await listTransactions({ accountId: checking.id }, augustContext)).rows.find((row) => row.id === transfer.id);
@@ -6196,8 +6218,12 @@ async function main() {
     // remains averages over its own count.
     eq("with no start date the walk is unchanged", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), null).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A,2026-05-A,2026-04-A,2026-03-A");
     eq("a start date drops every comparable period that ended before it", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 6, 1)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A");
-    eq("a period ending on the start date itself still counts", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 5, 15)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A,2026-05-A");
-    eq("a period the start date falls inside counts in full", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 5, 10)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A,2026-05-A");
+    // Flipped for K9 (decision 5.2): the date is applied by period - a period
+    // that starts before it is not walked, so nothing dated before it is read.
+    // These two kept May 1-15 (it ended on or after the date) before K9.
+    eq("a period ending on the start date is not walked: it starts before it", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 5, 15)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A");
+    eq("a period the start date falls inside is not walked either", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 5, 10)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A");
+    eq("a start date on a period's first day keeps that period", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 5, 1)).map((p) => p.key).join(","), "2026-08-A,2026-07-A,2026-06-A,2026-05-A");
     eq("a start date past every comparable period leaves nothing to average", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, new Set(), civilDate(2026, 9, 1)).length, 0);
     eq("the boundary is by period end, so B periods are bounded the same way (May 16-31 ends before June 1)", affordData.comparableHistory({ year: 2026, month: 10, period: "B" }, affordToday, new Set(), civilDate(2026, 6, 1)).map((p) => p.key).join(","), "2026-08-B,2026-07-B,2026-06-B");
     eq("the confirmed-period rule and the boundary compose", affordData.comparableHistory({ year: 2026, month: 10, period: "A" }, affordToday, confirmedSepA, civilDate(2026, 7, 1)).map((p) => p.key).join(","), "2026-09-A,2026-08-A,2026-07-A");
@@ -8877,8 +8903,11 @@ async function main() {
       note: extra.note,
     });
     // July history for the category: median 500, so the one-off threshold is 1,500.
+    // On Jul 17 (was Jul 20): these rows are the database's first activity, and
+    // K9 leaves a partial first period (one starting after its 4th day) out of
+    // every spending average.
     await prisma.transaction.createMany({
-      data: [500, 550, 450].map((amount) => sharedRow(amount, { date: civilDate(2026, 7, 20) })),
+      data: [500, 550, 450].map((amount) => sharedRow(amount, { date: civilDate(2026, 7, 17) })),
     });
     const periodBefore = await summaryFor(sharedContext.currentPeriod, sharedContext);
     const balanceBefore = (await balancesFor(sharedContext)).find((a) => a.id === sharedAccount.id)!.balance;
@@ -8916,8 +8945,12 @@ async function main() {
     console.log("-- the two averages read the share; the current month reads the fact --");
     // Plan 2026-09-B: comparable periods are 2026-08-B (the tickets and the
     // dinner) and 2026-07-B (the three history rows), averaged over the two.
+    // Read on Sep 1 (flipped for K9, D29): on Aug 25 the comparable Aug 16-31
+    // has not ended, and the walk now starts at the newest one that has, so
+    // the suggestion asked then would average July alone.
     const planRef = { year: 2026, month: 9, period: "B" as const };
-    const withShare = await suggestFor(planRef, [{ id: sharedCategory.id }], sharedContext);
+    const suggestionContext = { ...sharedContext, today: civilDate(2026, 9, 1), currentPeriod: periodForDate(civilDate(2026, 9, 1)) };
+    const withShare = await suggestFor(planRef, [{ id: sharedCategory.id }], suggestionContext);
     eq(
       "payday suggestion: (545 + 600 + 1,500) / 2 - the tickets count at your share, the dinner in full",
       JSON.stringify(withShare.get(sharedCategory.id)),
@@ -8937,7 +8970,7 @@ async function main() {
     // The same rows with the share taken off: the only thing that changes is
     // what the averages read.
     await prisma.transaction.update({ where: { id: tickets.id }, data: { yourShare: null } });
-    const withoutShare = await suggestFor(planRef, [{ id: sharedCategory.id }], sharedContext);
+    const withoutShare = await suggestFor(planRef, [{ id: sharedCategory.id }], suggestionContext);
     eq("without the share, the suggestion averages the full 2,725: a difference of exactly 2,180 / 2", round2(withoutShare.get(sharedCategory.id)!.amount - withShare.get(sharedCategory.id)!.amount), 1090);
     const augustWithoutShare = await classifyMonth(augustWindow, septemberContext, [], categoryMeta);
     eq("without the share, the completed month's lifestyle rises by exactly 2,180", round2(augustWithoutShare.lifestyle - augustWithShare.lifestyle), 2180);
@@ -13988,6 +14021,390 @@ async function main() {
       await prisma.account.updateMany({ where: { id: { in: archivedForEarmark } }, data: { status: "ACTIVE" } });
       await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForEarmark } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForEarmark } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== one history window (K9) and the remaining money fixes: D29 D33 D34 D13 D42 D46, the pace's population, the upcoming payment on import and approval, the amount charged ==");
+  {
+    // Public APIs only, with every new export read through a guard, so this
+    // block also runs against the code before these changes and fails there
+    // instead of crashing (the RED evidence). Fixtures are `Verify K9 ...`;
+    // every other active item is paused, open goal parked and active account
+    // archived meanwhile, all restored in the finally. The history blocks are
+    // dated 2024, before anything else in the database, so their rows are its
+    // first activity and the only spending in the periods they read.
+    const kHistory = (await import("../src/lib/history-window").catch(() => null)) as Record<string, unknown> | null;
+    const kPayday = await import("../src/lib/data/payday");
+    const kAfford = await import("../src/lib/data/afford");
+    const kAffordPure = await import("../src/lib/afford");
+    const kReports = await import("../src/lib/data/reports");
+    const kMonthly = await import("../src/lib/data/monthly");
+    const kGoals = await import("../src/lib/data/goals");
+    const kSummary = await import("../src/lib/data/period-summary");
+    const kRecurringData = (await import("../src/lib/data/recurring")) as Record<string, unknown>;
+    const kPost = (await import("../src/lib/recurring-posting")).postDueRecurringItems;
+    const kImport = await import("../src/lib/data/import");
+    const kImportDuplicates = await import("../src/lib/data/import-duplicates");
+    const kStaged = await import("../src/lib/data/staged-approval");
+    const kManual = await import("../src/lib/data/manual-transaction");
+    const kMoney = (await import("../src/lib/account-money")) as Record<string, unknown>;
+    const kValidation = (await import("../src/lib/validation")) as Record<string, unknown>;
+    const { transactionSchema: kTxSchema, recurringSchema: kRecurringSchema } = await import("../src/lib/validation");
+    const { getDictionary: kDictionary } = await import("../src/lib/i18n");
+    const kRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const kContext = (today: Date, extra: { incomeHistoryStartDate?: Date | null } = {}) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: kRates(),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+      ...extra,
+    });
+    const day24 = (month: number, day: number) => civilDate(2024, month, day);
+    const day26 = (month: number, day: number) => civilDate(2026, month, day);
+
+    const strayBefore2025 =
+      (await prisma.transaction.count({ where: { date: { lt: civilDate(2025, 1, 1) }, type: { in: ["EXPENSE", "INCOME"] } } })) +
+      (await prisma.goalContribution.count({ where: { date: { lt: civilDate(2025, 1, 1) } } }));
+    eq("K9 fixture isolation: nothing in the database predates 2025, so the 2024 rows below are the first activity", strayBefore2025, 0);
+
+    const pausedForK9 = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForK9 = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const archivedForK9 = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK9 } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK9 } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForK9 } }, data: { status: "ARCHIVED" } });
+    const restoreK9Rates = await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.9 });
+    const k9Wipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify K9 " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.stagedTransaction.deleteMany({ where: { rawDescription: { startsWith: "Verify K9 " } } });
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify K9 " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify K9 " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+      await prisma.category.deleteMany({ where: { name: { startsWith: "Verify K9 " } } });
+    };
+    try {
+      const account = await prisma.account.create({ data: { name: "Verify K9 Account", currency: "DOP", type: "CHECKING" } });
+      const category = await prisma.category.create({ data: { name: "Verify K9 Groceries", kind: "EXPENSE" } });
+      const spend = (date: Date, amount: number, categoryId: string | null = category.id, note: string | null = null) =>
+        prisma.transaction.create({ data: { date, amount, currency: "DOP", type: "EXPENSE", accountId: account.id, categoryId, note, source: "MANUAL" } });
+      const clearRows = () => prisma.transaction.deleteMany({ where: { accountId: account.id } });
+      const suggestion = async (ref: { year: number; month: number; period: "A" | "B" }, ctx: ReturnType<typeof kContext>) =>
+        JSON.stringify((await kPayday.getCategorySuggestions(ref, [{ id: category.id }], ctx)).get(category.id));
+      const averageOf = (summary: Awaited<ReturnType<typeof kReports.getSpendingTrendSummary>>) =>
+        `${summary.average?.average ?? "none"}:${summary.average?.periods ?? 0}`;
+
+      console.log("-- K9: the shared rules (pure) --");
+      const firstPeriodFrom = kHistory?.firstPeriodFrom as ((date: Date) => { key: string }) | undefined;
+      const firstUsablePeriod = kHistory?.firstUsablePeriod as ((date: Date) => { key: string }) | undefined;
+      const firstMonthFrom = kHistory?.firstMonthFrom as ((date: Date) => { year: number; month: number }) | undefined;
+      eq(
+        "the history date by period: Aug 20 counts from Sep 1-15, Aug 16 from Aug 16-31, Aug 1 from Aug 1-15",
+        firstPeriodFrom ? [day24(8, 20), day24(8, 16), day24(8, 1)].map((d) => firstPeriodFrom(d).key).join(",") : "missing",
+        "2024-09-A,2024-08-B,2024-08-A",
+      );
+      eq(
+        "a first activity counts its period only within its first 4 days: Jun 4 keeps Jun 1-15, Jun 5 and Jun 14 start at Jun 16-31, Jun 19 keeps Jun 16-30",
+        firstUsablePeriod ? [day24(6, 4), day24(6, 5), day24(6, 14), day24(6, 19)].map((d) => firstUsablePeriod(d).key).join(",") : "missing",
+        "2024-06-A,2024-06-B,2024-06-B,2024-06-B",
+      );
+      eq(
+        "the monthly windows start at the first month that starts on or after that period: Sep 1 -> Sep, Aug 16 -> Sep, Aug 1 -> Aug",
+        firstMonthFrom ? [day24(9, 1), day24(8, 16), day24(8, 1)].map((d) => { const m = firstMonthFrom(d); return `${m.year}-${m.month}`; }).join(",") : "missing",
+        "2024-9,2024-9,2024-8",
+      );
+
+      console.log("-- D29: a suggestion averages only comparable periods that have ended --");
+      for (const month of [4, 5, 6, 7, 8]) await spend(day24(month, 2), 300);
+      await spend(day24(9, 1), 30);
+      eq(
+        "planning Oct 1-15 on Sep 3: Sep 1-15 (30 in two days) has not ended and is not averaged - 300 over the five ended periods (it read 255)",
+        await suggestion({ year: 2024, month: 10, period: "A" }, kContext(day24(9, 3))),
+        JSON.stringify({ amount: 300, basis: "average" }),
+      );
+      eq(
+        "once Sep 1-15 has ended it counts like any other: (5 x 300 + 30) / 6 on Sep 16",
+        await suggestion({ year: 2024, month: 10, period: "A" }, kContext(day24(9, 16))),
+        JSON.stringify({ amount: 255, basis: "average" }),
+      );
+      eq(
+        "D33 for suggestions: from Jun 10, Jun 1-15 (which starts before it) is not read - Jul and Aug, 300 (it read 232.5 over Sep, Aug, Jul and Jun)",
+        await suggestion({ year: 2024, month: 10, period: "A" }, kContext(day24(9, 3), { incomeHistoryStartDate: day24(6, 10) })),
+        JSON.stringify({ amount: 300, basis: "average" }),
+      );
+      await clearRows();
+
+      console.log("-- D33: one date bounds every average, by period --");
+      for (const [month, d] of [[7, 16], [8, 1], [8, 16], [9, 2], [9, 16]] as const) await spend(day24(month, d), 13000);
+      const oct10 = kContext(day24(10, 10));
+      const oct10From = kContext(day24(10, 10), { incomeHistoryStartDate: day24(8, 20) });
+      eq("Reports, no date: 13,000 over the 5 ended periods", averageOf(await kReports.getSpendingTrendSummary(oct10, 6)), "13000:5");
+      eq(
+        "Reports, from Aug 20: only Sep 1-15 and Sep 16-30 are read - 13,000 over 2 (it read 13,000 over 5 with or without the date)",
+        averageOf(await kReports.getSpendingTrendSummary(oct10From, 6)),
+        "13000:2",
+      );
+      eq(
+        "the monthly windows from Aug 20: September only - August, which the date falls inside, is left out (they were Aug and Sep)",
+        (await kMonthly.getCompletedMonthWindows(oct10From)).map((w) => w.key).join(","),
+        "2024-09",
+      );
+      eq(
+        "Afford's walk for Oct 1-15 from Aug 20 keeps Sep 1-15 only, as it did",
+        kAfford.comparableHistory({ year: 2024, month: 10, period: "A" }, oct10.today, new Set(), day24(8, 20)).map((p) => p.key).join(","),
+        "2024-09-A",
+      );
+      await clearRows();
+
+      console.log("-- D34: a partial first period is not a period of history --");
+      await spend(day24(6, 14), 1000);
+      for (const [month, d] of [[6, 16], [7, 1], [7, 16], [8, 1], [8, 16], [9, 1], [9, 16]] as const) await spend(day24(month, d), 8000);
+      const oct5 = kContext(day24(10, 5));
+      eq(
+        "first activity Jun 14 (1,000), then 8,000 a period: Reports reads 8,000 over the 7 full periods (it read 7,125 over 8, Jun 1-15 counted with its two days)",
+        // Nine periods back from Oct 1-15 reach Jun 1-15, the first period.
+        averageOf(await kReports.getSpendingTrendSummary(oct5, 9)),
+        "8000:7",
+      );
+      const monthlyHistory = await kMonthly.getHistoricalMonthlyAverage(oct5);
+      eq("...the monthly average leaves June out the same way: 16,000 over Jul, Aug and Sep", `${monthlyHistory.averageLifestyle}:${monthlyHistory.monthsUsed}`, "16000:3");
+      await clearRows();
+
+      console.log("-- D13's divisor: an undated goal's average over complete periods --");
+      const debt = await prisma.goal.create({ data: { name: "Verify K9 Debt", targetAmount: 10000, currency: "DOP", savedAmount: 1000 } });
+      await prisma.goalContribution.create({ data: { goalId: debt.id, amount: 1000, currency: "DOP", date: day26(9, 5) } });
+      eq(
+        "1,000 on Sep 5, seen Oct 20: the average over Sep 1-15, Sep 16-30 and Oct 1-15 is 333.33 (removed by K3; now the history window's count)",
+        (await kGoals.getGoalDetail(debt.id, kContext(day26(10, 20))))?.summary.pacePerPeriod,
+        333.33,
+      );
+      const early = await prisma.goal.create({ data: { name: "Verify K9 Early", targetAmount: 10000, currency: "DOP", savedAmount: 1000 } });
+      await prisma.goalContribution.create({ data: { goalId: early.id, amount: 1000, currency: "DOP", date: day26(9, 2) } });
+      eq(
+        "1,000 on Sep 2: 1,000 on Sep 15 and still 1,000 on Sep 16, not 500 overnight",
+        `${(await kGoals.getGoalDetail(early.id, kContext(day26(9, 15))))?.summary.pacePerPeriod}:${(await kGoals.getGoalDetail(early.id, kContext(day26(9, 16))))?.summary.pacePerPeriod}`,
+        "1000:1000",
+      );
+
+      console.log("-- D42, goal part: a contribution dated after today is not saved yet --");
+      const fund = await prisma.goal.create({ data: { name: "Verify K9 Fund", targetAmount: 5000, currency: "DOP", savedAmount: 1500 } });
+      await prisma.goalContribution.create({ data: { goalId: fund.id, amount: 1000, currency: "DOP", date: day26(9, 20) } });
+      await prisma.goalContribution.create({ data: { goalId: fund.id, amount: 500, currency: "DOP", date: day26(10, 1) } });
+      const onSep30 = (await kGoals.getGoalDetail(fund.id, kContext(day26(9, 30))))?.summary as (Record<string, unknown> & { savedAmount: number; remaining: number; progress: number }) | undefined;
+      eq(
+        "on Sep 30, saved is 1,000 with the 500 dated Oct 1 shown apart; still to go 4,000; 20% (it read 1,500 saved and 3,500 to go)",
+        `${onSep30?.savedAmount}|${onSep30?.savedAhead}|${onSep30?.displaySavedAhead}|${onSep30?.remaining}|${onSep30?.progress}`,
+        "1000|500|500|4000|0.2",
+      );
+      eq(
+        "...and the undated average reads only what is dated to today: 1,000 in the period in progress (it read 1,500)",
+        onSep30?.pacePerPeriod,
+        1000,
+      );
+      const onOct1 = (await kGoals.getGoalDetail(fund.id, kContext(day26(10, 1))))?.summary as (Record<string, unknown> & { savedAmount: number }) | undefined;
+      eq("on Oct 1 its day has come: saved 1,500, nothing apart", `${onOct1?.savedAmount}|${onOct1?.savedAhead}`, "1500|0");
+
+      console.log("-- D46: a past first date in the Recurring form follows Afford's rule unless the user chooses to post --");
+      const startAfter = kRecurringData.startAfterPaidOccurrences as
+        | ((values: Record<string, unknown>, choice: { dateTyped: boolean; pastOccurrences: "paid" | "post" }, today: Date) => { ok: boolean; values?: Record<string, unknown>; reason?: string })
+        | undefined;
+      const pastChoice = kValidation.pastOccurrencesFrom as ((formData: FormData) => "paid" | "post") | undefined;
+      const createItem = kRecurringData.createRecurringItem as (data: Record<string, unknown>) => Promise<{ ok: boolean; id?: string }>;
+      const planForm = (overrides: Record<string, string> = {}) =>
+        kRecurringSchema.parse({ name: "Verify K9 Plan", amount: "3500", currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: "2026-09-10", accountId: account.id, categoryId: "none", note: "", remainingOccurrences: "4", active: "true", ...overrides });
+      // What saveRecurringAction does with the form: the schema, the past-date
+      // choice from the form, then the save. Before D46 it saved as typed.
+      const saveFromForm = async (formChoice: string | null, overrides: Record<string, string> = {}, today = day26(10, 2)) => {
+        const { id: _id, updatedAt: _updatedAt, ...typed } = planForm(overrides);
+        const formData = new FormData();
+        if (formChoice) formData.set("pastOccurrences", formChoice);
+        const settled = startAfter
+          ? startAfter(typed, { dateTyped: typed.anchorDay !== undefined, pastOccurrences: pastChoice ? pastChoice(formData) : "paid" }, today)
+          : { ok: true, values: typed as Record<string, unknown> };
+        if (!settled.ok || !settled.values) return { refused: settled.reason ?? "refused", id: null };
+        const created = await createItem(settled.values);
+        return { refused: null, id: created.id ?? null };
+      };
+      const planRows = async (id: string | null) =>
+        id ? (await prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${id}:` } }, orderBy: { date: "asc" } })).map((row) => toISODate(row.date)).join(",") : "none";
+      const planState = async (id: string | null) => {
+        const item = id ? await prisma.recurringItem.findUnique({ where: { id } }) : null;
+        return item ? `${toISODate(item.nextDate)}:${item.remainingOccurrences}` : "none";
+      };
+      const asPaid = await saveFromForm(null);
+      await kPost(day26(10, 2));
+      const affordSplit = kAffordPure.splitPaidInstallments(kAffordPure.buildInstallments(kAffordPure.installmentDates(day26(9, 10), "MONTHLY", 4), 3500), day26(10, 2));
+      eq(
+        "4 x 3,500 from Sep 10, saved on Oct 2: Sep 10 counts as paid and is not posted - 3 payments from Oct 10, as Afford records it (the form posted Sep 10 and left 3)",
+        `${await planRows(asPaid.id)}|${await planState(asPaid.id)}|afford ${affordSplit.paid.length}:${affordSplit.upcoming.length}:${toISODate(affordSplit.upcoming[0].date)}`,
+        "|2026-10-10:3|afford 1:3:2026-10-10",
+      );
+      await prisma.recurringItem.deleteMany({ where: { id: asPaid.id ?? "" } });
+      const asPosted = await saveFromForm("post");
+      await kPost(day26(10, 2));
+      eq(
+        "with the form's explicit choice to post them, Sep 10 is posted and 3 are left, as before",
+        `${await planRows(asPosted.id)}|${await planState(asPosted.id)}`,
+        "2026-09-10|2026-10-10:3",
+      );
+      await prisma.transaction.deleteMany({ where: { source: "RECURRING", externalId: { startsWith: `${asPosted.id}:` } } });
+      await prisma.recurringItem.deleteMany({ where: { id: asPosted.id ?? "" } });
+      const allPast = await saveFromForm(null, { nextDate: "2026-08-10", remainingOccurrences: "2" });
+      eq("a plan whose every payment is before today has nothing left to record and is refused", `${allPast.refused}|${allPast.id}`, "all_paid|null");
+      const openEnded = await saveFromForm(null, { remainingOccurrences: "" });
+      eq("an open-ended item typed from Sep 10 starts at Oct 10 with no countdown", await planState(openEnded.id), "2026-10-10:null");
+      await prisma.recurringItem.deleteMany({ where: { id: openEnded.id ?? "" } });
+      const untouched = await prisma.recurringItem.create({ data: { name: "Verify K9 Overdue", amount: 100, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: day26(9, 10), anchorDay: 10, active: true } });
+      const edit = kRecurringSchema.parse({ id: untouched.id, name: "Verify K9 Overdue", amount: "120", currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: "2026-09-10", originalNextDate: "2026-09-10", accountId: account.id, categoryId: "none", note: "", active: "true" });
+      const editSettled = startAfter ? startAfter(edit, { dateTyped: edit.anchorDay !== undefined, pastOccurrences: "paid" }, day26(10, 2)) : null;
+      eq("an edit that leaves an existing item's date alone changes nothing about it (existing items are not changed)", editSettled?.ok && editSettled.values ? toISODate(editSettled.values.nextDate as Date) : "missing", "2026-09-10");
+      await prisma.recurringItem.delete({ where: { id: untouched.id } });
+
+      console.log("-- the monthly pace reads K6's budget-spending population --");
+      const health = await prisma.category.create({ data: { name: "Verify K9 Health", kind: "EXPENSE" } });
+      const subscriptionsCategory = await prisma.category.findFirstOrThrow({ where: { isSubscriptionDefault: true } });
+      await prisma.recurringItem.create({ data: { name: "Verify K9 Gym", amount: 50, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: day26(11, 5), anchorDay: 5, categoryId: health.id, active: true } });
+      await prisma.recurringItem.create({ data: { name: "Verify K9 Stream", amount: 30, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: day26(11, 5), anchorDay: 5, categoryId: subscriptionsCategory.id, active: true } });
+      const oct20 = kContext(day26(10, 20));
+      const octB26 = periodInfo({ year: 2026, month: 10, period: "B" });
+      const paceBefore = await kMonthly.getCurrentMonthPace(oct20);
+      const spentBefore = (await kSummary.getPeriodSummary(octB26, oct20)).spent;
+      await spend(day26(10, 17), 50, health.id, "Verify K9 Gym");
+      const paceAfterGym = await kMonthly.getCurrentMonthPace(oct20);
+      const spentAfterGym = (await kSummary.getPeriodSummary(octB26, oct20)).spent;
+      eq(
+        "a 50 charge under Health that looks like the unposted Gym item: the budget counts it, and so does the pace's lifestyle - committed unchanged (it read lifestyle 0, committed 50)",
+        `${round2(spentAfterGym - spentBefore)}|${round2(paceAfterGym.lifestyleSpentSoFar - paceBefore.lifestyleSpentSoFar)}|${round2(paceAfterGym.committedSpentSoFar - paceBefore.committedSpentSoFar)}`,
+        "50|50|0",
+      );
+      await spend(day26(10, 17), 30, subscriptionsCategory.id, "Verify K9 Stream");
+      const paceAfterStream = await kMonthly.getCurrentMonthPace(oct20);
+      eq(
+        "a charge under Subscriptions is outside the budget, and the pace still files it as the Stream item's committed charge",
+        `${round2((await kSummary.getPeriodSummary(octB26, oct20)).spent - spentAfterGym)}|${round2(paceAfterStream.lifestyleSpentSoFar - paceAfterGym.lifestyleSpentSoFar)}|${round2(paceAfterStream.committedSpentSoFar - paceAfterGym.committedSpentSoFar)}`,
+        "0|0|30",
+      );
+      await clearRows();
+      await prisma.recurringItem.deleteMany({ where: { name: { in: ["Verify K9 Gym", "Verify K9 Stream"] } } });
+
+      console.log("-- \"It's that payment\" for a CSV row and an approved receipt --");
+      // 100 EUR a month on the DOP account: 6,666.67 DOP at these rates, which
+      // a peso charge can never hold to the cent, so posting would charge it
+      // again unless the answer is recorded.
+      const klarna = await prisma.recurringItem.create({ data: { name: "Verify K9 Klarna", amount: 100, currency: "EUR", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: day26(11, 28), anchorDay: 28, accountId: account.id, active: true } });
+      const nov28 = `${klarna.id}:2026-11-28`;
+      const dec28 = `${klarna.id}:2026-12-28`;
+      const csvRow = { date: "2026-11-27", amount: 6700, type: "EXPENSE" as const, transferDirection: null, note: "Verify K9 Klarna purchase", categoryId: null, importAnyway: false, isExtraordinary: false, yourShare: null, reimburses: null };
+      const csvHits = await kImportDuplicates.findCsvPostedDuplicates({ accountId: account.id, currency: "DOP", rows: [csvRow], skip: new Set(), rates: kRates() });
+      const csvHit = csvHits?.get(0);
+      eq(
+        "the review step offers the 6,700 DOP row as a possible match of the Nov 28 payment of 100 EUR, not posted yet (it offered nothing)",
+        `${csvHit?.kind}|${csvHit?.possible}|${csvHit?.posted.id === nov28}`,
+        "upcoming|true|true",
+      );
+      const staleAnswer = await kImport.importCsvTransactions({ accountId: account.id, currency: "DOP", rows: [{ ...csvRow, importAnyway: true, settlesOccurrence: dec28 } as never] }, kRates());
+      eq("an answer naming another payment than the one the row matches refuses the import, writing nothing", `${staleAnswer.ok ? "ok" : staleAnswer.reason}|${await prisma.transaction.count({ where: { accountId: account.id } })}`, "posted_match_changed|0");
+      const imported = await kImport.importCsvTransactions({ accountId: account.id, currency: "DOP", rows: [{ ...csvRow, importAnyway: true, settlesOccurrence: nov28 } as never] }, kRates());
+      const importedRow = await prisma.transaction.findFirst({ where: { accountId: account.id, source: "CSV" } });
+      eq(
+        "\"It's that payment\" on import: the row is imported as it is and recorded as the Nov 28 payment (it was imported with no pairing)",
+        `${imported.ok}|${num(importedRow?.amount ?? 0)}:${importedRow?.currency}|${await prisma.recurringSettlement.count({ where: { occurrenceKey: nov28, transactionId: importedRow?.id ?? "" } })}`,
+        "true|6700:DOP|1",
+      );
+      await kPost(day26(11, 28));
+      eq(
+        "posting on Nov 28 writes no second charge, and counts the payment: no RECURRING row, next Dec 28 (it charged 100 EUR again)",
+        `${await prisma.transaction.count({ where: { source: "RECURRING", externalId: nov28 } })}|${await planState(klarna.id)}`,
+        "0|2026-12-28:null",
+      );
+      const receipt = await prisma.stagedTransaction.create({
+        data: { date: day26(12, 27), amount: 6700, currency: "DOP", rawDescription: "Verify K9 Klarna receipt", accountId: account.id, source: "GMAIL", externalId: "verify-k9-receipt" },
+      });
+      const offered = await kStaged.stagedPostedMatches([{ ...receipt, amount: 6700, status: "PENDING" } as never], [account.id], kRates());
+      eq("the review queue shows the receipt's match with the Dec 28 payment (it showed none)", `${offered[receipt.id]?.[account.id]?.kind}|${offered[receipt.id]?.[account.id]?.posted.id === dec28}`, "upcoming|true");
+      const approved = await kStaged.approveStagedTransaction(
+        { id: receipt.id, date: day26(12, 27), amount: 6700, currency: "DOP", rawDescription: "Verify K9 Klarna receipt", accountId: account.id, categoryId: null, resolution: "upcoming" as never },
+        kRates(),
+      );
+      const approvedRow = await prisma.transaction.findFirst({ where: { source: "GMAIL", externalId: "verify-k9-receipt" } });
+      await kPost(day26(12, 28));
+      eq(
+        "\"It's that payment\" on approval: the receipt becomes the charge, paired with Dec 28 in the same write, and posting leaves Dec 28 alone (it approved with no pairing and posted Dec 28)",
+        `${approved.ok ? approved.outcome : approved.reason}|${await prisma.recurringSettlement.count({ where: { occurrenceKey: dec28, transactionId: approvedRow?.id ?? "" } })}|${await prisma.transaction.count({ where: { source: "RECURRING", externalId: dec28 } })}`,
+        "kept_upcoming|1|0",
+      );
+      await prisma.recurringItem.update({ where: { id: klarna.id }, data: { active: false } });
+
+      console.log("-- the amount charged in the account's currency (K7) --");
+      const chargedInAccount = kMoney.chargedInAccount as ((entered: { amount: number; currency: string }, accountCurrency: string, charged: number) => Record<string, unknown>) | undefined;
+      eq(
+        "15 USD charged as 912.30 DOP: stored 912.30 DOP with the 15 USD kept, at the rate the two imply (60.82)",
+        chargedInAccount ? JSON.stringify(chargedInAccount({ amount: 15, currency: "USD" }, "DOP", 912.3)) : "missing",
+        JSON.stringify({ amount: 912.3, currency: "DOP", originalAmount: 15, originalCurrency: "USD", rate: 60.82 }),
+      );
+      const chargedFrom = kValidation.chargedAmountFrom as ((formData: FormData) => { amount: number | null } | { error: string }) | undefined;
+      const chargedForm = (value: string) => { const form = new FormData(); form.set("chargedAmount", value); return form; };
+      eq(
+        "the form's field: blank is no figure, 912.30 is read, -5 is refused",
+        chargedFrom ? [chargedFrom(chargedForm("")), chargedFrom(chargedForm("912.30")), chargedFrom(chargedForm("-5"))].map((r) => ("error" in r ? "error" : String(r.amount))).join(",") : "missing",
+        "null,912.3,error",
+      );
+      const usdValues = (() => {
+        const { id: _id, ...values } = kTxSchema.parse({ type: "EXPENSE", date: "2026-10-05", amount: "15", currency: "USD", accountId: account.id, categoryId: "none", note: "Verify K9 streaming" });
+        return values;
+      })();
+      const created = await kManual.createManualTransaction(usdValues, { getContext: async () => kContext(day26(10, 5)) as never, getRates: async () => kRates(), chargedAmount: 912.3 } as never);
+      const createdRow = await prisma.transaction.findUniqueOrThrow({ where: { id: created.id } });
+      eq(
+        "a new entry of 15 USD with the bank's 912.30 DOP stores 912.30 DOP, 15 USD kept, rate 60.82 (it stored 900 at the table's 60)",
+        `${num(createdRow.amount)}:${createdRow.currency}|${num(createdRow.originalAmount)}:${createdRow.originalCurrency}|${num(createdRow.rate)}`,
+        "912.3:DOP|15:USD|60.82",
+      );
+      const postedForeign = await prisma.transaction.create({ data: { date: day26(10, 6), amount: 900, currency: "DOP", originalAmount: 15, originalCurrency: "USD", rate: 60, type: "EXPENSE", accountId: account.id, source: "RECURRING", externalId: "verify-k9-posted:2026-10-06" } });
+      const previous = { row: { amount: 900, currency: "DOP", originalAmount: 15, originalCurrency: "USD", rate: 60, yourShare: null }, accountCurrency: "DOP" };
+      const storedValues = kManual.storedTransactionValues as unknown as (values: unknown, getRates: () => Promise<RateTable>, previous: unknown, charged?: number | null) => Promise<Record<string, unknown>>;
+      const edited = await storedValues(usdValues, async () => kRates(), previous, 912.3);
+      eq(
+        "editing a posted 15 USD row with the real 912.30 DOP: the pesos replace the conversion and the 15 USD stays (it kept 900)",
+        `${edited.amount}:${edited.currency}|${edited.originalAmount}:${edited.originalCurrency}|${edited.rate}`,
+        "912.3:DOP|15:USD|60.82",
+      );
+      const keptValues = await storedValues(usdValues, async () => kRates(), previous, null);
+      eq("left blank, the same edit keeps the stored conversion, as before", `${keptValues.amount}|${keptValues.rate}`, "900|60");
+      await prisma.transaction.delete({ where: { id: postedForeign.id } });
+
+      console.log("-- copy --");
+      const enSettings = kDictionary("en").settingsPage as Record<string, unknown>;
+      const esSettings = kDictionary("es").settingsPage as Record<string, unknown>;
+      eq("the setting is \"Count history from\" / \"Contar historial desde\"", `${enSettings.historyStartLabel}|${esSettings.historyStartLabel}`, "Count history from|Contar historial desde");
+      check(
+        "its hint names everything the date bounds, in both languages",
+        typeof enSettings.historyStartHint === "string" && ["Afford", "suggestions", "Reports", "monthly"].every((word) => (enSettings.historyStartHint as string).includes(word)) &&
+          typeof esSettings.historyStartHint === "string" && ["Cuotas", "sugerencias", "Informes", "mensual"].every((word) => (esSettings.historyStartHint as string).includes(word)),
+      );
+      const keys: [string, string[]][] = [
+        ["recurring", ["pastDatePaidNote", "postPastLabel", "postPastHint", "allPaymentsPast"]],
+        ["transactions", ["chargedAmountLabel", "accountAmountLabel", "chargedAmountHint", "savedAsCharged", "appliedUpcomingPayment", "upcomingPaymentsKept"]],
+        ["goals", ["savedAhead"]],
+        ["dashboard", ["savedAhead"]],
+      ];
+      check(
+        "the new copy exists in English and Spanish",
+        keys.every(([group, names]) =>
+          names.every((name) => (kDictionary("en") as unknown as Record<string, Record<string, unknown>>)[group]?.[name] !== undefined && (kDictionary("es") as unknown as Record<string, Record<string, unknown>>)[group]?.[name] !== undefined),
+        ),
+      );
+    } finally {
+      await restoreK9Rates();
+      await k9Wipe();
+      await prisma.account.updateMany({ where: { id: { in: archivedForK9 } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK9 } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK9 } }, data: { active: true } });
     }
   }
 

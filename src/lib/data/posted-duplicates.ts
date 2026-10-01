@@ -12,11 +12,12 @@
  * what "It's the posted charge" does to the posted row, and
  * keepPostedInsteadOfEntry the same answer for an entry already saved by hand.
  *
- * A charge entered by hand is also checked against what has not posted yet
- * (`upcoming`): an occurrence of an item in another currency than its
- * account's, which the charge - in the account's currency - can never settle
- * by amount, so posting would write it again on its due date. Only ever a
- * possible match; keepEntryAsUpcoming is what "It's that payment" does.
+ * A charge entered by hand, a CSV row and a receipt being approved are also
+ * checked against what has not posted yet (`upcoming`): an occurrence of an
+ * item in another currency than its account's, which the charge - in the
+ * account's currency - can never settle by amount, so posting would write it
+ * again on its due date. Only ever a possible match; "It's that payment" is
+ * recordUpcomingPayment, for a hand entry through keepEntryAsUpcoming.
  */
 import { createHash } from "node:crypto";
 
@@ -645,10 +646,6 @@ export async function keepEntryAsUpcoming(
   const match = found.get(entry.id);
   if (!match || match.kind !== "upcoming" || match.posted.id !== input.occurrenceKey) return { ok: false, reason: "match_gone" };
 
-  const itemId = itemIdFromOccurrenceKey(input.occurrenceKey);
-  const dueDate = fromISODate(input.occurrenceKey.slice(input.occurrenceKey.lastIndexOf(":") + 1));
-  if (!itemId || !dueDate) return { ok: false, reason: "match_gone" };
-
   const outcome = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "Transaction" WHERE "id" = ${entry.id} FOR UPDATE`;
     const current = await tx.transaction.findUnique({
@@ -657,21 +654,45 @@ export async function keepEntryAsUpcoming(
     });
     if (!current) return "not_found" as const;
     if (current.recurringSettlement !== null || entryDigest(current) !== input.savedDigest) return "changed" as const;
-    const item = await tx.recurringItem.findFirst({
-      where: { id: itemId, active: true, nextDate: { lte: dueDate } },
-      select: { id: true, name: true, kind: true },
-    });
-    const posted = await tx.transaction.findUnique({
-      where: { source_externalId: { source: "RECURRING", externalId: input.occurrenceKey } },
-      select: { id: true },
-    });
-    if (!item || posted) return "match_gone" as const;
-    const recorded = await tx.recurringSettlement.createMany({
-      data: [{ transactionId: entry.id, occurrenceKey: input.occurrenceKey, recurringItemId: item.id, kind: item.kind, dueDate }],
-      skipDuplicates: true,
-    });
-    return recorded.count === 1 ? { itemName: item.name } : ("match_gone" as const);
+    return recordUpcomingPayment(tx, entry.id, input.occurrenceKey);
   });
   if (typeof outcome === "string") return { ok: false, reason: outcome };
   return { ok: true, match, itemName: outcome.itemName };
+}
+
+/**
+ * "It's that payment", written: the pairing of a charge already in the ledger
+ * (`transactionId`) with an occurrence posting has not written yet
+ * (`occurrenceKey`), as the RecurringSettlement row posting itself writes when
+ * it settles an occurrence with a charge. The one writer of the answer for a
+ * hand entry (keepEntryAsUpcoming), a CSV row (importCsvTransactions) and an
+ * approved receipt (approveStagedTransaction); run inside the caller's
+ * database transaction, after the caller's own checks of the charge. The
+ * occurrence must still be ahead of posting - its item active with nextDate
+ * not past the due date, and no RECURRING row for it - and both of
+ * RecurringSettlement's unique keys refuse a second pairing of either side;
+ * otherwise "match_gone" and nothing is written.
+ */
+export async function recordUpcomingPayment(
+  tx: Client,
+  transactionId: string,
+  occurrenceKey: string,
+): Promise<{ itemName: string } | "match_gone"> {
+  const itemId = itemIdFromOccurrenceKey(occurrenceKey);
+  const dueDate = fromISODate(occurrenceKey.slice(occurrenceKey.lastIndexOf(":") + 1));
+  if (!itemId || !dueDate) return "match_gone";
+  const item = await tx.recurringItem.findFirst({
+    where: { id: itemId, active: true, nextDate: { lte: dueDate } },
+    select: { id: true, name: true, kind: true },
+  });
+  const posted = await tx.transaction.findUnique({
+    where: { source_externalId: { source: "RECURRING", externalId: occurrenceKey } },
+    select: { id: true },
+  });
+  if (!item || posted) return "match_gone";
+  const recorded = await tx.recurringSettlement.createMany({
+    data: [{ transactionId, occurrenceKey, recurringItemId: item.id, kind: item.kind, dueDate }],
+    skipDuplicates: true,
+  });
+  return recorded.count === 1 ? { itemName: item.name } : "match_gone";
 }

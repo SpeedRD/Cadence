@@ -11,8 +11,10 @@
  *   - the two combined         -> getMonthlyPace (what the dashboard card renders)
  *
  * Classification rules (see AGENTS.md for the full spec):
- *   lifestyle          = EXPENSE transactions, not Savings/Investment category,
- *                        not matched to a subscription/contribution recurring item.
+ *   lifestyle          = budget spending (K6, src/lib/budget-spending.ts): EXPENSE
+ *                        transactions that stand for no recurring occurrence,
+ *                        are no contribution's own expense and are not filed
+ *                        under a subscription or savings category.
  *                        For a completed month, also not a one-off the user
  *                        confirmed extraordinary (Transaction.isExtraordinary),
  *                        and a shared expense counts only the user's own part
@@ -49,10 +51,12 @@
  *      once, whether or not the item behind them still exists. A charge the
  *      user entered that posting settled an occurrence with (RecurringSettlement)
  *      carries the same key through its settlement and is read the same way.
- *   2. Anything else is heuristic, because Cadence has no link between an item
- *      and a charge it did not write itself: same currency, amount within one
- *      cent, and either the item's category or its name in the note. See
- *      matchRecurringToTransactions for what that deliberately refuses to match.
+ *   2. A charge filed under a subscription or savings category - outside
+ *      budget spending - is matched by heuristic, because Cadence has no link
+ *      between an item and a charge it did not write itself: same currency,
+ *      amount within one cent, and either the item's category or its name in
+ *      the note. See matchRecurringToTransactions for what that deliberately
+ *      refuses to match. A charge the budget counts is never taken by it.
  *
  * A real charge logged under a different category with no matching note text,
  * or an item whose configured amount has drifted from the real charge, will not
@@ -65,16 +69,19 @@ import { exactAmountIn } from "@/lib/account-money";
 import { convert } from "@/lib/currency";
 import { appTimeZone, civilDateInZone, minDate, startOfDay } from "@/lib/date";
 import { num, round2, sum } from "@/lib/money";
+import { firstMonthFrom, firstPeriodFrom } from "@/lib/history-window";
 import { daysElapsedInMonth, monthForDate, monthWindow, nextMonth, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
 import { nextPeriod, periodForDate, periodInfo } from "@/lib/period";
 import { outstanding, outstandingCharge, sumOccurrences } from "@/lib/period-commitments";
 import { monthlyEquivalent } from "@/lib/recurring";
 import { chargeMatchesItem, itemsWithAmbiguousCategory } from "@/lib/recurring-settlement";
+import { inUnbudgetedCategory } from "@/lib/budget-spending";
 import { ownShare } from "@/lib/shared-expense";
 import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX, manualContributionIdFromTransaction } from "@/lib/transactions";
 
 import type { AppContext } from "@/lib/data/context";
+import { getFirstActivityDate } from "@/lib/data/history-window";
 import { loadCommitments } from "@/lib/data/period-commitments";
 import type { SpendingLine } from "@/lib/data/period-summary";
 import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
@@ -267,28 +274,7 @@ async function loadCategoryMeta(): Promise<CategoryMeta[]> {
   });
 }
 
-/**
- * The earliest date Cadence has any recorded financial *activity* for.
- *
- * Only cashflow counts. An OPENING_BALANCE dated "as of" some date long before
- * the user started using Cadence is a starting position, not a month of
- * spending, and letting it in opened months of fabricated history: every one of
- * them scored zero lifestyle spending while still collecting each recurring
- * item's scheduled amount, which both deflated the lifestyle average and
- * inflated the committed one.
- */
-export async function getFirstActivityDate(): Promise<Date | null> {
-  const [txMin, goalMin] = await Promise.all([
-    prisma.transaction.aggregate({
-      _min: { date: true },
-      where: { type: { in: ["EXPENSE", "INCOME"] } },
-    }),
-    prisma.goalContribution.aggregate({ _min: { date: true } }),
-  ]);
-  const dates = [txMin._min.date, goalMin._min.date].filter((d): d is Date => Boolean(d));
-  if (dates.length === 0) return null;
-  return dates.reduce((earliest, date) => (date.getTime() < earliest.getTime() ? date : earliest));
-}
+export { getFirstActivityDate };
 
 /**
  * The first month that counts as a full month of history for a first activity
@@ -311,8 +297,9 @@ export function firstUsableMonth(firstActivity: Date): MonthRef {
  * further back than `firstActivityMonth` - no fake zero-history months before
  * the user started using Cadence.
  *
- * `incomeHistoryStartMonth` (Settings' "count income history from", already
- * bounding comparableHistory and getCategorySuggestions the same way) is a
+ * `incomeHistoryStartMonth` (Settings' "count history from", the first month
+ * that starts on or after the first period it lets count - K9,
+ * src/lib/history-window.ts) is a
  * second, independent lower bound of the same kind, not a parallel mechanism:
  * the walk stops at whichever of the two boundaries is later (more
  * restrictive), using the exact same break condition below. Null (the
@@ -353,8 +340,8 @@ export function computeCompletedMonthWindows(
  * before the current one. See computeCompletedMonthWindows for the boundary
  * rules - this just wires it up to the real first-activity date (through
  * firstUsableMonth, so a partial first month is not a month of history),
- * "today", and (converted to a month the same way every other date here is)
- * Settings' incomeHistoryStartDate.
+ * "today", and Settings' incomeHistoryStartDate, applied by period as every
+ * other average applies it (K9).
  */
 export async function getCompletedMonthWindows(
   context: AppContext,
@@ -366,7 +353,11 @@ export async function getCompletedMonthWindows(
     monthForDate(context.today),
     firstUsableMonth(firstActivity),
     maxCount,
-    context.incomeHistoryStartDate ? monthForDate(context.incomeHistoryStartDate) : null,
+    // "Count history from" by period (K9, src/lib/history-window.ts): the
+    // months start at the first one that starts on or after the first
+    // period the date lets count, so the monthly average reads nothing dated
+    // before it - a month the date falls inside is left out whole.
+    context.incomeHistoryStartDate ? firstMonthFrom(firstPeriodFrom(context.incomeHistoryStartDate).start) : null,
   );
 }
 
@@ -525,15 +516,25 @@ async function computeMonthActuals(
   }
 
   // Whatever posting did not already account for falls to the heuristic, which
-  // is all that is available for a charge Cadence did not write itself.
+  // is all that is available for a charge Cadence did not write itself - but
+  // only among the rows budget spending leaves out (K6, src/lib/budget-
+  // spending.ts), so the pace and the budget agree on what is lifestyle
+  // spending. These rows already stand for no occurrence and are no
+  // contribution twin, so what is left outside the budget is a charge filed
+  // under a subscription or savings category: the heuristic tells which item
+  // it is (and so that the month needs no scheduled amount for it). A charge
+  // the budget counts stays lifestyle here, whatever item it looks like;
+  // when it really paid an occurrence, posting's settlement says so.
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
   const unposted = matchable.filter(
     (tx) => !postedTransactionIds.has(tx.id) && !manualContributionTwinIds.has(tx.id),
   );
+  const outsideBudget = unposted.filter((tx) => inUnbudgetedCategory(tx, categoryById));
   const subscriptionItems = recurringItems.filter((item) => item.kind === "SUBSCRIPTION");
   const contributionItems = recurringItems.filter((item) => item.kind === "CONTRIBUTION");
 
-  const subscriptionMatch = matchRecurringToTransactions(subscriptionItems, unposted);
-  const remaining = unposted.filter((tx) => !subscriptionMatch.matchedTransactionIds.has(tx.id));
+  const subscriptionMatch = matchRecurringToTransactions(subscriptionItems, outsideBudget);
+  const remaining = outsideBudget.filter((tx) => !subscriptionMatch.matchedTransactionIds.has(tx.id));
   const contributionMatch = matchRecurringToTransactions(contributionItems, remaining);
 
   // A matched charge counts at what it stored - what its account moved (K7) -
@@ -555,7 +556,6 @@ async function computeMonthActuals(
     ...subscriptionMatch.matchedTransactionIds,
     ...contributionMatch.matchedTransactionIds,
   ]);
-  const categoryById = new Map(categories.map((category) => [category.id, category]));
 
   let lifestyle = 0;
   let typicalLifestyle = 0;

@@ -3,7 +3,7 @@ import { today as todayInAppZone } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import { nextPeriod, periodForDate, periodInfo, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, semiMonthlyAnchorsCollide, skipReasonFor } from "@/lib/recurring";
+import { firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, paidPastOccurrences, semiMonthlyAnchorsCollide, skipReasonFor } from "@/lib/recurring";
 
 import { loadCommitments } from "@/lib/data/period-commitments";
 
@@ -232,6 +232,39 @@ export async function createRecurringItem(
   if (problem) return { ok: false, problem };
   const created = await db.recurringItem.create({ data, select: { id: true } });
   return { ok: true, id: created.id };
+}
+
+/**
+ * The Recurring form's values once a typed past due date is read (D46): with
+ * `pastOccurrences` "paid" (the default) on an active item whose due date the
+ * user typed, the occurrences before `today` count as already paid
+ * (paidPastOccurrences in src/lib/recurring.ts) - nextDate moves to the first
+ * one on or after today and a finite plan's countdown drops by as many. A
+ * plan with every payment behind today has nothing left to record and is
+ * refused. "post" keeps the values as typed, so posting charges each one.
+ */
+export function startAfterPaidOccurrences<
+  V extends {
+    nextDate: Date;
+    frequency: RecurringFrequency;
+    anchorDay?: number | null;
+    secondAnchorDay?: number | null;
+    remainingOccurrences: number | null;
+    active: boolean;
+  },
+>(
+  values: V,
+  choice: { dateTyped: boolean; pastOccurrences: "paid" | "post" },
+  today: Date,
+): { ok: true; values: V } | { ok: false; reason: "all_paid" } {
+  if (!choice.dateTyped || !values.active || choice.pastOccurrences === "post") return { ok: true, values };
+  const paid = paidPastOccurrences(
+    { ...values, anchorDay: values.anchorDay ?? values.nextDate.getUTCDate() },
+    today,
+  );
+  if (!paid) return { ok: true, values };
+  if (paid.allPaid) return { ok: false, reason: "all_paid" };
+  return { ok: true, values: { ...values, nextDate: paid.nextDate, remainingOccurrences: paid.remainingOccurrences } };
 }
 
 /**

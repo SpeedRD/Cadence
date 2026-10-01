@@ -45,6 +45,11 @@ export function GoalCard({
               ? ` · ${formatMoney(goal.savedAmount, goal.currency)} ${t.of(formatMoney(goal.targetAmount, goal.currency))}`
               : ""}
           </p>
+          {goal.savedAhead > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t.savedAhead(formatMoney(goal.displaySavedAhead, displayCurrency))}
+            </p>
+          ) : null}
         </div>
 
         {goal.achievedAt ? (

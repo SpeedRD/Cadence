@@ -510,6 +510,16 @@ export const recurringSchema = z
     return { ...value, anchorDay, secondAnchorDay, accountId: value.accountId, goalId: null };
   });
 
+/**
+ * D46: the Recurring form's choice for the occurrences before today when the
+ * due date typed is behind it - "paid" (the default, Afford's rule: they were
+ * paid already and are not posted) or "post" (the explicit choice to post
+ * them, for when they are not in the ledger). Read beside recurringSchema.
+ */
+export function pastOccurrencesFrom(formData: FormData): "paid" | "post" {
+  return formData.get("pastOccurrences") === "post" ? "post" : "paid";
+}
+
 export const goalSchema = z.object({
   id: z.string().trim().optional(),
   name: z.string().trim().min(1, "Name the goal").max(80),
@@ -797,6 +807,20 @@ export const stagedApproveSchema = z.object({
 });
 
 /** Turn a FormData into the plain object the schemas expect. */
+/**
+ * The transaction form's "Amount charged in <account currency>": what the
+ * account really moved for an amount entered in another currency - the
+ * bank's figure, stored as the amount with the entered one kept
+ * (chargedInAccount in src/lib/account-money.ts). Read beside
+ * transactionSchema, whose output is the row's own fields. Blank is null:
+ * the entry is converted at the rate as before. Ignored when the currencies
+ * agree.
+ */
+export function chargedAmountFrom(formData: FormData): { amount: number | null } | { error: string } {
+  const parsed = positiveAmountOrEmpty.safeParse(String(formData.get("chargedAmount") ?? ""));
+  return parsed.success ? { amount: parsed.data } : { error: parsed.error.issues[0]?.message ?? "Enter an amount greater than 0" };
+}
+
 /**
  * The transaction form's "This money is for an upcoming payment" lines
  * (src/lib/earmarks.ts): `earmarkOffered` says the form showed the section

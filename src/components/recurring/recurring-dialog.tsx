@@ -14,12 +14,13 @@ import {
 } from "@/components/form/selects";
 import { SubscriptionRoomPanel } from "@/components/recurring/subscription-room-panel";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { CURRENCIES, formatMoney } from "@/lib/currency";
 import { formatDate, fromISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { RECURRING_FREQUENCIES, RECURRING_KINDS } from "@/lib/labels";
-import { previewPostingFrom } from "@/lib/recurring";
+import { paidPastOccurrences, previewPostingFrom } from "@/lib/recurring";
 import { LARGE_SUBSCRIPTION_THRESHOLD } from "@/lib/subscription-room";
 import { checkSubscriptionRoomAction, saveRecurringAction } from "@/server/actions/recurring";
 
@@ -141,12 +142,16 @@ export function RecurringDialog({
   const [room, setRoom] = useState<SubscriptionRoom | null>(null);
   const [roomPending, setRoomPending] = useState(false);
   const roomRequest = useRef(0);
+  // D46: a typed date before today counts the dates before today as already
+  // paid unless the user says they are missing from the accounts.
+  const [postPast, setPostPast] = useState(false);
   if (open !== wasOpen) {
     setWasOpen(open);
     if (open) {
       setKind(values.kind ?? "SUBSCRIPTION");
       setRoomInputs(initialRoomInputs());
       setRoom(null);
+      setPostPast(false);
     }
   }
   const updateRoomInputs = (patch: Partial<RoomInputs>) =>
@@ -155,28 +160,30 @@ export function RecurringDialog({
   const { amount, currency, frequency, nextDate } = roomInputs;
   const isSemiMonthly = frequency === "SEMI_MONTHLY";
 
-  // A next date already in the past is saved as typed and posting then owes
-  // every occurrence since, so the date field says how many charges saving
-  // writes. Only for a date the user typed (a new item, or an edit that changed
-  // the date - one left alone is an overdue backlog, not a choice) on an item
-  // that will be active. Advisory: it never changes the save.
+  // A next date already in the past (D46): by default the occurrences before
+  // today count as already paid, as Afford counts them - the item starts at
+  // its first occurrence on or after today - and the note says which. The
+  // switch below is the explicit choice to post them instead, for when they
+  // are not in the ledger; the note then says how many charges saving writes.
+  // Only for a date the user typed (a new item, or an edit that changed the
+  // date - one left alone is an overdue backlog, not a choice) on an item that
+  // will be active.
   const typedDate = fromISODate(nextDate);
   const secondDay = Number(roomInputs.secondAnchorDay);
   const remainingTyped = Number(roomInputs.remaining);
   const dateTyped = !editing || nextDate !== values.nextDate;
-  const pastPreview =
+  const typedSchedule =
     open && dateTyped && values.active !== false && typedDate !== null && (!isSemiMonthly || Number.isInteger(secondDay))
-      ? previewPostingFrom(
-          {
-            nextDate: typedDate,
-            frequency: frequency as RecurringFrequency,
-            anchorDay: typedDate.getUTCDate(),
-            secondAnchorDay: isSemiMonthly ? secondDay : null,
-            remainingOccurrences: Number.isInteger(remainingTyped) && remainingTyped >= 1 ? remainingTyped : null,
-          },
-          today,
-        )
+      ? {
+          nextDate: typedDate,
+          frequency: frequency as RecurringFrequency,
+          anchorDay: typedDate.getUTCDate(),
+          secondAnchorDay: isSemiMonthly ? secondDay : null,
+          remainingOccurrences: Number.isInteger(remainingTyped) && remainingTyped >= 1 ? remainingTyped : null,
+        }
       : null;
+  const pastPreview = typedSchedule ? previewPostingFrom(typedSchedule, today) : null;
+  const pastPaid = typedSchedule && pastPreview ? paidPastOccurrences(typedSchedule, today) : null;
   // Only a subscription with an amount is checked; a contribution never is
   // (its funding is planned per account in the payday check-in's Step 3),
   // and neither is a SEMI_MONTHLY item - the room check's own occurrence
@@ -309,23 +316,7 @@ export function RecurringDialog({
         <Field
           label={t.nextDue}
           htmlFor="recurring-next"
-          hint={
-            pastPreview ? (
-              <>
-                {t.nextDueHint}
-                <span className="mt-1 block" role="status">
-                  {t.pastDateNote(
-                    pastPreview.count,
-                    formatDate(pastPreview.first),
-                    formatDate(pastPreview.last),
-                    pastPreview.capped,
-                  )}
-                </span>
-              </>
-            ) : (
-              t.nextDueHint
-            )
-          }
+          hint={t.nextDueHint}
         >
           <Input
             id="recurring-next"
@@ -356,6 +347,35 @@ export function RecurringDialog({
           />
         </Field>
       </div>
+
+      {pastPreview && pastPaid ? (
+        <div className="grid gap-1.5" data-past-date>
+          <input type="hidden" name="pastOccurrences" value={postPast ? "post" : "paid"} />
+          <p className="text-xs text-muted-foreground" role="status">
+            {postPast
+              ? t.pastDateNote(
+                  pastPreview.count,
+                  formatDate(pastPreview.first),
+                  formatDate(pastPreview.last),
+                  pastPreview.capped,
+                )
+              : pastPaid.allPaid
+                ? t.allPaymentsPast
+                : t.pastDatePaidNote(
+                    pastPaid.paidCount,
+                    formatDate(pastPaid.first),
+                    formatDate(pastPaid.last),
+                    formatDate(pastPaid.nextDate),
+                    pastPaid.remainingOccurrences,
+                  )}
+          </p>
+          <label className="flex items-center gap-2.5 text-sm">
+            <Switch checked={postPast} onCheckedChange={setPostPast} />
+            {t.postPastLabel}
+          </label>
+          <p className="text-xs text-muted-foreground">{t.postPastHint}</p>
+        </div>
+      ) : null}
 
       {isSemiMonthly ? (
         <Field

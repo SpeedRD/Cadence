@@ -143,7 +143,14 @@ export function TransactionDialog({
   // currency, tracked only to label the share input with its code. Both
   // reset with `type` below.
   const [isShared, setIsShared] = useState(values.yourShare != null);
-  const [currency, setCurrency] = useState(values.currency ?? CURRENCIES[0]);
+  // A new entry's currency follows its account's until the user picks one
+  // (K7: most entries are in the account's own currency); an edit keeps the
+  // currency it was entered in.
+  const [chosenCurrency, setChosenCurrency] = useState(values.currency ?? CURRENCIES[0]);
+  const [currencyTouched, setCurrencyTouched] = useState(false);
+  // "Amount charged in <account currency>", as typed: the bank's own figure
+  // for an entry in another currency (chargedInAccount).
+  const [chargedText, setChargedText] = useState("");
   // The amount as typed, for the conversion preview under it.
   const [amountText, setAmountText] = useState(values.amount === undefined ? "" : String(values.amount));
   // The one-off income switch, carried as a hidden field like the share
@@ -178,6 +185,8 @@ export function TransactionDialog({
   const [earmarkOn, setEarmarkOn] = useState((values.earmarks ?? []).length > 0);
   const [earmarkLines, setEarmarkLines] = useState<EarmarkLine[]>(() => linesFrom(values.earmarks));
   const accountCurrency = accounts.find((account) => account.id === accountId)?.currency;
+  const currency = editing || currencyTouched ? chosenCurrency : (accountCurrency ?? chosenCurrency);
+  const offersCharged = Boolean(accountCurrency) && currency !== accountCurrency;
   const accountOptions = earmarkOptions.filter(
     (option) =>
       option.accountId === accountId &&
@@ -246,7 +255,9 @@ export function TransactionDialog({
       setIsShared(values.yourShare != null);
       setIsOneOffIncome(values.isOneOffIncome ?? false);
       setReimbursesId(values.reimbursesTransactionId ?? "none");
-      setCurrency(values.currency ?? CURRENCIES[0]);
+      setChosenCurrency(values.currency ?? CURRENCIES[0]);
+      setCurrencyTouched(false);
+      setChargedText("");
       setAmountText(values.amount === undefined ? "" : String(values.amount));
       setDirection(values.transferDirection ?? "OUT");
       setEarmarkOn((values.earmarks ?? []).length > 0);
@@ -368,8 +379,11 @@ export function TransactionDialog({
           <CurrencySelect
             id="transaction-currency"
             name="currency"
-            defaultValue={values.currency}
-            onValueChange={setCurrency}
+            value={currency}
+            onValueChange={(next) => {
+              setChosenCurrency(next);
+              setCurrencyTouched(true);
+            }}
           />
         </Field>
       </div>
@@ -377,12 +391,38 @@ export function TransactionDialog({
       {/* In another currency than the account's, the amount is stored in the
           account's currency, converted once now (K7): what it will be saved
           as, and at which rate, before it is. */}
+      {offersCharged && accountCurrency ? (
+        // The bank's own figure for it, when the user has the statement: saved
+        // as typed, with the amount above kept as what it was entered as.
+        // Editing a row already converted offers it too, so the real figure can
+        // replace the converted one without losing the original.
+        <Field
+          label={type === "EXPENSE" ? t.chargedAmountLabel(accountCurrency) : t.accountAmountLabel(accountCurrency)}
+          htmlFor="transaction-charged"
+          hint={t.chargedAmountHint}
+        >
+          <Input
+            id="transaction-charged"
+            name="chargedAmount"
+            inputMode="decimal"
+            className="font-mono"
+            placeholder={
+              values.stored && values.stored.accountCurrency === accountCurrency && values.stored.row.currency === accountCurrency
+                ? String(values.stored.row.amount)
+                : "0.00"
+            }
+            value={chargedText}
+            onChange={(event) => setChargedText(event.target.value)}
+          />
+        </Field>
+      ) : null}
       <ConversionPreview
         amount={amountText}
         currency={currency}
-        accountCurrency={accounts.find((account) => account.id === accountId)?.currency}
+        accountCurrency={accountCurrency}
         rates={rates}
         previous={values.stored}
+        charged={offersCharged ? chargedText : undefined}
         locale={locale}
       />
 

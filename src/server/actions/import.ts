@@ -42,6 +42,8 @@ const importPayloadSchema = z.object({
           importAnyway: z.boolean().optional().default(false),
           /** The user said this row is the posted charge or recorded paycheck it matches (see findCsvPostedDuplicates): it is not written. */
           postedCharge: z.boolean().optional().default(false),
+          /** "It's that payment": the upcoming payment's occurrence key this row paid (see importCsvTransactions). */
+          settlesOccurrence: z.string().max(200).nullable().optional().default(null),
           /** The user reviewed this row as unusually large and marked it a one-off (see src/lib/extraordinary.ts), or the file's One-off column says so. */
           isExtraordinary: z.boolean().optional().default(false),
           /** The file's One-off income column, for an INCOME row (see Transaction.isOneOffIncome). */
@@ -50,6 +52,10 @@ const importPayloadSchema = z.object({
           yourShare: z.number().positive("Enter an amount greater than 0").nullable().optional().default(null),
           /** The file's Reimburses column, for an INCOME row: the shared expense it pays back, by reference. */
           reimburses: z.string().max(700).nullable().optional().default(null),
+        })
+        .refine((row) => !(row.settlesOccurrence && (row.postedCharge || row.type !== "EXPENSE")), {
+          message: "Only a spending row that is imported can be that payment",
+          path: ["settlesOccurrence"],
         })
         .refine((row) => !(row.importAnyway && row.postedCharge), {
           message: "A row is either the posted charge or a different one",
@@ -283,6 +289,7 @@ export async function importTransactionsAction(
   const message = [
     t.imported(result.count),
     result.matchedPosted ? t.postedChargesKept(result.matchedPosted, result.updatedPosted) : null,
+    result.settledUpcoming ? t.upcomingPaymentsKept(result.settledUpcoming) : null,
     result.unresolvedReimbursements ? t.reimbursementsUnresolved(result.unresolvedReimbursements) : null,
   ]
     .filter(Boolean)

@@ -8,12 +8,21 @@
  * money (findPostedDuplicates). Such a row is never approved on its own: the
  * user says whether it is the posted charge or a different one, and the
  * review page shows the match before they are asked (stagedPostedMatches).
+ * One that may be an upcoming payment in another currency, which posting has
+ * not written yet, is asked the same way: "It's that payment" approves it
+ * and records it as having paid that occurrence (recordUpcomingPayment).
  */
 import { Prisma } from "@/generated/prisma/client";
 import { inAccountCurrency } from "@/lib/account-money";
 import { prisma } from "@/lib/prisma";
 
-import { applyPostedMatch, lookUpPostedDuplicates, type PostedLookup, type PostedMatch } from "@/lib/data/posted-duplicates";
+import {
+  applyPostedMatch,
+  lookUpPostedDuplicates,
+  recordUpcomingPayment,
+  type PostedLookup,
+  type PostedMatch,
+} from "@/lib/data/posted-duplicates";
 
 import type { RateTable } from "@/lib/currency";
 import type { StagedRow } from "@/lib/data/staged";
@@ -28,14 +37,17 @@ export interface StagedApprovalInput {
   categoryId: string | null;
   /**
    * The user's answer to a posted match: "posted" - it is the posted charge,
-   * write nothing new - or "different" - approve it as its own expense. Null
-   * when no match was shown.
+   * write nothing new - or "different" - approve it as its own expense. For
+   * a match with an upcoming payment in another currency, "upcoming" - it is
+   * that payment: approve it and record it as having paid that occurrence.
+   * Null when no match was shown.
    */
-  resolution: "posted" | "different" | null;
+  resolution: "posted" | "different" | "upcoming" | null;
 }
 
 export type StagedApprovalResult =
   | { ok: true; outcome: "approved" }
+  | { ok: true; outcome: "kept_upcoming"; match: PostedMatch; itemName: string }
   | { ok: true; outcome: "kept_posted"; match: PostedMatch; updated: boolean }
   | { ok: false; reason: "not_found" | "already_reviewed" | "account_missing" | "account_not_active" | "exists" | "match_gone" | "check_failed" }
   | { ok: false; reason: "needs_choice"; match: PostedMatch };
@@ -90,8 +102,10 @@ export async function approveStagedTransaction(
   // The receipt's amount as the account will store it: converted once, now,
   // when the receipt is in another currency, with the receipt's own figure kept.
   const incoming = incomingFor(input, staged.id, account.currency, rates);
-  const found = await lookUpPostedDuplicates([incoming], rates, options);
-  if (!found && input.resolution === "posted") return { ok: false, reason: "check_failed" };
+  // A receipt may also be an upcoming payment in another currency that
+  // posting has not written yet (findPostedDuplicates' `upcoming`).
+  const found = await lookUpPostedDuplicates([incoming], rates, { ...options, upcoming: true });
+  if (!found && (input.resolution === "posted" || input.resolution === "upcoming")) return { ok: false, reason: "check_failed" };
   const match = found?.get(staged.id) ?? null;
   const reviewed = {
     date: input.date,
@@ -105,7 +119,7 @@ export async function approveStagedTransaction(
   };
 
   if (input.resolution === "posted") {
-    if (!match) return { ok: false, reason: "match_gone" };
+    if (!match || match.kind === "upcoming") return { ok: false, reason: "match_gone" };
     const updated = await prisma.$transaction(async (tx) => {
       const changed = await applyPostedMatch(tx, match);
       await tx.stagedTransaction.update({ where: { id: staged.id }, data: reviewed });
@@ -116,10 +130,13 @@ export async function approveStagedTransaction(
   if (match && !match.possible && input.resolution !== "different") {
     return { ok: false, reason: "needs_choice", match };
   }
+  const upcoming = input.resolution === "upcoming" ? match : null;
+  if (input.resolution === "upcoming" && (!upcoming || upcoming.kind !== "upcoming")) return { ok: false, reason: "match_gone" };
 
+  let itemName: string | null = null;
   try {
-    await prisma.$transaction([
-      prisma.transaction.create({
+    await prisma.$transaction(async (tx) => {
+      const created = await tx.transaction.create({
         data: {
           date: input.date,
           amount: incoming.amount,
@@ -134,17 +151,29 @@ export async function approveStagedTransaction(
           source: staged.source,
           externalId: staged.externalId,
         },
-      }),
-      prisma.stagedTransaction.update({ where: { id: staged.id }, data: reviewed }),
-    ]);
+      });
+      // "It's that payment": recorded with the row, in the same database
+      // transaction, or neither is written.
+      if (upcoming) {
+        const recorded = await recordUpcomingPayment(tx, created.id, upcoming.posted.id);
+        if (recorded === "match_gone") throw new UpcomingPaymentGone();
+        itemName = recorded.itemName;
+      }
+      await tx.stagedTransaction.update({ where: { id: staged.id }, data: reviewed });
+    });
   } catch (error) {
+    if (error instanceof UpcomingPaymentGone) return { ok: false, reason: "match_gone" };
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return { ok: false, reason: "exists" };
     }
     throw error;
   }
+  if (upcoming && itemName !== null) return { ok: true, outcome: "kept_upcoming", match: upcoming, itemName };
   return { ok: true, outcome: "approved" };
 }
+
+/** Thrown inside the approval's transaction to roll it back when the upcoming payment it answers is gone. */
+class UpcomingPaymentGone extends Error {}
 
 /**
  * For the review page: each pending row's posted match on every account it
@@ -177,6 +206,7 @@ export async function stagedPostedMatches(
         return accountCurrency ? [incomingFor({ ...values, accountId }, accountId, accountCurrency, rates)] : [];
       }),
       rates,
+      { upcoming: true },
     );
     if (found && found.size > 0) result[row.id] = Object.fromEntries(found);
   }

@@ -18,7 +18,7 @@ import {
 } from "@/lib/shared-expense";
 
 import { findCsvDuplicates, findCsvPostedDuplicates } from "@/lib/data/import-duplicates";
-import { applyPostedMatch, type PostedLookup } from "@/lib/data/posted-duplicates";
+import { applyPostedMatch, recordUpcomingPayment, type PostedLookup } from "@/lib/data/posted-duplicates";
 
 import type { RateTable } from "@/lib/currency";
 
@@ -38,6 +38,13 @@ export interface CsvImportRow {
    * it; the posted row takes its amount and currency where they differ.
    */
   postedCharge?: boolean;
+  /**
+   * "It's that payment": the occurrence key of an upcoming payment in
+   * another currency this row matched (findCsvPostedDuplicates, kind
+   * "upcoming"). The row is imported as usual and recorded as having paid
+   * that occurrence (recordUpcomingPayment), so posting never charges it.
+   */
+  settlesOccurrence?: string | null;
   /** The user's own verdict - the review step's, or the file's One-off column. */
   isExtraordinary: boolean;
   /** INCOME only: the file's One-off income column says yes (Transaction.isOneOffIncome). */
@@ -68,9 +75,14 @@ export type CsvImportResult =
       matchedPosted: number;
       /** Of those, how many changed the posted row's amount or currency. */
       updatedPosted: number;
+      /** Rows imported as an upcoming payment ("It's that payment"), which posting will not charge again; absent when none. */
+      settledUpcoming?: number;
     }
   | { ok: false; reason: "account_missing" | "account_not_active" | "invalid_date" | "collision" | "posted_match_changed" }
   | { ok: false; reason: "duplicates_need_review"; count: number };
+
+/** Thrown inside the import's transaction to roll it back when an "It's that payment" answer no longer holds. */
+class UpcomingPaymentGone extends Error {}
 
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
@@ -88,7 +100,10 @@ function isUniqueViolation(error: unknown): boolean {
  * (findCsvPostedDuplicates, with the same rates the review step used): it
  * needs the user's answer, "a different charge" (importAnyway) or "the posted
  * charge" (postedCharge), except for a possible match (planPostedDuplicates),
- * which is only a warning and imports unless the user says otherwise. A posted-charge
+ * which is only a warning and imports unless the user says otherwise. A row
+ * matching an upcoming payment in another currency (always possible) imports
+ * either way; "It's that payment" (settlesOccurrence) also records it as
+ * having paid that occurrence, in the same database transaction. A posted-charge
  * row is not written; the posted row takes its amount and currency, in the
  * same database transaction as the rest. A posted-charge answer the ledger no
  * longer supports refuses the whole import rather than guessing. The posted
@@ -132,6 +147,21 @@ export async function importCsvTransactions(
     ...options,
   });
   if (posted && input.rows.some((row, index) => row.postedCharge && !posted.has(index))) {
+    return { ok: false, reason: "posted_match_changed" };
+  }
+  // "It's that payment" must still name the upcoming payment the row matches;
+  // with the check failed open the answer stands, and the write below checks
+  // the occurrence is still ahead of posting.
+  const settles = input.rows.flatMap((row, index) => (row.settlesOccurrence ? [{ index, key: row.settlesOccurrence }] : []));
+  if (
+    settles.some(({ index, key }) => {
+      const row = input.rows[index];
+      if (row.type !== "EXPENSE" || row.postedCharge) return true;
+      if (!posted) return false;
+      const match = posted.get(index);
+      return !match || match.kind !== "upcoming" || match.posted.id !== key;
+    })
+  ) {
     return { ok: false, reason: "posted_match_changed" };
   }
   const unreviewed = input.rows.filter((row, index) => {
@@ -231,6 +261,20 @@ export async function importCsvTransactions(
         if (await applyPostedMatch(tx, match)) updatedPosted += 1;
       }
       const count = (await tx.transaction.createMany({ data: data.map(({ rowIndex: _rowIndex, ...row }) => row) })).count;
+      if (settles.length > 0) {
+        const externalIdByRow = new Map(data.map((row) => [row.rowIndex, row.externalId]));
+        const written = await tx.transaction.findMany({
+          where: { source: "CSV", externalId: { in: settles.map(({ index }) => externalIdByRow.get(index) as string) } },
+          select: { id: true, externalId: true },
+        });
+        const idByExternalId = new Map(written.map((row) => [row.externalId as string, row.id]));
+        for (const { index, key } of settles) {
+          const id = idByExternalId.get(externalIdByRow.get(index) as string);
+          // A payment posted or settled since the review: the whole import
+          // is refused rather than half-recorded.
+          if (!id || (await recordUpcomingPayment(tx, id, key)) === "match_gone") throw new UpcomingPaymentGone();
+        }
+      }
       if (references.length === 0) return { count, unresolved: 0, updatedPosted };
 
       const parsed = references.filter(
@@ -315,11 +359,13 @@ export async function importCsvTransactions(
       unresolvedReimbursements: outcome.unresolved,
       matchedPosted: keptAsPosted,
       updatedPosted: outcome.updatedPosted,
+      ...(settles.length > 0 ? { settledUpcoming: settles.length } : {}),
     };
   } catch (error) {
     // Only another import of the same rows landing in between can collide;
     // the user re-runs the check rather than getting half a statement.
     if (isUniqueViolation(error)) return { ok: false, reason: "collision" };
+    if (error instanceof UpcomingPaymentGone) return { ok: false, reason: "posted_match_changed" };
     throw error;
   }
 }

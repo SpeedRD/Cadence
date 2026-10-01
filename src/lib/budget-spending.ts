@@ -78,7 +78,7 @@ export function isContributionTwin(row: Pick<SpendingRow, "source" | "externalId
 /** The row is filed under a category the check-in never budgets: a subscription or savings one. */
 export function inUnbudgetedCategory(
   row: Pick<SpendingRow, "categoryId">,
-  categoryById: ReadonlyMap<string, SpendingCategory>,
+  categoryById: ReadonlyMap<string, Pick<SpendingCategory, "isSubscriptionDefault" | "isSavingsDefault">>,
 ): boolean {
   const category = row.categoryId === null ? undefined : categoryById.get(row.categoryId);
   return Boolean(category && (category.isSubscriptionDefault || category.isSavingsDefault));

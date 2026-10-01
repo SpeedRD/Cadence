@@ -22,6 +22,7 @@ import {
   transactionEditBlock,
 } from "@/lib/transactions";
 import {
+  chargedAmountFrom,
   earmarkLinesFrom,
   firstError,
   formObject,
@@ -56,6 +57,10 @@ export async function saveTransactionAction(
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const { id, ...values } = parsed.data;
+  // "Amount charged in <account currency>" (chargedInAccount): the bank's own
+  // figure for an entry in another currency, stored as typed.
+  const charged = chargedAmountFrom(formData);
+  if ("error" in charged) return fail(localizeValidationMessage(charged.error, locale));
   // "This money is for an upcoming payment" (src/lib/earmarks.ts): checked
   // against the deposit as it will be stored before anything is written, and
   // saved with it.
@@ -148,10 +153,12 @@ export async function saveTransactionAction(
     // Stored in the account's currency (K7): the same money re-saved keeps
     // its stored conversion, and a corrected amount keeps the stored rate.
     const previousAccount = await prisma.account.findUnique({ where: { id: existing.accountId }, select: { currency: true } });
-    const stored = await storedTransactionValues(values, async () => (await getAppContext()).rates, {
-      row: previousRow,
-      accountCurrency: previousAccount?.currency ?? existing.currency,
-    });
+    const stored = await storedTransactionValues(
+      values,
+      async () => (await getAppContext()).rates,
+      { row: previousRow, accountCurrency: previousAccount?.currency ?? existing.currency },
+      charged.amount,
+    );
     const deposit = {
       id,
       accountId: values.accountId,
@@ -176,7 +183,7 @@ export async function saveTransactionAction(
   } else {
     const requests = earmarks.offered ? earmarks.requests : [];
     if (requests.length > 0) {
-      const inAccount = await storedTransactionValues(values, async () => (await getAppContext()).rates);
+      const inAccount = await storedTransactionValues(values, async () => (await getAppContext()).rates, null, charged.amount);
       const check = await checkEarmarks(
         { id: null, accountId: values.accountId, amount: inAccount.amount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection },
         requests,
@@ -185,7 +192,7 @@ export async function saveTransactionAction(
       if (!check.ok) return fail(earmarkMessage(check.issue));
     }
     // The row is written whatever the hints say; see createManualTransaction.
-    const created = await createManualTransaction(values, { getContext: getAppContext });
+    const created = await createManualTransaction(values, { getContext: getAppContext, chargedAmount: charged.amount });
     if (requests.length > 0) {
       const saved = await saveEarmarks(
         { id: created.id, accountId: values.accountId, amount: created.storedAmount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection },

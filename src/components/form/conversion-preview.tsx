@@ -1,6 +1,6 @@
 "use client";
 
-import { rateLine, toAccountMoney, type MoneyRow } from "@/lib/account-money";
+import { chargedInAccount, rateLine, toAccountMoney, type MoneyRow } from "@/lib/account-money";
 import { formatMoney, type RateTable } from "@/lib/currency";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { parseAmountInput } from "@/lib/money";
@@ -11,7 +11,8 @@ import { parseAmountInput } from "@/lib/money";
  * account's currency and the rate, computed by the same function the server
  * stores it with. Nothing when the currencies agree or the amount does not
  * parse. `previous` is the row being edited, as stored: re-entering it keeps
- * its stored rate, and the line says so.
+ * its stored rate, and the line says so. With the bank's own figure typed in
+ * `charged`, that is what is stored, at the rate it implies.
  */
 export function ConversionPreview({
   amount,
@@ -19,10 +20,13 @@ export function ConversionPreview({
   accountCurrency,
   rates,
   previous,
+  charged,
   locale,
 }: {
   /** The amount field's text, as typed. */
   amount: string;
+  /** The "Amount charged in <account currency>" field's text, when the form has one: the bank's figure, stored as typed. */
+  charged?: string;
   currency: string;
   accountCurrency: string | undefined;
   /** The request's rate table (RateTable.rates). */
@@ -35,6 +39,16 @@ export function ConversionPreview({
   if (!parsed.ok || parsed.amount <= 0) return null;
   const t = getDictionary(locale).transactions;
   const table: RateTable = { rates, fetchedAt: null, stale: false, source: "open-er-api", asOf: null };
+  const chargedAmount = charged ? parseAmountInput(charged) : null;
+  if (chargedAmount && chargedAmount.ok && chargedAmount.amount > 0) {
+    const fixed = chargedInAccount({ amount: parsed.amount, currency }, accountCurrency, chargedAmount.amount);
+    if (fixed.rate === null) return null;
+    return (
+      <p className="text-xs text-muted-foreground" aria-live="polite" data-conversion-preview>
+        {t.savedAsCharged(formatMoney(fixed.amount, fixed.currency), rateLine(currency, accountCurrency, fixed.rate))}
+      </p>
+    );
+  }
   let stored;
   try {
     stored = toAccountMoney({ amount: parsed.amount, currency }, accountCurrency, table, previous);

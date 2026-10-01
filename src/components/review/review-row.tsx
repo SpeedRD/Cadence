@@ -43,12 +43,13 @@ function StatusBadge({ status, t }: { status: string; t: ReviewDictionary }) {
 /**
  * Approve and reject for one staged row, with the account and category the
  * reviewer picked. A row matching a posted charge is approved with the
- * reviewer's answer: "posted" (it is that charge) or "different".
+ * reviewer's answer: "posted" (it is that charge) or "different" - or, for
+ * an upcoming payment in another currency, "upcoming" (it is that payment).
  */
 function useReviewActions(row: StagedRow, t: ReviewDictionary, accountId: string, categoryId: string) {
   const [pending, startTransition] = useTransition();
 
-  const approve = (resolution?: "posted" | "different") => {
+  const approve = (resolution?: "posted" | "different" | "upcoming") => {
     if (!accountId) {
       toast.error(t.pickAccountFirst);
       return;
@@ -247,9 +248,9 @@ export function ReviewRow({
             </Button>
             {match ? (
               <>
-                <Button size="sm" disabled={pending} onClick={() => approve("posted")}>
+                <Button size="sm" disabled={pending} onClick={() => approve(match.kind === "upcoming" ? "upcoming" : "posted")}>
                   {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
-                  {tx.isPostedCharge}
+                  {match.kind === "upcoming" ? tx.isUpcomingPayment : tx.isPostedCharge}
                 </Button>
                 <Button variant="outline" size="sm" disabled={pending} onClick={() => approve("different")}>
                   {tx.isDifferentCharge}
@@ -382,9 +383,9 @@ export function ReviewCard({
           </div>
           {match ? (
             <div className="grid gap-2">
-              <Button size="sm" disabled={pending} onClick={() => approve("posted")}>
+              <Button size="sm" disabled={pending} onClick={() => approve(match.kind === "upcoming" ? "upcoming" : "posted")}>
                 {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
-                {tx.isPostedCharge}
+                {match.kind === "upcoming" ? tx.isUpcomingPayment : tx.isPostedCharge}
               </Button>
               <Button variant="outline" size="sm" disabled={pending} onClick={() => approve("different")}>
                 {tx.isDifferentCharge}

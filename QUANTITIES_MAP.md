@@ -520,6 +520,7 @@ database-free function.
 - **Repro (DB):** an undated 10,000 debt with 1,000 contributed on Sep 5, seen Oct 20: Goals page pace **250** per period, done around Apr 30 2028; wizard recommends **9,000**; comparator minimum **0**. One 1,000 contribution on Sep 2: pace 1,000 on Sep 15 and **500** on Sep 16, and the projected end moves from Jan 31 to Jun 30 2027 overnight.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
 - **Status (2026-09-30, K3):** removed. The pace (K3) of an undated goal is its remaining balance at the period's start, asked of the plan period only (the wizard), and never repeated as a per-period figure (Afford, the forecast and the comparator give it none, the planning statement does not judge it). The Goals page's history figure is labelled for what it is, "Average so far" / "Promedio hasta ahora" (was "Pace" / "Ritmo"), and divides by the completed periods since the first contribution: 333.33 on Oct 20 (was 250), and 1,000 on both Sep 15 and Sep 16 (was 500 overnight).
+- **Status (2026-10-01, K9):** divisor moved to the one history window. The average so far divides by `completedPeriodsFrom` (`lib/history-window.ts`), the same count of complete periods every average uses, and reads only contributions dated today or earlier (D42). Repro unchanged from K3: 333.33 on Oct 20, 1,000 on both Sep 15 and Sep 16. Harness: "one history window (K9) ...", D13's divisor.
 
 #### D14. The two goal paces convert currency along different paths
 - **Quantities:** Q33 against Q34 for a goal in another currency.
@@ -646,6 +647,7 @@ database-free function.
 - **Rules:** the suggestion walk starts at the previous same-half period with no has-ended rule (`lib/data/payday.ts:246, 283-289`).
 - **Repro (DB):** planning Oct 1-15 on Sep 3 averages Sep 1-15 (30 spent in two days) as a full period: **255** where the complete periods give 300.
 - **Severity:** Low. **Confidence:** High. **Relates to:** B35.
+- **Status (2026-10-01, K9):** removed. Suggestions walk `comparableHistory(ref, today, "spending")` (`lib/history-window.ts`): it starts at the newest comparable period that has ended - for spending a confirmed check-in does not complete a period, only its end does - and keeps up to six. Repro: planning Oct 1-15 on Sep 3 reads **300** over the five ended periods (was 255); once Sep 1-15 has ended it counts, 255 on Sep 16. Harness: "one history window (K9) ...", D29.
 
 #### D30. The suggestion's divisor counts periods whose only spending was recurring; its numerator leaves them out
 - **Quantities:** Q27.
@@ -672,11 +674,13 @@ database-free function.
 - **Rules:** `countsInIncomeHistory` drops a period that ended before the date (`lib/payday.ts:21-26`); the monthly windows start at the month containing the date (`lib/data/monthly.ts:359`); `averageOfCompletedPeriods` never reads it (`lib/data/reports.ts:109-117`).
 - **Repro (DB):** date Aug 20: Afford's walk for Oct 1-15 keeps only Sep 1-15 (Aug 1-15 dropped); the monthly windows are Aug 1 and Sep 1 (August's first 19 days included), 2 months, so "not enough history"; the Reports per-period average stays **13,000 over 5 periods** with or without the date.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new. See decision 5.2.
+- **Status (2026-10-01, K9, decision 5.2 option B):** removed. One date, renamed "Count history from" / "Contar historial desde", applied by period everywhere: a period counts when it starts on or after the date (`firstPeriodFrom`), and the monthly windows start at the first month that starts on or after that period (`firstMonthFrom`). Afford's walk, the suggestions, the Reports per-period average and the monthly windows all read it. Repro with Aug 20: Afford keeps Sep 1-15 (as before); the monthly windows are **September** only (were Aug and Sep); the Reports average is **13,000 over 2 periods** (was 13,000 over 5, with or without the date). A period the date falls inside is no longer read (it was by Afford and the suggestions: from Jun 10 the suggestion read 232.5 over Sep, Aug, Jul and Jun, now 300 over Jul and Aug). Production ("from" Sep 1): the Reports average reads 23,511.66 over Sep 1-15 and Sep 16-30 (was 21,892.76 over five periods since Jul 16); the Oct 1-15 suggestions and the monthly windows are unchanged.
 
 #### D34. The first, partial period counts as a whole one in Reports and not in the monthly average
 - **Quantities:** Q17's average against Q29.
 - **Repro (DB):** first activity Jun 14 (1,000), then 8,000 a period: Reports average **7,125 over 8 periods** (June 1-15 with two days counted as a period); the monthly average drops June and reads **16,000** over 3 months.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new (B30 fixed the monthly side, B33 the in-progress side).
+- **Status (2026-10-01, K9):** removed. Spending averages skip a partial first period the way the monthly average skips a partial first month: the period of the first activity counts only when the activity starts within its first `FIRST_PERIOD_MAX_START_DAY` (4) days (`firstUsablePeriod`). Repro: Reports reads **8,000 over 7 periods** (was 7,125 over 8); the monthly average still reads 16,000 over 3 months. The B30 day-7 rule for the first month is unchanged.
 
 ### Balances, currency and shared expenses
 
@@ -735,6 +739,7 @@ database-free function.
 - **Repro (DB):** a rent row dated Nov 1 lowers the Oct 15 balance and Step 1 ledger to **30,000**. In trace (a) a contribution dated Oct 1 is in "saved" on Sep 30.
 - **Severity:** Low. **Confidence:** High. **Relates to:** new.
 - **Status (2026-09-30, K8):** removed for balances (chosen: excluded, shown apart). A balance is the ledger as of today; rows dated later are shown apart ("... dated after today, not in this balance") on the Accounts list and the account page, and Step 1 stops at the day before the pay. Repro on Oct 15: 32,000 on the list, the account page and Step 1, with -2,000 shown apart (was 30,000). A goal's "saved" still counts a contribution dated later (not changed here).
+- **Status (2026-10-01):** goal part removed (chosen: excluded, shown apart, as K8 does for balances). A goal's saved, still to go and progress are as of today; contributions dated later are shown apart ("... dated after today, not in this figure") on the Goals list, the goal page and the Dashboard card, and the undated average reads only rows dated today or earlier. Trace (a)'s shape: 1,000 on Sep 20 and 500 dated Oct 1, read on Sep 30: saved **1,000** with 500 apart, still to go 4,000 of 5,000 (was 1,500 and 3,500); on Oct 1 saved is 1,500. Achievement (`achievedAt`) still follows every contribution, as before. Production: no contribution is dated after Oct 1, so nothing changes.
 
 #### D43. The bank's sell rate is used in both directions
 - **Quantities:** Q54 in every conversion.
@@ -759,6 +764,7 @@ database-free function.
 #### D46. A past first payment: Afford treats it as paid, the Recurring form posts it
 - **Repro (DB):** 4 × 3,500 from Sep 10, on Oct 2: Afford would record **3** payments from Oct 10 (1 treated as paid); the same plan entered on the form posts a Sep 10 row and leaves 3.
 - **Severity:** Low. **Confidence:** High (both behaviours are documented). **Relates to:** B17.
+- **Status (2026-10-01):** removed (the user's decision: Afford's rule by default). A first date typed before today in the Recurring form counts the occurrences before today as already paid: the item is saved from its first occurrence on or after today, with a finite plan's payments left less the paid ones (`paidPastOccurrences`, `lib/recurring.ts`; `startAfterPaidOccurrences`, `lib/data/recurring.ts`). The form's past-date notice says which dates count as paid and offers "Post them - they're not in my accounts", which posts them as before; a plan with every payment behind today is refused. Existing items, and edits that leave the date alone, are not changed. Repro: 4 x 3,500 from Sep 10 saved on Oct 2 posts nothing and leaves **3 from Oct 10**, as Afford records it (was a Sep 10 row and 3 left); with the switch on, Sep 10 is posted and 3 are left.
 
 #### D47. Editing a posted installment to the real pesos changes the past, not the future
 - **Repro (DB, trace (c)):** after the edit to 3,350 DOP, Afford, the room check, the monthly pace and the ledger read **3,350** for October while the three remaining payments stay 50 EUR at today's rate (3,333.33, later 3,444.44) everywhere.
@@ -885,6 +891,7 @@ move to it.
 - **Removes:** D29, D33, D34, and D13's divisor.
 - **Risk:** low.
 - **Depends on:** decision 5.2.
+- **Status (2026-10-01):** built. `lib/history-window.ts` (pure: `comparableHistory(ref, today, purpose)`, `historyBoundary`, `firstPeriodFrom`, `firstUsablePeriod`, `firstMonthFrom`, `completedHistoryPeriods`, `completedPeriodsFrom`) and `lib/data/history-window.ts` (`getFirstActivityDate`, `loadHistoryBounds`). Afford's `comparableHistory` is its income purpose. Removes D29, D33, D34 and moves D13's divisor onto it.
 
 ### Order of changes (grouped by the code they touch)
 

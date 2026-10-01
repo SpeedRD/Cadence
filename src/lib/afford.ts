@@ -281,7 +281,7 @@ export interface PeriodProjection {
   goalPlans: ProjectedGoalPlan[];
   /**
    * How many comparable periods were looked at - up to HISTORY_PERIODS, fewer
-   * when Settings' "count income history from" date drops some of them (see
+   * when Settings' "count history from" date drops some of them (see
    * comparableHistory in src/lib/data/afford.ts). Not the divisor
    * (`flexible.incomePeriods` is): the results page reads it only to say how
    * far back an account with no income at all was checked.

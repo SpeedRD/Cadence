@@ -13,13 +13,13 @@
  * sends is trusted as a "recommended" figure.
  */
 import { getSettings } from "@/lib/auth";
+import { comparableHistory, HISTORY_PERIODS } from "@/lib/history-window";
 import { addDays } from "@/lib/date";
 import { convert, isSameMoney, type RateTable } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import {
   availableForFlexibleCategories,
   commitmentPortions,
-  countsInIncomeHistory,
   draftAccountBuffers,
   planAccountBuffers,
   planGoalFunding,
@@ -51,7 +51,6 @@ import {
   periodKey,
   previousComparablePeriod,
   previousPeriod,
-  type PeriodInfo,
   type PeriodRef,
 } from "@/lib/period";
 import { carryoverIsProvisional, PROVISIONAL_CARRYOVER_BASIS } from "@/lib/flexible-room";
@@ -65,6 +64,7 @@ import { getAccountBalances, ledgerAt } from "@/lib/data/accounts";
 import { loadPayLanded } from "@/lib/data/period-income";
 import { goalPeriodPlans, loadGoalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
 import { loadBudgetSpent } from "@/lib/data/budget-spending";
+import { loadHistoryBounds } from "@/lib/data/history-window";
 import { periodLeftover } from "@/lib/data/flexible-room";
 import { getPeriodSummary } from "@/lib/data/period-summary";
 import { listGoals } from "@/lib/data/goals";
@@ -338,11 +338,10 @@ export function planPeriodRef(context: AppContext): PeriodRef {
 }
 
 /**
- * How many comparable (same-half) periods the planner averages over. Shared
- * with the Afford calculator (src/lib/data/afford.ts), which projects a
- * future period's income and commitments with this same walk.
+ * How many comparable (same-half) periods the planner averages over - one
+ * history window for every average (K9, src/lib/history-window.ts).
  */
-export const HISTORY_PERIODS = 6;
+export { HISTORY_PERIODS };
 
 /** Exported so Task 7's server action can recompute the exact same suggestions before persisting - never trusting a client-sent "recommended" figure. */
 export async function getCategorySuggestions(
@@ -385,21 +384,16 @@ export async function getCategorySuggestions(
   // pulled the suggestion down towards nothing.
   const historicalPeriodCount = new Map<string, number>();
   if (remaining.length > 0) {
-    // HISTORY_PERIODS comparable (same-half) periods, starting at
-    // comparableRef and stepping one full cycle back each time, read in one
-    // query - the dashboard calls this unconditionally on every load. A
-    // period that ended before Settings' "count income history from" date is
-    // dropped here, before anything is fetched - the
-    // same rule Afford's comparableHistory applies - so the per-category
-    // count below runs over the periods that remain, exactly as it already
-    // runs from a category's oldest spending forward.
-    const cursors: PeriodInfo[] = [];
-    let cursor = comparableRef;
-    for (let i = 0; i < HISTORY_PERIODS; i += 1) {
-      const info = periodInfo(cursor);
-      if (countsInIncomeHistory(info, context.incomeHistoryStartDate)) cursors.push(info);
-      cursor = previousComparablePeriod(cursor);
-    }
+    // The one history window for spending (K9, src/lib/history-window.ts):
+    // up to HISTORY_PERIODS comparable (same-half) periods from the newest
+    // one that has ended - a period still running has only some of its
+    // spending, whether or not its plan is confirmed - leaving out a partial
+    // first period of activity and every period that starts before
+    // Settings' "count history from" date. Read in one query - the dashboard
+    // calls this unconditionally on every load. The per-category count below
+    // runs over the periods that remain, as it runs from a category's oldest
+    // spending forward.
+    const cursors = comparableHistory(planRef, context.today, "spending", { bounds: await loadHistoryBounds(context) });
     const spentByPeriod = await loadBudgetSpent(cursors, context);
     // Newest first, so the oldest period with budget spending in a category
     // is the furthest index the average reaches back to.

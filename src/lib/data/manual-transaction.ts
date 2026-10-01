@@ -12,6 +12,7 @@
  * open).
  */
 import {
+  chargedInAccount,
   needsConversion,
   shareInAccountCurrency,
   toAccountMoney,
@@ -49,16 +50,30 @@ export type StoredTransactionValues = Omit<ManualTransactionValues, "currency"> 
  * rate kept. `previous` is the row being edited, as stored, and its account's
  * currency: re-saving it unchanged keeps its stored conversion, and a new
  * amount in the same currency is converted at the rate stored with it.
- * Rates are asked for only when a conversion is needed.
+ * `chargedAmount` is the bank's own figure in the account's currency, when
+ * the form has one: it is stored as typed, with the entered amount kept and
+ * the rate the two imply (chargedInAccount). Rates are asked for only when a
+ * conversion is needed.
  */
 export async function storedTransactionValues(
   values: ManualTransactionValues,
   getRates: () => Promise<RateTable>,
   previous?: { row: MoneyRow & { yourShare: number | null }; accountCurrency: string } | null,
+  chargedAmount: number | null = null,
 ): Promise<StoredTransactionValues> {
   const account = await prisma.account.findUniqueOrThrow({ where: { id: values.accountId }, select: { currency: true } });
-  const table = needsConversion(values.currency, account.currency) ? await getRates() : IDENTITY_RATES;
-  const stored = toAccountMoney({ amount: values.amount, currency: values.currency }, account.currency, table, previous);
+  const entered = { amount: values.amount, currency: values.currency };
+  // The bank's own figure, when the form has one, is the stored amount as
+  // typed; otherwise the entry is converted (or keeps its stored conversion).
+  const stored =
+    chargedAmount != null && needsConversion(values.currency, account.currency)
+      ? chargedInAccount(entered, account.currency, chargedAmount)
+      : toAccountMoney(
+          entered,
+          account.currency,
+          needsConversion(values.currency, account.currency) ? await getRates() : IDENTITY_RATES,
+          previous,
+        );
   return {
     ...values,
     amount: stored.amount,
@@ -92,6 +107,8 @@ export async function createManualTransaction(
     getRates?: () => Promise<RateTable>;
     lookup?: PostedLookup;
     timeoutMs?: number;
+    /** "Amount charged in <account currency>": the bank's own figure for an entry in another currency. */
+    chargedAmount?: number | null;
   },
 ): Promise<ManualTransactionResult> {
   // Measured before the row lands so it is not its own history. The row is
@@ -116,6 +133,8 @@ export async function createManualTransaction(
   const stored = await storedTransactionValues(
     values,
     async () => (context ? context.rates : await (options.getRates ?? getRateTable)()),
+    null,
+    options.chargedAmount ?? null,
   );
   const created = await prisma.transaction.create({ data: { ...stored, source: "MANUAL" } });
 

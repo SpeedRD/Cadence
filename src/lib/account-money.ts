@@ -150,6 +150,24 @@ export function toAccountMoney(
   return inAccountCurrency(entered, accountCurrency, table);
 }
 
+/**
+ * K7 with the bank's own figure: `entered` (in another currency than the
+ * account's) stored as `charged`, what the account really moved, to the cent,
+ * with the entered figure kept and the rate the two imply (charged /
+ * original) - not a rate table's. In the account's own currency there is
+ * nothing to convert and `charged` is not read.
+ */
+export function chargedInAccount(entered: EnteredMoney, accountCurrency: string, charged: number): StoredMoney {
+  if (entered.currency === accountCurrency || entered.amount <= 0) return plain(entered.amount, accountCurrency);
+  return {
+    amount: round2(charged),
+    currency: accountCurrency,
+    originalAmount: round2(entered.amount),
+    originalCurrency: entered.currency,
+    rate: roundRate(round2(charged) / round2(entered.amount)),
+  };
+}
+
 /** Whether storing `entered` on an account in `accountCurrency` needs a rate table at all. */
 export function needsConversion(enteredCurrency: string, accountCurrency: string): boolean {
   return enteredCurrency !== accountCurrency;

@@ -311,6 +311,7 @@ export const en = {
     periodsTo: (n: number, date: string) => `${n} period${n === 1 ? "" : "s"} to ${date}`,
     perPayPeriod: "per pay period",
     perPayPeriodByHand: "per pay period by hand",
+    savedAhead: (amount: string) => `${amount} dated after today, not in this figure`,
     fromRecurring: (amount: string) => `${amount} from recurring contributions`,
     planVersusContributed: (period: string, planned: string, contributed: string) =>
       `${period}: ${planned} planned · ${contributed} contributed`,
@@ -549,6 +550,8 @@ export const en = {
     // A row brought in that the ledger already holds as a row Cadence wrote
     // itself: a posted recurring charge or a check-in's paycheck (see
     // src/lib/data/posted-duplicates.ts).
+    upcomingDuplicatesDescription:
+      "A row may also be a payment in another currency that has not posted yet: it imports either way, and \"It's that payment\" records it as that payment so it is not charged again.",
     postedDuplicatesDescription:
       "Some rows match a charge Cadence already posted from a recurring item, or a paycheck a check-in recorded, on this account. An exact match (the item's name or category, a paycheck, or the same amount within a few days of the posted charge) is skipped as the posted charge unless you say it's a different one. A possible match (in another currency, or the same amount further away with neither the item's name nor its category) imports unless you say it's the posted charge.",
     postedMatchRecurring: (name: string, date: string, amount: string) => `Matches ${name}, posted ${date} for ${amount}`,
@@ -635,6 +638,11 @@ export const en = {
     receivedAmountHint:
       "Leave blank to record the same amount on both sides, converted at today's rate. Fill it in to record exactly what the bank credited.",
     // Amounts stored in the account's currency (src/lib/account-money.ts).
+    savedAsCharged: (amount: string, rate: string) => `Saved in this account as ${amount}, as charged (${rate}).`,
+    /** Shown when the entry's currency is not the account's: the bank's own figure, stored instead of a converted one. */
+    chargedAmountLabel: (currency: string) => `Amount charged in ${currency}`,
+    accountAmountLabel: (currency: string) => `Amount in ${currency}`,
+    chargedAmountHint: "Optional. The figure on your statement; it is saved as typed, with the amount above kept.",
     savedAsTodaysRate: (amount: string, rate: string) => `Saved in this account as ${amount} (${rate}, today's rate).`,
     savedAsKeptRate: (amount: string, rate: string) =>
       `Saved in this account as ${amount} (${rate}, the rate it was saved at).`,
@@ -666,6 +674,9 @@ export const en = {
     upcomingPromptDescription: (entered: string, scheduled: string) =>
       `Your entry of ${entered} is saved. The payment it may be is ${scheduled}. "It's that payment" keeps your entry as the payment, so it isn't posted again on its due date. Closing this keeps both.`,
     isUpcomingPayment: "It's that payment",
+    upcomingPaymentsKept: (count: number) =>
+      `${count === 1 ? "1 row kept as its upcoming payment" : `${count} rows kept as their upcoming payments`} - not posted again`,
+    appliedUpcomingPayment: "Imported as that payment",
     upcomingKept: (name: string) => `Kept as the ${name} payment - it won't be posted again`,
   },
   accounts: {
@@ -814,9 +825,16 @@ export const en = {
     kind: "Kind",
     frequency: "Frequency",
     nextDue: "Next due",
-    nextDueHint: "Every due date up to today is posted automatically.",
+    nextDueHint: "Each due date is posted automatically when it comes. A date you type before today counts the dates before today as already paid, unless you choose to post them.",
     pastDateNote: (count: number, first: string, last: string, capped: boolean) =>
       `Saving posts ${count === 1 ? "1 charge" : `${count} charges`} dated ${count === 1 ? first : `${first} - ${last}`}${capped ? "; the rest follow on later runs" : ""}.`,
+    /** D46: a typed past due date counts the dates before today as already paid (Afford's rule) unless the user chooses to post them. */
+    pastDatePaidNote: (count: number, first: string, last: string, next: string, left: number | null) =>
+      `${count === 1 ? `The payment dated ${first} counts` : `The ${count} payments dated ${first} - ${last} count`} as already paid and won't be posted. The first charge is ${next}${left === null ? "" : `, ${left === 1 ? "1 payment" : `${left} payments`} left`}.`,
+    postPastLabel: "Post them - they're not in my accounts",
+    postPastHint: "Turn this on only if these charges are missing from your accounts; otherwise they would be counted twice.",
+    allPaymentsPast:
+      "Every payment in this plan is dated before today, so they all count as already paid. There is nothing left to record - turn on posting them if they are missing from your accounts.",
     /** Only shown when Frequency is "Twice a month" - the day this item's *other* charge lands on each month. */
     secondDueDay: "Second due day",
     secondDueDayHint:
@@ -1066,6 +1084,8 @@ export const en = {
     targetDate: (date: string) => `Target ${date}`,
     noTargetDate: "No target date",
     percentOf: (pct: number, amount: string) => `${pct}% of ${amount}`,
+    /** Contributions dated after today: not in "saved" until their day (D42). */
+    savedAhead: (amount: string) => `${amount} dated after today, not in this figure`,
     fullyFunded: "Fully funded",
     perPayPeriod: "per pay period",
     perPayPeriodByHand: "per pay period by hand",
@@ -1284,9 +1304,9 @@ export const en = {
     carryoverDefaultLabel: "Include carryover by default",
     carryoverDefaultHint:
       "When on, unspent money from the previous period's budget pre-fills as included carryover in each new check-in.",
-    incomeHistoryStartLabel: "Count income history from",
-    incomeHistoryStartHint:
-      "If your income situation changed - a new job, for example - set this to stop Cadence's averages (Afford's income projection, the payday planner's category suggestions, the monthly spending pace and the monthly averages in Reports) from counting older, no-longer-relevant periods. Leave blank to use your full history as normal.",
+    historyStartLabel: "Count history from",
+    historyStartHint:
+      "If your situation changed - a new job, a move, a new household - set this so Cadence's averages read only what came after it: Afford's income projection, the payday check-in's category suggestions, the Reports average per pay period, and the monthly spending pace and averages. History counts from the first pay period that starts on or after this date, and the monthly figures from the first month that does. Leave blank to use your full history.",
     planningPreferencesSaved: "Planning preferences saved",
     essentialCategoriesTitle: "Essential fixed categories",
     essentialCategoriesDescription:

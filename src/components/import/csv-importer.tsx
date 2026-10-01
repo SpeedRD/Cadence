@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Field } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
 import type { Option } from "@/components/form/selects";
-import { defaultDuplicateDecision, ImportReview } from "@/components/import/import-review";
+import { defaultDuplicateDecision, ImportReview, type DuplicateDecision } from "@/components/import/import-review";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -155,7 +155,7 @@ export function CsvImporter({
   } | null>(null);
   const [duplicateChoices, setDuplicateChoices] = useState<{
     key: string;
-    decisions: Record<number, "import" | "skip">;
+    decisions: Record<number, DuplicateDecision>;
   } | null>(null);
   // Rows unusually large for the category they will land in (by validRows
   // index), found by the server the same way, and the per-row verdict: absent
@@ -434,9 +434,19 @@ export function CsvImporter({
   const skippedDuplicateCount = validRows.length - importIndexes.length;
 
   // Every row that will be imported, resolved as the server will see it.
+  // A row matching an upcoming payment in another currency imports either
+  // way; "It's that payment" also sends that payment's key, so the server
+  // records the row as having paid it.
+  const settledOccurrence = (index: number): string | null => {
+    const hit = duplicateHits[index];
+    return hit?.kind === "posted" && hit.match.kind === "upcoming" && duplicateDecisions[index] === "settle"
+      ? hit.match.posted.id
+      : null;
+  };
   const resolvedRows = importIndexes.map((index) => ({
     ...checkedRows[index],
     importAnyway: duplicateHits[index] !== undefined,
+    settlesOccurrence: settledOccurrence(index),
   }));
   // Every skipped row that matched a posted charge or a recorded paycheck:
   // sent as "the posted charge", so the server writes nothing for it and puts
@@ -444,7 +454,7 @@ export function CsvImporter({
   const postedChargeRows = validRows
     .map((_, index) => index)
     .filter((index) => isSkippedDuplicate(index) && duplicateHits[index]?.kind === "posted")
-    .map((index) => ({ ...checkedRows[index], importAnyway: false, postedCharge: true }));
+    .map((index) => ({ ...checkedRows[index], importAnyway: false, postedCharge: true, settlesOccurrence: null }));
   const postedRewrites = postedChargeRows.filter((row) => {
     const hit = duplicateHits[row.index];
     return hit?.kind === "posted" && hit.match.rewrite !== null;

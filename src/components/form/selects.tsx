@@ -140,15 +140,22 @@ export function CurrencySelect({
   id,
   name,
   defaultValue,
+  value,
   onValueChange,
 }: {
   id?: string;
   name: string;
   defaultValue?: string;
+  /** Controlled: the form decides the currency shown (the transaction form follows its account's until the user picks one). */
+  value?: string;
   onValueChange?: (value: string) => void;
 }) {
   return (
-    <Select name={name} defaultValue={defaultValue ?? CURRENCIES[0]} onValueChange={onValueChange}>
+    <Select
+      name={name}
+      {...(value === undefined ? { defaultValue: defaultValue ?? CURRENCIES[0] } : { value })}
+      onValueChange={onValueChange}
+    >
       <SelectTrigger id={id} className="w-full">
         <SelectValue />
       </SelectTrigger>

@@ -50,9 +50,10 @@ export interface AppContext {
    */
   recurringPostingFailure?: RecurringPostingFailure | null;
   /**
-   * Settings.incomeHistoryStartDate - "count income history from". A
-   * comparable pay period that ended before it is left out of Afford's income
-   * projection and the payday planner's category averages. Optional, like
+   * Settings.incomeHistoryStartDate - "count history from" (the column keeps
+   * its first name). Every average reads only pay periods that start on or
+   * after it, and months that start on or after that first period (K9,
+   * src/lib/history-window.ts). Optional, like
    * recurringPosting, so a context built by hand (scripts) is unbounded; null
    * or absent means no boundary.
    */

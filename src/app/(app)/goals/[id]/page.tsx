@@ -70,7 +70,8 @@ export default async function GoalDetailPage({
 
   const { summary, contributions, contributionTotal, displayContributionTotal } = detail;
   const today = toISODate(context.today);
-  const drifted = Math.abs(contributionTotal - summary.savedAmount) > 0.005;
+  // The cached total holds every contribution; savedAmount leaves out the ones dated after today.
+  const drifted = Math.abs(contributionTotal - (summary.savedAmount + summary.savedAhead)) > 0.005;
   const display = context.displayCurrency;
   const t = getDictionary(context.language).goals;
   const common = getDictionary(context.language).common;
@@ -141,6 +142,11 @@ export default async function GoalDetailPage({
               </span>
             </div>
             <Meter value={summary.progress} max={1} status="accent" size="lg" />
+            {summary.savedAhead > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {t.savedAhead(formatMoney(summary.displaySavedAhead, display))}
+              </p>
+            ) : null}
           </div>
 
           <div className="grid gap-6 sm:grid-cols-3">

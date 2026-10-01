@@ -83,9 +83,9 @@ export function PlanningPreferencesForm({
       <p className="text-xs text-muted-foreground">{t.carryoverDefaultHint}</p>
 
       <Field
-        label={t.incomeHistoryStartLabel}
+        label={t.historyStartLabel}
         htmlFor="income-history-start"
-        hint={t.incomeHistoryStartHint}
+        hint={t.historyStartHint}
       >
         <Input
           id="income-history-start"

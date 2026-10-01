@@ -8,7 +8,6 @@
 import { convert, type RateTable } from "@/lib/currency";
 import { cushionFrom, flexibleRoomFrom, type FlexibleRoom } from "@/lib/flexible-room";
 import { round2 } from "@/lib/money";
-import type { PeriodInfo } from "@/lib/period";
 
 import type {
   PaydayCheckinDraft,
@@ -16,20 +15,6 @@ import type {
   PaydayGoalFundingDraft,
   PaydayReachedGoalDraft,
 } from "@/lib/data/payday";
-
-/**
- * Whether a comparable period is on the counted side of Settings'
- * incomeHistoryStartDate ("count income history from"): it is unless it
- * ended before that date. The one rule both history walks apply - Afford's
- * comparableHistory and the planner's getCategorySuggestions - so a period is
- * never counted by one and dropped by the other. No date is no boundary.
- */
-export function countsInIncomeHistory(
-  period: PeriodInfo,
-  incomeHistoryStartDate: Date | null | undefined,
-): boolean {
-  return !incomeHistoryStartDate || period.end.getTime() >= incomeHistoryStartDate.getTime();
-}
 
 /** max(bufferPercent% of this check-in's income, the configured floor). Never zero unless the floor itself is zero. */
 export function defaultProtectedBuffer(

@@ -10,6 +10,7 @@ import {
   firstError,
   formObject,
   localizeValidationMessage,
+  pastOccurrencesFrom,
   recurringAccountSchema,
   recurringSchema,
   subscriptionRoomSchema,
@@ -20,6 +21,7 @@ import { getAppContext } from "@/lib/data/context";
 import {
   checkRecurringReferences,
   createRecurringItem,
+  startAfterPaidOccurrences,
   markRecurringItemPaidOff,
   semiMonthlyEditCollides,
   setRecurringItemActive,
@@ -46,7 +48,21 @@ export async function saveRecurringAction(
   const parsed = recurringSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
-  const { id, updatedAt, ...values } = parsed.data;
+  const { id, updatedAt, ...typed } = parsed.data;
+  // A due date typed before today (D46): unless the form's choice says to
+  // post them, the occurrences before today were paid already (Afford's
+  // rule) - the item starts at its first occurrence on or after today, with
+  // a finite plan's countdown less the paid ones. Only a date the user typed
+  // on an item that will be active; an item left alone is not changed.
+  // recurringSchema leaves anchorDay undefined exactly when an edit left the
+  // due date alone; a new item always has one.
+  const settled = startAfterPaidOccurrences(
+    typed,
+    { dateTyped: typed.anchorDay !== undefined, pastOccurrences: pastOccurrencesFrom(formData) },
+    today(),
+  );
+  if (!settled.ok) return fail(t.allPaymentsPast);
+  const values = settled.values;
 
   if (id) {
     const problem = await checkRecurringReferences(values);

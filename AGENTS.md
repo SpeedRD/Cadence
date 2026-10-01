@@ -42,11 +42,18 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   (loaded by `loadSettlementPlan()` in `src/lib/data/recurring-settlement.ts`),
   and read by posting and the payday check-in alike. Only posting persists a
   pairing, as a `RecurringSettlement` row - except the user's own answer
-  "It's that payment" (`keepEntryAsUpcoming()` in
+  "It's that payment" for a manual entry, a CSV row or an approved receipt
+  (written only by `recordUpcomingPayment()` in
   `src/lib/data/posted-duplicates.ts`), which records it before the
   occurrence falls due; `loadSettlementPlan()` then treats that occurrence as
   settled by its row. Reuse it rather than matching charges to items a
   second way.
+- Every average over past periods reads them through the one history window,
+  `comparableHistory()` and its helpers in `src/lib/history-window.ts`
+  (QUANTITIES_MAP.md K9): complete periods only, Settings' "Count history
+  from" date applied by period, a partial first period of spending skipped,
+  and the monthly windows derived from the same boundary. Do not walk
+  periods for an average a second way.
 - The reverse question - is a CSV row, a receipt being approved or a manual
   entry the money a RECURRING row or a check-in's paycheck already holds? -
   is `planPostedDuplicates()` in the same file (loaded by

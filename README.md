@@ -280,12 +280,14 @@ covered it ("DOP 5,000.00 covered by ..."). Deleting the deposit removes what it
 covered. A paycheck recorded by a check-in cannot be set aside (it is already
 the plan's income).
 
-A charge typed by hand in the account's currency that may be an upcoming
-payment in another currency - a peso charge for a euro installment not posted
-yet - is put to you as a possible match, as it is after posting. "It's that
-payment" keeps your entry exactly as typed and records it as that payment, so
-posting never charges it again, whatever you later change in the entry's note.
-Deleting the entry undoes it: the payment then posts on its due date.
+A charge in the account's currency that may be an upcoming payment in another
+currency - a peso charge for a euro installment not posted yet - is put to you
+as a possible match, as it is after posting: when you type it by hand, as a row
+of a CSV import (in the possible-duplicates group) and as a receipt in the
+review queue. "It's that payment" keeps the charge exactly as it is and records
+it as that payment, so posting never charges it again, whatever you later change
+in its note; "It's a different charge" brings it in on its own. Deleting the
+charge undoes it: the payment then posts on its due date.
 
 ### Review queue
 
@@ -330,7 +332,11 @@ while it could not post is never charged afterwards: resuming it, restoring or
 assigning its account, giving it a goal, or raising an achieved goal's target moves
 its next date to the first occurrence on or after today (a payments-left count is
 left as it was), whereas an item merely overdue because a run failed posts its whole
-backlog. A charge you already
+backlog. A due date you type that is already behind today counts the dates before
+today as already paid, as Afford does: the item starts at its first occurrence on or
+after today, with a payments-left count less those, and a plan with every payment
+behind today is not saved. The form says which dates count as paid and offers "Post
+them - they're not in my accounts" for when they are missing from your accounts. A charge you already
 entered yourself (by hand, from a CSV or an approved receipt, on any account, up to
 five days before a due date early in a pay period) is taken as that occurrence paid
 and nothing is posted for it. Each such charge stands for one occurrence of one item,
@@ -416,7 +422,7 @@ the same period are checked together. Installments dated before today count as a
 paid: the schedule marks them, the checks leave them out, and "I bought this" records
 only the payments still ahead (a plan with none ahead is refused). Because those periods haven't happened yet,
 income is projected from the average of your comparable periods (same half of the
-month) — up to the last six, fewer if a **Count income history from** date (Settings)
+month) — up to the last six, fewer if a **Count history from** date (Settings)
 has trimmed some of them off. Every account divides by the same count, from the first
 of those periods with income in any account, so pay that moved from one account to
 another is not projected in both; the results say how many periods back the figure
@@ -458,6 +464,9 @@ in that account's currency alongside the contribution (the pair is deleted toget
 too). Auto-posted contributions from recurring items land here as well; their amount
 can be corrected in place, which updates the ledger row they wrote, and removing one
 from either side removes both. A goal that reaches its target is marked as achieved.
+A contribution dated after today is not in the goal's saved figure until its day:
+the Goals page, the goal and the Dashboard card show it apart, as an account's
+balance shows rows dated later.
 Once the period's check-in is confirmed, the goal page shows what it planned for the
 goal beside the live roadmap figure and says by how much the plan is behind; a dated
 goal in that state is also an advisory item in the Inbox. Deleting a goal removes its
@@ -485,24 +494,25 @@ Current-period spending by category, a six-pay-period trend, and a calendar-mont
 view: average monthly lifestyle spending by category, the last completed months, and
 the averages for committed spending, savings and investing, and total cash outflow.
 The pay-period trend's average is over completed periods only since your first
-activity: the period in progress stays in the chart, marked "so far", and is left
-out of the mean. The calendar-month average starts at your first full month: the
+full period: the period in progress stays in the chart, marked "so far", and is
+left out of the mean, and so is the period of your first recorded activity unless
+that activity started in its first four days. The calendar-month average starts at your first full month: the
 month of your first recorded activity counts only when that activity started on or
 before its 7th, and an item's scheduled amount fills a month only from the month of
-its first occurrence. And - like Afford's and the payday planner's own pay-period
-averages - an optional **Count income history from** date (Settings) bounds it a
-second way: a completed month ending before that date is left out too, whichever
+its first occurrence. And - like every pay-period average - an optional **Count
+history from** date (Settings) bounds it a second way: the months start at the first
+one that starts on or after the first pay period the date lets count, whichever
 boundary is later. A boundary set recently enough to leave fewer than three completed
 months shows as not enough history yet, the same honest result a brand-new account
 gets, rather than an average forced over too little.
 
 ### Settings
 
-![Settings page: display currency, cached exchange rates, planning preferences (buffer percentage and floor, and a Count income history from date), essential fixed categories, goal recalculation, categorization, email connections, and session](screenshots/settings.png)
+![Settings page: display currency, cached exchange rates, planning preferences (buffer percentage and floor, and a Count history from date), essential fixed categories, goal recalculation, categorization, email connections, and session](screenshots/settings.png)
 
 Display currency; the cached exchange-rate table; how the payday planner sizes the
 protected buffer (percentage of income and a fixed minimum), whether carryover is
-included by default, and an optional **Count income history from** date; category
+included by default, and an optional **Count history from** date; category
 management; changing the PIN; which categories count as essential fixed spending;
 goal-total recalculation; categorizing older imports; a full data export;
 Gmail/Outlook connections; and locking the app.
@@ -516,14 +526,16 @@ and the rest), so it re-imports through the importer's defaults plus its Account
 Category column mappings; the other six are backups with no import path, so every
 column they carry is included and linked rows are named rather than shown by id.
 
-"Count income history from" is for when your situation genuinely changed - a new job,
-say - and the older history would only drag the averages the wrong way. With a date
-set, any comparable pay period or completed calendar month that ended before it is
-left out of every history walk that averages one (Afford's income projection, the
-payday planner's category-spending suggestions, and Reports' calendar-month average),
-for every account alike, and whatever remains is averaged over its own count exactly
-as it already is for an account that did not exist yet. A period or month the date
-falls inside still counts in full. Blank - the default - changes nothing.
+"Count history from" is for when your situation genuinely changed - a new job, a
+move - and the older history would only drag the averages the wrong way. One date
+bounds every average, income and spending alike, by pay period: only the pay
+periods that start on or after it are read by Afford's income projection, the
+payday planner's category suggestions and Reports' per-period average, and the
+monthly pace and averages read only the months that start on or after the first
+of those periods. A period or month the date falls inside is left out whole. It
+applies to every account alike, and whatever remains is averaged over its own count
+exactly as it already is for an account that did not exist yet. Blank - the
+default - changes nothing.
 
 ![PIN change form in Settings: current PIN, new PIN, and confirmation](screenshots/settings-pin-change.png)
 
@@ -549,6 +561,12 @@ imported, approved from a receipt, or posted by a recurring item) in another
 currency is converted once, at that day's rate, and the entered amount and the
 rate are kept beside it - the form shows the converted amount and the rate
 before you save, and the ledger shows what each converted row was entered as.
+The transaction form starts in the chosen account's currency; in another one it
+offers an optional **Amount charged in** the account's currency, the figure on
+your statement, which is stored as typed with the entered amount kept (the rate is
+then the one the two imply). Editing a converted row - a posted foreign
+subscription, say - offers the same field, so the real pesos replace the
+conversion without losing what it was charged for.
 So a balance never moves with the exchange rate. Changing the display currency
 only changes how figures are presented everywhere; it never converts or mutates
 what was recorded. Conversions use cached,

@@ -107,7 +107,8 @@ export interface CsvPostedCandidateRow extends CsvCandidateRow {
 /**
  * Which candidate rows are money the ledger already holds as a row the app
  * wrote itself: an occurrence recurring posting charged (a spending row), or
- * a paycheck a check-in recorded (a deposit) - see findPostedDuplicates. The
+ * a paycheck a check-in recorded (a deposit) - or that posting will write, an
+ * upcoming payment in another currency - see findPostedDuplicates. The
  * batch is the file: a posted row pairs with at most one row of it. Rows in
  * `skip` (already flagged as CSV re-imports) and external transfers are not
  * judged. Each row's category is the one it will land in, since the
@@ -154,6 +155,8 @@ export async function findCsvPostedDuplicates(input: {
       },
     ];
   });
-  const found = await lookUpPostedDuplicates(incoming, input.rates, { lookup: input.lookup, timeoutMs: input.timeoutMs });
+  // A spending row may also be an upcoming payment in another currency that
+  // posting has not written yet (findPostedDuplicates' `upcoming`).
+  const found = await lookUpPostedDuplicates(incoming, input.rates, { lookup: input.lookup, timeoutMs: input.timeoutMs, upcoming: true });
   return found && new Map([...found].map(([key, match]) => [Number(key), match]));
 }

@@ -93,14 +93,14 @@ import { remainingInstallments, type AffordTrackedItem } from "@/lib/afford-trac
 import { getSettings } from "@/lib/auth";
 import { convert } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
-import { countsInIncomeHistory, defaultProtectedBuffer, planGoalFunding } from "@/lib/payday";
+import { comparableHistory as historyWalk } from "@/lib/history-window";
+import { defaultProtectedBuffer, planGoalFunding } from "@/lib/payday";
 import {
   goalWindow,
   nextPeriod,
   parsePeriodKey,
   periodClock,
   periodInfo,
-  previousComparablePeriod,
   type PeriodInfo,
   type PeriodRef,
 } from "@/lib/period";
@@ -119,7 +119,6 @@ import { loadCommitments } from "@/lib/data/period-commitments";
 import { loadPeriodIncome } from "@/lib/data/period-income";
 import {
   getCategorySuggestions,
-  HISTORY_PERIODS,
   type ConfirmPaydayCheckinContext,
 } from "@/lib/data/payday";
 
@@ -137,22 +136,17 @@ interface ActiveAccount {
 }
 
 /**
- * The comparable periods a projection for `ref` averages over: HISTORY_PERIODS
- * same-half periods, newest first, stepping one full cycle back each time the
- * way getCategorySuggestions does. The walk starts from the most recent
- * comparable period that is complete: one whose dates have all passed, or one
- * whose check-in is already confirmed (`confirmed` holds those periods' keys)
- * - its income is then known in full, even on the payday it was entered. An
- * installment can land a year out, and the same-half periods between now and
- * then that are neither over nor confirmed have no history to give and would
- * only dilute the average with zeros, so they are walked past.
- *
- * `incomeHistoryStartDate` (Settings, "count income history from") is a
- * second lower bound of the same kind as the first activity: a period that
- * ended before it is dropped from the walk rather than counted as zero, so
- * incomeHistoryDepth counts over whatever periods remain exactly as it does
- * before the oldest income ever recorded. Null or absent leaves the walk
- * untouched.
+ * The comparable periods an income projection for `ref` averages over: the
+ * one history window (K9, comparableHistory in src/lib/history-window.ts) for
+ * income. The walk starts from the most recent comparable period that is
+ * complete - one whose dates have all passed, or one whose check-in is
+ * already confirmed (`confirmed` holds those periods' keys), its income then
+ * known in full even on the payday it was entered - and keeps up to
+ * HISTORY_PERIODS of them. `incomeHistoryStartDate` (Settings, "count
+ * history from") is applied by period: a period that starts before it is
+ * dropped from the walk rather than counted as zero, so incomeHistoryDepth
+ * counts over whatever periods remain exactly as it does before the oldest
+ * income ever recorded. Null or absent leaves the walk untouched.
  */
 export function comparableHistory(
   ref: PeriodRef,
@@ -160,21 +154,7 @@ export function comparableHistory(
   confirmed: ReadonlySet<string> = new Set(),
   incomeHistoryStartDate: Date | null = null,
 ): PeriodInfo[] {
-  let cursor = periodInfo(previousComparablePeriod(ref));
-  // Bounded for an absurdly distant first payment (~40 years).
-  for (
-    let i = 0;
-    i < 1000 && cursor.end.getTime() >= today.getTime() && !confirmed.has(cursor.key);
-    i += 1
-  ) {
-    cursor = periodInfo(previousComparablePeriod(cursor));
-  }
-  const periods: PeriodInfo[] = [];
-  for (let i = 0; i < HISTORY_PERIODS; i += 1) {
-    periods.push(cursor);
-    cursor = periodInfo(previousComparablePeriod(cursor));
-  }
-  return periods.filter((period) => countsInIncomeHistory(period, incomeHistoryStartDate));
+  return historyWalk(ref, today, "income", { confirmed, bounds: { historyStart: incomeHistoryStartDate } });
 }
 
 /**
@@ -182,7 +162,7 @@ export function comparableHistory(
  * from the oldest one with income in *any* account forward - the same "since
  * first activity" rule as getCategorySuggestions, taken once for the whole
  * walk rather than per account. Periods before the user had any income at all
- * (a new user, or a boundary set in "count income history from") do not drag
+ * (a new user, or a boundary set in "count history from") do not drag
  * the figure toward zero. Periods after it do, in every account: when pay
  * moves from one account to another, the old account's empty periods since
  * are real zeros, not gaps, so its old pay fades out as the new account's
@@ -554,12 +534,12 @@ export async function projectPeriods(
   const historyKeyFor = new Map<string, string>();
   // The period whose essential-category suggestion stands in for each
   // evaluated one: the one right after its newest complete comparable period
-  // (see loadEssentialFixed). Taken before the "count income history from"
-  // boundary, which trims the income walk, not where it starts.
+  // (see loadEssentialFixed). Taken before the "count history from"
+  // boundary, which trims the walk, not where it starts.
   const suggestionRefFor = new Map<string, PeriodRef>();
   for (const ref of refs) {
     const history = comparableHistory(ref, context.today, confirmedOpen, context.incomeHistoryStartDate);
-    // A "count income history from" date past every comparable period leaves
+    // A "count history from" date past every comparable period leaves
     // an empty walk: nothing to load, and every account then projects zero
     // income over zero periods (basis "none"), as a brand-new account does.
     const key = history[0]?.key ?? "";
@@ -786,7 +766,7 @@ export async function projectPeriods(
       goalPlans: projectedGoalPlans,
       // The comparable periods actually walked for this projection - `incomes`
       // is built by mapping over the (possibly boundary-filtered) `history`
-      // array above, so this is HISTORY_PERIODS unless "count income history
+      // array above, so this is HISTORY_PERIODS unless "count history
       // from" trimmed it. Not the divisor (that is `depth`): the results page
       // reads it only for how far back an account with no income was checked.
       historyPeriods: incomes.length,

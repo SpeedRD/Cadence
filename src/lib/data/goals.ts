@@ -7,9 +7,9 @@ import {
   periodClock,
   periodForDate,
   periodInfo,
-  previousPeriod,
   type PeriodInfo,
 } from "@/lib/period";
+import { completedPeriodsFrom, isCompletePeriod } from "@/lib/history-window";
 import { prisma } from "@/lib/prisma";
 
 import { goalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
@@ -28,7 +28,10 @@ export interface GoalSummary {
   name: string;
   currency: string;
   targetAmount: number;
+  /** Saved as of today: contributions dated after today are not in it (savedAhead holds them), as a balance leaves out rows dated later (K8). */
   savedAmount: number;
+  /** Contributions dated after today, in the goal's currency: shown apart, counted once their day comes. */
+  savedAhead: number;
   remaining: number;
   progress: number;
   targetDate: Date | null;
@@ -61,6 +64,7 @@ export interface GoalSummary {
   displayCurrency: string;
   displayTarget: number;
   displaySaved: number;
+  displaySavedAhead: number;
   displayRemaining: number;
   displayPerPeriod: number | null;
   displayPacePerPeriod: number | null;
@@ -83,7 +87,16 @@ function summarize(
   plan: GoalPeriodPlan,
 ): GoalSummary {
   const targetAmount = num(goal.targetAmount as never);
-  const savedAmount = num(goal.savedAmount as never);
+  // Saved as of today (D42): the cached total holds every contribution, so
+  // the ones dated after today are taken out of it here, by the same formula
+  // the total is built with, and shown apart until their day comes.
+  const ahead = contributions.filter((row) => row.date.getTime() > context.today.getTime());
+  const savedAhead =
+    ahead.length > 0
+      ? savedFromContributions(ahead.map((row) => ({ amount: num(row.amount as never), currency: row.currency })), goal.currency, context.rates)
+      : 0;
+  const savedAmount = round2(num(goal.savedAmount as never) - savedAhead);
+  const toDate = contributions.filter((row) => row.date.getTime() <= context.today.getTime());
   const remaining = Math.max(0, round2(targetAmount - savedAmount));
   const progress = targetAmount > 0 ? Math.min(1, savedAmount / targetAmount) : 0;
 
@@ -98,8 +111,8 @@ function summarize(
   // contribution, projected forward to a finish date.
   let pacePerPeriod: number | null = null;
   let projectedEnd: Date | null = null;
-  if (!goal.targetDate && contributions.length > 0) {
-    pacePerPeriod = averagePerCompletedPeriod(contributions, goal.currency, context);
+  if (!goal.targetDate && toDate.length > 0) {
+    pacePerPeriod = averagePerCompletedPeriod(toDate, goal.currency, context);
     if (pacePerPeriod > 0 && remaining > 0) {
       const periodsNeeded = Math.ceil(remaining / pacePerPeriod);
       let cursor: PeriodInfo = context.currentPeriod;
@@ -119,6 +132,7 @@ function summarize(
     currency: goal.currency,
     targetAmount: round2(targetAmount),
     savedAmount: round2(savedAmount),
+    savedAhead,
     remaining,
     progress,
     targetDate: goal.targetDate,
@@ -133,6 +147,7 @@ function summarize(
     displayCurrency: context.displayCurrency,
     displayTarget: toDisplay(targetAmount),
     displaySaved: toDisplay(savedAmount),
+    displaySavedAhead: toDisplay(savedAhead),
     displayRemaining: toDisplay(remaining),
     displayPerPeriod: dated ? plan.byHand : null,
     displayPacePerPeriod: pacePerPeriod === null ? null : toDisplay(pacePerPeriod),
@@ -141,10 +156,13 @@ function summarize(
 
 /**
  * An undated goal's average, in its own currency: what was contributed in
- * the completed periods from the first contribution's period on, over how
- * many of them there were. The period in progress is left out of both until
- * it ends, so the figure does not halve overnight when a new period starts.
- * With no completed period yet, it is what the current period holds.
+ * the complete periods from the first contribution's period on, over how
+ * many of them there were - the one history window's count of complete
+ * periods (K9, completedPeriodsFrom in src/lib/history-window.ts). The
+ * period in progress is left out of both until it ends, so the figure does
+ * not halve overnight when a new period starts. With no complete period
+ * yet, it is what the current period holds. `contributions` are the ones
+ * dated today or earlier.
  */
 function averagePerCompletedPeriod(
   contributions: { amount: unknown; currency: string; date: Date }[],
@@ -153,26 +171,10 @@ function averagePerCompletedPeriod(
 ): number {
   const rows = contributions.map((row) => ({ amount: num(row.amount as never), currency: row.currency, date: row.date }));
   const earliest = rows.reduce((oldest, row) => (row.date < oldest ? row.date : oldest), rows[0].date);
-  const lastCompleted = periodInfo(previousPeriod(context.currentPeriod));
-  if (earliest.getTime() > lastCompleted.end.getTime()) {
-    return savedFromContributions(rows, currency, context.rates);
-  }
-  const completed = rows.filter((row) => row.date.getTime() < addDays(lastCompleted.end, 1).getTime());
-  return round2(
-    savedFromContributions(completed, currency, context.rates) /
-      countPeriodsInclusive(periodForDate(earliest), lastCompleted),
-  );
-}
-
-function countPeriodsInclusive(from: PeriodInfo, to: PeriodInfo): number {
-  if (from.start.getTime() > to.start.getTime()) return 1;
-  let count = 1;
-  let cursor = from;
-  while (cursor.start.getTime() < to.start.getTime() && count < 1000) {
-    cursor = periodInfo(nextPeriod(cursor));
-    count += 1;
-  }
-  return count;
+  const periods = completedPeriodsFrom(periodForDate(earliest), context.today);
+  if (periods === 0) return savedFromContributions(rows, currency, context.rates);
+  const completed = rows.filter((row) => isCompletePeriod(periodForDate(row.date), context.today, "spending"));
+  return round2(savedFromContributions(completed, currency, context.rates) / periods);
 }
 
 export async function listGoals(context: AppContext): Promise<GoalSummary[]> {

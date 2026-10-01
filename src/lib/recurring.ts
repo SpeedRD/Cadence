@@ -266,6 +266,49 @@ export function previewPostingFrom(item: ScheduledItem, today: Date): PostingPre
   };
 }
 
+/** What saving an item whose first date is behind `today` keeps of its plan when the dates before today count as already paid. */
+export interface PaidPastOccurrences {
+  /** How many occurrences are dated before today: paid already, never posted. */
+  paidCount: number;
+  first: Date;
+  last: Date;
+  /** The first occurrence on or after today: where the item starts. */
+  nextDate: Date;
+  /** A finite plan's payments still owed after the paid ones; null for an open-ended item. */
+  remainingOccurrences: number | null;
+  /** Every payment of a finite plan is dated before today: there is nothing left to record. */
+  allPaid: boolean;
+}
+
+/**
+ * D46: the Recurring form's past first date read as Afford reads one - an
+ * occurrence dated before today was paid already (isPaidInstallment in
+ * src/lib/afford.ts: the purchase was made and the money has left), so it is
+ * neither posted nor counted, and the plan starts at the first occurrence on
+ * or after today with that many fewer payments left. Walks the dates posting
+ * would walk (advanceDate), stopping at a finite plan's countdown. Null when
+ * nextDate is today or later.
+ */
+export function paidPastOccurrences(item: ScheduledItem, today: Date): PaidPastOccurrences | null {
+  if (item.nextDate.getTime() >= today.getTime()) return null;
+  const remaining = item.remainingOccurrences ?? Number.POSITIVE_INFINITY;
+  const paid: Date[] = [];
+  let cursor = item.nextDate;
+  for (let i = 0; i < MAX_SKIP_WALK && paid.length < remaining && cursor.getTime() < today.getTime(); i += 1) {
+    paid.push(cursor);
+    cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
+  }
+  const left = item.remainingOccurrences == null ? null : item.remainingOccurrences - paid.length;
+  return {
+    paidCount: paid.length,
+    first: paid[0],
+    last: paid[paid.length - 1],
+    nextDate: cursor,
+    remainingOccurrences: left,
+    allPaid: left !== null && left <= 0,
+  };
+}
+
 /** Cost per calendar month, used for the subscriptions total. */
 export function monthlyEquivalent(
   amount: number,

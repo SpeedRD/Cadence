@@ -141,6 +141,11 @@ export default async function GoalsPage() {
                       {t.ofAmount(formatMoney(goal.targetAmount, goal.currency))}
                     </p>
                   ) : null}
+                  {goal.savedAhead > 0 ? (
+                    <p className="text-hint text-muted-foreground">
+                      {t.savedAhead(formatMoney(goal.displaySavedAhead, goal.displayCurrency))}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="flex items-end justify-between gap-3">

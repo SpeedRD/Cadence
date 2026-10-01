@@ -300,6 +300,7 @@ export const es = {
     periodsTo: (n: number, date: string) => `${n} periodo${n === 1 ? "" : "s"} hasta ${date}`,
     perPayPeriod: "por periodo de pago",
     perPayPeriodByHand: "por periodo de pago a mano",
+    savedAhead: (amount: string) => `${amount} con fecha posterior a hoy, fuera de esta cifra`,
     fromRecurring: (amount: string) => `${amount} de aportes recurrentes`,
     planVersusContributed: (period: string, planned: string, contributed: string) =>
       `${period}: ${planned} planificado · ${contributed} aportado`,
@@ -540,6 +541,8 @@ export const es = {
     // Una fila que el libro ya tiene como fila que Cadence escribió: un cargo
     // recurrente registrado o el sueldo de un check-in (ver
     // src/lib/data/posted-duplicates.ts).
+    upcomingDuplicatesDescription:
+      "Una fila también puede ser un pago en otra moneda que aún no se ha registrado: se importa de todos modos, y \"Es ese pago\" la guarda como ese pago para que no se cobre otra vez.",
     postedDuplicatesDescription:
       "Algunas filas coinciden con un cargo que Cadence ya registró desde un elemento recurrente, o con un sueldo que registró un check-in, en esta cuenta. Una coincidencia exacta (con el nombre o la categoría del elemento, un sueldo, o el mismo monto a pocos días del cargo registrado) se omite como el cargo registrado a menos que digas que es otro. Una posible coincidencia (en otra moneda, o el mismo monto más lejos, sin el nombre ni la categoría del elemento) se importa a menos que digas que es el cargo registrado.",
     postedMatchRecurring: (name: string, date: string, amount: string) => `Coincide con ${name}, registrado el ${date} por ${amount}`,
@@ -626,6 +629,10 @@ export const es = {
     receivedAmountHint:
       "Déjalo en blanco para registrar el mismo monto en ambos lados, convertido a la tasa de hoy. Escríbelo para registrar exactamente lo que acreditó el banco.",
     // Montos guardados en la moneda de la cuenta (src/lib/account-money.ts).
+    savedAsCharged: (amount: string, rate: string) => `Se guarda en esta cuenta como ${amount}, tal como se cobró (${rate}).`,
+    chargedAmountLabel: (currency: string) => `Monto cobrado en ${currency}`,
+    accountAmountLabel: (currency: string) => `Monto en ${currency}`,
+    chargedAmountHint: "Opcional. La cifra de tu estado de cuenta; se guarda tal cual, conservando el monto de arriba.",
     savedAsTodaysRate: (amount: string, rate: string) => `Se guarda en esta cuenta como ${amount} (${rate}, tasa de hoy).`,
     savedAsKeptRate: (amount: string, rate: string) =>
       `Se guarda en esta cuenta como ${amount} (${rate}, la tasa con la que se guardó).`,
@@ -658,6 +665,9 @@ export const es = {
     upcomingPromptDescription: (entered: string, scheduled: string) =>
       `Tu registro de ${entered} está guardado. El pago que podría ser es ${scheduled}. "Es ese pago" conserva tu registro como el pago, así no se publica otra vez en su fecha. Cerrar esto conserva ambos.`,
     isUpcomingPayment: "Es ese pago",
+    upcomingPaymentsKept: (count: number) =>
+      `${count === 1 ? "1 fila guardada como su pago próximo" : `${count} filas guardadas como sus pagos próximos`}; no se registran otra vez`,
+    appliedUpcomingPayment: "Importada como ese pago",
     upcomingKept: (name: string) => `Guardado como el pago de ${name}; no se publicará otra vez`,
   },
   accounts: {
@@ -807,9 +817,15 @@ export const es = {
     kind: "Tipo",
     frequency: "Frecuencia",
     nextDue: "Próximo vencimiento",
-    nextDueHint: "Cada vencimiento hasta hoy se registra automáticamente.",
+    nextDueHint: "Cada vencimiento se registra automáticamente al llegar. Si escribes una fecha anterior a hoy, las fechas antes de hoy cuentan como ya pagadas, salvo que elijas registrarlas.",
     pastDateNote: (count: number, first: string, last: string, capped: boolean) =>
       `Al guardar se ${count === 1 ? "registra 1 cobro" : `registran ${count} cobros`} con fecha ${count === 1 ? first : `del ${first} al ${last}`}${capped ? "; el resto sigue en las siguientes ejecuciones" : ""}.`,
+    pastDatePaidNote: (count: number, first: string, last: string, next: string, left: number | null) =>
+      `${count === 1 ? `El pago con fecha ${first} cuenta como ya pagado y no se registra` : `Los ${count} pagos con fecha del ${first} al ${last} cuentan como ya pagados y no se registran`}. El primer cobro es el ${next}${left === null ? "" : `; ${left === 1 ? "queda 1 pago" : `quedan ${left} pagos`}`}.`,
+    postPastLabel: "Registrarlos: no están en mis cuentas",
+    postPastHint: "Actívalo solo si estos cobros faltan en tus cuentas; si no, se contarían dos veces.",
+    allPaymentsPast:
+      "Todos los pagos de este plan tienen fecha anterior a hoy, así que cuentan como ya pagados. No queda nada por registrar: activa registrarlos si faltan en tus cuentas.",
     secondDueDay: "Segundo día de vencimiento",
     secondDueDayHint:
       "El otro día del mes en que se cobra esto. Un día que cae en fin de semana se registra el viernes anterior, igual que Próximo vencimiento.",
@@ -1057,6 +1073,7 @@ export const es = {
     targetDate: (date: string) => `Meta para ${date}`,
     noTargetDate: "Sin fecha límite",
     percentOf: (pct: number, amount: string) => `${pct}% de ${amount}`,
+    savedAhead: (amount: string) => `${amount} con fecha posterior a hoy, fuera de esta cifra`,
     fullyFunded: "Totalmente financiada",
     perPayPeriod: "por periodo de pago",
     perPayPeriodByHand: "por periodo de pago a mano",
@@ -1278,9 +1295,9 @@ export const es = {
     carryoverDefaultLabel: "Incluir remanente por defecto",
     carryoverDefaultHint:
       "Si está activo, el dinero sin gastar del presupuesto del periodo anterior se precarga como remanente incluido en cada chequeo nuevo.",
-    incomeHistoryStartLabel: "Contar historial de ingresos desde",
-    incomeHistoryStartHint:
-      "Si tu situación de ingresos cambió (un trabajo nuevo, por ejemplo), define esta fecha para que los promedios de Cadence (la proyección de ingresos de Cuotas, las sugerencias por categoría del chequeo de pago, el ritmo de gasto mensual y los promedios mensuales de Informes) dejen de contar periodos antiguos que ya no aplican. Déjala en blanco para usar todo tu historial como siempre.",
+    historyStartLabel: "Contar historial desde",
+    historyStartHint:
+      "Si tu situación cambió (un trabajo nuevo, una mudanza, un nuevo hogar), define esta fecha para que los promedios de Cadence lean solo lo que vino después: la proyección de ingresos de Cuotas, las sugerencias por categoría del chequeo de pago, el promedio por periodo de pago de Informes y el ritmo y los promedios de gasto mensual. El historial cuenta desde el primer periodo de pago que empieza en esta fecha o después, y las cifras mensuales desde el primer mes que lo hace. Déjala en blanco para usar todo tu historial.",
     planningPreferencesSaved: "Preferencias de planificación guardadas",
     essentialCategoriesTitle: "Categorías fijas esenciales",
     essentialCategoriesDescription:

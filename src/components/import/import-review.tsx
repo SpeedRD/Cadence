@@ -35,11 +35,19 @@ import { nextDueOfImportedSeries } from "@/lib/recurring-detection";
 import type { CsvDuplicateHit, CsvExtraordinaryHit } from "@/server/actions/import";
 
 /**
+ * A row's answer in the possible-duplicates group: imported, skipped, or -
+ * for a row matching an upcoming payment in another currency - imported as
+ * that payment ("It's that payment"), which posting then never charges.
+ */
+export type DuplicateDecision = "import" | "skip" | "settle";
+
+/**
  * What a possible duplicate does when the user has not chosen: a re-import, or
  * an exact match for a posted charge or recorded paycheck, is skipped; a
- * possible match (planPostedDuplicates) is only a warning and imports.
+ * possible match (planPostedDuplicates) is only a warning and imports, as its
+ * own charge for an upcoming payment until the user says it is that payment.
  */
-export function defaultDuplicateDecision(hit: CsvDuplicateHit): "import" | "skip" {
+export function defaultDuplicateDecision(hit: CsvDuplicateHit): DuplicateDecision {
   return hit.kind === "posted" && hit.match.possible ? "import" : "skip";
 }
 
@@ -106,8 +114,8 @@ export function ImportReview({
   duplicateRowIndexes: number[];
   duplicateHits: Record<number, CsvDuplicateHit>;
   /** Per-row choice; a row with no entry takes defaultDuplicateDecision. */
-  duplicateDecisions: Record<number, "import" | "skip">;
-  onDecideDuplicateAction: (rowIndexes: number[], decision: "import" | "skip") => void;
+  duplicateDecisions: Record<number, DuplicateDecision>;
+  onDecideDuplicateAction: (rowIndexes: number[], decision: DuplicateDecision) => void;
   /** Rows the server found unusually large for their category (see detectCsvExtraordinaryAction). */
   extraordinaryRowIndexes: number[];
   extraordinaryHits: Record<number, CsvExtraordinaryHit>;
@@ -173,8 +181,17 @@ export function ImportReview({
                   ? ` · ${t.possibleDuplicatesDescription}`
                   : null}
               </p>
-              {duplicateRowIndexes.some((index) => duplicateHits[index]?.kind === "posted") ? (
+              {duplicateRowIndexes.some((index) => {
+                const hit = duplicateHits[index];
+                return hit?.kind === "posted" && hit.match.kind !== "upcoming";
+              }) ? (
                 <p className="text-xs text-muted-foreground">{t.postedDuplicatesDescription}</p>
+              ) : null}
+              {duplicateRowIndexes.some((index) => {
+                const hit = duplicateHits[index];
+                return hit?.kind === "posted" && hit.match.kind === "upcoming";
+              }) ? (
+                <p className="text-xs text-muted-foreground">{t.upcomingDuplicatesDescription}</p>
               ) : null}
             </div>
             <Button
@@ -724,8 +741,8 @@ function DuplicateRowsPanel({
   hits: Record<number, CsvDuplicateHit>;
   currency: string;
   locale: Locale;
-  decisions: Record<number, "import" | "skip">;
-  onDecideAction: (rowIndexes: number[], decision: "import" | "skip") => void;
+  decisions: Record<number, DuplicateDecision>;
+  onDecideAction: (rowIndexes: number[], decision: DuplicateDecision) => void;
 }) {
   const dictionary = getDictionary(locale);
   const t = dictionary.transactions;
@@ -792,8 +809,13 @@ function DuplicateRowsPanel({
             {rowIndexes.map((index) => {
               const row = rows[index];
               const hit = hits[index];
-              const importing = (decisions[index] ?? (hit ? defaultDuplicateDecision(hit) : "skip")) === "import";
+              const decision = decisions[index] ?? (hit ? defaultDuplicateDecision(hit) : "skip");
               const posted = hit?.kind === "posted" ? hit.match : null;
+              // An upcoming payment: both answers import the row; "It's that
+              // payment" also records it as that payment (settle).
+              const upcoming = posted?.kind === "upcoming";
+              const settling = upcoming && decision === "settle";
+              const importing = decision === "import" || settling;
               const keepLabel = posted?.kind === "paycheck" ? t.isRecordedPaycheck : t.isPostedCharge;
               return (
                 <TableRow key={index}>
@@ -816,7 +838,7 @@ function DuplicateRowsPanel({
                       <PostedMatchNotice
                         match={posted}
                         incoming={{ amount: row.amount, currency }}
-                        showOutcome={!importing}
+                        showOutcome={upcoming ? settling : !importing}
                         locale={locale}
                       />
                     ) : null}
@@ -826,7 +848,9 @@ function DuplicateRowsPanel({
                   </TableCell>
                   <TableCell className="text-xs">
                     <span className={importing ? "text-foreground" : "text-muted-foreground"}>
-                      {importing
+                      {settling
+                        ? t.appliedUpcomingPayment
+                        : importing
                         ? t.appliedImportAnyway
                         : posted
                           ? posted.kind === "paycheck"
@@ -839,9 +863,15 @@ function DuplicateRowsPanel({
                       variant="ghost"
                       size="xs"
                       className="ml-1"
-                      onClick={() => onDecideAction([index], importing ? "skip" : "import")}
+                      onClick={() =>
+                        onDecideAction([index], upcoming ? (settling ? "import" : "settle") : importing ? "skip" : "import")
+                      }
                     >
-                      {posted
+                      {upcoming
+                        ? settling
+                          ? t.isDifferentCharge
+                          : t.isUpcomingPayment
+                        : posted
                         ? importing
                           ? keepLabel
                           : t.isDifferentCharge

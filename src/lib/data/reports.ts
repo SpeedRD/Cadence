@@ -1,9 +1,10 @@
 import { convert } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import { ownCost } from "@/lib/budget-spending";
+import { completedHistoryPeriods, type HistoryBounds } from "@/lib/history-window";
 import { periodForDate, periodSeries, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { getFirstActivityDate } from "@/lib/data/monthly";
+import { loadHistoryBounds } from "@/lib/data/history-window";
 import { loadPeriodIncome } from "@/lib/data/period-income";
 
 import type { AppContext } from "@/lib/data/context";
@@ -66,20 +67,21 @@ export interface TrendAverage {
 }
 
 /**
- * The mean spent per completed period: a period still in progress is left out
- * (a few days of spending read as a whole period drags the mean down), and so
- * is every period before the first recorded activity (the user was not using
- * Cadence yet, so it says nothing about what a period costs). Null when no
- * completed period is left - there is nothing to average.
+ * The mean spent per complete period, over the one history window for
+ * spending (K9, src/lib/history-window.ts): a period still in progress is
+ * left out (a few days of spending read as a whole period drags the mean
+ * down), and so is every period before the first full period of activity -
+ * a first period the user joined partway through is not a period's spending
+ * - and every period that starts before Settings' "count history from" date.
+ * Null when no complete period is left - there is nothing to average.
  */
-function averageOfCompletedPeriods(points: TrendPoint[], firstActivity: Date | null): TrendAverage | null {
-  if (!firstActivity) return null;
-  const counted = points.filter(
-    (point) => !point.partial && point.period.end.getTime() >= firstActivity.getTime(),
-  );
-  if (counted.length === 0) return null;
-  const total = counted.reduce((sum, point) => sum + point.spent, 0);
-  return { average: round2(total / counted.length), periods: counted.length };
+function averageOfCompletedPeriods(points: TrendPoint[], today: Date, bounds: HistoryBounds): TrendAverage | null {
+  if (!bounds.firstActivity) return null;
+  const counted = new Set(completedHistoryPeriods(points.map((point) => point.period), today, bounds).map((period) => period.key));
+  const kept = points.filter((point) => counted.has(point.period.key));
+  if (kept.length === 0) return null;
+  const total = kept.reduce((sum, point) => sum + point.spent, 0);
+  return { average: round2(total / kept.length), periods: kept.length };
 }
 
 /** getSpendingTrend, with the average per completed period the Reports page shows beside it. */
@@ -87,6 +89,6 @@ export async function getSpendingTrendSummary(
   context: AppContext,
   count = 6,
 ): Promise<{ points: TrendPoint[]; average: TrendAverage | null }> {
-  const [points, firstActivity] = await Promise.all([getSpendingTrend(context, count), getFirstActivityDate()]);
-  return { points, average: averageOfCompletedPeriods(points, firstActivity) };
+  const [points, bounds] = await Promise.all([getSpendingTrend(context, count), loadHistoryBounds(context)]);
+  return { points, average: averageOfCompletedPeriods(points, context.today, bounds) };
 }
