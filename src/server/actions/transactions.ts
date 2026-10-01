@@ -10,6 +10,7 @@ import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { recomputeGoalSaved, removeContribution } from "@/lib/goals";
 import { num } from "@/lib/money";
+import { canBeEarmarked, type EarmarkIssue } from "@/lib/earmarks";
 import { checkReferences } from "@/lib/references";
 import { yourShareIssue } from "@/lib/shared-expense";
 import {
@@ -21,6 +22,7 @@ import {
   transactionEditBlock,
 } from "@/lib/transactions";
 import {
+  earmarkLinesFrom,
   firstError,
   formObject,
   localizeValidationMessage,
@@ -29,8 +31,9 @@ import {
 } from "@/lib/validation";
 
 import { getAppContext } from "@/lib/data/context";
+import { checkEarmarks, saveEarmarks } from "@/lib/data/earmark-targets";
 import { createManualTransaction, storedTransactionValues } from "@/lib/data/manual-transaction";
-import { keepPostedInsteadOfEntry } from "@/lib/data/posted-duplicates";
+import { keepEntryAsUpcoming, keepPostedInsteadOfEntry } from "@/lib/data/posted-duplicates";
 
 import {
   done,
@@ -53,6 +56,12 @@ export async function saveTransactionAction(
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
   const { id, ...values } = parsed.data;
+  // "This money is for an upcoming payment" (src/lib/earmarks.ts): checked
+  // against the deposit as it will be stored before anything is written, and
+  // saved with it.
+  const earmarks = earmarkLinesFrom(formData);
+  if ("error" in earmarks) return fail(localizeValidationMessage(earmarks.error, locale));
+  const earmarkMessage = (issue: EarmarkIssue | "not_depositable") => t.earmarkIssues[issue];
 
   const referenceError = await checkReferences(t, [values.accountId], values.categoryId, !id);
   if (referenceError) return fail(referenceError);
@@ -143,10 +152,53 @@ export async function saveTransactionAction(
       row: previousRow,
       accountCurrency: previousAccount?.currency ?? existing.currency,
     });
+    const deposit = {
+      id,
+      accountId: values.accountId,
+      amount: stored.amount,
+      type: values.type,
+      source: existing.source,
+      transferDirection: values.transferDirection,
+    };
+    if (earmarks.offered) {
+      const check = await checkEarmarks(deposit, earmarks.requests, await getAppContext());
+      if (!check.ok) return fail(earmarkMessage(check.issue));
+    }
     await prisma.transaction.update({ where: { id }, data: stored });
+    if (earmarks.offered) {
+      const saved = await saveEarmarks(deposit, earmarks.requests, await getAppContext());
+      if (!saved.ok) return fail(earmarkMessage(saved.issue));
+    } else if (!canBeEarmarked(deposit)) {
+      // No longer a deposit (its type or direction changed): nothing of it
+      // is set aside for a payment any more.
+      await prisma.recurringEarmark.deleteMany({ where: { transactionId: id } });
+    }
   } else {
+    const requests = earmarks.offered ? earmarks.requests : [];
+    if (requests.length > 0) {
+      const inAccount = await storedTransactionValues(values, async () => (await getAppContext()).rates);
+      const check = await checkEarmarks(
+        { id: null, accountId: values.accountId, amount: inAccount.amount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection },
+        requests,
+        await getAppContext(),
+      );
+      if (!check.ok) return fail(earmarkMessage(check.issue));
+    }
     // The row is written whatever the hints say; see createManualTransaction.
     const created = await createManualTransaction(values, { getContext: getAppContext });
+    if (requests.length > 0) {
+      const saved = await saveEarmarks(
+        { id: created.id, accountId: values.accountId, amount: created.storedAmount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection },
+        requests,
+        await getAppContext(),
+      );
+      // Checked a moment ago; only a payment that changed in between lands
+      // here, and the deposit itself is saved.
+      if (!saved.ok) {
+        revalidateApp();
+        return fail(t.earmarkNotSavedWithDeposit(earmarkMessage(saved.issue)));
+      }
+    }
     const extraordinarySuggestion: ExtraordinarySuggestion | undefined = created.extraordinary
       ? {
           transactionId: created.id,
@@ -199,6 +251,25 @@ export async function keepPostedChargeAction(
   const savedDigest = String(formData.get("savedDigest") ?? "").trim();
   const postedId = String(formData.get("postedId") ?? "").trim();
   if (!transactionId || !savedDigest || !postedId) return fail(t.transactionNoLongerExists);
+
+  // "It's that payment": an upcoming occurrence in another currency, not
+  // posted yet. The entry stays and is made to say what it paid, so posting
+  // settles the occurrence with it (keepEntryAsUpcoming).
+  if (formData.get("kind") === "upcoming") {
+    const kept = await keepEntryAsUpcoming(
+      { transactionId, savedDigest, occurrenceKey: postedId },
+      async () => (await getAppContext()).rates,
+    );
+    if (!kept.ok) {
+      if (kept.reason === "not_found") return fail(t.postedEntryAlreadyGone);
+      if (kept.reason === "not_applicable") return fail(t.postedMatchNotApplicable);
+      if (kept.reason === "changed") return fail(t.postedEntryChanged);
+      if (kept.reason === "check_failed") return fail(t.postedMatchCheckFailed);
+      return fail(t.postedMatchGone);
+    }
+    revalidateApp();
+    return done(t.upcomingKept(kept.itemName));
+  }
 
   const result = await keepPostedInsteadOfEntry(
     { transactionId, savedDigest, postedId },

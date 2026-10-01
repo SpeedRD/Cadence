@@ -57,6 +57,9 @@ export function PostedMatchPrompt({
   }, [state, onKeptAction, t.postedChargeKept]);
 
   const paycheck = suggestion?.match.kind === "paycheck";
+  // An upcoming payment in another currency, not posted yet: the entry stays
+  // and becomes that payment (keepEntryAsUpcoming).
+  const upcoming = suggestion?.match.kind === "upcoming";
 
   return (
     <Dialog open={suggestion !== null} onOpenChange={(open) => !open && onCloseAction()}>
@@ -66,8 +69,11 @@ export function PostedMatchPrompt({
             <input type="hidden" name="id" value={suggestion.transactionId} />
             <input type="hidden" name="savedDigest" value={suggestion.savedDigest} />
             <input type="hidden" name="postedId" value={suggestion.match.posted.id} />
+            {upcoming ? <input type="hidden" name="kind" value="upcoming" /> : null}
             <DialogHeader>
-              <DialogTitle>{paycheck ? t.paycheckPromptTitle : t.postedPromptTitle}</DialogTitle>
+              <DialogTitle>
+                {paycheck ? t.paycheckPromptTitle : upcoming ? t.upcomingPromptTitle : t.postedPromptTitle}
+              </DialogTitle>
               <DialogDescription asChild>
                 <div className="grid gap-2">
                   <PostedMatchNotice
@@ -77,7 +83,11 @@ export function PostedMatchPrompt({
                     locale={locale}
                   />
                   <span>
-                    {(paycheck ? t.paycheckPromptDescription : t.postedPromptDescription)(
+                    {(paycheck
+                      ? t.paycheckPromptDescription
+                      : upcoming
+                        ? t.upcomingPromptDescription
+                        : t.postedPromptDescription)(
                       formatMoney(suggestion.amount, suggestion.currency),
                       formatMoney(suggestion.match.posted.amount, suggestion.match.posted.currency),
                     )}
@@ -89,7 +99,9 @@ export function PostedMatchPrompt({
               <Button type="button" variant="ghost" onClick={onCloseAction}>
                 {t.isDifferentCharge}
               </Button>
-              <SubmitButton pending={pending}>{paycheck ? t.isRecordedPaycheck : t.isPostedCharge}</SubmitButton>
+              <SubmitButton pending={pending}>
+                {paycheck ? t.isRecordedPaycheck : upcoming ? t.isUpcomingPayment : t.isPostedCharge}
+              </SubmitButton>
             </DialogFooter>
           </form>
         ) : null}

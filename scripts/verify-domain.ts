@@ -12481,8 +12481,6 @@ async function main() {
     // read through ?. with a fallback, so this runs on the tree before too.
     // Display DOP; fixtures `Verify Window ...`; other active items paused and
     // open goals parked, restored in the finally.
-    const periodLib = (await import("../src/lib/period")) as Record<string, unknown>;
-    const incomeLib = (await import("../src/lib/period-income").catch(() => null)) as Record<string, unknown> | null;
     const goalPlanLib = (await import("../src/lib/goal-plan").catch(() => null)) as null | typeof import("../src/lib/goal-plan");
     const { listGoals: wGoals } = await import("../src/lib/data/goals");
     const { loadPeriodIncome: wIncome } = await import("../src/lib/data/period-income");
@@ -13625,6 +13623,371 @@ async function main() {
       await kWipe();
       await prisma.account.updateMany({ where: { id: { in: archivedForK7 } }, data: { status: "ACTIVE" } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK7 } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== income earmarked for a recurring payment (K2 K4 K5), and a charge entered before posting against a payment in another currency (K7) ==");
+  {
+    // Public APIs only. Earmarks are written through the form's writer
+    // (src/lib/data/earmark-targets.ts) when it is there and straight into
+    // RecurringEarmark otherwise, so this block also runs against the code
+    // before the feature (with the table migrated) and fails there on every
+    // reader that ignores an earmark. The user's shape: a Klarna plan of 6 x
+    // 163.71 EUR from Oct 28, charged to the DOP account "Popular" - 11,493
+    // DOP at the rates below - part-covered by a 5,000 DOP deposit from a
+    // family member and by money moved in from outside Cadence. Display DOP,
+    // buffer 10% with a 2,000 DOP floor (the Settings row). Fixtures are
+    // `Verify Earmark ...`; every other active item is paused, open goal
+    // parked and active account archived meanwhile, all restored in the
+    // finally.
+    const ePayday = await import("../src/lib/data/payday");
+    const ePure = await import("../src/lib/payday");
+    const eAfford = await import("../src/lib/data/afford");
+    const eCommitments = await import("../src/lib/data/period-commitments");
+    const eK2 = await import("../src/lib/period-commitments");
+    const eIncome = await import("../src/lib/data/period-income");
+    const eRoom = await import("../src/lib/data/flexible-room");
+    const ePost = (await import("../src/lib/recurring-posting")).postDueRecurringItems;
+    const eManual = await import("../src/lib/data/manual-transaction");
+    const eDuplicates = (await import("../src/lib/data/posted-duplicates")) as Record<string, unknown>;
+    const eTargets = await import("../src/lib/data/earmark-targets").catch(() => null);
+    const { transactionSchema: eSchema } = await import("../src/lib/validation");
+    const { getDictionary: eDictionary } = await import("../src/lib/i18n");
+    // 163.71 EUR is 11,493 DOP: USD 1 = DOP 60 = EUR 0.85465...
+    const EUR = (163.71 * 60) / 11493;
+    const eRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const eContext = (today: Date) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: eRates(),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    });
+    type EContext = ReturnType<typeof eContext>;
+    const eDay = (month: number, day: number) => civilDate(2026, month, day);
+    const octB = { year: 2026, month: 10, period: "B" as const };
+    const novB = { year: 2026, month: 11, period: "B" as const };
+    const decB = { year: 2026, month: 12, period: "B" as const };
+    const eKey = (itemId: string, due: Date) => `${itemId}:${toISODate(due)}`;
+    type EDeposit = { id: string; accountId: string; amount: number; type: string; source: string; transferDirection: string | null };
+    type ERequest = { occurrenceKey: string; amount: number };
+    const eSave = async (deposit: EDeposit, requests: ERequest[], ctx: EContext) => {
+      if (eTargets) return eTargets.saveEarmarks(deposit, requests, ctx);
+      await prisma.$executeRaw`DELETE FROM "RecurringEarmark" WHERE "transactionId" = ${deposit.id}`;
+      for (const [index, request] of requests.entries()) {
+        const separator = request.occurrenceKey.lastIndexOf(":");
+        await prisma.$executeRaw`INSERT INTO "RecurringEarmark" (id, "transactionId", "occurrenceKey", "recurringItemId", "dueDate", amount, currency)
+          VALUES (${`verify-earmark-${deposit.id}-${index}`}, ${deposit.id}, ${request.occurrenceKey}, ${request.occurrenceKey.slice(0, separator)}, ${request.occurrenceKey.slice(separator + 1)}::date, ${request.amount}::numeric, 'DOP')`;
+      }
+      return { ok: true as const };
+    };
+    const eIssue = async (deposit: Omit<EDeposit, "id"> & { id: string | null }, requests: ERequest[], ctx: EContext) => {
+      if (!eTargets) return "no check";
+      const result = await eTargets.checkEarmarks(deposit, requests, ctx);
+      return result.ok ? "ok" : result.issue;
+    };
+    const eRows = async (depositId: string) =>
+      (await prisma.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM "RecurringEarmark" WHERE "transactionId" = ${depositId}`)[0].n;
+    const eWhole = async (ref: { year: number; month: number; period: "A" | "B" }, itemId: string, ctx: EContext) =>
+      round2(
+        (await eCommitments.periodCommitments(periodInfo(ref), ctx))
+          .filter((occurrence) => occurrence.itemId === itemId)
+          .reduce((sum, occurrence) => sum + eK2.wholeAmount(occurrence), 0),
+      );
+    const eOccurrence = async (ref: { year: number; month: number; period: "A" | "B" }, key: string, ctx: EContext) =>
+      (await eCommitments.periodCommitments(periodInfo(ref), ctx)).find((occurrence) => occurrence.key === key);
+    const eAccounts = () => prisma.account.findMany({ where: { status: "ACTIVE" }, orderBy: { name: "asc" }, select: { id: true, name: true, currency: true } });
+    const eWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Earmark " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { year: 2026, month: { in: [10, 11, 12] } } });
+      await prisma.budget.deleteMany({ where: { year: 2026, month: { in: [10, 11, 12] } } });
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Earmark " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+
+    check("earmark: no check-in for Oct-Dec 2026 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: { year: 2026, month: { in: [10, 11, 12] } } })) === 0);
+    const pausedForEarmark = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForEarmark = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const archivedForEarmark = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForEarmark } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForEarmark } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForEarmark } }, data: { status: "ARCHIVED" } });
+    const restoreEarmarkRates = await seedStoredRates({ USD: 1, DOP: 60, EUR });
+    try {
+      const ctx = eContext(eDay(10, 20));
+      const popularRow = await prisma.account.create({ data: { name: "Verify Earmark Popular", currency: "DOP", type: "CHECKING" } });
+      const popular = { id: popularRow.id, name: popularRow.name, currency: popularRow.currency };
+      await prisma.transaction.create({ data: { accountId: popular.id, date: eDay(8, 1), amount: 50000, currency: "DOP", type: "OPENING_BALANCE", source: "OPENING_BALANCE" } });
+      // Pay history for the projections: 30,000 into each B half since July.
+      for (const [month, day] of [[7, 16], [8, 17], [9, 16]] as const) {
+        await prisma.transaction.create({ data: { accountId: popular.id, date: eDay(month, day), amount: 30000, currency: "DOP", type: "INCOME", source: "MANUAL", note: "Verify Earmark salary" } });
+      }
+      const klarna = await prisma.recurringItem.create({
+        data: {
+          name: "Verify Earmark Klarna PS5 Pro",
+          amount: 163.71,
+          currency: "EUR",
+          frequency: "MONTHLY",
+          anchorDay: 28,
+          nextDate: eDay(10, 28),
+          remainingOccurrences: 6,
+          fromAfford: true,
+          active: true,
+          kind: "SUBSCRIPTION",
+          accountId: popular.id,
+        },
+      });
+      const oct28 = eKey(klarna.id, eDay(10, 28));
+      const nov28 = eKey(klarna.id, eDay(11, 28));
+      const dec28 = eKey(klarna.id, eDay(12, 28));
+
+      // Step 3 for Oct 16-31 with 30,000 typed as Popular's paycheck.
+      const eStep3 = async (at: EContext) => {
+        const draft = await ePayday.getPaydayCheckinDraft(at, octB);
+        const typed = { ...draft, accounts: draft.accounts.map((a) => ({ ...a, incomeEntered: a.accountId === popular.id ? 30000 : 0 })) } as typeof draft;
+        const withBuffer = { ...typed, plannedBuffer: ePure.draftAccountBuffers(typed, at.rates).total } as typeof draft;
+        const row = draft.subscriptions.find((entry) => entry.recurringItemId === klarna.id) as (typeof draft.subscriptions)[number] & { covered?: { amount: number; depositLabel: string | null }[] };
+        const account = ePure.draftAccountBuffers(typed, at.rates).accounts.find((plan) => plan.accountId === popular.id);
+        return { subscriptions: draft.subscriptionsTotal, row, account: round2(account?.commitmentsTotal ?? NaN), available: ePure.summarizePaydayDraft(withBuffer, at.rates).available };
+      };
+      const eCard = async (at: EContext) => (await eRoom.loadConfirmedRooms([periodInfo(octB)], at)).get(periodInfo(octB).key) ?? null;
+      const eAffordAt = async (ref: { year: number; month: number; period: "A" | "B" }, at: EContext) => {
+        const projection = (await eAfford.projectPeriods([ref], popular, await eAccounts(), at)).get(periodInfo(ref).key);
+        return { account: round2(projection?.account.committed ?? NaN), flexible: round2(projection?.flexible.committed ?? NaN), income: projection?.account.income ?? NaN };
+      };
+      // The tracker's re-check: the Oct 28 installment as Popular's check subtracts it.
+      const eTracker = async (at: EContext) => {
+        const recheck = await eAfford.recheckAffordItem(klarna.id, at);
+        return recheck.ok ? round2(recheck.verdict.periods[0].account.installment) : NaN;
+      };
+      const eIncomeOf = async (basis: "fact" | "estimate", at: EContext) =>
+        round2((await eIncome.loadPeriodIncome([octB], basis, at)).get(periodInfo(octB).key)?.byAccount.get(popular.id) ?? 0);
+
+      console.log("-- before: the Oct 28 installment asks its whole 11,493 --");
+      const before = {
+        k2: await eWhole(octB, klarna.id, ctx),
+        step3: await eStep3(ctx),
+        afford: await eAffordAt(octB, ctx),
+        tracker: await eTracker(ctx),
+      };
+      eq("before: K2, Step 3, Afford (account and period) and the tracker all count 11,493", `${before.k2}|${before.step3.subscriptions}|${before.afford.account}|${before.afford.flexible}|${before.tracker}`, "11493|11493|11493|11493|11493");
+
+      // The check-in for Oct 16-31, confirmed with Popular's 30,000.
+      const draft = await ePayday.getPaydayCheckinDraft(ctx, octB);
+      const confirmed = await ePayday.confirmPaydayCheckin(
+        {
+          ...octB,
+          accounts: draft.accounts
+            .filter((a) => !a.readOnly)
+            .map((a) => ({ accountId: a.accountId, reportedBalance: a.expectedLedgerBalance, incomeEntered: a.accountId === popular.id ? 30000 : 0, incomeNote: null })),
+          goals: [],
+          essentialCategories: [],
+          flexibleCategories: [],
+          includedCarryover: 0,
+          acknowledgedDeficit: true,
+          acknowledgedZeroBuffer: true,
+        },
+        ctx,
+      );
+      check("the Oct 16-31 check-in is confirmed with Popular's 30,000", confirmed.ok, confirmed);
+      const cardBefore = await eCard(ctx);
+      const novBefore = await eAffordAt(novB, ctx);
+      const step3Before = await eStep3(ctx);
+      eq("before: the confirmed card counts 11,493 against 30,000", `${cardBefore?.subscriptions}|${cardBefore?.income}`, "11493|30000");
+
+      console.log("-- a 5,000 deposit from a family member, earmarked for the Oct 28 installment --");
+      const family = await eManual.createManualTransaction(
+        (() => {
+          const { id: _id, ...values } = eSchema.parse({ type: "INCOME", date: "2026-10-20", amount: "5000", currency: "DOP", accountId: popular.id, categoryId: "none", note: "Verify Earmark family help" });
+          return values;
+        })(),
+        { getContext: async () => ctx as never, getRates: async () => eRates() },
+      );
+      const familyDeposit = { id: family.id, accountId: popular.id, amount: 5000, type: "INCOME", source: "MANUAL", transferDirection: null };
+      check("the earmark for 5,000 on the Oct 28 installment is accepted", (await eSave(familyDeposit, [{ occurrenceKey: oct28, amount: 5000 }], ctx)).ok);
+      const occurrence = await eOccurrence(octB, oct28, ctx);
+      eq(
+        "K2: the Oct 28 occurrence still costs 11,493 as a charge, 5,000 of it is covered, and it asks 6,493 of the period (whole and outstanding)",
+        `${round2(occurrence?.amount ?? NaN)}|${(occurrence as { earmarked?: number } | undefined)?.earmarked ?? 0}|${round2(occurrence ? eK2.wholeAmount(occurrence) : NaN)}|${round2(occurrence ? eK2.outstandingAmount(occurrence) : NaN)}`,
+        "11493|5000|6493|6493",
+      );
+      const step3 = await eStep3(ctx);
+      eq(
+        "Step 3: the Klarna row, Subscriptions and Popular's own room count 6,493, and the row names what covers the rest",
+        `${step3.subscriptions}|${step3.row?.amount}|${step3.account}|${(step3.row?.covered ?? []).map((part) => `${part.amount}:${part.depositLabel}`).join(",")}`,
+        "6493|6493|6493|5000:Verify Earmark family help",
+      );
+      eq("Step 3: Available rises by exactly the 5,000 the installment no longer asks - never by 10,000", round2(step3.available - step3Before.available), 5000);
+      const card = await eCard(ctx);
+      eq(
+        "the confirmed card: commitments 6,493 against the 30,000 typed (the deposit is not income on top), Available 5,000 higher, the same as Step 3",
+        `${card?.subscriptions}|${card?.income}|${round2((card?.available ?? NaN) - (cardBefore?.available ?? NaN))}|${card?.available === step3.available}`,
+        "6493|30000|5000|true",
+      );
+      const afford = await eAffordAt(octB, ctx);
+      eq("Afford: Popular's check and the period's check count 6,493 for Oct 16-31", `${afford.account}|${afford.flexible}`, "6493|6493");
+      eq("the From Afford tracker re-judges the Oct 28 installment at 6,493", await eTracker(ctx), 6493);
+      eq(
+        "K5: the deposit is income as a fact (35,000 with the paycheck) and left out of the estimate (30,000)",
+        `${await eIncomeOf("fact", ctx)}|${await eIncomeOf("estimate", ctx)}`,
+        "35000|30000",
+      );
+      eq(
+        "K5: Nov 16-31's projected income, averaged over Oct 16-31 and the halves before, is what it was before the deposit",
+        (await eAffordAt(novB, ctx)).income,
+        novBefore.income,
+      );
+
+      console.log("-- money moved in from outside Cadence: a second earmark on the same installment --");
+      const transfer = await prisma.transaction.create({
+        data: { accountId: popular.id, date: eDay(10, 22), amount: 3000, currency: "DOP", type: "EXTERNAL_TRANSFER", transferDirection: "IN", source: "MANUAL", note: "Verify Earmark from savings abroad" },
+      });
+      const transferDeposit = { id: transfer.id, accountId: popular.id, amount: 3000, type: "EXTERNAL_TRANSFER", source: "MANUAL", transferDirection: "IN" };
+      eq("an incoming transfer of 8,000 for the installment is refused: it still asks only 6,493", await eIssue({ ...transferDeposit, amount: 8000 }, [{ occurrenceKey: oct28, amount: 8000 }], ctx), "over_occurrence");
+      check("the incoming transfer's 3,000 is accepted", (await eSave(transferDeposit, [{ occurrenceKey: oct28, amount: 3000 }], ctx)).ok);
+      eq("K2: two deposits cover 8,000 of the installment; it asks 3,493", await eWhole(octB, klarna.id, ctx), 3493);
+      // Past the writer, as an edit elsewhere could leave it: the transfer
+      // and its earmark both raised to 8,000.
+      await prisma.transaction.update({ where: { id: transfer.id }, data: { amount: 8000 } });
+      await prisma.$executeRaw`UPDATE "RecurringEarmark" SET amount = 8000 WHERE "transactionId" = ${transfer.id}`;
+      const over = await eOccurrence(octB, oct28, ctx);
+      eq(
+        "a doubly earmarked occurrence never takes more than it costs: 5,000 + 8,000 set aside cover 11,493 and it asks 0, never less",
+        `${(over as { earmarked?: number } | undefined)?.earmarked ?? 0}|${round2(over ? eK2.wholeAmount(over) : NaN)}`,
+        "11493|0",
+      );
+      await prisma.transaction.update({ where: { id: transfer.id }, data: { amount: 3000 } });
+      await prisma.$executeRaw`UPDATE "RecurringEarmark" SET amount = 3000 WHERE "transactionId" = ${transfer.id}`;
+      eq(
+        "an outgoing transfer and a check-in's paycheck cannot be set aside for a payment",
+        `${await eIssue({ ...transferDeposit, id: null, transferDirection: "OUT" }, [{ occurrenceKey: nov28, amount: 100 }], ctx)}|${await eIssue({ ...familyDeposit, id: null, source: "PAYDAY_CHECKIN" }, [{ occurrenceKey: nov28, amount: 100 }], ctx)}`,
+        "not_depositable|not_depositable",
+      );
+
+      console.log("-- one deposit split over two installments --");
+      const split = await prisma.transaction.create({
+        data: { accountId: popular.id, date: eDay(10, 23), amount: 15000, currency: "DOP", type: "INCOME", source: "MANUAL", note: "Verify Earmark split" },
+      });
+      const splitDeposit = { id: split.id, accountId: popular.id, amount: 15000, type: "INCOME", source: "MANUAL", transferDirection: null };
+      eq(
+        "11,493 for Nov 28 and 4,000 for Dec 28 is refused: 15,493 is more than the 15,000 deposit",
+        await eIssue(splitDeposit, [{ occurrenceKey: nov28, amount: 11493 }, { occurrenceKey: dec28, amount: 4000 }], ctx),
+        "over_deposit",
+      );
+      check("11,000 for Nov 28 and 4,000 for Dec 28 is accepted", (await eSave(splitDeposit, [{ occurrenceKey: nov28, amount: 11000 }, { occurrenceKey: dec28, amount: 4000 }], ctx)).ok);
+      eq("K2: Nov 28 asks 493 and Dec 28 asks 7,493", `${await eWhole(novB, klarna.id, ctx)}|${await eWhole(decB, klarna.id, ctx)}`, "493|7493");
+      await prisma.transaction.update({ where: { id: split.id }, data: { amount: 12000 } });
+      eq(
+        "a split deposit never covers more than it holds: lowered to 12,000, Nov 28 keeps its 11,000 and Dec 28 gets the 1,000 left (asks 10,493)",
+        `${await eWhole(novB, klarna.id, ctx)}|${await eWhole(decB, klarna.id, ctx)}`,
+        "493|10493",
+      );
+      await prisma.transaction.delete({ where: { id: split.id } });
+      eq("the split deposit deleted, Nov 28 and Dec 28 ask their whole 11,493 again", `${await eWhole(novB, klarna.id, ctx)}|${await eWhole(decB, klarna.id, ctx)}`, "11493|11493");
+
+      console.log("-- posting the Oct 28 installment --");
+      await ePost(eDay(10, 28));
+      const posted = await prisma.transaction.findMany({ where: { accountId: popular.id, source: "RECURRING" } });
+      const ctx28 = eContext(eDay(10, 28));
+      const postedOccurrence = await eOccurrence(octB, oct28, ctx28);
+      eq(
+        "the posted row keeps the full bank amount, 11,493 DOP; both earmarks stay as the record of what covered it; the occurrence asks 3,493",
+        `${posted.length}|${round2(num(posted[0]?.amount))}:${posted[0]?.currency}|${(await eRows(family.id)) + (await eRows(transfer.id))}|${postedOccurrence?.status}|${round2(postedOccurrence ? eK2.wholeAmount(postedOccurrence) : NaN)}`,
+        "1|11493:DOP|2|posted|3493",
+      );
+
+      console.log("-- deleting the deposits --");
+      await prisma.transaction.delete({ where: { id: family.id } });
+      eq("the family deposit deleted: its earmark goes with it and the installment asks 8,493", `${await eRows(family.id)}|${await eWhole(octB, klarna.id, ctx28)}`, "0|8493");
+      await prisma.transaction.delete({ where: { id: transfer.id } });
+      eq("the transfer deleted too: the installment asks its full 11,493 again", await eWhole(octB, klarna.id, ctx28), 11493);
+
+      console.log("-- a charge entered before posting, in pesos, against the euro installment (K7) --");
+      const ctx27 = eContext(eDay(11, 27));
+      const charge = await eManual.createManualTransaction(
+        (() => {
+          const { id: _id, ...values } = eSchema.parse({ type: "EXPENSE", date: "2026-11-27", amount: "11520", currency: "DOP", accountId: popular.id, categoryId: "none", note: "Compra Visa Int Klarna" });
+          return values;
+        })(),
+        { getContext: async () => ctx27 as never, getRates: async () => eRates() },
+      );
+      const match = charge.posted?.match as { kind: string; possible: boolean; posted: { id: string; amount: number; currency: string } } | undefined;
+      eq(
+        "the 11,520 DOP charge on Nov 27 is offered as a possible match of the Nov 28 installment of 163.71 EUR, not posted yet",
+        `${match?.kind}|${match?.possible}|${match?.posted.id === nov28}|${match?.posted.amount}:${match?.posted.currency}`,
+        "upcoming|true|true|163.71:EUR",
+      );
+      const keepUpcoming = eDuplicates.keepEntryAsUpcoming as
+        | ((input: { transactionId: string; savedDigest: string; occurrenceKey: string }, rates: RateTable) => Promise<{ ok: boolean }>)
+        | undefined;
+      const kept = keepUpcoming && charge.posted ? await keepUpcoming({ transactionId: charge.id, savedDigest: charge.posted.savedDigest, occurrenceKey: nov28 }, eRates()) : null;
+      const entry = await prisma.transaction.findUniqueOrThrow({ where: { id: charge.id } });
+      eq(
+        "\"It's that payment\": the pairing is recorded at once as a RecurringSettlement of the charge with Nov 28, and the entry stays as typed (11,520 DOP, its own note)",
+        `${kept?.ok}|${await prisma.recurringSettlement.count({ where: { occurrenceKey: nov28, transactionId: charge.id } })}|${num(entry.amount)}:${entry.currency}|${entry.originalCurrency}|${entry.note}`,
+        "true|1|11520:DOP|null|Compra Visa Int Klarna",
+      );
+      eq("K2: the Nov 28 installment is settled by that charge before it posts", (await eOccurrence(novB, nov28, ctx27))?.status, "settled");
+      // The user edits the entry afterwards: a note that no longer names
+      // anything, and the amount the bank finally showed. An amount edit
+      // keeps the pairing, as it does for a charge posting settled.
+      await prisma.transaction.update({ where: { id: charge.id }, data: { note: "Compra tarjeta", amount: 11605 } });
+      eq(
+        "after the note and amount are edited the pairing still holds: one settlement, the occurrence still settled",
+        `${await prisma.recurringSettlement.count({ where: { occurrenceKey: nov28, transactionId: charge.id } })}|${(await eOccurrence(novB, nov28, ctx27))?.status}`,
+        "1|settled",
+      );
+      await ePost(eDay(11, 28));
+      eq(
+        "posting on Nov 28 writes no second charge though the note no longer names the item: no RECURRING row for Nov 28, the entry settles it, one installment counted (4 left)",
+        `${await prisma.transaction.count({ where: { source: "RECURRING", externalId: nov28 } })}|${await prisma.recurringSettlement.count({ where: { occurrenceKey: nov28, transactionId: charge.id } })}|${(await prisma.recurringItem.findUniqueOrThrow({ where: { id: klarna.id } })).remainingOccurrences}`,
+        "0|1|4",
+      );
+
+      console.log("-- the same answer, then the charge deleted before the installment posts --");
+      const ctxDec = eContext(eDay(12, 27));
+      const decCharge = await eManual.createManualTransaction(
+        (() => {
+          const { id: _id, ...values } = eSchema.parse({ type: "EXPENSE", date: "2026-12-27", amount: "11520", currency: "DOP", accountId: popular.id, categoryId: "none", note: "Compra Visa Int" });
+          return values;
+        })(),
+        { getContext: async () => ctxDec as never, getRates: async () => eRates() },
+      );
+      const decMatch = decCharge.posted?.match as { kind: string; posted: { id: string } } | undefined;
+      const decKept =
+        keepUpcoming && decCharge.posted && decMatch?.posted.id === dec28
+          ? await keepUpcoming({ transactionId: decCharge.id, savedDigest: decCharge.posted.savedDigest, occurrenceKey: dec28 }, eRates())
+          : null;
+      const pairedBeforeDelete = await prisma.recurringSettlement.count({ where: { occurrenceKey: dec28, transactionId: decCharge.id } });
+      // The delete the transaction form makes for a plain entry; the
+      // settlement goes with the charge (ON DELETE CASCADE), as one posting
+      // wrote does.
+      await prisma.transaction.delete({ where: { id: decCharge.id } });
+      const pairedAfterDelete = await prisma.recurringSettlement.count({ where: { occurrenceKey: dec28 } });
+      await ePost(eDay(12, 28));
+      eq(
+        "deleting the paired charge releases the occurrence: paired once answered, no settlement after the delete, and Dec 28 posts as a RECURRING row",
+        `${decKept?.ok}|${pairedBeforeDelete}|${pairedAfterDelete}|${await prisma.transaction.count({ where: { source: "RECURRING", externalId: dec28 } })}`,
+        "true|1|0|1",
+      );
+
+      const en = eDictionary("en").transactions as Record<string, unknown>;
+      const es = eDictionary("es").transactions as Record<string, unknown>;
+      check(
+        "the earmark picker and the upcoming-payment question exist in English and Spanish",
+        ["earmarkLabel", "earmarkOption", "earmarkAmountLabel", "upcomingPromptTitle", "isUpcomingPayment"].every((k) => en[k] !== undefined && es[k] !== undefined),
+      );
+    } finally {
+      await restoreEarmarkRates();
+      await eWipe();
+      await prisma.account.updateMany({ where: { id: { in: archivedForEarmark } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForEarmark } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForEarmark } }, data: { active: true } });
     }
   }
 

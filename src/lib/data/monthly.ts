@@ -68,7 +68,7 @@ import { num, round2, sum } from "@/lib/money";
 import { daysElapsedInMonth, monthForDate, monthWindow, nextMonth, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
 import { prisma } from "@/lib/prisma";
 import { nextPeriod, periodForDate, periodInfo } from "@/lib/period";
-import { outstanding, outstandingAmount, sumOccurrences } from "@/lib/period-commitments";
+import { outstanding, outstandingCharge, sumOccurrences } from "@/lib/period-commitments";
 import { monthlyEquivalent } from "@/lib/recurring";
 import { chargeMatchesItem, itemsWithAmbiguousCategory } from "@/lib/recurring-settlement";
 import { ownShare } from "@/lib/shared-expense";
@@ -841,7 +841,10 @@ export async function getCurrentMonthPace(context: AppContext): Promise<MonthlyP
   // finite plan stops at its countdown, a backlog posting will still charge
   // counts in full, and an occurrence already posted or paid by a charge the
   // user entered is in committedSpentSoFar, never here. An item posting will
-  // skip charges nothing.
+  // skip charges nothing. This is spending, so it is the charge itself
+  // (outstandingCharge): a deposit earmarked for it lowers what it asks of
+  // the plan, not what leaves the account - and once posted, the row counts
+  // in full in committedSpentSoFar.
   const current = periodForDate(context.today);
   const monthPeriods = [current];
   if (current.period === "A") monthPeriods.push(periodInfo(nextPeriod(current)));
@@ -853,7 +856,7 @@ export async function getCurrentMonthPace(context: AppContext): Promise<MonthlyP
         .filter((occurrence) => occurrence.kind === "SUBSCRIPTION"),
       context.displayCurrency,
       context.rates,
-      outstandingAmount,
+      outstandingCharge,
     ),
   );
 

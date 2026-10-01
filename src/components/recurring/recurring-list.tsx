@@ -15,7 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatMoney } from "@/lib/currency";
-import { formatDate, formatRelativeDays, toISODate } from "@/lib/date";
+import { formatDate, formatDayMonth, formatRelativeDays, toISODate } from "@/lib/date";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { labelFor } from "@/lib/labels";
 import { isFinishedPlan } from "@/lib/recurring";
@@ -173,6 +173,23 @@ export function RecurringList({
                 {row.accountName ? ` · ${row.accountName}` : ""}
                 {row.goalName ? ` · ${row.goalName}` : ""}
               </p>
+              {/* Deposits set aside for its upcoming charges
+                  (src/lib/earmarks.ts): already off what each one asks of
+                  the plan, here and in the tracker's verdict. */}
+              {row.covered.map((part) => (
+                <p
+                  key={`${toISODate(part.dueDate)}:${part.transactionId}:${part.currency}`}
+                  className="text-hint text-muted-foreground max-sm:block"
+                >
+                  {t.coveredOn(
+                    formatDayMonth(part.dueDate),
+                    common.coveredBy(
+                      formatMoney(part.amount, part.currency),
+                      part.depositLabel ?? common.depositOf(formatDayMonth(part.depositDate)),
+                    ),
+                  )}
+                </p>
+              ))}
             </div>
 
             <div className="text-right">

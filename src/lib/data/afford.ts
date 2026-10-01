@@ -105,13 +105,16 @@ import {
   type PeriodRef,
 } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { whole, type CommitmentOccurrence } from "@/lib/period-commitments";
+import { coverOccurrence } from "@/lib/earmarks";
+import { scheduleDates, whole, wholeAmount, type CommitmentOccurrence } from "@/lib/period-commitments";
+import { recurringExternalId } from "@/lib/recurring-settlement";
 import type { affordInputSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAppContext } from "@/lib/data/context";
 import { loadGoalPeriodPlans } from "@/lib/data/goal-plan";
 import { loadConfirmedRooms, type ConfirmedRoom } from "@/lib/data/flexible-room";
+import { loadOccurrenceEarmarks } from "@/lib/data/earmarks";
 import { loadCommitments } from "@/lib/data/period-commitments";
 import { loadPeriodIncome } from "@/lib/data/period-income";
 import {
@@ -268,7 +271,8 @@ interface ScheduledCommitments {
  * charge or already has, subscription or contribution, each filed in the
  * period its due date falls in (a backlog in the current period, every
  * occurrence of it up to the countdown), at the ledger's amount once posting
- * has written or settled it, on the account the money left. The period
+ * has written or settled it, on the account the money left, less what a
+ * deposit the user earmarked for it covers (wholeAmount). The period
  * containing today is therefore counted in full, not from today: its income
  * is a whole-period average, so its commitments must be too, or rent posted
  * on the 16th would vanish from a purchase judged on the 28th. An item
@@ -346,10 +350,13 @@ async function loadScheduledCommitments(
   for (const [key, occurrences] of commitments) {
     const bucket = result.get(key);
     if (!bucket) continue;
+    // What each occurrence costs the plan (wholeAmount): less what a
+    // deposit the user earmarked for it covers.
     for (const occurrence of whole(occurrences)) {
-      add(bucket, occurrence.amount, occurrence.currency, occurrence.accountId);
+      const cost = wholeAmount(occurrence);
+      add(bucket, cost, occurrence.currency, occurrence.accountId);
       if (occurrence.kind === "CONTRIBUTION") {
-        bucket.contributions += convert(occurrence.amount, occurrence.currency, context.displayCurrency, context.rates);
+        bucket.contributions += convert(cost, occurrence.currency, context.displayCurrency, context.rates);
       }
     }
   }
@@ -970,11 +977,21 @@ async function recheckLoadedItem(
 ): Promise<AffordVerdict | null> {
   const chosen = accounts.find((account) => account.id === item.accountId);
   if (!chosen) return null;
-  const installments = remainingInstallments(
-    item,
-    num(item.amount),
-    context.today,
-    context.currentPeriod.key,
+  // Each installment as the period commitments count it: less what deposits
+  // the user earmarked for it cover (src/lib/earmarks.ts). The cover is set
+  // aside in the account's currency, so a plan with any is judged in that
+  // currency, where what is left is exact to the cent; one without is judged
+  // in its own, as it always was.
+  const keys = scheduleDates(item, context.today, { currentPeriodKey: context.currentPeriod.key }).map((date) =>
+    recurringExternalId(item.id, date.dueDate),
+  );
+  const earmarks = await loadOccurrenceEarmarks(keys, context.rates);
+  const currency = earmarks.size > 0 ? chosen.currency : item.currency;
+  const amount = round2(convert(num(item.amount), item.currency, currency, context.rates));
+  const installments = remainingInstallments(item, amount, context.today, context.currentPeriod.key, (dueDate) =>
+    earmarks.size > 0
+      ? coverOccurrence(amount, currency, earmarks.get(recurringExternalId(item.id, dueDate)) ?? [], context.rates).earmarked
+      : 0,
   );
   const refs = [...new Set(installments.map((installment) => installment.periodKey))]
     .map((key) => parsePeriodKey(key))
@@ -984,7 +1001,7 @@ async function recheckLoadedItem(
   });
   return evaluateAffordability({
     installments,
-    currency: item.currency,
+    currency,
     projections,
     rates: context.rates,
   });

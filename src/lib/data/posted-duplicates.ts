@@ -11,24 +11,35 @@
  * Nothing here decides: every match is put to the user. applyPostedMatch is
  * what "It's the posted charge" does to the posted row, and
  * keepPostedInsteadOfEntry the same answer for an entry already saved by hand.
+ *
+ * A charge entered by hand is also checked against what has not posted yet
+ * (`upcoming`): an occurrence of an item in another currency than its
+ * account's, which the charge - in the account's currency - can never settle
+ * by amount, so posting would write it again on its due date. Only ever a
+ * possible match; keepEntryAsUpcoming is what "It's that payment" does.
  */
 import { createHash } from "node:crypto";
 
 import { roundRate, storedMoney, type StoredMoney } from "@/lib/account-money";
 
-import { addDays, maxDate, minDate, toISODate } from "@/lib/date";
+import { addDays, fromISODate, maxDate, minDate, toISODate } from "@/lib/date";
 import { num, type DecimalLike } from "@/lib/money";
 import { fundedPeriodFor, periodInfo } from "@/lib/period";
+import { scheduleDates } from "@/lib/period-commitments";
 import { prisma } from "@/lib/prisma";
+import { skipReasonFor } from "@/lib/recurring";
 import {
   itemIdFromOccurrenceKey,
   paycheckWindow,
   planPostedDuplicates,
+  recurringExternalId,
   settlementWindow,
   type IncomingEntry,
   type MatchableItem,
   type PostedEntry,
 } from "@/lib/recurring-settlement";
+
+import { loadSettlementPlan } from "@/lib/data/recurring-settlement";
 
 import type { Prisma } from "@/generated/prisma/client";
 import type { RateTable } from "@/lib/currency";
@@ -41,10 +52,10 @@ import type { RateTable } from "@/lib/currency";
  */
 const LOOKUP_MARGIN_DAYS = 40;
 
-/** One posted row as the entry points show it. */
+/** One posted row as the entry points show it - for an upcoming occurrence, its key, due date and the item's charge. */
 export interface PostedMatchRow {
   id: string;
-  kind: "recurring" | "paycheck";
+  kind: "recurring" | "paycheck" | "upcoming";
   /** The recurring item's name (the row's note once the item is gone), or the paycheck's note. */
   label: string | null;
   /** YYYY-MM-DD */
@@ -54,7 +65,7 @@ export interface PostedMatchRow {
 }
 
 export interface PostedMatch {
-  kind: "recurring" | "paycheck";
+  kind: "recurring" | "paycheck" | "upcoming";
   /** Only after converting between currencies, or the row neither names the item nor lands within PROXIMITY_DAYS of it: a warning, never resolved unless the user says so. */
   possible: boolean;
   /** Several items survive the look-alike guard; `others` lists the rest. */
@@ -89,6 +100,7 @@ export async function findPostedDuplicates(
   incoming: readonly IncomingEntry[],
   rates: RatesSource,
   client: Client = prisma,
+  options: { upcoming?: boolean } = {},
 ): Promise<Map<string, PostedMatch>> {
   const result = new Map<string, PostedMatch>();
   if (incoming.length === 0) return result;
@@ -124,7 +136,8 @@ export async function findPostedDuplicates(
       note: true,
     },
   });
-  if (rows.length === 0) return result;
+  const upcoming = options.upcoming ? await loadUpcomingEntries(incoming, earliest, latest, client) : [];
+  if (rows.length === 0 && upcoming.length === 0) return result;
 
   const recurringKeys = rows
     .filter((row) => row.source === "RECURRING" && row.externalId)
@@ -201,6 +214,17 @@ export async function findPostedDuplicates(
     });
     if (kind === "recurring" && !(row.externalId && contributionHalves.has(row.externalId))) rewritable.add(row.id);
   }
+  for (const entry of upcoming) {
+    posted.push(entry);
+    viewById.set(entry.id, {
+      id: entry.id,
+      kind: "upcoming",
+      label: entry.item?.name ?? null,
+      date: toISODate(entry.date),
+      amount: entry.amount,
+      currency: entry.currency,
+    });
+  }
 
   const incomingByKey = new Map(incoming.map((entry) => [entry.key, entry]));
   const crossCurrency = posted.some((row) =>
@@ -257,6 +281,87 @@ function rewriteFor(incoming: StoredMoney, posted: PostedEntry): StoredMoney {
   };
 }
 
+/**
+ * The occurrences a hand-entered charge may be although posting has not
+ * written them: for each active subscription on one of the charges' accounts
+ * whose currency is not that account's, every due date from its nextDate
+ * whose settlement window can hold one of the charges, unless posting already
+ * wrote it or its own settlement plan already pairs a charge with it (then
+ * posting takes care of it), or posting will skip the item. Only charges
+ * entered in their account's currency are asked about: one entered in the
+ * item's currency is settled by posting on its own when it holds the item's
+ * amount.
+ */
+async function loadUpcomingEntries(
+  incoming: readonly IncomingEntry[],
+  earliest: Date,
+  latest: Date,
+  client: Client,
+): Promise<PostedEntry[]> {
+  const charges = incoming.filter((entry) => entry.type === "EXPENSE" && !entry.originalCurrency);
+  if (charges.length === 0) return [];
+  const accountIds = [...new Set(charges.map((entry) => entry.accountId))];
+  const [accounts, items] = await Promise.all([
+    client.account.findMany({ where: { id: { in: accountIds } }, select: { id: true, currency: true } }),
+    client.recurringItem.findMany({
+      where: { active: true, kind: "SUBSCRIPTION", accountId: { in: accountIds } },
+      select: {
+        id: true,
+        name: true,
+        amount: true,
+        currency: true,
+        categoryId: true,
+        kind: true,
+        goalId: true,
+        frequency: true,
+        nextDate: true,
+        anchorDay: true,
+        secondAnchorDay: true,
+        remainingOccurrences: true,
+        accountId: true,
+        account: { select: { status: true } },
+        goal: { select: { achievedAt: true } },
+      },
+    }),
+  ]);
+  const currencyOf = new Map(accounts.map((account) => [account.id, account.currency]));
+  const foreign = items.filter(
+    (item) => item.accountId && item.currency !== currencyOf.get(item.accountId) && skipReasonFor(item) === null,
+  );
+  if (foreign.length === 0) return [];
+  // A window reaches SETTLEMENT_LEAD_DAYS before its due date and to its
+  // period's end, so a due date within LOOKUP_MARGIN_DAYS of the charges
+  // covers every window that can hold one.
+  const through = addDays(latest, LOOKUP_MARGIN_DAYS);
+  const from = addDays(earliest, -LOOKUP_MARGIN_DAYS);
+  const plan = await loadSettlementPlan(through);
+  const entries: PostedEntry[] = [];
+  for (const item of foreign) {
+    const matchable: MatchableItem = { id: item.id, name: item.name, amount: num(item.amount), currency: item.currency, categoryId: item.categoryId };
+    for (const date of scheduleDates({ ...item }, earliest, {
+      through,
+      alreadyPosted: (due) => plan.posted.has(recurringExternalId(item.id, due)),
+    })) {
+      const key = recurringExternalId(item.id, date.dueDate);
+      if (date.dueDate.getTime() < from.getTime() || plan.posted.has(key) || plan.settledBy.has(key)) continue;
+      entries.push({
+        id: key,
+        kind: "upcoming",
+        accountId: item.accountId as string,
+        type: "EXPENSE",
+        date: date.dueDate,
+        amount: matchable.amount,
+        currency: item.currency,
+        originalAmount: null,
+        originalCurrency: null,
+        window: settlementWindow(date.dueDate),
+        item: matchable,
+      });
+    }
+  }
+  return entries;
+}
+
 export type PostedLookup = typeof findPostedDuplicates;
 
 /** How long a duplicate hint may take before the write it hints at goes ahead without it. */
@@ -272,14 +377,14 @@ export const POSTED_LOOKUP_TIMEOUT_MS = 2000;
 export async function lookUpPostedDuplicates(
   incoming: readonly IncomingEntry[],
   rates: RatesSource,
-  options: { lookup?: PostedLookup; timeoutMs?: number } = {},
+  options: { lookup?: PostedLookup; timeoutMs?: number; upcoming?: boolean } = {},
 ): Promise<Map<string, PostedMatch> | null> {
   const lookup = options.lookup ?? findPostedDuplicates;
   const timeoutMs = options.timeoutMs ?? POSTED_LOOKUP_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      lookup(incoming, rates),
+      lookup(incoming, rates, prisma, { upcoming: options.upcoming }),
       new Promise<null>((resolve) => {
         timer = setTimeout(() => {
           console.error(`[posted-duplicates] lookup gave no answer within ${timeoutMs}ms; writing without the hint`);
@@ -466,4 +571,107 @@ export async function keepPostedInsteadOfEntry(
   });
   if (!outcome) return { ok: false, reason: "not_found" };
   return { ok: true, match, updated: outcome.updated };
+}
+
+export type KeepUpcomingResult =
+  | { ok: true; match: PostedMatch; itemName: string }
+  | { ok: false; reason: "not_found" | "not_applicable" | "changed" | "match_gone" | "check_failed" };
+
+/**
+ * "It's that payment" for an entry the user just added by hand that may be
+ * an upcoming occurrence in another currency (findPostedDuplicates'
+ * `upcoming`): the user's answer is recorded as the pairing itself - a
+ * RecurringSettlement of the entry with that occurrence key, the row posting
+ * writes when it settles an occurrence with a charge. Posting then claims
+ * the occurrence as settled by it (loadSettlementPlan keeps a recorded
+ * pairing) and never charges it again, whatever the entry's note or category
+ * say later. The entry itself is left exactly as typed.
+ *
+ * The pairing goes as one posting wrote it: deleting the entry deletes it
+ * (ON DELETE CASCADE) and the occurrence posts on its due date as usual; an
+ * edit to the entry keeps it.
+ *
+ * Guarded as keepPostedInsteadOfEntry is: a plain MANUAL expense entered in
+ * its account's currency and paired with nothing, still exactly as saved
+ * (`savedDigest`), whose recomputed match is still this occurrence. The
+ * write is one database transaction that locks the entry, checks it again,
+ * checks the occurrence is still ahead of posting (its item active, its
+ * nextDate not past the due date, no RECURRING row for it) and inserts the
+ * row - both of RecurringSettlement's unique keys refuse a second pairing of
+ * either side.
+ */
+export async function keepEntryAsUpcoming(
+  input: { transactionId: string; savedDigest: string; occurrenceKey: string },
+  rates: RatesSource,
+  options: { lookup?: PostedLookup; timeoutMs?: number } = {},
+): Promise<KeepUpcomingResult> {
+  const entry = await prisma.transaction.findUnique({
+    where: { id: input.transactionId },
+    include: { recurringSettlement: { select: { id: true } } },
+  });
+  if (!entry) return { ok: false, reason: "not_found" };
+  if (
+    entry.source !== "MANUAL" ||
+    entry.externalId !== null ||
+    entry.transferId !== null ||
+    entry.type !== "EXPENSE" ||
+    entry.originalCurrency !== null ||
+    entry.recurringSettlement !== null
+  ) {
+    return { ok: false, reason: "not_applicable" };
+  }
+  if (entryDigest(entry) !== input.savedDigest) return { ok: false, reason: "changed" };
+
+  const found = await lookUpPostedDuplicates(
+    [
+      {
+        key: entry.id,
+        accountId: entry.accountId,
+        type: entry.type,
+        date: entry.date,
+        amount: num(entry.amount),
+        currency: entry.currency,
+        originalAmount: null,
+        originalCurrency: null,
+        rate: null,
+        note: entry.note,
+        categoryId: entry.categoryId,
+      },
+    ],
+    rates,
+    { ...options, upcoming: true },
+  );
+  if (!found) return { ok: false, reason: "check_failed" };
+  const match = found.get(entry.id);
+  if (!match || match.kind !== "upcoming" || match.posted.id !== input.occurrenceKey) return { ok: false, reason: "match_gone" };
+
+  const itemId = itemIdFromOccurrenceKey(input.occurrenceKey);
+  const dueDate = fromISODate(input.occurrenceKey.slice(input.occurrenceKey.lastIndexOf(":") + 1));
+  if (!itemId || !dueDate) return { ok: false, reason: "match_gone" };
+
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Transaction" WHERE "id" = ${entry.id} FOR UPDATE`;
+    const current = await tx.transaction.findUnique({
+      where: { id: entry.id },
+      include: { recurringSettlement: { select: { id: true } } },
+    });
+    if (!current) return "not_found" as const;
+    if (current.recurringSettlement !== null || entryDigest(current) !== input.savedDigest) return "changed" as const;
+    const item = await tx.recurringItem.findFirst({
+      where: { id: itemId, active: true, nextDate: { lte: dueDate } },
+      select: { id: true, name: true, kind: true },
+    });
+    const posted = await tx.transaction.findUnique({
+      where: { source_externalId: { source: "RECURRING", externalId: input.occurrenceKey } },
+      select: { id: true },
+    });
+    if (!item || posted) return "match_gone" as const;
+    const recorded = await tx.recurringSettlement.createMany({
+      data: [{ transactionId: entry.id, occurrenceKey: input.occurrenceKey, recurringItemId: item.id, kind: item.kind, dueDate }],
+      skipDuplicates: true,
+    });
+    return recorded.count === 1 ? { itemName: item.name } : ("match_gone" as const);
+  });
+  if (typeof outcome === "string") return { ok: false, reason: outcome };
+  return { ok: true, match, itemName: outcome.itemName };
 }

@@ -6,6 +6,13 @@
  * check-in and every other reader of a period's items use) with the last
  * day of the periods they cover; the matcher's due-date ordering is what
  * makes the two agree on every occurrence both cover.
+ *
+ * An occurrence the user already paired with a charge before it fell due
+ * ("It's that payment", keepEntryAsUpcoming in
+ * src/lib/data/posted-duplicates.ts) has its RecurringSettlement row already:
+ * it is settled by that row's charge, never offered to the matcher, and the
+ * charge is no candidate for any other occurrence. The matcher's rules are
+ * not involved.
  */
 import { num } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -35,6 +42,8 @@ export interface PlannedCharge {
   accountId: string;
   /** A hand-logged contribution's own expense: its GoalContribution already exists. */
   isContributionTwin: boolean;
+  /** The pairing is already a RecurringSettlement row, written before the occurrence fell due; posting keeps it rather than writing one. */
+  alreadyRecorded?: boolean;
 }
 
 export interface SettlementPlan {
@@ -86,13 +95,43 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
   })) {
     plan.posted.add(posted.externalId as string);
   }
+  // Occurrences already paired before they fell due: settled by their row's
+  // charge as recorded.
+  for (const recorded of await prisma.recurringSettlement.findMany({
+    where: { occurrenceKey: { in: keys } },
+    select: {
+      occurrenceKey: true,
+      transaction: {
+        select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, accountId: true, source: true, externalId: true },
+      },
+    },
+  })) {
+    const charge = recorded.transaction;
+    plan.settledBy.set(recorded.occurrenceKey, {
+      id: charge.id,
+      date: charge.date,
+      amount: num(charge.amount),
+      currency: charge.currency,
+      originalAmount: charge.originalAmount === null ? null : num(charge.originalAmount),
+      originalCurrency: charge.originalCurrency,
+      accountId: charge.accountId,
+      isContributionTwin: manualContributionIdFromTransaction(charge) !== null,
+      alreadyRecorded: true,
+    });
+  }
 
   const occurrences: SettlementOccurrence[] = [];
   for (const { row, dates } of walks) {
     let left = row.remainingOccurrences ?? Number.POSITIVE_INFINITY;
     for (const due of dates) {
       if (left <= 0) break;
-      if (plan.posted.has(recurringExternalId(row.id, due))) continue;
+      const key = recurringExternalId(row.id, due);
+      if (plan.posted.has(key)) continue;
+      // Already settled: one installment accounted for, nothing to match.
+      if (plan.settledBy.has(key)) {
+        left -= 1;
+        continue;
+      }
       occurrences.push({ itemId: row.id, due });
       left -= 1;
     }

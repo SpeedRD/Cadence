@@ -3,9 +3,11 @@
  * receipt) stands for which occurrence of a recurring item - the one matcher
  * behind recurring posting's "already logged" and the payday check-in's
  * "Already paid this period". Pure and database-free: the loader is
- * src/lib/data/recurring-settlement.ts, the only writer of the pairing is
- * postDueRecurringItems (src/lib/recurring-posting.ts), and the pairing itself
- * is the RecurringSettlement table.
+ * src/lib/data/recurring-settlement.ts, the writer of the pairing is
+ * postDueRecurringItems (src/lib/recurring-posting.ts) - or the user, answering
+ * "It's that payment" before the occurrence falls due (keepEntryAsUpcoming in
+ * src/lib/data/posted-duplicates.ts) - and the pairing itself is the
+ * RecurringSettlement table.
  *
  * The rules, all of them here so both readers get the same verdict:
  *
@@ -298,10 +300,17 @@ export interface IncomingEntry {
   note: string | null;
 }
 
-/** A row the app wrote itself: an occurrence's RECURRING row, or a check-in's paycheck. */
+/**
+ * A row the app wrote itself: an occurrence's RECURRING row, or a check-in's
+ * paycheck - or, for a charge entered by hand (findPostedDuplicates'
+ * `upcoming`), an occurrence of an item in another currency than its
+ * account's that posting has not written yet, at the item's amount: such a
+ * charge never settles it by amount (holdsItemAmount), so without this the
+ * money would post a second time.
+ */
 export interface PostedEntry {
   id: string;
-  kind: "recurring" | "paycheck";
+  kind: "recurring" | "paycheck" | "upcoming";
   accountId: string;
   type: "EXPENSE" | "INCOME";
   date: Date;

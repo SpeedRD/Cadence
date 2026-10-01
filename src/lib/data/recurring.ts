@@ -1,10 +1,14 @@
 import { convert } from "@/lib/currency";
 import { today as todayInAppZone } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
+import { nextPeriod, periodForDate, periodInfo, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, semiMonthlyAnchorsCollide, skipReasonFor } from "@/lib/recurring";
 
+import { loadCommitments } from "@/lib/data/period-commitments";
+
 import type { AppContext } from "@/lib/data/context";
+import type { OccurrenceEarmark } from "@/lib/earmarks";
 import type { Prisma } from "@/generated/prisma/client";
 import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
 
@@ -51,17 +55,57 @@ export interface RecurringRow {
    * src/lib/recurring-posting.ts.
    */
   needs: "account" | "goal" | "goal_achieved" | null;
+  /**
+   * Deposits the user set aside for its occurrences from the current period
+   * on (src/lib/earmarks.ts), one entry per occurrence and deposit, soonest
+   * first - each part as the period commitments apply it, in the currency of
+   * the account it covers.
+   */
+  covered: (OccurrenceEarmark & { dueDate: Date })[];
+}
+
+/**
+ * What covers each item's occurrences from the current period on, by item
+ * id: the period commitments' own figures (src/lib/period-commitments.ts),
+ * read through the last period an earmark names. Nothing is read beyond the
+ * earmark table when there are none.
+ */
+async function loadCovered(context: AppContext): Promise<Map<string, RecurringRow["covered"]>> {
+  const result = new Map<string, RecurringRow["covered"]>();
+  const latest = await prisma.recurringEarmark.findFirst({
+    where: { dueDate: { gte: context.currentPeriod.start } },
+    orderBy: { dueDate: "desc" },
+    select: { dueDate: true },
+  });
+  if (!latest) return result;
+  const last = periodForDate(latest.dueDate);
+  const periods: PeriodInfo[] = [context.currentPeriod];
+  while (periods[periods.length - 1].key !== last.key && periods.length < 400) {
+    periods.push(periodInfo(nextPeriod(periods[periods.length - 1])));
+  }
+  const commitments = await loadCommitments(periods, context);
+  for (const occurrence of [...commitments.values()].flat()) {
+    if (occurrence.earmarks.length === 0) continue;
+    const list = result.get(occurrence.itemId) ?? [];
+    list.push(...occurrence.earmarks.map((earmark) => ({ ...earmark, dueDate: occurrence.dueDate })));
+    result.set(occurrence.itemId, list);
+  }
+  for (const list of result.values()) list.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+  return result;
 }
 
 export async function listRecurringItems(context: AppContext) {
-  const items = await prisma.recurringItem.findMany({
-    include: {
-      category: { select: { name: true, color: true } },
-      account: { select: { name: true, status: true } },
-      goal: { select: { name: true, achievedAt: true } },
-    },
-    orderBy: [{ active: "desc" }, { nextDate: "asc" }],
-  });
+  const [items, covered] = await Promise.all([
+    prisma.recurringItem.findMany({
+      include: {
+        category: { select: { name: true, color: true } },
+        account: { select: { name: true, status: true } },
+        goal: { select: { name: true, achievedAt: true } },
+      },
+      orderBy: [{ active: "desc" }, { nextDate: "asc" }],
+    }),
+    loadCovered(context),
+  ]);
 
   const rows: RecurringRow[] = items.map((item) => {
     const amount = num(item.amount);
@@ -104,6 +148,7 @@ export async function listRecurringItems(context: AppContext) {
             : item.kind === "CONTRIBUTION" && item.goal?.achievedAt
               ? "goal_achieved"
               : null,
+      covered: covered.get(item.id) ?? [],
     };
   });
 

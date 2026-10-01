@@ -98,6 +98,16 @@ function SubscriptionRow({
             ? ` · ${t.chargesThisPeriod(item.occurrenceCount + item.ledgerOccurrences, formatMoney(item.perOccurrenceAmount, item.currency))}`
             : ""}
         </span>
+        {/* Deposits set aside for it (src/lib/earmarks.ts): already off the
+            amount on the right and the account's room. */}
+        {item.covered.map((part) => (
+          <span key={`${part.transactionId}:${part.currency}`} className="block text-xs text-muted-foreground">
+            {t.coveredBy(
+              formatMoney(part.amount, part.currency),
+              part.depositLabel ?? t.depositOf(formatDayMonth(part.depositDate)),
+            )}
+          </span>
+        ))}
       </span>
       {/* Wraps on a phone: badge + amount + a fixed-width account picker is
           wider than the buffer block at 375px if this row cannot break. */}

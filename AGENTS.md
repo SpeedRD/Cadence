@@ -20,10 +20,12 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   point it at a scratch database, never one holding real data. Add checks as
   `check`/`eq` blocks; there is no Jest/Vitest.
 - Integrity audit: `DATABASE_URL="postgres://.../any_db" npx tsx scripts/verify-no-double-counting.ts`
-  checks real data for the four pairs of mechanisms that could count one
+  checks real data for the five pairs of mechanisms that could count one
   commitment twice or drop it (goal-contribution twins, SEMI_MONTHLY anchors,
   Afford's goal estimate vs confirmed GOAL rows, a posted RECURRING or
-  PAYDAY_CHECKIN row vs a row brought in for the same money). Read-only at the database
+  PAYDAY_CHECKIN row vs a row brought in for the same money, and a deposit
+  earmarked for a recurring occurrence vs the income estimate and the
+  occurrence it lowers). Read-only at the database
   level (`default_transaction_read_only=on` on its connection), so it is safe
   against real data. Exit 1 is a finding to investigate, never something to
   fix inside the script; it verifies the mechanisms and must not re-implement
@@ -39,14 +41,25 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   decided in one place, `planSettlements()` in `src/lib/recurring-settlement.ts`
   (loaded by `loadSettlementPlan()` in `src/lib/data/recurring-settlement.ts`),
   and read by posting and the payday check-in alike. Only posting persists a
-  pairing, as a `RecurringSettlement` row. Reuse it rather than matching
-  charges to items a second way.
+  pairing, as a `RecurringSettlement` row - except the user's own answer
+  "It's that payment" (`keepEntryAsUpcoming()` in
+  `src/lib/data/posted-duplicates.ts`), which records it before the
+  occurrence falls due; `loadSettlementPlan()` then treats that occurrence as
+  settled by its row. Reuse it rather than matching charges to items a
+  second way.
 - The reverse question - is a CSV row, a receipt being approved or a manual
   entry the money a RECURRING row or a check-in's paycheck already holds? -
   is `planPostedDuplicates()` in the same file (loaded by
   `findPostedDuplicates()` in `src/lib/data/posted-duplicates.ts`), on the same
   window and look-alike guard. A match is only ever put to the user ("It's
   the posted charge" / "It's a different charge"); never resolve one silently.
+- A deposit set aside for a recurring occurrence is a `RecurringEarmark`
+  row (rules in `src/lib/earmarks.ts`, written only by `saveEarmarks()` in
+  `src/lib/data/earmark-targets.ts`). It lowers an occurrence's cost in one
+  place, `wholeAmount`/`outstandingAmount` in `src/lib/period-commitments.ts`
+  (the loader applies it); read an occurrence's cost through those, never
+  `occurrence.amount`, which stays the charge itself. Its earmarked part is
+  left out of K5's income estimate.
 - A Transaction is stored in its account's currency (QUANTITIES_MAP.md K7):
   every write converts through `src/lib/account-money.ts` (`toAccountMoney`,
   `inAccountCurrency`, `transferLegsInAccounts`), keeping `originalAmount`,

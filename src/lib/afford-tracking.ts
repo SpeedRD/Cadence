@@ -23,19 +23,24 @@ export const FROM_AFFORD_HREF = `/recurring#${FROM_AFFORD_SECTION_ID}`;
  * (no anchor) falls back to the date's own day, and an occurrence already
  * past `today` is owed now and filed under the current period - every one of
  * them, exactly as the commitments the re-check is judged against count them.
- * Each row carries the item's amount - the one figure it will post.
+ * Each row carries `amount` - the one figure it will post, in the currency
+ * the re-check is judged in - less what `covered` says deposits the user
+ * earmarked for that date cover, in the same currency (src/lib/earmarks.ts):
+ * what the installment still asks of the plan, as the period commitments
+ * count it.
  */
 export function remainingInstallments(
   item: ScheduledItem,
   amount: number,
   today: Date,
   currentPeriodKey: string,
+  covered: (dueDate: Date) => number = () => 0,
 ): Installment[] {
   if (!item.remainingOccurrences || item.remainingOccurrences <= 0) return [];
   return scheduleDates(item, today, { currentPeriodKey }).map((date, index) => ({
     index: index + 1,
     date: date.dueDate,
-    amount: round2(amount),
+    amount: round2(Math.max(0, round2(amount) - covered(date.dueDate))),
     periodKey: date.periodKey,
   }));
 }

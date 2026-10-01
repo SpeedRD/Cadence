@@ -797,6 +797,32 @@ export const stagedApproveSchema = z.object({
 });
 
 /** Turn a FormData into the plain object the schemas expect. */
+/**
+ * The transaction form's "This money is for an upcoming payment" lines
+ * (src/lib/earmarks.ts): `earmarkOffered` says the form showed the section
+ * (absent: the row's earmarks are not this form's to change), and each line
+ * is an `earmarkKey` with its `earmarkAmount`, in the deposit's account's
+ * currency. The switch off sends no lines, which clears them. Whether each
+ * line fits the deposit and the occurrence is the writer's to judge
+ * (checkEarmarks in src/lib/data/earmark-targets.ts).
+ */
+export function earmarkLinesFrom(
+  formData: FormData,
+): { offered: false } | { offered: true; requests: { occurrenceKey: string; amount: number }[] } | { error: string } {
+  if (formData.get("earmarkOffered") !== "true") return { offered: false };
+  const keys = formData.getAll("earmarkKey").map((value) => String(value).trim());
+  const amounts = formData.getAll("earmarkAmount").map((value) => String(value));
+  const requests: { occurrenceKey: string; amount: number }[] = [];
+  for (const [index, key] of keys.entries()) {
+    if (!key) return { error: "Pick an upcoming payment" };
+    const parsed = parseAmountInput(amounts[index] ?? "");
+    if (!parsed.ok) return { error: amountIssue(parsed.reason) };
+    if (parsed.amount <= 0) return { error: "Enter an amount greater than 0" };
+    requests.push({ occurrenceKey: key, amount: parsed.amount });
+  }
+  return { offered: true, requests };
+}
+
 export function formObject(formData: FormData): Record<string, string> {
   const entries: Record<string, string> = {};
   for (const [key, value] of formData.entries()) {
@@ -817,6 +843,7 @@ const VALIDATION_MESSAGES_ES: Record<string, string> = {
   "Use 4 to 6 digits": "Usa de 4 a 6 dígitos",
   "Name the account": "Ponle nombre a la cuenta",
   "Pick an account": "Elige una cuenta",
+  "Pick an upcoming payment": "Elige un pago próximo",
   "Pick a source account": "Elige una cuenta de origen",
   "Pick a destination account": "Elige una cuenta de destino",
   "Pick two different accounts": "Elige dos cuentas diferentes",

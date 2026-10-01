@@ -1,9 +1,9 @@
 /**
  * Standing double-counting integrity audit.
  *
- * Four pairs of mechanisms in this codebase could, in principle, count the
+ * Five pairs of mechanisms in this codebase could, in principle, count the
  * same financial commitment twice (or, just as bad, drop it). Each was fixed
- * as a one-off in the past; this script checks all four against whatever
+ * as a one-off in the past; this script checks all five against whatever
  * data it is pointed at, by computing each side of every pair independently
  * from the raw rows and comparing it with what the app's own readers report:
  *
@@ -38,6 +38,14 @@
  *           entry points' own matcher (findPostedDuplicates in
  *           src/lib/data/posted-duplicates.ts), and no occurrence may be
  *           both settled by a charge (RecurringSettlement) and posted.
+ *   pair 5  a deposit the user earmarked for a recurring occurrence
+ *           (RecurringEarmark, src/lib/earmarks.ts) and the occurrence it
+ *           covers: the earmarked part lowers what the occurrence asks of the
+ *           plan (wholeAmount in src/lib/period-commitments.ts), so it must
+ *           not also count as estimated income (src/lib/period-income.ts),
+ *           must not be a check-in's paycheck (already the plan's income),
+ *           and no occurrence may be covered beyond its cost nor any deposit
+ *           beyond its amount.
  *
  *   DATABASE_URL="postgres://.../any_db" npx tsx scripts/verify-no-double-counting.ts
  *
@@ -95,7 +103,7 @@ import {
   type PeriodInfo,
   type PeriodRef,
 } from "../src/lib/period";
-import { whole } from "../src/lib/period-commitments";
+import { whole, wholeAmount } from "../src/lib/period-commitments";
 import { monthlyEquivalent, owedOccurrences, skipReasonFor, type ScheduledItem } from "../src/lib/recurring";
 import {
   manualContributionExternalId,
@@ -146,8 +154,9 @@ let prisma!: PrismaClient;
 // ---------------------------------------------------------------------------
 
 type FindingKind = "DOUBLE" | "POSSIBLE" | "DROP" | "MISMATCH";
+type Pair = 1 | 2 | 3 | 4 | 5;
 interface Finding {
-  pair: 1 | 2 | 3 | 4;
+  pair: Pair;
   kind: FindingKind;
   title: string;
   evidence: string[];
@@ -155,7 +164,7 @@ interface Finding {
 
 const findings: Finding[] = [];
 
-function flag(pair: 1 | 2 | 3 | 4, kind: FindingKind, title: string, evidence: string[]) {
+function flag(pair: Pair, kind: FindingKind, title: string, evidence: string[]) {
   findings.push({ pair, kind, title, evidence });
   console.log(`  FLAG ${kind.padEnd(8)} ${title}`);
   for (const line of evidence) console.log(`                ${line}`);
@@ -169,7 +178,7 @@ function money(amount: number, currency: string): string {
   return `${round2(amount).toFixed(2)} ${currency}`;
 }
 
-function sectionResult(pair: 1 | 2 | 3 | 4) {
+function sectionResult(pair: Pair) {
   const own = findings.filter((finding) => finding.pair === pair);
   console.log(own.length === 0 ? "  clean" : `  ${own.length} finding${own.length === 1 ? "" : "s"}`);
 }
@@ -964,18 +973,20 @@ async function main(): Promise<number> {
       // The period's recurring commitments, as the app defines them: whole()
       // of the period commitments (src/lib/period-commitments.ts) - pair 2
       // checks that walk against an independent anchor count; this pair is
-      // about what Afford adds on top of it. Each occurrence counts on the
-      // account the money leaves (the ledger row's, the paying charge's, else
-      // the item's), and only an active account carries a per-account figure.
+      // about what Afford adds on top of it. Each occurrence counts at what it
+      // costs the plan (wholeAmount: less what a deposit the user earmarked
+      // for it covers - pair 5 checks that part), on the account the money
+      // leaves (the ledger row's, the paying charge's, else the item's), and
+      // only an active account carries a per-account figure.
       const scheduledTotal = new Map<string, number>();
       const scheduledByAccount = new Map<string, Map<string, number>>();
       for (const [key, occurrences] of await loadCommitments(periods, context)) {
         for (const occurrence of whole(occurrences)) {
-          scheduledTotal.set(key, (scheduledTotal.get(key) ?? 0) + toDisplay(occurrence.amount, occurrence.currency));
+          scheduledTotal.set(key, (scheduledTotal.get(key) ?? 0) + toDisplay(wholeAmount(occurrence), occurrence.currency));
           const account = occurrence.accountId ? activeAccounts.find((candidate) => candidate.id === occurrence.accountId) : undefined;
           if (!account) continue;
           const byAccount = scheduledByAccount.get(key) ?? new Map<string, number>();
-          byAccount.set(account.id, (byAccount.get(account.id) ?? 0) + convert(occurrence.amount, occurrence.currency, account.currency, rates));
+          byAccount.set(account.id, (byAccount.get(account.id) ?? 0) + convert(wholeAmount(occurrence), occurrence.currency, account.currency, rates));
           scheduledByAccount.set(key, byAccount);
         }
       }
@@ -1209,12 +1220,158 @@ async function main(): Promise<number> {
   }
 
   // =========================================================================
+  console.log("\n== pair 5: an earmarked deposit vs the occurrence it covers ==");
+  // =========================================================================
+  {
+    const { loadPeriodIncome } = await import("../src/lib/data/period-income");
+    const { incomePeriodFor } = await import("../src/lib/period-income");
+
+    const earmarks = await prisma.recurringEarmark.findMany({
+      select: {
+        transactionId: true,
+        occurrenceKey: true,
+        dueDate: true,
+        amount: true,
+        currency: true,
+        transaction: {
+          select: {
+            id: true,
+            date: true,
+            amount: true,
+            currency: true,
+            type: true,
+            source: true,
+            transferDirection: true,
+            accountId: true,
+            note: true,
+            isOneOffIncome: true,
+            reimbursesTransactionId: true,
+          },
+        },
+      },
+    });
+    const deposits = new Map(earmarks.map((earmark) => [earmark.transactionId, earmark.transaction]));
+    const describe = (deposit: (typeof earmarks)[number]["transaction"]) =>
+      `Transaction ${deposit.id} (${deposit.source} ${deposit.type.toLowerCase()}${deposit.transferDirection ? ` ${deposit.transferDirection}` : ""}, ${toISODate(deposit.date)}) ${money(num(deposit.amount), deposit.currency)}${deposit.note ? ` "${deposit.note}"` : ""}`;
+    const storedIn = (earmark: (typeof earmarks)[number], currency: string) => convert(num(earmark.amount), earmark.currency, currency, rates);
+
+    // A deposit that can be set aside at all: ordinary income or an
+    // incoming external transfer. A check-in's paycheck is the plan's income
+    // already; earmarking it lowers the occurrence while the check-in still
+    // counts the same money.
+    for (const deposit of deposits.values()) {
+      const own = earmarks.filter((earmark) => earmark.transactionId === deposit.id);
+      if (deposit.source === "PAYDAY_CHECKIN") {
+        flag(5, "DOUBLE", `a check-in's paycheck ${deposit.id} is earmarked for a recurring payment`, [
+          `deposit:   ${describe(deposit)}`,
+          ...own.map((earmark) => `earmarked: ${money(num(earmark.amount), earmark.currency)} for ${earmark.occurrenceKey}`),
+          "the check-in counts this paycheck as the plan's income, and the occurrence asks less of the same plan",
+        ]);
+      } else if (
+        !(deposit.type === "INCOME" || (deposit.type === "EXTERNAL_TRANSFER" && deposit.transferDirection === "IN")) ||
+        deposit.source === "OPENING_BALANCE" ||
+        deposit.source === "RECURRING"
+      ) {
+        flag(5, "MISMATCH", `${deposit.id} is earmarked but is not a deposit`, [`row: ${describe(deposit)}`]);
+      }
+      const stored = own.reduce((sum, earmark) => sum + storedIn(earmark, deposit.currency), 0);
+      if (stored > num(deposit.amount) + 0.005) {
+        flag(5, "MISMATCH", `the earmarks stored for ${deposit.id} add up to more than the deposit`, [
+          `deposit:   ${describe(deposit)}`,
+          `earmarked: ${money(stored, deposit.currency)} over ${own.length} occurrence${own.length === 1 ? "" : "s"} (the readers apply at most the deposit)`,
+        ]);
+      }
+    }
+
+    // What the period commitments apply: never more than an occurrence
+    // costs, never below zero, never more of a deposit than it holds.
+    const periods = new Map<string, PeriodInfo>([[context.currentPeriod.key, context.currentPeriod]]);
+    for (const earmark of earmarks) {
+      const period = periodForDate(earmark.dueDate);
+      periods.set(period.key, period);
+    }
+    const commitments = earmarks.length > 0 ? await loadCommitments([...periods.values()], context) : new Map();
+    const appliedByDeposit = new Map<string, number>();
+    const appliedKeys = new Set<string>();
+    let covered = 0;
+    for (const occurrence of [...commitments.values()].flat()) {
+      if (occurrence.earmarks.length === 0) continue;
+      covered += 1;
+      appliedKeys.add(occurrence.key);
+      const cost = wholeAmount(occurrence);
+      if (occurrence.earmarked > occurrence.amount + 0.005 || cost < 0 || !sameCents(cost, Math.max(0, occurrence.amount - occurrence.earmarked))) {
+        flag(5, "DOUBLE", `occurrence ${occurrence.key} (${occurrence.name}) is covered beyond what it costs`, [
+          `occurrence: ${money(occurrence.amount, occurrence.currency)} (${occurrence.status})`,
+          `covered:    ${money(occurrence.earmarked, occurrence.currency)}; asks ${money(cost, occurrence.currency)}`,
+        ]);
+      }
+      for (const part of occurrence.earmarks) {
+        const deposit = deposits.get(part.transactionId);
+        const inDeposit = deposit ? convert(part.amount, part.currency, deposit.currency, rates) : part.amount;
+        appliedByDeposit.set(part.transactionId, (appliedByDeposit.get(part.transactionId) ?? 0) + inDeposit);
+      }
+    }
+    for (const [depositId, applied] of appliedByDeposit) {
+      const deposit = deposits.get(depositId);
+      if (deposit && applied > num(deposit.amount) + 0.01) {
+        flag(5, "DOUBLE", `deposit ${depositId} lowers its occurrences by more than it holds`, [
+          `deposit: ${describe(deposit)}`,
+          `applied: ${money(applied, deposit.currency)} across the occurrences it covers`,
+        ]);
+      }
+    }
+
+    // Income: what an earmarked deposit covers is not estimated income. For
+    // every period and account an earmarked INCOME row counts in, the fact
+    // must exceed the estimate by at least the earmarked parts of the rows
+    // the estimate would otherwise read (one-off income and paybacks are
+    // out of it already).
+    const incomeRows = [...deposits.values()].filter((deposit) => deposit.type === "INCOME" && deposit.source !== "PAYDAY_CHECKIN");
+    const required = new Map<string, number>();
+    const incomePeriods = new Map<string, PeriodInfo>();
+    for (const row of incomeRows) {
+      if (row.isOneOffIncome || row.reimbursesTransactionId !== null) continue;
+      const period = incomePeriodFor(row);
+      incomePeriods.set(period.key, period);
+      const earmarked = earmarks
+        .filter((earmark) => earmark.transactionId === row.id)
+        .reduce((sum, earmark) => sum + storedIn(earmark, row.currency), 0);
+      const account = await prisma.account.findUnique({ where: { id: row.accountId }, select: { currency: true } });
+      const part = convert(Math.min(num(row.amount), earmarked), row.currency, account?.currency ?? row.currency, rates);
+      const key = `${period.key}|${row.accountId}`;
+      required.set(key, (required.get(key) ?? 0) + part);
+    }
+    if (required.size > 0) {
+      const [fact, estimate] = await Promise.all([
+        loadPeriodIncome([...incomePeriods.values()], "fact", context),
+        loadPeriodIncome([...incomePeriods.values()], "estimate", context),
+      ]);
+      for (const [key, part] of required) {
+        const [periodKey, accountId] = key.split("|");
+        const factAmount = fact.get(periodKey)?.byAccount.get(accountId) ?? 0;
+        const estimateAmount = estimate.get(periodKey)?.byAccount.get(accountId) ?? 0;
+        if (factAmount - estimateAmount + 0.01 < part) {
+          flag(5, "DOUBLE", `earmarked income counted as estimated income in ${periodKey} on account ${accountId}`, [
+            `income fact ${round2(factAmount).toFixed(2)}, estimate ${round2(estimateAmount).toFixed(2)} (account currency)`,
+            `earmarked parts that lower their occurrences: ${round2(part).toFixed(2)} - the estimate must leave at least that out`,
+          ]);
+        }
+      }
+    }
+    const unapplied = [...new Set(earmarks.map((earmark) => earmark.occurrenceKey))].filter((key) => !appliedKeys.has(key));
+    info(
+      `earmarks: ${earmarks.length} on ${deposits.size} deposit${deposits.size === 1 ? "" : "s"}; ${covered} occurrence${covered === 1 ? "" : "s"} covered in the period commitments${unapplied.length ? `; ${unapplied.length} not applied (posting skips the item, or the item is gone): ${unapplied.join(", ")}` : ""}; ${required.size} period/account income figure${required.size === 1 ? "" : "s"} checked`,
+    );
+    sectionResult(5);
+  }
+
+  // =========================================================================
   console.log("\n== summary ==");
   if (findings.length === 0) {
-    console.log("  clean: no double-counted or dropped commitment found in any of the four pairs");
+    console.log("  clean: no double-counted or dropped commitment found in any of the five pairs");
     return 0;
   }
-  for (const pair of [1, 2, 3, 4] as const) {
+  for (const pair of [1, 2, 3, 4, 5] as const) {
     const own = findings.filter((finding) => finding.pair === pair);
     if (own.length === 0) continue;
     console.log(`  pair ${pair}: ${own.length} finding${own.length === 1 ? "" : "s"}`);

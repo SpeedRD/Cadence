@@ -13,6 +13,7 @@ import {
 } from "@/components/form/selects";
 import { ExtraordinaryPrompt } from "@/components/transactions/extraordinary-prompt";
 import { PostedMatchPrompt } from "@/components/transactions/posted-match-prompt";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -26,8 +27,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { ConversionPreview } from "@/components/form/conversion-preview";
 import { CURRENCIES, formatMoney, type RateTable } from "@/lib/currency";
 import type { MoneyRow } from "@/lib/account-money";
-import { toISODate } from "@/lib/date";
+import { formatDayMonth, toISODate } from "@/lib/date";
+import { canBeEarmarked, defaultEarmarkAmount, stillAskedOf, type EarmarkOption } from "@/lib/earmarks";
 import { getDictionary, type Locale } from "@/lib/i18n";
+import { parseAmountInput, round2 } from "@/lib/money";
 import { canBeOneOffIncome, canBeSharedExpense } from "@/lib/transactions";
 import { saveTransactionAction } from "@/server/actions/transactions";
 
@@ -50,6 +53,8 @@ export interface TransactionFormValues {
   reimbursesTransactionId?: string | null;
   /** The user marked this income as a one-off (Transaction.isOneOffIncome), when editing one. */
   isOneOffIncome?: boolean;
+  /** What this deposit is set aside for (RecurringEarmark), in its account's currency, when editing one. */
+  earmarks?: { occurrenceKey: string; amount: number }[];
   /** With externalId, lets canBeSharedExpense decide whether the share switch is offered; a new row is MANUAL. */
   source?: string;
   externalId?: string | null;
@@ -62,10 +67,22 @@ export interface TransactionFormValues {
   stored?: { row: MoneyRow; accountCurrency: string };
 }
 
+/** One "This money is for an upcoming payment" line as the form holds it: the amount as typed, or the default while untouched. */
+interface EarmarkLine {
+  key: string;
+  amount: string;
+  touched: boolean;
+}
+
+function linesFrom(earmarks: TransactionFormValues["earmarks"]): EarmarkLine[] {
+  return (earmarks ?? []).map((earmark) => ({ key: earmark.occurrenceKey, amount: String(earmark.amount), touched: true }));
+}
+
 export function TransactionDialog({
   accounts,
   categories,
   openSharedExpenses,
+  earmarkOptions,
   values,
   rates,
   trigger,
@@ -77,6 +94,8 @@ export function TransactionDialog({
   categories: Option[];
   /** What an INCOME row can be linked to as a reimbursement - see listOpenSharedExpenses. */
   openSharedExpenses: OpenSharedExpense[];
+  /** The upcoming payments a deposit can be set aside for - see listEarmarkOptions. */
+  earmarkOptions: EarmarkOption[];
   values: TransactionFormValues;
   /** The request's rate table, for the conversion preview (ConversionPreview). */
   rates: RateTable["rates"];
@@ -110,9 +129,14 @@ export function TransactionDialog({
   const changeType = (next: string) => {
     setType(next);
     // The category field is unmounted for a transfer and comes back at its
-    // default, so the state it mirrors goes back with it.
+    // default, so the state it mirrors goes back with it, as does the
+    // direction picker.
     if (next === "EXTERNAL_TRANSFER") resetCategory();
+    if (next !== "EXTERNAL_TRANSFER") setDirection(values.transferDirection ?? "OUT");
   };
+  // An external transfer's direction, tracked only to tell an incoming one -
+  // which can be set aside for a payment - from an outgoing one.
+  const [direction, setDirection] = useState(values.transferDirection ?? "OUT");
 
   // The share switch, carried as a hidden field the way the goal form carries
   // isDebt (the Radix switch is not a form control of its own), and the
@@ -140,6 +164,59 @@ export function TransactionDialog({
     source: values.source ?? "MANUAL",
     externalId: values.externalId ?? null,
   });
+
+  // "This money is for an upcoming payment" (src/lib/earmarks.ts): a deposit
+  // - income, or money coming in from outside - set aside for occurrences
+  // charged to the same account, each line defaulting to the smaller of what
+  // the deposit has left and what the payment still asks, in the account's
+  // currency, until the user types an amount of their own.
+  const canEarmark = canBeEarmarked({
+    type,
+    source: values.source ?? "MANUAL",
+    transferDirection: type === "EXTERNAL_TRANSFER" ? direction : null,
+  });
+  const [earmarkOn, setEarmarkOn] = useState((values.earmarks ?? []).length > 0);
+  const [earmarkLines, setEarmarkLines] = useState<EarmarkLine[]>(() => linesFrom(values.earmarks));
+  const accountCurrency = accounts.find((account) => account.id === accountId)?.currency;
+  const accountOptions = earmarkOptions.filter(
+    (option) =>
+      option.accountId === accountId &&
+      (stillAskedOf(option, values.id) > 0 || earmarkLines.some((line) => line.key === option.occurrenceKey)),
+  );
+  const optionByKey = new Map(accountOptions.map((option) => [option.occurrenceKey, option]));
+  // Lines for payments on another account (the account was changed) are not
+  // this deposit's to keep.
+  const shownLines = earmarkLines.filter((line) => line.key === "" || optionByKey.has(line.key));
+  const parsedDeposit = parseAmountInput(amountText);
+  const depositInAccount =
+    parsedDeposit.ok && parsedDeposit.amount > 0 && accountCurrency
+      ? currency === accountCurrency
+        ? parsedDeposit.amount
+        : rates[currency] && rates[accountCurrency]
+          ? round2((parsedDeposit.amount / rates[currency]) * rates[accountCurrency])
+          : 0
+      : 0;
+  const lineAmounts: string[] = [];
+  let depositLeft = depositInAccount;
+  for (const line of shownLines) {
+    const option = optionByKey.get(line.key);
+    const text = line.touched
+      ? line.amount
+      : option
+        ? String(defaultEarmarkAmount(depositLeft, stillAskedOf(option, values.id)))
+        : "";
+    const parsed = parseAmountInput(text);
+    depositLeft = round2(depositLeft - (parsed.ok ? parsed.amount : 0));
+    lineAmounts.push(text);
+  }
+  const firstFreeOption = (taken: readonly EarmarkLine[]) =>
+    accountOptions.find((option) => !taken.some((line) => line.key === option.occurrenceKey))?.occurrenceKey ?? "";
+  const turnEarmarkOn = (on: boolean) => {
+    setEarmarkOn(on);
+    if (on && shownLines.length === 0) setEarmarkLines([{ key: firstFreeOption([]), amount: "", touched: false }]);
+  };
+  const updateLine = (index: number, change: Partial<EarmarkLine>) =>
+    setEarmarkLines(shownLines.map((line, at) => (at === index ? { ...line, ...change } : line)));
 
   // Mirrors FormDialog's own controlled/uncontrolled resolution so this
   // component can see the effective open state even for the "New
@@ -171,6 +248,9 @@ export function TransactionDialog({
       setReimbursesId(values.reimbursesTransactionId ?? "none");
       setCurrency(values.currency ?? CURRENCIES[0]);
       setAmountText(values.amount === undefined ? "" : String(values.amount));
+      setDirection(values.transferDirection ?? "OUT");
+      setEarmarkOn((values.earmarks ?? []).length > 0);
+      setEarmarkLines(linesFrom(values.earmarks));
       setAccountId(defaultAccountId);
       setAccountTouched(false);
       resetCategory();
@@ -328,6 +408,7 @@ export function TransactionDialog({
               options={["OUT", "IN"]}
               labels={{ OUT: t.directionOut, IN: t.directionIn }}
               defaultValue={values.transferDirection ?? "OUT"}
+              onValueChange={setDirection}
             />
           </Field>
         ) : (
@@ -439,6 +520,103 @@ export function TransactionDialog({
             {t.oneOffIncomeLabel}
           </label>
           <p className="text-xs text-muted-foreground">{t.oneOffIncomeHint}</p>
+        </div>
+      ) : null}
+
+      {/* Money for an upcoming payment (src/lib/earmarks.ts). Offered on a
+          deposit whose account has a payment to set it aside for, or that is
+          already set aside; the hidden earmarkOffered says this form showed
+          it, so the switch off clears what was set aside. A row that is not a
+          deposit sends nothing, and the server drops its earmarks. */}
+      {canEarmark ? <input type="hidden" name="earmarkOffered" value="true" /> : null}
+      {canEarmark && (accountOptions.length > 0 || shownLines.length > 0) ? (
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <label className="flex items-center gap-2.5 text-sm">
+              <Switch checked={earmarkOn} onCheckedChange={turnEarmarkOn} />
+              {t.earmarkLabel}
+            </label>
+            <p className="text-xs text-muted-foreground">{t.earmarkHint}</p>
+          </div>
+          {earmarkOn ? (
+            <>
+              {shownLines.map((line, index) => {
+                const lineId = `transaction-earmark-${index}`;
+                return (
+                  // The payment keeps a row of its own: its label carries the
+                  // date and what it still asks, too long to share one.
+                  <div key={index} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                    <Field label={t.earmarkPaymentLabel} htmlFor={lineId} className="sm:col-span-2">
+                      <Select
+                        name="earmarkKey"
+                        value={line.key || undefined}
+                        onValueChange={(key) => updateLine(index, { key, touched: false, amount: "" })}
+                      >
+                        <SelectTrigger id={lineId} className="w-full">
+                          <SelectValue placeholder={t.earmarkPick} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {accountOptions
+                            .filter(
+                              (option) =>
+                                option.occurrenceKey === line.key ||
+                                !shownLines.some((other) => other.key === option.occurrenceKey),
+                            )
+                            .map((option) => (
+                              <SelectItem key={option.occurrenceKey} value={option.occurrenceKey}>
+                                {t.earmarkOption(
+                                  option.name,
+                                  formatDayMonth(option.dueDate),
+                                  formatMoney(stillAskedOf(option, values.id), option.currency),
+                                )}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label={t.earmarkAmountLabel(accountCurrency ?? currency)} htmlFor={`${lineId}-amount`}>
+                      <Input
+                        id={`${lineId}-amount`}
+                        name="earmarkAmount"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        className="font-mono"
+                        value={lineAmounts[index]}
+                        onChange={(event) => updateLine(index, { amount: event.target.value, touched: true })}
+                        required
+                      />
+                    </Field>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="justify-self-start"
+                      onClick={() => {
+                        const rest = shownLines.filter((_, at) => at !== index);
+                        setEarmarkLines(rest);
+                        if (rest.length === 0) setEarmarkOn(false);
+                      }}
+                    >
+                      {t.earmarkRemove}
+                    </Button>
+                  </div>
+                );
+              })}
+              {accountOptions.length > shownLines.length ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="justify-self-start"
+                  onClick={() =>
+                    setEarmarkLines([...shownLines, { key: firstFreeOption(shownLines), amount: "", touched: false }])
+                  }
+                >
+                  {t.earmarkAddAnother}
+                </Button>
+              ) : null}
+            </>
+          ) : null}
         </div>
       ) : null}
 

@@ -31,10 +31,14 @@
  * whole() is what the period costs: posted + settled + outstanding. A plan
  * for the period subtracts it from the period's whole income. outstanding()
  * is what is still to leave: the "Committed" figure. Each occurrence's
- * outstanding amount is taken through outstandingAmount(), the one place a
- * later reduction of what an occurrence still asks would apply.
+ * cost is taken through wholeAmount() and outstandingAmount(), the one place
+ * what an occurrence asks is reduced: by the deposits the user earmarked for
+ * it (src/lib/earmarks.ts), whether it is still to come or already posted.
+ * The occurrence's `amount` stays what the charge is - the posted row's bank
+ * amount, or the schedule's.
  */
 import { convert, type RateTable } from "@/lib/currency";
+import { coverOccurrence, type OccurrenceEarmark } from "@/lib/earmarks";
 import { periodForDate, type PeriodInfo } from "@/lib/period";
 import {
   advanceDate,
@@ -93,6 +97,14 @@ export interface CommitmentOccurrence {
   itemCurrency: string;
   /** Set on a settled occurrence: the charge that paid it. */
   settledBy: OccurrenceCharge | null;
+  /**
+   * What deposits the user earmarked for it cover, in `currency`: never more
+   * than `amount`, and 0 for one posting will skip. wholeAmount and
+   * outstandingAmount subtract it.
+   */
+  earmarked: number;
+  /** The deposits behind `earmarked`, each part in `currency`, in the order they arrived. */
+  earmarks: OccurrenceEarmark[];
 }
 
 /** An active item with what the walk and the skip rule need. */
@@ -185,6 +197,8 @@ export interface PlanCommitmentsInput {
   rates: RateTable;
   /** Leaves one item's schedule out (never its ledger facts): the tracker's re-check of a plan judges the plan's own installments. */
   excludeItemId?: string | null;
+  /** The deposits earmarked for each occurrence, by occurrence key, already bounded by each deposit (boundByDeposit). */
+  earmarks?: ReadonlyMap<string, readonly OccurrenceEarmark[]>;
 }
 
 /**
@@ -236,6 +250,8 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
       itemAmount: info?.amount ?? fact.amount,
       itemCurrency: info?.currency ?? fact.currency,
       settledBy: fact.settledBy,
+      earmarked: 0,
+      earmarks: [],
     });
   }
 
@@ -287,14 +303,41 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
         itemAmount: item.amount,
         itemCurrency: item.currency,
         settledBy: settledBy ?? null,
+        earmarked: 0,
+        earmarks: [],
       });
     }
   }
+
+  if (input.earmarks) applyEarmarks(result, input.earmarks, input.rates);
 
   for (const bucket of result.values()) {
     bucket.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime() || a.itemId.localeCompare(b.itemId));
   }
   return result;
+}
+
+/**
+ * Sets on each planned occurrence what the user earmarked for it
+ * (`earmarks`, by occurrence key, already bounded by each deposit), in its
+ * currency and never more than it costs. One posting will skip costs
+ * nothing, so nothing covers it. The loader reads the earmarks once the
+ * occurrences are planned, for exactly their keys.
+ */
+export function applyEarmarks(
+  planned: ReadonlyMap<string, readonly CommitmentOccurrence[]>,
+  earmarks: ReadonlyMap<string, readonly OccurrenceEarmark[]>,
+  rates: RateTable,
+): void {
+  for (const bucket of planned.values()) {
+    for (const occurrence of bucket) {
+      const forKey = earmarks.get(occurrence.key);
+      if (!forKey || forKey.length === 0 || occurrence.status === "wont_post") continue;
+      const cover = coverOccurrence(occurrence.amount, occurrence.currency, forKey, rates);
+      occurrence.earmarked = cover.earmarked;
+      occurrence.earmarks = cover.earmarks;
+    }
+  }
 }
 
 /** What the period costs: every occurrence posting will charge or already has - wont_post left out. */
@@ -312,14 +355,32 @@ export function wontPost(occurrences: readonly CommitmentOccurrence[]): Commitme
   return occurrences.filter((occurrence) => occurrence.status === "wont_post");
 }
 
-/** What an occurrence still asks of the period, in its `currency`: its amount while outstanding, nothing once posted, paid or skipped. */
+/**
+ * What an occurrence still asks of the period, in its `currency`: its amount
+ * less what is earmarked for it while outstanding, nothing once posted, paid
+ * or skipped.
+ */
 export function outstandingAmount(occurrence: CommitmentOccurrence): number {
-  return occurrence.status === "outstanding" ? occurrence.amount : 0;
+  return occurrence.status === "outstanding" ? Math.max(0, occurrence.amount - occurrence.earmarked) : 0;
 }
 
-/** What an occurrence costs the period, in its `currency`: nothing for one posting will skip. */
+/**
+ * What an occurrence costs the period, in its `currency`: its amount less
+ * what is earmarked for it - posted, paid or still to come - and nothing for
+ * one posting will skip.
+ */
 export function wholeAmount(occurrence: CommitmentOccurrence): number {
-  return occurrence.status === "wont_post" ? 0 : occurrence.amount;
+  return occurrence.status === "wont_post" ? 0 : Math.max(0, occurrence.amount - occurrence.earmarked);
+}
+
+/**
+ * What still leaves the account for an occurrence, in its `currency`: the
+ * charge itself while outstanding - an earmark changes what the charge asks
+ * of the plan, not what the bank takes. For readers of money leaving rather
+ * than of the plan's cost: the monthly pace's spending still due.
+ */
+export function outstandingCharge(occurrence: CommitmentOccurrence): number {
+  return occurrence.status === "outstanding" ? occurrence.amount : 0;
 }
 
 /** Occurrences summed into `currency` through `amountOf` (wholeAmount or outstandingAmount), unrounded. */

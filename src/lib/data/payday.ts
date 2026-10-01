@@ -14,7 +14,7 @@
  */
 import { getSettings } from "@/lib/auth";
 import { addDays } from "@/lib/date";
-import { convert, isSameMoney } from "@/lib/currency";
+import { convert, isSameMoney, type RateTable } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import {
   availableForFlexibleCategories,
@@ -56,6 +56,7 @@ import {
 } from "@/lib/period";
 import { carryoverIsProvisional, PROVISIONAL_CARRYOVER_BASIS } from "@/lib/flexible-room";
 import { prisma } from "@/lib/prisma";
+import type { OccurrenceEarmark } from "@/lib/earmarks";
 import type { RecurringSkipReason } from "@/lib/recurring";
 import type { paydayConfirmSchema } from "@/lib/validation";
 import type { z } from "zod";
@@ -143,6 +144,21 @@ export interface PaydayCommittedDraft {
   paidPortions: { accountId: string | null; amount: number; currency: string }[];
   /** The account funding this item - reassignable from Step 3, which writes RecurringItem.accountId. */
   accountId: string | null;
+  /**
+   * Deposits the user earmarked for its occurrences in the plan period
+   * (src/lib/earmarks.ts), one entry per deposit, each in the currency of the
+   * account it covers: already taken off `amount`, `outstandingAmount` and
+   * `paidPortions`, and named on the row ("X covered by ...").
+   */
+  covered: OccurrenceEarmark[];
+  /**
+   * Set when `covered` is: what is still to leave in the currency of the
+   * account it leaves from, where the earmark was set aside. The item's own
+   * currency rounds a partly covered charge to its cents, which the
+   * account's room would then read a few cents off; this is the exact
+   * figure (commitmentPortions prefers it).
+   */
+  outstandingInAccount?: { amount: number; currency: string };
 }
 
 /** An item with occurrences in the plan period that posting will skip: listed with its reason, counted nowhere. */
@@ -592,6 +608,31 @@ export async function reconciliationLedger(
   return { date, byAccount };
 }
 
+/** A partly covered item's outstanding occurrences in their account's currency (see PaydayCommittedDraft.outstandingInAccount); nothing for one nothing covers. */
+function outstandingInAccountOf(
+  group: readonly CommitmentOccurrence[],
+  rates: RateTable,
+): Pick<PaydayCommittedDraft, "outstandingInAccount"> {
+  const owed = group.filter((occurrence) => occurrence.status === "outstanding");
+  if (owed.length === 0 || !group.some((occurrence) => occurrence.earmarks.length > 0)) return {};
+  const currency = owed[0].currency;
+  return { outstandingInAccount: { amount: round2(sumOccurrences(owed, currency, rates, outstandingAmount)), currency } };
+}
+
+/** An item's earmarks over its occurrences, one entry per deposit and currency, in the order the deposits arrived. */
+function coveredBy(group: readonly CommitmentOccurrence[]): OccurrenceEarmark[] {
+  const byDeposit = new Map<string, OccurrenceEarmark>();
+  for (const earmark of group.flatMap((occurrence) => occurrence.earmarks)) {
+    const key = `${earmark.transactionId}|${earmark.currency}`;
+    const entry = byDeposit.get(key);
+    if (entry) entry.amount = round2(entry.amount + earmark.amount);
+    else byDeposit.set(key, { ...earmark });
+  }
+  return [...byDeposit.values()].sort(
+    (a, b) => a.depositDate.getTime() - b.depositDate.getTime() || a.transactionId.localeCompare(b.transactionId),
+  );
+}
+
 /**
  * The plan period's occurrences as the wizard lists them: one row per item,
  * subscriptions and contributions apart, plus the items posting will skip.
@@ -612,7 +653,7 @@ export function committedDrafts(
     for (const occurrence of paid) {
       const key = `${occurrence.accountId ?? ""}|${occurrence.currency}`;
       const portion = paidByAccount.get(key) ?? { accountId: occurrence.accountId, amount: 0, currency: occurrence.currency };
-      portion.amount += occurrence.amount;
+      portion.amount += wholeAmount(occurrence);
       paidByAccount.set(key, portion);
     }
     const inDisplay = (amountOf: (occurrence: CommitmentOccurrence) => number) =>
@@ -638,6 +679,8 @@ export function committedDrafts(
         alreadyLogged: paid.length === group.length,
         paidPortions: [...paidByAccount.values()].map((portion) => ({ ...portion, amount: round2(portion.amount) })),
         accountId: scheduled.find((occurrence) => occurrence.status === "outstanding")?.accountId ?? first.accountId,
+        covered: coveredBy(group),
+        ...outstandingInAccountOf(group, context.rates),
       },
     };
   });

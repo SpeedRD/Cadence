@@ -4,11 +4,14 @@
  * the periods' date range (RECURRING rows and RecurringSettlement rows), and
  * posting's own settlement plan (loadSettlementPlan) for the occurrences
  * still ahead - planned through the last period's end, the same call the
- * payday check-in has always made for its plan period. Nothing here decides
- * whether a charge paid an occurrence; posting's matcher does.
+ * payday check-in has always made for its plan period - and the deposits
+ * the user earmarked for the occurrences planned (src/lib/data/earmarks.ts),
+ * which lower what each asks. Nothing here decides whether a charge paid an
+ * occurrence; posting's matcher does.
  */
 import { num } from "@/lib/money";
 import {
+  applyEarmarks,
   planCommitments,
   type CommitmentItem,
   type CommitmentOccurrence,
@@ -21,6 +24,7 @@ import { prisma } from "@/lib/prisma";
 import { itemIdFromOccurrenceKey } from "@/lib/recurring-settlement";
 import { fromISODate } from "@/lib/date";
 
+import { loadOccurrenceEarmarks } from "@/lib/data/earmarks";
 import { loadSettlementPlan } from "@/lib/data/recurring-settlement";
 
 import type { AppContext } from "@/lib/data/context";
@@ -177,7 +181,7 @@ export async function loadCommitments(
     });
   }
 
-  return planCommitments({
+  const planned = planCommitments({
     periods,
     today: context.today,
     items,
@@ -188,6 +192,11 @@ export async function loadCommitments(
     rates: context.rates,
     excludeItemId: options.excludeItemId,
   });
+  // The occurrences are known only once planned; what covers them is read
+  // for exactly their keys.
+  const keys = [...planned.values()].flat().map((occurrence) => occurrence.key);
+  applyEarmarks(planned, await loadOccurrenceEarmarks(keys, context.rates), context.rates);
+  return planned;
 }
 
 /** One period's occurrences (see planCommitments), in due-date order. */

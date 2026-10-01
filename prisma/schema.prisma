@@ -164,33 +164,33 @@ model Category {
 }
 
 model Transaction {
-  id                String             @id @default(cuid())
-  date              DateTime           @db.Date
-  amount            Decimal            @db.Decimal(14, 2)
-  currency          String
-  type              TransactionType
-  accountId         String
-  categoryId        String?
-  note              String?
-  source            TransactionSource  @default(MANUAL)
+  id                      String             @id @default(cuid())
+  date                    DateTime           @db.Date
+  amount                  Decimal            @db.Decimal(14, 2)
+  currency                String
+  type                    TransactionType
+  accountId               String
+  categoryId              String?
+  note                    String?
+  source                  TransactionSource  @default(MANUAL)
   /// Identifier from the originating system (Phase 2 dedup). Null for manual/csv.
-  externalId        String?
+  externalId              String?
   /// Both legs of a transfer share this id.
-  transferId        String?
+  transferId              String?
   /// OUT on the source leg, IN on the destination leg, null otherwise.
-  transferDirection TransferDirection?
+  transferDirection       TransferDirection?
   /// A one-off the user confirmed as such (see src/lib/extraordinary.ts):
   /// left out of the averages that estimate typical spending - the payday
   /// planner's category suggestions and Reports' monthly pace - while still
   /// counting as real spending everywhere else. Only ever set by the user.
-  isExtraordinary   Boolean            @default(false)
+  isExtraordinary         Boolean            @default(false)
   /// INCOME only: a one-off receipt (a gift, a sale, a refund) the user marked
   /// as such. It counts as the period's real income everywhere it is a fact -
   /// the period summary, Reports, the ledger, account balances - and is left
   /// out only of Afford's income history, the figure that estimates what the
   /// user will earn in future periods. Kept apart from isExtraordinary, which
   /// is spending only. Only ever set by the user.
-  isOneOffIncome    Boolean            @default(false)
+  isOneOffIncome          Boolean            @default(false)
   /// EXPENSE only: the part of `amount` that was the user's own cost, when the
   /// purchase covered other people who will pay their part back (see
   /// src/lib/shared-expense.ts). Null - every ordinary row - means the whole
@@ -199,7 +199,7 @@ model Transaction {
   /// spending, the averages that estimate typical spending and the one-off
   /// threshold read this figure in its place (src/lib/budget-spending.ts).
   /// Positive and never above `amount`.
-  yourShare         Decimal?           @db.Decimal(14, 2)
+  yourShare               Decimal?           @db.Decimal(14, 2)
   /// INCOME only: the shared expense this deposit pays back. A linked deposit
   /// still raises the account's balance like any income, but is left out of
   /// every income estimate (src/lib/period-income.ts) - it is money coming
@@ -214,18 +214,21 @@ model Transaction {
   /// written before this existed may still carry another currency in
   /// `currency` with these null; every reader converts such a row at today's
   /// rate, as before, until scripts/backfill-account-currency.ts stores it.
-  originalAmount    Decimal?           @db.Decimal(14, 2)
-  originalCurrency  String?
-  rate              Decimal?           @db.Decimal(20, 10)
-  createdAt         DateTime           @default(now())
+  originalAmount          Decimal?           @db.Decimal(14, 2)
+  originalCurrency        String?
+  rate                    Decimal?           @db.Decimal(20, 10)
+  createdAt               DateTime           @default(now())
 
-  account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  reimburses     Transaction?  @relation("Reimbursement", fields: [reimbursesTransactionId], references: [id], onDelete: SetNull)
-  reimbursements Transaction[] @relation("Reimbursement")
+  account             Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category            Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  reimburses          Transaction?         @relation("Reimbursement", fields: [reimbursesTransactionId], references: [id], onDelete: SetNull)
+  reimbursements      Transaction[]        @relation("Reimbursement")
   /// Set when this charge stands for one occurrence of a recurring item that
   /// posting therefore did not write (see RecurringSettlement).
   recurringSettlement RecurringSettlement?
+  /// INCOME or incoming EXTERNAL_TRANSFER only: the parts of this deposit the
+  /// user set aside for upcoming recurring occurrences (see RecurringEarmark).
+  earmarks            RecurringEarmark[]
 
   @@unique([source, externalId])
   @@index([date])
@@ -363,6 +366,7 @@ model RecurringItem {
   paydayAllocations PaydayPlanAllocation[]
   goalContributions GoalContribution[]
   settlements       RecurringSettlement[]
+  earmarks          RecurringEarmark[]
 
   @@index([active, nextDate])
   @@index([kind])
@@ -418,6 +422,42 @@ model RecurringSettlement {
   recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)
 
   @@index([recurringItemId])
+}
+
+/// Part of a deposit the user set aside for one occurrence of a recurring
+/// item ("This money is for an upcoming payment"): a family member's transfer
+/// toward an installment, money moved in from outside Cadence for it. The
+/// occurrence then asks that much less of the plan - outstanding = amount -
+/// earmarked (outstandingAmount and wholeAmount in
+/// src/lib/period-commitments.ts) - whether it is still to come or already
+/// posted, and the deposit's earmarked part is left out of the income
+/// estimate (src/lib/period-income.ts), so the money is counted once. The
+/// posted row keeps the full bank amount; this row stays as the record of
+/// what covered it. The same shape as RecurringSettlement (charge <->
+/// occurrence), but many-to-many: one deposit may be split over several
+/// occurrences and one occurrence may take several deposits, never more than
+/// either holds (src/lib/earmarks.ts).
+model RecurringEarmark {
+  id              String   @id @default(cuid())
+  transactionId   String
+  /// "<itemId>:<YYYY-MM-DD>" (recurringExternalId) - a plain string, so
+  /// deleting the item cannot erase it.
+  occurrenceKey   String
+  /// Null once the item is deleted; occurrenceKey still names it.
+  recurringItemId String?
+  dueDate         DateTime @db.Date
+  /// In `currency`: the deposit's account's currency when it was written.
+  amount          Decimal  @db.Decimal(14, 2)
+  currency        String
+  createdAt       DateTime @default(now())
+
+  transaction   Transaction    @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)
+
+  @@unique([transactionId, occurrenceKey])
+  @@index([occurrenceKey])
+  @@index([recurringItemId])
+  @@index([dueDate])
 }
 
 /// An insight the user dismissed on the Inbox page (src/lib/insights.ts):

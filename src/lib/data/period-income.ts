@@ -19,6 +19,7 @@ import {
 import {
   incomePeriodFor,
   rowCountsAsIncome,
+  rowIncome,
   snapshotIncome,
   type IncomeBasis,
 } from "@/lib/period-income";
@@ -68,6 +69,7 @@ export async function loadPeriodIncome(
         type: true,
         isOneOffIncome: true,
         reimbursesTransactionId: true,
+        earmarks: { select: { amount: true, currency: true } },
       },
     }),
     prisma.paydayCheckin.findMany({
@@ -98,9 +100,16 @@ export async function loadPeriodIncome(
   };
 
   for (const row of rows) {
-    const income = { ...row, amount: num(row.amount) };
+    const income = {
+      ...row,
+      amount: num(row.amount),
+      earmarked: row.earmarks.reduce(
+        (sum, earmark) => sum + convert(num(earmark.amount), earmark.currency, row.currency, context.rates),
+        0,
+      ),
+    };
     if (!rowCountsAsIncome(income, basis)) continue;
-    add(incomePeriodFor(row).key, row.accountId, income.amount, row.currency);
+    add(incomePeriodFor(row).key, row.accountId, rowIncome(income, basis), row.currency);
   }
   for (const checkin of checkins) {
     const key = periodInfo(checkin).key;

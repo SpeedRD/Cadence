@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
+import { listEarmarkOptions } from "@/lib/data/earmark-targets";
+import { loadDepositEarmarks } from "@/lib/data/earmarks";
 import { getDictionary } from "@/lib/i18n";
 import {
   listOpenSharedExpenses,
@@ -74,12 +76,18 @@ export default async function TransactionsPage({
   ]);
   // What a new deposit can be linked to, plus whatever this page's deposits
   // already point at, so editing one of them keeps its link on offer.
-  const openSharedExpenses = await listOpenSharedExpenses(
-    context,
-    result.rows
-      .map((row) => row.reimbursesTransactionId)
-      .filter((id): id is string => id !== null),
-  );
+  // And the upcoming payments a deposit can be set aside for, with what this
+  // page's deposits are already set aside for.
+  const [openSharedExpenses, earmarkOptions, depositEarmarks] = await Promise.all([
+    listOpenSharedExpenses(
+      context,
+      result.rows
+        .map((row) => row.reimbursesTransactionId)
+        .filter((id): id is string => id !== null),
+    ),
+    listEarmarkOptions(context),
+    loadDepositEarmarks(result.rows.map((row) => row.id)),
+  ]);
 
   const buildPageHref = (page: number) => {
     const next = new URLSearchParams();
@@ -130,6 +138,7 @@ export default async function TransactionsPage({
                 accounts={accounts}
                 categories={categories}
                 openSharedExpenses={openSharedExpenses}
+                earmarkOptions={earmarkOptions}
                 values={{ date: today, currency: context.displayCurrency }}
                 rates={context.rates.rates}
                 locale={context.language}
@@ -149,6 +158,7 @@ export default async function TransactionsPage({
               accounts={accounts}
               categories={categories}
               openSharedExpenses={openSharedExpenses}
+              earmarkOptions={earmarkOptions}
               values={{ date: today, currency: context.displayCurrency }}
               rates={context.rates.rates}
               locale={context.language}
@@ -216,6 +226,8 @@ export default async function TransactionsPage({
               accounts={accountsForEdit}
               categories={categories}
               openSharedExpenses={openSharedExpenses}
+              earmarkOptions={earmarkOptions}
+              depositEarmarks={Object.fromEntries(depositEarmarks)}
               displayCurrency={context.displayCurrency}
               rates={context.rates.rates}
               locale={context.language}

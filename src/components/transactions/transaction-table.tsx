@@ -39,7 +39,9 @@ import { canBeExtraordinary, transactionEditBlock } from "@/lib/transactions";
 import { deleteTransactionAction, setExtraordinaryAction } from "@/server/actions/transactions";
 import { cn } from "@/lib/utils";
 
+import type { DepositEarmark } from "@/lib/data/earmarks";
 import type { OpenSharedExpense, TransactionRow } from "@/lib/data/transactions";
+import type { EarmarkOption } from "@/lib/earmarks";
 
 /** The sign and tone every amount on this page is shown with. */
 function amountStyle(row: TransactionRow) {
@@ -416,6 +418,8 @@ export function TransactionTable({
   accounts,
   categories,
   openSharedExpenses,
+  earmarkOptions,
+  depositEarmarks,
   displayCurrency,
   rates,
   locale,
@@ -425,6 +429,10 @@ export function TransactionTable({
   categories: Option[];
   /** For the edit dialog's reimbursement picker - see TransactionDialog. */
   openSharedExpenses: OpenSharedExpense[];
+  /** For the edit dialog's "This money is for an upcoming payment" - see TransactionDialog. */
+  earmarkOptions: EarmarkOption[];
+  /** What each deposit on the page is set aside for, by transaction id. */
+  depositEarmarks: Record<string, DepositEarmark[]>;
   displayCurrency: string;
   /** The request's rate table, for the edit dialogs' conversion preview. */
   rates: RateTable["rates"];
@@ -574,6 +582,7 @@ export function TransactionTable({
           accounts={accounts}
           categories={categories}
           openSharedExpenses={openSharedExpenses}
+          earmarkOptions={earmarkOptions}
           locale={locale}
           open
           onOpenChange={(next) => !next && setEditing(null)}
@@ -603,6 +612,7 @@ export function TransactionTable({
             yourShare: enteredShare(editingPlain),
             reimbursesTransactionId: editingPlain.reimbursesTransactionId,
             isOneOffIncome: editingPlain.isOneOffIncome,
+            earmarks: depositEarmarks[editingPlain.id] ?? [],
             source: editingPlain.source,
             externalId: editingPlain.externalId,
           }}

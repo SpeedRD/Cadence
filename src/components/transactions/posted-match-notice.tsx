@@ -46,7 +46,9 @@ export function PostedMatchNotice({
         ) : null}
         {match.kind === "paycheck"
           ? t.postedMatchPaycheck(posted.date, postedMoney)
-          : t.postedMatchRecurring(labelOf(posted, t), posted.date, postedMoney)}
+          : match.kind === "upcoming"
+            ? t.postedMatchUpcoming(labelOf(posted, t), posted.date, postedMoney)
+            : t.postedMatchRecurring(labelOf(posted, t), posted.date, postedMoney)}
       </span>
       {match.ambiguous ? (
         <span className="block">
@@ -58,7 +60,9 @@ export function PostedMatchNotice({
         </span>
       ) : null}
       {showOutcome ? (
-        match.kind === "paycheck" ? (
+        match.kind === "upcoming" ? (
+          <span className="block">{t.upcomingMatchOutcome}</span>
+        ) : match.kind === "paycheck" ? (
           <span className="block">{t.postedMatchBothAmounts(postedMoney, incomingMoney)}</span>
         ) : match.rewrite ? (
           <span className="block">

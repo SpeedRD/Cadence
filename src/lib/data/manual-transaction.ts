@@ -7,8 +7,9 @@
  * The row is always written. Two hints may come back with it, and neither can
  * stop it: an unusually large expense (src/lib/extraordinary.ts), and money
  * the ledger may already hold as a row Cadence wrote itself - a posted
- * recurring charge or a check-in's paycheck (lookUpPostedDuplicates, which
- * fails open).
+ * recurring charge or a check-in's paycheck - or that posting will write, an
+ * upcoming payment in another currency (lookUpPostedDuplicates, which fails
+ * open).
  */
 import {
   needsConversion,
@@ -74,6 +75,8 @@ export async function storedTransactionValues(
 
 export interface ManualTransactionResult {
   id: string;
+  /** The amount as stored, in the account's currency (K7). */
+  storedAmount: number;
   /** Set when the expense is unusually large for its category, measured at `measured` (the user's own share). */
   extraordinary: { hit: ExtraordinaryHit; measured: number } | null;
   /** Set when the saved row matches a posted charge or a recorded paycheck; `savedDigest` names the row as saved. */
@@ -135,13 +138,17 @@ export async function createManualTransaction(
             },
           ],
           context ? context.rates : (options.getRates ?? getRateTable),
-          { lookup: options.lookup, timeoutMs: options.timeoutMs },
+          // A charge in the account's currency may also be an upcoming
+          // payment in another currency, which posting would otherwise
+          // write again (see findPostedDuplicates' `upcoming`).
+          { lookup: options.lookup, timeoutMs: options.timeoutMs, upcoming: true },
         )
       : null;
   const match = found?.get(created.id);
 
   return {
     id: created.id,
+    storedAmount: num(created.amount),
     extraordinary: extraordinary ? { hit: extraordinary, measured } : null,
     posted: match ? { match, savedDigest: entryDigest(created) } : null,
   };

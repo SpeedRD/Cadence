@@ -22,10 +22,14 @@
  *             the check-in's own history.
  *   estimate  what the next periods can expect: one-off income
  *             (Transaction.isOneOffIncome), deposits paying back a shared
- *             expense (Transaction.reimbursesTransactionId) and the one-off
+ *             expense (Transaction.reimbursesTransactionId), the one-off
  *             part of a check-in paycheck (PaydayAccountSnapshot.oneOffIncome)
- *             are left out. Afford, the subscription-room check, the From
- *             Afford tracker and the goal forecast average it.
+ *             and the part of a deposit earmarked for a recurring payment
+ *             (RecurringEarmark, src/lib/earmarks.ts) are left out. Afford,
+ *             the subscription-room check, the From Afford tracker and the
+ *             goal forecast average it. An earmarked part already lowers what
+ *             its occurrence asks of the plan; counted as income as well, the
+ *             same money would be counted twice.
  *
  * The Transactions and account pages read deposits by date instead - a
  * statement of the ledger - and say so on the page.
@@ -48,6 +52,8 @@ export interface IncomeRow {
   type: string;
   isOneOffIncome: boolean;
   reimbursesTransactionId: string | null;
+  /** What of it the user earmarked for recurring payments, in `currency` (0 or absent: none). */
+  earmarked?: number;
 }
 
 /** One account's paycheck on a confirmed check-in. */
@@ -78,6 +84,16 @@ export function rowCountsAsIncome(row: IncomeRow, basis: IncomeBasis): boolean {
   if (row.source === "PAYDAY_CHECKIN") return false;
   if (basis === "fact") return true;
   return !row.isOneOffIncome && reimbursedExpenseIdFromTransaction(row) === null;
+}
+
+/**
+ * What an INCOME row adds on `basis`, in its currency, once it counts
+ * (rowCountsAsIncome): all of it as a fact, less its earmarked part as an
+ * estimate.
+ */
+export function rowIncome(row: IncomeRow, basis: IncomeBasis): number {
+  if (basis === "fact") return row.amount;
+  return Math.max(0, row.amount - Math.max(0, row.earmarked ?? 0));
 }
 
 /** What a check-in paycheck adds on `basis`, in the snapshot's currency. */

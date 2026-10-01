@@ -23,6 +23,9 @@ export const es = {
     cancel: "Cancelar",
     delete: "Eliminar",
     edit: "Editar",
+    // Ingreso apartado para un pago recurrente (src/lib/earmarks.ts).
+    coveredBy: (amount: string, deposit: string) => `${amount} cubierto por ${deposit}`,
+    depositOf: (date: string) => `el depósito del ${date}`,
     add: "Agregar",
     keepIt: "Conservar",
     saved: "Guardado",
@@ -627,6 +630,35 @@ export const es = {
     savedAsKeptRate: (amount: string, rate: string) =>
       `Se guarda en esta cuenta como ${amount} (${rate}, la tasa con la que se guardó).`,
     enteredAs: (original: string, rate: string) => `registrado como ${original} · ${rate}`,
+    // Ingreso apartado para un pago recurrente (src/lib/earmarks.ts).
+    earmarkLabel: "Este dinero es para un pago próximo",
+    earmarkHint:
+      "Elige el pago que cubre. Ese pago le pide entonces esa cantidad menos a tu plan, y el dinero no se cuenta además como ingreso.",
+    earmarkPaymentLabel: "Pago",
+    earmarkPick: "Elige un pago",
+    earmarkOption: (name: string, date: string, stillAsked: string) => `${name} · ${date} · faltan ${stillAsked}`,
+    earmarkAmountLabel: (code: string) => `Apartado para él (${code})`,
+    earmarkAddAnother: "Agregar otro pago",
+    earmarkRemove: "Quitar",
+    earmarkNoPayments: "Ningún pago próximo se cobra a esta cuenta.",
+    earmarkIssues: {
+      amount: "Ingresa un monto mayor que 0 para cada pago",
+      duplicate: "Elige cada pago una sola vez",
+      target: "Ese pago ya no está abierto en esta cuenta; elige otro",
+      over_deposit: "Los montos apartados suman más que este depósito",
+      over_occurrence: "Es más de lo que falta por ese pago",
+      not_depositable: "Solo un ingreso o dinero que entra de fuera puede apartarse para un pago",
+    },
+    earmarkNotSavedWithDeposit: (reason: string) => `El depósito se guardó, pero no el pago para el que está apartado: ${reason}`,
+    // Un cargo registrado antes de publicarse que puede ser un pago próximo en otra moneda.
+    postedMatchUpcoming: (name: string, date: string, amount: string) =>
+      `Coincide con ${name}, que vence el ${date} por ${amount}, aún sin publicar`,
+    upcomingMatchOutcome: "Como ese pago, tu registro queda tal cual y el pago no se publicará otra vez.",
+    upcomingPromptTitle: "¿Es un pago próximo?",
+    upcomingPromptDescription: (entered: string, scheduled: string) =>
+      `Tu registro de ${entered} está guardado. El pago que podría ser es ${scheduled}. "Es ese pago" conserva tu registro como el pago, así no se publica otra vez en su fecha. Cerrar esto conserva ambos.`,
+    isUpcomingPayment: "Es ese pago",
+    upcomingKept: (name: string) => `Guardado como el pago de ${name}; no se publicará otra vez`,
   },
   accounts: {
     title: "Cuentas",
@@ -820,6 +852,7 @@ export const es = {
     finishedCannotResume: "Este plan terminó. Edítalo y define los pagos restantes para iniciarlo de nuevo.",
     notAnInstallmentPlan: "Solo un plan de cuotas con pagos restantes se puede marcar como pagado",
     paymentsLeft: (n: number) => (n === 1 ? "1 pago restante" : `${n} pagos restantes`),
+    coveredOn: (date: string, covered: string) => `${date}: ${covered}`,
     roomHeading: "¿Qué cuenta puede con esto?",
     roomDescription: (threshold: string, period: string, periods: number) =>
       `Una suscripción se comprueba cuando un solo cobro llega a ${threshold} o cuando su total mensual lo alcanza. La comprobación funciona como ¿Me alcanza? con una compra: el ingreso de cada cuenta para ${period} se proyecta como ${incomeBasisEs(periods)} (la misma mitad del mes); se restan sus otros elementos recurrentes que vencen entonces, el aporte a metas de ese período (el de un check-in confirmado o, si no hay, un estimado al ritmo actual de cada meta) y su parte de tus categorías fijas esenciales; y se reserva su colchón protegido. Los elementos de dos veces al mes no se comprueban. Que haya margen significa que el margen habitual de la cuenta cubre el cobro, no una garantía para todos los períodos. Esto nunca impide guardar.`,
@@ -1523,6 +1556,9 @@ export const es = {
     archivedAccountNote: "archivada, se conserva como registro",
     overdueBadge: "Vencido",
     chargesThisPeriod: (count: number, each: string) => `${count} cargos de ${each}`,
+    // Ingreso apartado para un pago recurrente (src/lib/earmarks.ts).
+    coveredBy: (amount: string, deposit: string) => `${amount} cubierto por ${deposit}`,
+    depositOf: (date: string) => `el depósito del ${date}`,
     goalsHeading: "Hoja de ruta de metas",
     goalsDescription:
       "Cada meta se financia desde las cuentas a las que les sobra dinero tras sus suscripciones, aportes recurrentes y su colchón, en proporción al margen de cada una. Ajusta la parte de cualquier cuenta; el total de la meta es la suma.",

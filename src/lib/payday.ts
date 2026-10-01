@@ -95,12 +95,20 @@ export interface PaydayDraftSummary {
 export function commitmentPortions(
   rows: readonly Pick<
     PaydayCommittedDraft,
-    "recurringItemId" | "accountId" | "outstandingNativeAmount" | "currency" | "paidPortions"
+    "recurringItemId" | "accountId" | "outstandingNativeAmount" | "currency" | "paidPortions" | "outstandingInAccount"
   >[],
 ): AccountBufferSubscription[] {
   return rows.flatMap((row) => [
     ...(row.outstandingNativeAmount > 0
-      ? [{ recurringItemId: row.recurringItemId, accountId: row.accountId, nativeAmount: row.outstandingNativeAmount, currency: row.currency }]
+      ? [
+          {
+            recurringItemId: row.recurringItemId,
+            accountId: row.accountId,
+            // Exact in the account's currency when an earmark covers part of it.
+            nativeAmount: row.outstandingInAccount?.amount ?? row.outstandingNativeAmount,
+            currency: row.outstandingInAccount?.currency ?? row.currency,
+          },
+        ]
       : []),
     ...row.paidPortions.map((portion) => ({
       recurringItemId: row.recurringItemId,

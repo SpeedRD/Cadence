@@ -36,7 +36,10 @@
  *                      settled by that charge instead, and the pairing is
  *                      recorded (RecurringSettlement) in the claim's own
  *                      transaction so the charge can never settle another
- *                      occurrence, on this run or any later one. Which charge
+ *                      occurrence, on this run or any later one - or, when
+ *                      the user already paired the two before the
+ *                      occurrence fell due ("It's that payment"), the row
+ *                      they recorded is kept. Which charge
  *                      settles which occurrence is planSettlements'
  *                      (src/lib/recurring-settlement.ts), over every due item
  *                      at once - the matcher the payday check-in's "Already
@@ -255,14 +258,24 @@ async function postOccurrence(
       // The pairing is written with the claim, and both unique keys guard it:
       // if an overlapping run paired this charge first, nothing is inserted
       // and the claim is rolled back for the next run to plan again.
+      // A pairing the user recorded before the occurrence fell due is kept as
+      // it is - it must still be there, with the same charge.
       if (settledBy) {
         const charge = await tx.transaction.findUnique({ where: { id: settledBy.id }, select: { id: true } });
-        const recorded = charge
-          ? await tx.recurringSettlement.createMany({
-              data: [{ transactionId: settledBy.id, occurrenceKey: externalId, recurringItemId: item.id, kind: item.kind, dueDate: due }],
-              skipDuplicates: true,
-            })
-          : { count: 0 };
+        const recorded = !charge
+          ? { count: 0 }
+          : settledBy.alreadyRecorded
+            ? {
+                count:
+                  (await tx.recurringSettlement.findUnique({ where: { occurrenceKey: externalId }, select: { transactionId: true } }))
+                    ?.transactionId === settledBy.id
+                    ? 1
+                    : 0,
+              }
+            : await tx.recurringSettlement.createMany({
+                data: [{ transactionId: settledBy.id, occurrenceKey: externalId, recurringItemId: item.id, kind: item.kind, dueDate: due }],
+                skipDuplicates: true,
+              });
         if (recorded.count === 0) throw new SettlementLost();
         if (!writesContribution || !goalId) {
           return { result: "already_logged" as const, goalContribution: false, completed, counted };

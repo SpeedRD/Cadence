@@ -263,6 +263,30 @@ flag (the last are already left out of the averages by their link). Flagged rows
 show a "One-off income" badge in the Transactions table and the account ledger,
 and the export's One-off income column brings the flag back through the CSV import.
 
+A deposit can also be set aside for an upcoming recurring payment - a family
+member sending part of an installment, money moved in from an account Cadence
+does not track. Switch on **This money is for an upcoming payment** on an income
+row or an incoming external transfer and pick the payment (each one charged to
+the same account is listed with its date and what it still asks); the amount
+starts at the smaller of the deposit and what the payment still asks, and a
+deposit can be split over several payments with "Add another payment". That
+payment then asks that much less of the plan everywhere its cost is read - the
+check-in's Step 3 and the account's room, the confirmed plan and
+"Recommended", Afford's checks, the From Afford tracker and the room check -
+whether it has posted yet or not, and the set-aside part of the deposit is left
+out of the income Afford averages, so the money is counted once. The posted
+charge keeps the full bank amount; the Recurring page and Step 3 say what
+covered it ("DOP 5,000.00 covered by ..."). Deleting the deposit removes what it
+covered. A paycheck recorded by a check-in cannot be set aside (it is already
+the plan's income).
+
+A charge typed by hand in the account's currency that may be an upcoming
+payment in another currency - a peso charge for a euro installment not posted
+yet - is put to you as a possible match, as it is after posting. "It's that
+payment" keeps your entry exactly as typed and records it as that payment, so
+posting never charges it again, whatever you later change in the entry's note.
+Deleting the entry undoes it: the payment then posts on its due date.
+
 ### Review queue
 
 ![Review queue for email-derived transactions, empty, with the Manage connections action](screenshots/review.png)

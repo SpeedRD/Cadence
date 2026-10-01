@@ -29,6 +29,9 @@ export const en = {
     cancel: "Cancel",
     delete: "Delete",
     edit: "Edit",
+    // Income earmarked for a recurring payment (src/lib/earmarks.ts).
+    coveredBy: (amount: string, deposit: string) => `${amount} covered by ${deposit}`,
+    depositOf: (date: string) => `the deposit of ${date}`,
     add: "Add",
     keepIt: "Keep it",
     saved: "Saved",
@@ -636,6 +639,34 @@ export const en = {
     savedAsKeptRate: (amount: string, rate: string) =>
       `Saved in this account as ${amount} (${rate}, the rate it was saved at).`,
     enteredAs: (original: string, rate: string) => `entered as ${original} · ${rate}`,
+    // Income earmarked for a recurring payment (src/lib/earmarks.ts).
+    earmarkLabel: "This money is for an upcoming payment",
+    earmarkHint:
+      "Pick the payment it covers. That payment then asks this much less of your plan, and the money isn't counted as income on top.",
+    earmarkPaymentLabel: "Payment",
+    earmarkPick: "Pick a payment",
+    earmarkOption: (name: string, date: string, stillAsked: string) => `${name} · ${date} · ${stillAsked} still asked`,
+    earmarkAmountLabel: (code: string) => `Set aside for it (${code})`,
+    earmarkAddAnother: "Add another payment",
+    earmarkRemove: "Remove",
+    earmarkNoPayments: "No upcoming payment is charged to this account.",
+    earmarkIssues: {
+      amount: "Enter an amount greater than 0 for each payment",
+      duplicate: "Pick each payment once",
+      target: "That payment is no longer open on this account - pick another",
+      over_deposit: "The amounts set aside add up to more than this deposit",
+      over_occurrence: "That is more than the payment still asks",
+      not_depositable: "Only income or money coming in from outside can be set aside for a payment",
+    },
+    earmarkNotSavedWithDeposit: (reason: string) => `The deposit was saved, but not what it is set aside for: ${reason}`,
+    // A charge entered before posting that may be an upcoming payment in another currency.
+    postedMatchUpcoming: (name: string, date: string, amount: string) => `Matches ${name}, due ${date} for ${amount}, not posted yet`,
+    upcomingMatchOutcome: "As that payment, your entry stays as it is and the payment won't be posted again.",
+    upcomingPromptTitle: "Is this an upcoming payment?",
+    upcomingPromptDescription: (entered: string, scheduled: string) =>
+      `Your entry of ${entered} is saved. The payment it may be is ${scheduled}. "It's that payment" keeps your entry as the payment, so it isn't posted again on its due date. Closing this keeps both.`,
+    isUpcomingPayment: "It's that payment",
+    upcomingKept: (name: string) => `Kept as the ${name} payment - it won't be posted again`,
   },
   accounts: {
     title: "Accounts",
@@ -829,6 +860,7 @@ export const en = {
     finishedCannotResume: "This plan has finished. Edit it and set Payments left to start it again.",
     notAnInstallmentPlan: "Only an installment plan with payments left can be marked as paid off",
     paymentsLeft: (n: number) => (n === 1 ? "1 payment left" : `${n} payments left`),
+    coveredOn: (date: string, covered: string) => `${date}: ${covered}`,
     roomHeading: "Which account can carry this?",
     roomDescription: (threshold: string, period: string, periods: number) =>
       `A subscription is checked when one charge is ${threshold} or more, or when its monthly total reaches that. The check works the way Afford checks a purchase: each account's income for ${period} is projected as ${incomeBasisEn(periods)} (same half of the month); its other recurring items due then, the period's goal funding (a confirmed check-in's, or an estimate at each goal's current pace) and its share of your essential fixed categories are subtracted; and its protected buffer is kept back. Twice-a-month items are not checked. Room means the account's typical margin covers the charge - not a guarantee for every period. Saving is never blocked by this.`,
@@ -1536,6 +1568,9 @@ export const en = {
     archivedAccountNote: "archived, kept for the record",
     overdueBadge: "Overdue",
     chargesThisPeriod: (count: number, each: string) => `${count} charges of ${each}`,
+    // Income earmarked for a recurring payment (src/lib/earmarks.ts).
+    coveredBy: (amount: string, deposit: string) => `${amount} covered by ${deposit}`,
+    depositOf: (date: string) => `the deposit of ${date}`,
     goalsHeading: "Goal roadmap",
     goalsDescription:
       "Each goal is funded from the accounts with money to spare after their subscriptions, recurring contributions and buffer, in proportion to how much room each one has. Adjust any account's share; the goal's total is their sum.",
