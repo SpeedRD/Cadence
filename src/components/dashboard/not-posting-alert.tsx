@@ -1,8 +1,9 @@
 import Link from "next/link";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { fromISODate, formatDayMonth } from "@/lib/date";
-import type { Dictionary } from "@/lib/i18n";
+import { fromISODate } from "@/lib/date";
+import { formatDayMonth } from "@/lib/date-format";
+import type { Dictionary, Locale } from "@/lib/i18n";
 
 import type {
   RecurringPostingSummary,
@@ -18,9 +19,11 @@ import type {
  */
 export function NotPostingAlert({
   posting,
+  locale,
   t,
 }: {
   posting: RecurringPostingSummary;
+  locale: Locale;
   t: Dictionary["dashboard"];
 }) {
   const reasonText: Record<RecurringSkipReason, string> = {
@@ -39,7 +42,7 @@ export function NotPostingAlert({
         text: t.notPostingItem(
           item.name,
           reasonText[item.reason],
-          due ? formatDayMonth(due) : item.nextDate,
+          due ? formatDayMonth(due, locale) : item.nextDate,
         ),
       };
     }),

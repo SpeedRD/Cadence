@@ -6,6 +6,7 @@ import { MonthlyPaceCard } from "@/components/dashboard/monthly-pace-card";
 import { NotPostingAlert } from "@/components/dashboard/not-posting-alert";
 import { PaydayCheckinCard } from "@/components/dashboard/payday-checkin-card";
 import { PeriodHero } from "@/components/dashboard/period-hero";
+import { PostingRunFailedAlert } from "@/components/dashboard/posting-run-failed-alert";
 import { UpcomingList } from "@/components/dashboard/upcoming-list";
 import { EmptyState } from "@/components/stat";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,7 @@ import { isSameDay } from "@/lib/date";
 import { getAffordRechecks } from "@/lib/data/afford";
 import { getAppContext } from "@/lib/data/context";
 import { getDashboardData, UPCOMING_WINDOW_DAYS } from "@/lib/data/dashboard";
+import { getInsights } from "@/lib/data/insights";
 import { loadConfirmedRooms } from "@/lib/data/flexible-room";
 import { recommendationFor } from "@/lib/flexible-room";
 import { getMonthlyPace } from "@/lib/data/monthly";
@@ -28,14 +30,18 @@ export default async function DashboardPage() {
   const context = await getAppContext();
   const dictionary = getDictionary(context.language);
   const t = dictionary.dashboard;
-  const [{ summary, upcoming, goals }, monthlyPace, paydayDraft, settings, affordRechecks] =
+  const [{ summary, upcoming, goals }, monthlyPace, paydayDraft, settings, affordRechecks, insights] =
     await Promise.all([
       getDashboardData(context),
       getMonthlyPace(context),
       getPaydayCheckinDraft(context),
       getSettings(),
       getAffordRechecks(),
+      getInsights(),
     ]);
+  // The posting_run_failed insight: the latest run threw. Not dismissible, so
+  // it is always in the list while it is true and gone with the next good run.
+  const postingRunFailed = insights.some((insight) => insight.source === "posting_run_failed");
   const elapsed = daysElapsedInPeriod(context.today, context.currentPeriod);
   const activeGoals = goals.filter((goal) => !goal.achievedAt);
   const shownGoals = activeGoals.length > 0 ? activeGoals : goals;
@@ -111,6 +117,7 @@ export default async function DashboardPage() {
             items={upcoming}
             today={context.today}
             displayCurrency={context.displayCurrency}
+            locale={context.language}
             t={t}
             common={getDictionary(context.language).common}
           />
@@ -121,18 +128,20 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {postingRunFailed ? <PostingRunFailedAlert t={t} /> : null}
       {context.recurringPosting ? (
-        <NotPostingAlert posting={context.recurringPosting} t={t} />
+        <NotPostingAlert posting={context.recurringPosting} locale={context.language} t={t} />
       ) : null}
-      <AffordViabilityAlert tracked={affordRechecks} t={t} />
+      <AffordViabilityAlert tracked={affordRechecks} locale={context.language} t={t} />
       {checkinLeads ? checkinCard : null}
-      <PeriodHero summary={summary} elapsed={elapsed} recommended={recommended} t={t} />
+      <PeriodHero summary={summary} elapsed={elapsed} recommended={recommended} locale={context.language} t={t} />
       <section className="sm:hidden">{upcomingCard}</section>
       {checkinLeads ? null : checkinCard}
 
       <MonthlyPaceCard
         data={monthlyPace}
         displayCurrency={context.displayCurrency}
+        locale={context.language}
         t={dictionary.monthlyPace}
       />
 
@@ -161,6 +170,7 @@ export default async function DashboardPage() {
                   key={goal.id}
                   goal={goal}
                   displayCurrency={context.displayCurrency}
+                  locale={context.language}
                   t={t}
                 />
               ))}

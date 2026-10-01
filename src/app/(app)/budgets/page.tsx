@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMoney } from "@/lib/currency";
+import { formatPeriodLong, formatPeriodShort } from "@/lib/date-format";
 import { round2 } from "@/lib/money";
 import { getAppContext } from "@/lib/data/context";
 import { getPaydayCheckinDraft, planPeriodRef } from "@/lib/data/payday";
@@ -49,7 +50,8 @@ export default async function BudgetsPage({
 }) {
   const params = await searchParams;
   const context = await getAppContext();
-  const t = getDictionary(context.language).budgets;
+  const locale = context.language;
+  const t = getDictionary(locale).budgets;
 
   const requested = parsePeriodKey(
     typeof params.period === "string" ? params.period : undefined,
@@ -166,13 +168,13 @@ export default async function BudgetsPage({
         <Button asChild variant="outline" size="sm">
           <Link href={`/budgets?period=${periodKey(previousPeriod(period))}`}>
             <ChevronLeft className="size-3.5" />
-            {periodInfo(previousPeriod(period)).label}
+            {formatPeriodShort(periodInfo(previousPeriod(period)), locale)}
           </Link>
         </Button>
-        <span className="px-1 text-sm font-medium">{period.longLabel}</span>
+        <span className="px-1 text-sm font-medium">{formatPeriodLong(period, locale)}</span>
         <Button asChild variant="outline" size="sm">
           <Link href={`/budgets?period=${periodKey(nextPeriod(period))}`}>
-            {periodInfo(nextPeriod(period)).label}
+            {formatPeriodShort(periodInfo(nextPeriod(period)), locale)}
             <ChevronRight className="size-3.5" />
           </Link>
         </Button>
@@ -191,14 +193,14 @@ export default async function BudgetsPage({
         <Button asChild variant="outline" size="icon-lg">
           <Link
             href={`/budgets?period=${periodKey(previousPeriod(period))}`}
-            aria-label={periodInfo(previousPeriod(period)).longLabel}
-            title={periodInfo(previousPeriod(period)).longLabel}
+            aria-label={formatPeriodLong(periodInfo(previousPeriod(period)), locale)}
+            title={formatPeriodLong(periodInfo(previousPeriod(period)), locale)}
           >
             <ChevronLeft />
           </Link>
         </Button>
         <div className="flex flex-col items-center text-center">
-          <span className="text-sm font-medium">{period.longLabel}</span>
+          <span className="text-sm font-medium">{formatPeriodLong(period, locale)}</span>
           {!isCurrent ? (
             <Button asChild variant="ghost" size="sm">
               <Link href="/budgets">{t.backToNow}</Link>
@@ -208,8 +210,8 @@ export default async function BudgetsPage({
         <Button asChild variant="outline" size="icon-lg">
           <Link
             href={`/budgets?period=${periodKey(nextPeriod(period))}`}
-            aria-label={periodInfo(nextPeriod(period)).longLabel}
-            title={periodInfo(nextPeriod(period)).longLabel}
+            aria-label={formatPeriodLong(periodInfo(nextPeriod(period)), locale)}
+            title={formatPeriodLong(periodInfo(nextPeriod(period)), locale)}
           >
             <ChevronRight />
           </Link>

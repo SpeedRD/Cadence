@@ -5,6 +5,7 @@ import { TrendChart } from "@/components/reports/trend-chart";
 import { EmptyState, Stat } from "@/components/stat";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
+import { formatPeriodLong } from "@/lib/date-format";
 import { getAppContext } from "@/lib/data/context";
 import { getHistoricalMonthlyAverage } from "@/lib/data/monthly";
 import { getPeriodSummary } from "@/lib/data/period-summary";
@@ -39,7 +40,7 @@ export default async function ReportsPage() {
         <Card>
           <CardHeader>
             <CardTitle>{t.spendingByCategory}</CardTitle>
-            <CardDescription>{summary.period.longLabel}</CardDescription>
+            <CardDescription>{formatPeriodLong(summary.period, context.language)}</CardDescription>
           </CardHeader>
           <CardContent>
             {spendingLines.length === 0 ? (
@@ -71,6 +72,7 @@ export default async function ReportsPage() {
               points={trend}
               currency={context.displayCurrency}
               currentKey={context.currentPeriod.key}
+              locale={context.language}
               t={t}
             />
           </CardContent>
@@ -147,6 +149,7 @@ export default async function ReportsPage() {
                 <MonthlyTrendChart
                   months={monthlyHistory.months}
                   currency={context.displayCurrency}
+                  locale={context.language}
                   t={t}
                 />
               </CardContent>

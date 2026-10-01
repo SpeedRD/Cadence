@@ -765,6 +765,62 @@ function DuplicateRowsPanel({
     setSelected(new Set());
   };
 
+  // One row's state and its answer, read by the card and by the table row.
+  const rowView = (index: number) => {
+    const row = rows[index];
+    const hit = hits[index];
+    const decision = decisions[index] ?? (hit ? defaultDuplicateDecision(hit) : "skip");
+    const posted = hit?.kind === "posted" ? hit.match : null;
+    // An upcoming payment: both answers import the row; "It's that
+    // payment" also records it as that payment (settle).
+    const upcoming = posted?.kind === "upcoming";
+    const settling = upcoming && decision === "settle";
+    const importing = decision === "import" || settling;
+    const keepLabel = posted?.kind === "paycheck" ? t.isRecordedPaycheck : t.isPostedCharge;
+    const statusLabel = settling
+      ? t.appliedUpcomingPayment
+      : importing
+        ? t.appliedImportAnyway
+        : posted
+          ? posted.kind === "paycheck"
+            ? t.appliedRecordedPaycheck
+            : t.appliedPostedCharge
+          : t.appliedSkipped;
+    const answerLabel = upcoming
+      ? settling
+        ? t.isDifferentCharge
+        : t.isUpcomingPayment
+      : posted
+        ? importing
+          ? keepLabel
+          : t.isDifferentCharge
+        : importing
+          ? t.skipDuplicate
+          : t.importAnyway;
+    const answer = () =>
+      onDecideAction([index], upcoming ? (settling ? "import" : "settle") : importing ? "skip" : "import");
+    return { row, hit, posted, upcoming, settling, importing, statusLabel, answerLabel, answer };
+  };
+
+  // The note and what matched it. The table truncates the note to one line;
+  // a card has the width of the screen and shows all of it.
+  const matchNotes = (view: ReturnType<typeof rowView>, truncate = false) => (
+    <>
+      <span className={truncate ? "block truncate" : "block text-sm break-words"}>{view.row.note || "-"}</span>
+      {view.hit?.kind === "imported" ? (
+        <span className="block text-xs text-muted-foreground">{t.matchesExisting(view.hit.existingDate)}</span>
+      ) : null}
+      {view.posted ? (
+        <PostedMatchNotice
+          match={view.posted}
+          incoming={{ amount: view.row.amount, currency }}
+          showOutcome={view.upcoming ? view.settling : !view.importing}
+          locale={locale}
+        />
+      ) : null}
+    </>
+  );
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -794,7 +850,43 @@ function DuplicateRowsPanel({
         ) : null}
       </div>
 
-      <div className="overflow-x-auto rounded-md border border-border/50">
+      {/* Below sm each row is a stacked card, like the Inbox's rows, with its
+          answer at 44px: the table is 713px wide (fixed column widths plus a
+          note that cannot shrink) and would sit in a 314px frame scrolling
+          sideways. From sm the table stays. Both read the same row views, so
+          the two presentations can never answer a row differently. */}
+      <ul className="divide-y divide-border/50 rounded-md border border-border/50 sm:hidden">
+        {rowIndexes.map((index) => {
+          const view = rowView(index);
+          return (
+            <li key={index} data-duplicate-row={index} className="flex flex-col gap-2 p-3">
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  className="mt-0.5 after:-inset-3.5"
+                  checked={selected.has(index)}
+                  onCheckedChange={() => toggleRow(index)}
+                  aria-label={t.selectRowAria}
+                />
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="figure figure-sm text-xs text-muted-foreground">{toISODate(view.row.date)}</span>
+                    <span className="figure text-sm">{formatMoney(view.row.amount, currency)}</span>
+                  </div>
+                  {matchNotes(view)}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 pl-7 text-xs">
+                <span className={view.importing ? "text-foreground" : "text-muted-foreground"}>{view.statusLabel}</span>
+                <Button type="button" variant="ghost" size="xs" className="max-sm:h-11" onClick={view.answer}>
+                  {view.answerLabel}
+                </Button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="overflow-x-auto rounded-md border border-border/50 max-sm:hidden">
         <Table>
           <TableHeader>
             <TableRow>
@@ -807,16 +899,7 @@ function DuplicateRowsPanel({
           </TableHeader>
           <TableBody>
             {rowIndexes.map((index) => {
-              const row = rows[index];
-              const hit = hits[index];
-              const decision = decisions[index] ?? (hit ? defaultDuplicateDecision(hit) : "skip");
-              const posted = hit?.kind === "posted" ? hit.match : null;
-              // An upcoming payment: both answers import the row; "It's that
-              // payment" also records it as that payment (settle).
-              const upcoming = posted?.kind === "upcoming";
-              const settling = upcoming && decision === "settle";
-              const importing = decision === "import" || settling;
-              const keepLabel = posted?.kind === "paycheck" ? t.isRecordedPaycheck : t.isPostedCharge;
+              const view = rowView(index);
               return (
                 <TableRow key={index}>
                   <TableCell>
@@ -826,58 +909,15 @@ function DuplicateRowsPanel({
                       aria-label={t.selectRowAria}
                     />
                   </TableCell>
-                  <TableCell className="figure figure-sm text-xs">{toISODate(row.date)}</TableCell>
-                  <TableCell className="max-w-[22rem] text-sm">
-                    <span className="block truncate">{row.note || "-"}</span>
-                    {hit?.kind === "imported" ? (
-                      <span className="block text-xs text-muted-foreground">
-                        {t.matchesExisting(hit.existingDate)}
-                      </span>
-                    ) : null}
-                    {posted ? (
-                      <PostedMatchNotice
-                        match={posted}
-                        incoming={{ amount: row.amount, currency }}
-                        showOutcome={upcoming ? settling : !importing}
-                        locale={locale}
-                      />
-                    ) : null}
-                  </TableCell>
+                  <TableCell className="figure figure-sm text-xs">{toISODate(view.row.date)}</TableCell>
+                  <TableCell className="max-w-[22rem] text-sm">{matchNotes(view, true)}</TableCell>
                   <TableCell className="text-right">
-                    <span className="figure text-sm">{formatMoney(row.amount, currency)}</span>
+                    <span className="figure text-sm">{formatMoney(view.row.amount, currency)}</span>
                   </TableCell>
                   <TableCell className="text-xs">
-                    <span className={importing ? "text-foreground" : "text-muted-foreground"}>
-                      {settling
-                        ? t.appliedUpcomingPayment
-                        : importing
-                        ? t.appliedImportAnyway
-                        : posted
-                          ? posted.kind === "paycheck"
-                            ? t.appliedRecordedPaycheck
-                            : t.appliedPostedCharge
-                          : t.appliedSkipped}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="ml-1"
-                      onClick={() =>
-                        onDecideAction([index], upcoming ? (settling ? "import" : "settle") : importing ? "skip" : "import")
-                      }
-                    >
-                      {upcoming
-                        ? settling
-                          ? t.isDifferentCharge
-                          : t.isUpcomingPayment
-                        : posted
-                        ? importing
-                          ? keepLabel
-                          : t.isDifferentCharge
-                        : importing
-                          ? t.skipDuplicate
-                          : t.importAnyway}
+                    <span className={view.importing ? "text-foreground" : "text-muted-foreground"}>{view.statusLabel}</span>
+                    <Button type="button" variant="ghost" size="xs" className="ml-1" onClick={view.answer}>
+                      {view.answerLabel}
                     </Button>
                   </TableCell>
                 </TableRow>

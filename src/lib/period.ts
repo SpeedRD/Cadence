@@ -9,8 +9,6 @@
  * a calendar month.
  */
 import {
-  MONTHS_LONG,
-  MONTHS_SHORT,
   addDays,
   civilDate,
   daysBetween,
@@ -31,11 +29,7 @@ export interface PeriodInfo extends PeriodRef {
   start: Date;
   end: Date;
   totalDays: number;
-  /** "Aug 16-31" */
-  label: string;
-  /** "August 16-31, 2026" */
-  longLabel: string;
-  /** "2026-08-B" */
+  /** "2026-08-B". Its text label is formatPeriodShort / formatPeriodLong (src/lib/date-format.ts), in the app's language. */
   key: string;
 }
 
@@ -218,15 +212,11 @@ export function periodInfo(ref: PeriodRef): PeriodInfo {
   const endDay = ref.period === "A" ? PERIOD_A_LAST_DAY : lastDay;
   const start = civilDate(ref.year, ref.month, startDay);
   const end = civilDate(ref.year, ref.month, endDay);
-  const monthShort = MONTHS_SHORT[ref.month - 1];
-  const monthLong = MONTHS_LONG[ref.month - 1];
   return {
     ...ref,
     start,
     end,
     totalDays: endDay - startDay + 1,
-    label: `${monthShort} ${startDay}-${endDay}`,
-    longLabel: `${monthLong} ${startDay}-${endDay}, ${ref.year}`,
     key: periodKey(ref),
   };
 }

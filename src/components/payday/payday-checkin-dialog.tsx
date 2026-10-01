@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { convert, formatMoney, type RateTable } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
+import { formatPeriodLong } from "@/lib/date-format";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
@@ -380,12 +381,12 @@ export function PaydayCheckinDialog({
               first line; progress is the PeriodRail, one block per step,
               with the step count kept for screen readers. */}
           <DialogTitle>
-            <span className="max-sm:hidden">{t.wizardTitle(plan.periodLabel)}</span>
+            <span className="max-sm:hidden">{t.wizardTitle(formatPeriodLong(plan.period, locale))}</span>
             <span className="sm:hidden">{t.wizardName}</span>
           </DialogTitle>
           <PeriodRail totalDays={STEP_COUNT} elapsed={step - 1} compact className="w-24 sm:hidden" />
           <DialogDescription>
-            <span className="block sm:hidden">{plan.periodLabel}</span>
+            <span className="block sm:hidden">{formatPeriodLong(plan.period, locale)}</span>
             <span className="max-sm:sr-only">{t.stepOf(step, STEP_COUNT)} · </span>
             <span className="max-sm:block">{stepTitles[step - 1]}</span>
           </DialogDescription>

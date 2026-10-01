@@ -3,18 +3,20 @@ import Link from "next/link";
 import { GoalAchievedNote, GoalMeter } from "@/components/goals/goal-achieved";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
-import { formatDate } from "@/lib/date";
-import type { Dictionary } from "@/lib/i18n";
+import { formatDate, formatPeriodShort } from "@/lib/date-format";
+import type { Dictionary, Locale } from "@/lib/i18n";
 
 import type { GoalSummary } from "@/lib/data/goals";
 
 export function GoalCard({
   goal,
   displayCurrency,
+  locale,
   t,
 }: {
   goal: GoalSummary;
   displayCurrency: string;
+  locale: Locale;
   t: Dictionary["dashboard"];
 }) {
   const showConverted = goal.currency !== displayCurrency;
@@ -65,7 +67,7 @@ export function GoalCard({
             {goal.plan.scheduled > 0 ? `${t.fromRecurring(formatMoney(goal.plan.scheduled, displayCurrency))} · ` : ""}
             {goal.periodsLeft === 0
               ? t.dueThisPeriod
-              : t.periodsTo(goal.periodsLeft!, formatDate(goal.targetDate))}
+              : t.periodsTo(goal.periodsLeft!, formatDate(goal.targetDate, locale))}
           </p>
         ) : goal.displayPacePerPeriod ? (
           <p className="text-xs text-muted-foreground">
@@ -74,7 +76,7 @@ export function GoalCard({
               {formatMoney(goal.displayPacePerPeriod, displayCurrency)}
             </span>{" "}
             {t.perPeriod}
-            {goal.projectedEnd ? ` · ${t.onTrackFor(formatDate(goal.projectedEnd))}` : ""}
+            {goal.projectedEnd ? ` · ${t.onTrackFor(formatDate(goal.projectedEnd, locale))}` : ""}
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">{t.noContributionsYet}</p>
@@ -82,14 +84,14 @@ export function GoalCard({
         {goal.plan.planned !== null && (goal.plan.planned > 0 || goal.plan.contributed > 0) ? (
           <p className="text-xs text-muted-foreground">
             {t.planVersusContributed(
-              goal.plan.period.label,
+              formatPeriodShort(goal.plan.period, locale),
               formatMoney(goal.plan.planned, displayCurrency),
               formatMoney(goal.plan.contributed, displayCurrency),
             )}
           </p>
         ) : goal.plan.contributed > 0 ? (
           <p className="text-xs text-muted-foreground">
-            {t.contributedInPeriod(goal.plan.period.label, formatMoney(goal.plan.contributed, displayCurrency))}
+            {t.contributedInPeriod(formatPeriodShort(goal.plan.period, locale), formatMoney(goal.plan.contributed, displayCurrency))}
           </p>
         ) : null}
       </CardContent>

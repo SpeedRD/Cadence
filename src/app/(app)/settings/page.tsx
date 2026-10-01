@@ -19,7 +19,8 @@ import {
 } from "@/components/ui/card";
 import { getSettings } from "@/lib/auth";
 import { CURRENCIES, CURRENCY_LABELS, formatRate } from "@/lib/currency";
-import { appTimeZone, formatDate, formatDateTimeInAppZone, toISODate } from "@/lib/date";
+import { appTimeZone, formatDateTimeInAppZone, toISODate } from "@/lib/date";
+import { formatDate } from "@/lib/date-format";
 import { getAppContext } from "@/lib/data/context";
 import { getDictionary } from "@/lib/i18n";
 import { num } from "@/lib/money";
@@ -117,7 +118,7 @@ export default async function SettingsPage() {
             {context.rates.fetchedAt && (
               <p className="text-xs text-muted-foreground">
                 {context.rates.source === "bpd" && context.rates.asOf
-                  ? t.rateSourceBpd(formatDate(context.rates.asOf))
+                  ? t.rateSourceBpd(formatDate(context.rates.asOf, context.language))
                   : t.rateSourceOpenErApi}
               </p>
             )}

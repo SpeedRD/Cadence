@@ -7,7 +7,8 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/currency";
-import { formatDate, fromISODate } from "@/lib/date";
+import { fromISODate } from "@/lib/date";
+import { formatDate } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import type { Insight, InsightEvidence, InsightSource } from "@/lib/insights";
 import { cn } from "@/lib/utils";
@@ -35,13 +36,13 @@ const SOURCE_LABEL: Record<InsightSource, (t: InboxDictionary) => string> = {
   goal_forecast_risk: (t) => t.sourceGoalForecast,
 };
 
-function formatEvidence(evidence: InsightEvidence): string {
+function formatEvidence(evidence: InsightEvidence, locale: Locale): string {
   switch (evidence.kind) {
     case "money":
       return formatMoney(evidence.amount, evidence.currency);
     case "date": {
       const date = fromISODate(evidence.date);
-      return date ? formatDate(date) : evidence.date;
+      return date ? formatDate(date, locale) : evidence.date;
     }
     case "text":
       return evidence.value;
@@ -109,7 +110,7 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
                   <div key={`${evidence.label}-${index}`} className="flex gap-1 max-sm:contents">
                     <dt>{evidence.label}:</dt>
                     <dd className={evidence.kind === "money" ? "figure text-foreground" : "text-foreground"}>
-                      {formatEvidence(evidence)}
+                      {formatEvidence(evidence, locale)}
                     </dd>
                   </div>
                 ))}

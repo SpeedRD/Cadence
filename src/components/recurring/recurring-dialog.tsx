@@ -17,7 +17,8 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { CURRENCIES, formatMoney } from "@/lib/currency";
-import { formatDate, fromISODate } from "@/lib/date";
+import { fromISODate } from "@/lib/date";
+import { formatDate } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { RECURRING_FREQUENCIES, RECURRING_KINDS } from "@/lib/labels";
 import { paidPastOccurrences, previewPostingFrom } from "@/lib/recurring";
@@ -355,17 +356,17 @@ export function RecurringDialog({
             {postPast
               ? t.pastDateNote(
                   pastPreview.count,
-                  formatDate(pastPreview.first),
-                  formatDate(pastPreview.last),
+                  formatDate(pastPreview.first, locale),
+                  formatDate(pastPreview.last, locale),
                   pastPreview.capped,
                 )
               : pastPaid.allPaid
                 ? t.allPaymentsPast
                 : t.pastDatePaidNote(
                     pastPaid.paidCount,
-                    formatDate(pastPaid.first),
-                    formatDate(pastPaid.last),
-                    formatDate(pastPaid.nextDate),
+                    formatDate(pastPaid.first, locale),
+                    formatDate(pastPaid.last, locale),
+                    formatDate(pastPaid.nextDate, locale),
                     pastPaid.remainingOccurrences,
                   )}
           </p>

@@ -7,7 +7,7 @@ import { Field } from "@/components/form/field";
 import { PaydayAmountInput } from "@/components/payday/amount-input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
-import { formatDate } from "@/lib/date";
+import { formatDate } from "@/lib/date-format";
 import {
   MAX_DEBT_PERIODS,
   compareDebtStrategies,
@@ -55,7 +55,7 @@ export function DebtPayoffComparator({
     if (!planRef) return "";
     let cursor: PeriodRef = planRef;
     for (let i = 1; i < n; i += 1) cursor = nextPeriod(cursor);
-    return formatDate(periodInfo(cursor).end);
+    return formatDate(periodInfo(cursor).end, locale);
   };
 
   // The total is order-invariant (see simulateDebtPayoff), so either result's

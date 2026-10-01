@@ -51,6 +51,7 @@ import {
   periodKey,
   previousComparablePeriod,
   previousPeriod,
+  type PeriodInfo,
   type PeriodRef,
 } from "@/lib/period";
 import { carryoverIsProvisional, PROVISIONAL_CARRYOVER_BASIS } from "@/lib/flexible-room";
@@ -274,7 +275,8 @@ export type CarryoverBasis = "prior_period_budget" | "no_prior_budget";
 
 export interface PaydayCheckinDraft {
   periodRef: PeriodRef;
-  periodLabel: string;
+  /** The plan period; its text label is formatPeriodLong (src/lib/date-format.ts), in the app's language. */
+  period: PeriodInfo;
   /** The day Step 1's ledger balances are as of: the day before this period's pay landed (K8). */
   ledgerDate: Date;
   isEditingConfirmed: boolean;
@@ -1074,7 +1076,7 @@ export async function getPaydayCheckinDraft(
 
   return {
     periodRef: planRef,
-    periodLabel: plan.longLabel,
+    period: plan,
     ledgerDate: ledger.date,
     isEditingConfirmed: Boolean(existing),
     checkinId: existing?.id ?? null,

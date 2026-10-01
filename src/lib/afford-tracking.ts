@@ -8,6 +8,7 @@
  */
 import { type AffordVerdict, type Installment } from "@/lib/afford";
 import { round2 } from "@/lib/money";
+import type { PeriodInfo } from "@/lib/period";
 import { scheduleDates } from "@/lib/period-commitments";
 import { type ScheduledItem } from "@/lib/recurring";
 
@@ -57,7 +58,7 @@ export type AffordViability =
   | {
       status: "short";
       periodKey: string;
-      periodLabel: string;
+      period: PeriodInfo;
       shortfall: number;
       currency: string;
       check: "account" | "flexible";
@@ -70,7 +71,7 @@ export function summarizeAffordViability(verdict: AffordVerdict): AffordViabilit
     ? {
         status: "short",
         periodKey: first.key,
-        periodLabel: first.period.label,
+        period: first.period,
         shortfall: first.flexible.shortfall,
         currency: first.flexible.currency,
         check: "flexible",
@@ -78,7 +79,7 @@ export function summarizeAffordViability(verdict: AffordVerdict): AffordViabilit
     : {
         status: "short",
         periodKey: first.key,
-        periodLabel: first.period.label,
+        period: first.period,
         shortfall: first.account.shortfall,
         currency: first.account.currency,
         check: "account",

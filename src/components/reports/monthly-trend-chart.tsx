@@ -1,8 +1,9 @@
 import { formatMoney } from "@/lib/currency";
+import { formatMonthLong, formatMonthShort } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
 
 import type { MonthlyBreakdown } from "@/lib/data/monthly";
-import type { Dictionary } from "@/lib/i18n";
+import type { Dictionary, Locale } from "@/lib/i18n";
 
 /**
  * Same visual pattern as TrendChart (src/components/reports/trend-chart.tsx),
@@ -14,10 +15,12 @@ import type { Dictionary } from "@/lib/i18n";
 export function MonthlyTrendChart({
   months,
   currency,
+  locale,
   t,
 }: {
   months: MonthlyBreakdown[];
   currency: string;
+  locale: Locale;
   t: Dictionary["reports"];
 }) {
   const max = months.reduce((highest, month) => Math.max(highest, month.normalSpending), 0);
@@ -38,11 +41,11 @@ export function MonthlyTrendChart({
               key={month.window.key}
               className="group relative flex h-full flex-1 flex-col justify-end"
               tabIndex={0}
-              aria-label={`${month.window.longLabel}: ${t.monthlyTooltipNormal(formatMoney(month.normalSpending, currency))}`}
+              aria-label={`${formatMonthLong(month.window, locale)}: ${t.monthlyTooltipNormal(formatMoney(month.normalSpending, currency))}`}
             >
               {/* Capped and edge-anchored, same reasoning as TrendChart's tooltip. */}
               <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-max max-w-44 -translate-x-1/2 rounded-md bg-popover px-2 py-1.5 text-xs opacity-0 shadow-md ring-1 ring-foreground/10 transition-opacity group-first:left-0 group-first:translate-x-0 group-last:right-0 group-last:left-auto group-last:translate-x-0 group-hover:opacity-100 group-focus:opacity-100 sm:max-w-56">
-                <p className="font-medium">{month.window.label}</p>
+                <p className="font-medium">{formatMonthShort(month.window, locale)}</p>
                 <p className="figure figure-sm text-muted-foreground">
                   {t.monthlyTooltipNormal(formatMoney(month.normalSpending, currency))}
                 </p>
@@ -62,7 +65,7 @@ export function MonthlyTrendChart({
       <div className="flex gap-2">
         {months.map((month) => (
           <div key={month.window.key} className="flex-1 text-center text-hint text-muted-foreground">
-            {month.window.label}
+            {formatMonthShort(month.window, locale)}
           </div>
         ))}
       </div>

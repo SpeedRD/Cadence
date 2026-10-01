@@ -21,7 +21,8 @@ import {
   type AffordVerdict,
 } from "@/lib/afford";
 import { formatMoney } from "@/lib/currency";
-import { formatDate, fromISODate } from "@/lib/date";
+import { fromISODate } from "@/lib/date";
+import { formatDate, formatPeriodShort } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { AFFORD_FREQUENCIES } from "@/lib/labels";
 import { round2 } from "@/lib/money";
@@ -281,7 +282,7 @@ export function AffordCalculator({
                       <div className="min-w-0">
                         <p className="text-sm">{t.paymentLabel(installment.index)}</p>
                         <p className="text-hint text-muted-foreground">
-                          {formatDate(installment.date)} · {period.label}
+                          {formatDate(installment.date, locale)} · {formatPeriodShort(period, locale)}
                           {paid ? ` · ${t.alreadyPaid}` : ""}
                         </p>
                       </div>

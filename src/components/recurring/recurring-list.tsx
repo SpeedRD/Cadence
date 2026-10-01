@@ -15,7 +15,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatMoney } from "@/lib/currency";
-import { formatDate, formatDayMonth, formatRelativeDays, toISODate } from "@/lib/date";
+import { formatRelativeDays, toISODate } from "@/lib/date";
+import { formatDate, formatDayMonth, formatPeriodShort } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { labelFor } from "@/lib/labels";
 import { isFinishedPlan } from "@/lib/recurring";
@@ -38,10 +39,12 @@ import type { RecurringRow } from "@/lib/data/recurring";
 function ViabilityBadge({
   viability,
   accountName,
+  locale,
   t,
 }: {
   viability: AffordViability;
   accountName: string | null;
+  locale: Locale;
   t: ReturnType<typeof getDictionary>["recurring"];
 }) {
   if (viability.status === "on_track") {
@@ -63,7 +66,7 @@ function ViabilityBadge({
           : t.shortByFlexibleHint
       }
     >
-      {t.shortBy(formatMoney(viability.shortfall, viability.currency), viability.periodLabel)}
+      {t.shortBy(formatMoney(viability.shortfall, viability.currency), formatPeriodShort(viability.period, locale))}
     </span>
   );
 }
@@ -145,6 +148,7 @@ export function RecurringList({
                     <ViabilityBadge
                       viability={viability[row.id]}
                       accountName={row.accountName}
+                      locale={locale}
                       t={t}
                     />
                   ) : null}
@@ -167,7 +171,7 @@ export function RecurringList({
               </div>
               <p className="text-hint text-muted-foreground max-sm:contents">
                 {labelFor(common.frequencyLabels, row.frequency)} · {t.nextLabel}{" "}
-                {formatDate(row.nextDate)}
+                {formatDate(row.nextDate, locale)}
                 {row.active ? ` (${formatRelativeDays(today, row.nextDate, common)})` : ""}
                 {row.categoryName ? ` · ${row.categoryName}` : ""}
                 {row.accountName ? ` · ${row.accountName}` : ""}
@@ -182,10 +186,10 @@ export function RecurringList({
                   className="text-hint text-muted-foreground max-sm:block"
                 >
                   {t.coveredOn(
-                    formatDayMonth(part.dueDate),
+                    formatDayMonth(part.dueDate, locale),
                     common.coveredBy(
                       formatMoney(part.amount, part.currency),
-                      part.depositLabel ?? common.depositOf(formatDayMonth(part.depositDate)),
+                      part.depositLabel ?? common.depositOf(formatDayMonth(part.depositDate, locale)),
                     ),
                   )}
                 </p>

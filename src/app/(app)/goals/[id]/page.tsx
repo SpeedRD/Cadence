@@ -26,7 +26,8 @@ import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { getGoalDetail } from "@/lib/data/goals";
 import { getGoalRoadmapStatuses } from "@/lib/data/payday";
-import { formatDate, toISODate } from "@/lib/date";
+import { toISODate } from "@/lib/date";
+import { formatDate, formatPeriodShort } from "@/lib/date-format";
 import { getDictionary } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -89,7 +90,7 @@ export default async function GoalDetailPage({
         title={summary.name}
         description={
           summary.targetDate
-            ? t.targetDate(formatDate(summary.targetDate))
+            ? t.targetDate(formatDate(summary.targetDate, context.language))
             : t.noTargetPaceNote
         }
         actions={
@@ -174,7 +175,7 @@ export default async function GoalDetailPage({
                 }
                 hint={
                   summary.projectedEnd
-                    ? t.doneAround(formatDate(summary.projectedEnd))
+                    ? t.doneAround(formatDate(summary.projectedEnd, context.language))
                     : t.logToSetPace
                 }
               />
@@ -197,7 +198,7 @@ export default async function GoalDetailPage({
           {summary.plan.planned !== null ? (
             <p className="text-xs text-muted-foreground">
               {t.planVersusContributed(
-                summary.plan.period.label,
+                formatPeriodShort(summary.plan.period, context.language),
                 formatMoney(summary.plan.planned, display),
                 formatMoney(summary.plan.contributed, display),
               )}
@@ -210,25 +211,25 @@ export default async function GoalDetailPage({
             </p>
           ) : summary.plan.contributed > 0 ? (
             <p className="text-xs text-muted-foreground">
-              {t.contributedInPeriod(summary.plan.period.label, formatMoney(summary.plan.contributed, display))}
+              {t.contributedInPeriod(formatPeriodShort(summary.plan.period, context.language), formatMoney(summary.plan.contributed, display))}
             </p>
           ) : null}
           {roadmapStatus && roadmapStatus.roomShortfall > 0 ? (
             <p className="text-xs text-[var(--warning)]">
-              {t.roomShortfallThisPeriod(formatMoney(roadmapStatus.roomShortfall, display), roadmapStatus.period.label)}
+              {t.roomShortfallThisPeriod(formatMoney(roadmapStatus.roomShortfall, display), formatPeriodShort(roadmapStatus.period, context.language))}
             </p>
           ) : null}
           {!summary.targetDate && summary.plan.open && summary.plan.recommended !== null && summary.plan.byHand - summary.plan.recommended > 0.005 ? (
             <p className="text-xs text-[var(--warning)]">
               {t.roomShortfallRemainingThisPeriod(
                 formatMoney(round2(summary.plan.byHand - summary.plan.recommended), display),
-                summary.plan.period.label,
+                formatPeriodShort(summary.plan.period, context.language),
               )}
             </p>
           ) : null}
           {[...(roadmapStatus && roadmapStatus.followThroughShortfall > 0 ? [roadmapStatus] : []), ...earlierStatuses].map((status) => (
             <p key={status.period.key} className="text-xs text-[var(--warning)]">
-              {t.notYetContributed(formatMoney(status.followThroughShortfall, display), status.period.label)}
+              {t.notYetContributed(formatMoney(status.followThroughShortfall, display), formatPeriodShort(status.period, context.language))}
             </p>
           ))}
         </CardContent>

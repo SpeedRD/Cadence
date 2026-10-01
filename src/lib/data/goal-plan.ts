@@ -161,6 +161,14 @@ export function goalPeriodPlan(
         context.rates,
       ),
   );
+  const savedToDate = round2(
+    num(goal.savedAmount) -
+      savedFromContributions(
+        goal.contributions.filter((contribution) => contribution.date.getTime() > clock.today.getTime()),
+        goal.currency,
+        context.rates,
+      ),
+  );
   const contributedNative = savedFromContributions(
     goal.contributions.filter(
       (contribution) =>
@@ -215,7 +223,9 @@ export function goalPeriodPlan(
     currency: goal.currency,
     targetDate: goal.targetDate,
     achievedAt: goal.achievedAt,
-    open: !goal.achievedAt && round2(target - num(goal.savedAmount)) > 0,
+    // Left to fund as of today, like every page's "still to go": a contribution
+    // dated ahead is in the cached total but has not been saved yet.
+    open: !goal.achievedAt && round2(target - savedToDate) > 0,
     period,
     periodsLeft: goal.targetDate ? periodsRemaining(pacePeriod.start, goal.targetDate) : null,
     nativePace,

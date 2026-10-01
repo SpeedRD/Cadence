@@ -1,7 +1,8 @@
 import { EmptyState, Stat } from "@/components/stat";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
-import type { Dictionary } from "@/lib/i18n";
+import { formatMonthLong } from "@/lib/date-format";
+import type { Dictionary, Locale } from "@/lib/i18n";
 
 import type { MonthlyPaceCardData } from "@/lib/data/monthly";
 
@@ -13,10 +14,12 @@ import type { MonthlyPaceCardData } from "@/lib/data/monthly";
 export function MonthlyPaceCard({
   data,
   displayCurrency,
+  locale,
   t,
 }: {
   data: MonthlyPaceCardData;
   displayCurrency: string;
+  locale: Locale;
   t: Dictionary["monthlyPace"];
 }) {
   const { pace, history, comparison } = data;
@@ -29,7 +32,7 @@ export function MonthlyPaceCard({
     <Card size="sm">
       <CardHeader>
         <CardTitle>{t.title}</CardTitle>
-        <CardDescription>{data.window.longLabel}</CardDescription>
+        <CardDescription>{formatMonthLong(data.window, locale)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {!history.sufficient ? (

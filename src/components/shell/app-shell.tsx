@@ -10,6 +10,7 @@ import { PlanSegments } from "@/components/shell/plan-segments";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { PeriodRail } from "@/components/period-rail";
 import { formatDateTimeInAppZone } from "@/lib/date";
+import { formatPeriodShort } from "@/lib/date-format";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import type { AppContext } from "@/lib/data/context";
@@ -76,7 +77,7 @@ export function AppShell({
               </div>
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">
-                  {currentPeriod.label}
+                  {formatPeriodShort(currentPeriod, context.language)}
                 </p>
                 <p className="text-hint text-muted-foreground">
                   {remaining === 0 ? t.shell.periodClosed : t.shell.daysLeft(remaining)}

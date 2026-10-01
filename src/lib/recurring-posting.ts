@@ -81,7 +81,7 @@
 import { exactAmountIn, inAccountCurrency } from "@/lib/account-money";
 import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
 import { startOfDay, toISODate } from "@/lib/date";
-import { recomputeGoalSaved, savedFromContributions } from "@/lib/goals";
+import { contributionsOnOrBefore, markGoalsReachedByDate, recomputeGoalSaved, savedFromContributions } from "@/lib/goals";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
@@ -191,6 +191,7 @@ async function postOccurrence(
   settledBy: PlannedCharge | null,
   rates: RateTable,
   expectedRemaining: number | null,
+  today: Date,
 ): Promise<OccurrenceOutcome | null> {
   const next = advanceDate(due, item.frequency, item.anchorDay, item.secondAnchorDay);
   const goalId = item.kind === "CONTRIBUTION" ? item.goalId : null;
@@ -214,14 +215,16 @@ async function postOccurrence(
       // goal's row lock (the one rebuildGoalSaved takes), that the goal still
       // needs it. Read from the contribution rows rather than the cached
       // achievedAt, so a contribution another run wrote a moment ago counts.
+      // Only rows dated today or earlier count, as in rebuildGoalSaved: a
+      // contribution dated ahead has not reached the goal yet.
       const writesContribution = goalId !== null && !alreadyPosted && !settledBy?.isContributionTwin;
       if (writesContribution) {
         await tx.$queryRaw`SELECT "id" FROM "Goal" WHERE "id" = ${goalId} FOR UPDATE`;
         const goal = await tx.goal.findUnique({ where: { id: goalId }, select: { currency: true, targetAmount: true } });
         if (goal) {
-          const rows = await tx.goalContribution.findMany({ where: { goalId }, select: { amount: true, currency: true } });
+          const rows = await tx.goalContribution.findMany({ where: { goalId }, select: { amount: true, currency: true, date: true } });
           const target = num(goal.targetAmount);
-          if (target > 0 && savedFromContributions(rows, goal.currency, rates) >= target) {
+          if (target > 0 && savedFromContributions(contributionsOnOrBefore(rows, today), goal.currency, rates) >= target) {
             return { result: "goal_achieved" as const };
           }
         }
@@ -375,6 +378,9 @@ export async function postDueRecurringItems(
   reference: Date,
 ): Promise<RecurringPostingSummary> {
   const today = startOfDay(reference);
+  // A goal whose last contribution was dated ahead is reached the day it
+  // arrives; mark it before the run reads achievedAt below.
+  await markGoalsReachedByDate(today);
   const due = await loadDueItems(today);
 
   const summary: RecurringPostingSummary = {
@@ -476,6 +482,7 @@ export async function postDueRecurringItems(
           plan.settledBy.get(recurringExternalId(item.id, occurrence)) ?? null,
           rates,
           expectedRemaining,
+          today,
         );
         // Someone else (an overlapping run) owns this item now; leave the
         // rest of its backlog to them rather than racing for each occurrence.

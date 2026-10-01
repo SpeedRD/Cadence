@@ -422,7 +422,7 @@ database-free function.
 - **Who / direction:** every dated goal, from payday to the end of the period (1-3 days each period). The Goals page understates the pace, and "this period" names a different period than "planned this period" on the same card.
 - **Severity:** Low (display). **Confidence:** High. **Relates to:** B24.
 - **Status (2026-09-30, K1/K2):** removed. `summarize` in `lib/data/goals.ts` counts periods from `periodClock(today).plan.start` and nets the plan period's outstanding contributions (K2). Trace (a) on Sep 30: 3,714.22 × 3 on the Goals page, the same as the roadmap (was 2,785.66 × 4). "due this period" now names the plan period, so the Nov 13 / Nov 14 case reads the period the wizard plans it in; D9 (mid-period target) and D14 (currency path) remain. Harness: "period clock and period commitments (K1 K2)", D1.
-- **Status (2026-09-30, K3):** the figures moved again with K3. The Goals page now reads the plan's by-hand figure, fixed at the plan period's start (D2) and counted by payday (D9): trace (a) on Sep 30 reads 4,178.49 x 4 on the Goals page and the roadmap alike.
+- **Status (2026-09-30, K3):** the figures moved again with K3. The Goals page now reads the plan's by-hand figure, fixed at the plan period's payday (D2) and counted by payday (D9): trace (a) on Sep 30 reads 4,178.49 x 4 on the Goals page and the roadmap alike.
 
 #### D2. The roadmap still counts the plan period as a period to fund after money was contributed inside it
 - **Quantities:** Q34 in all its readers (wizard "Roadmap amount" and "ahead", Inbox, forecast pace, Afford estimate, debt comparator), against what the target still needs.
@@ -833,7 +833,7 @@ move to it.
 ### K3. A goal's period plan
 - **Name and signature:** `goalPeriodPlan(goal, period: PeriodInfo, clock) → { pace, scheduled, byHand, planned, contributed }`.
 - **Meaning:**
-  - `pace`: what reaching the target asks of each period from the plan period on, fixed at the plan period's start: (target − saved from contributions dated before `plan.start`) / `goalPeriodsLeft(plan.start, target)`. Gross (before recurring contributions).
+  - `pace`: what reaching the target asks of each period from the plan period on, fixed at the plan period's payday: (target − saved from contributions dated before `plan.start`) / `goalPeriodsLeft(plan.start, target)`. Gross (before recurring contributions).
   - `scheduled`: the goal's recurring contributions due in *that* period (from K2).
   - `byHand = max(0, pace − scheduled)`: what the check-in should fund.
   - `planned`: the period's confirmed GOAL rows (0 when the period is confirmed and has none).
