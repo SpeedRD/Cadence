@@ -287,7 +287,9 @@ export const es = {
     recommendedBudget: (amount: string) =>
       `Recomendado: ${amount} - lo que tu revisión de día de pago deja para categorías flexibles.`,
     recommendedUnallocated: (available: string, unallocated: string) =>
-      `Recomendado: ${available} - lo que tu revisión de día de pago deja para categorías flexibles. ${unallocated} aún no está en ningún presupuesto: presupuéstalo aquí o pasará al próximo periodo.`,
+      `Recomendado: ${available} - lo que tu revisión de día de pago deja para categorías flexibles. ${unallocated} aún no está en ningún presupuesto:`,
+    recommendedBudgetItHere: "presupuéstalo aquí",
+    recommendedUnallocatedRest: " o pasará al próximo periodo.",
     recommendedShortfall: (amount: string) =>
       `Tu revisión de día de pago deja ${amount} para categorías flexibles - el plan está sobrecomprometido, así que aún no hay nada que presupuestar.`,
     spent: "Gastado",
@@ -768,6 +770,8 @@ export const es = {
     overallBudgetForPeriod: "Presupuesto general de este periodo",
     noOverallSet: (total: string) =>
       `No hay presupuesto general definido. Se usa el total de los presupuestos por categoría (${total}).`,
+    unallocatedInRows: (amount: string) =>
+      `${amount} del margen de este periodo aún no está en ningún presupuesto; presupuéstalo abajo o pasará al próximo periodo.`,
     clearToRemove: "Vacía el campo para eliminar el presupuesto general.",
     prefilledFromCheckin: (amount: string) =>
       `${amount} viene prellenado de tu revisión de día de pago - no se guarda nada hasta que lo confirmes.`,

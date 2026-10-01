@@ -14619,6 +14619,14 @@ async function main() {
     }
   }
 
+  console.log("\n== dashboard 'budget it here' link: the Budgets page's category rows ==");
+  {
+    const { categoryBudgetsHref, CATEGORY_BUDGETS_SECTION_ID } = await import("../src/lib/flexible-room");
+    eq("budget-it-here link: the period's Budgets page, at the category rows", categoryBudgetsHref("2026-10-B"), "/budgets?period=2026-10-B#category-budgets");
+    eq("budget-it-here link: its hash is the section id the page sets", categoryBudgetsHref("2026-10-A").split("#")[1], CATEGORY_BUDGETS_SECTION_ID);
+    eq("budget-it-here link: carries no ?suggested (that is the Set this period's budget link)", categoryBudgetsHref("2026-10-A").includes("suggested"), false);
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });

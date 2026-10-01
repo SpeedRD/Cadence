@@ -20,6 +20,8 @@ import {
 import { formatMoney } from "@/lib/currency";
 import { formatPeriodLong, formatPeriodShort } from "@/lib/date-format";
 import { round2 } from "@/lib/money";
+import { loadConfirmedRooms } from "@/lib/data/flexible-room";
+import { CATEGORY_BUDGETS_SECTION_ID, recommendationFor } from "@/lib/flexible-room";
 import { getAppContext } from "@/lib/data/context";
 import { getPaydayCheckinDraft, planPeriodRef } from "@/lib/data/payday";
 import { getPeriodSummary } from "@/lib/data/period-summary";
@@ -79,6 +81,10 @@ export default async function BudgetsPage({
     getPaydayCheckinDraft(context, { year: period.year, month: period.month, period: period.period }),
   ]);
   const paydayLabels = getDictionary(context.language).payday;
+  // The same confirmed room the Dashboard's "Recommended" reads (K4), through
+  // the same recommendationFor: what the budgets leave in no budget.
+  const room = (await loadConfirmedRooms([period], context)).get(period.key) ?? null;
+  const unallocated = recommendationFor(summary, room)?.unallocated ?? 0;
   const planButtonLabel = paydayDraft.isEditingConfirmed
     ? paydayLabels.reviewConfirmedPlan
     : isPlanTarget
@@ -291,8 +297,13 @@ export default async function BudgetsPage({
         </CardContent>
       </Card>
 
-      <Card className="py-0">
+      <Card id={CATEGORY_BUDGETS_SECTION_ID} className="scroll-mt-20 py-0">
         <CardContent className="px-0">
+          {unallocated > 0 ? (
+            <p className="border-b px-4 py-3 text-xs text-muted-foreground">
+              {t.unallocatedInRows(formatMoney(unallocated, summary.currency))}
+            </p>
+          ) : null}
           <div className="hidden sm:block">
             <Table>
               <TableHeader>

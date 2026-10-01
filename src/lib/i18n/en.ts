@@ -297,8 +297,12 @@ export const en = {
     setPeriodBudget: "Set this period's budget",
     recommendedBudget: (amount: string) =>
       `Recommended: ${amount} - what your payday check-in leaves for flexible categories.`,
+    // One sentence in three parts so the middle one can be the link to the
+    // category budgets: lead + link + rest.
     recommendedUnallocated: (available: string, unallocated: string) =>
-      `Recommended: ${available} - what your payday check-in leaves for flexible categories. ${unallocated} of it is in no budget yet: budget it here, or it carries to the next period.`,
+      `Recommended: ${available} - what your payday check-in leaves for flexible categories. ${unallocated} of it is in no budget yet:`,
+    recommendedBudgetItHere: "budget it here",
+    recommendedUnallocatedRest: ", or it carries to the next period.",
     recommendedShortfall: (amount: string) =>
       `Your payday check-in leaves ${amount} for flexible categories - the plan is over-committed, so there is nothing to budget yet.`,
     spent: "Spent",
@@ -778,6 +782,8 @@ export const en = {
     noOverallSet: (total: string) =>
       `No overall budget set. Category budgets total ${total} and are used instead.`,
     clearToRemove: "Clear the field to remove the overall budget.",
+    unallocatedInRows: (amount: string) =>
+      `${amount} of this period's room is in no budget yet; budget it below, or it carries to the next period.`,
     prefilledFromCheckin: (amount: string) =>
       `${amount} is pre-filled from your payday check-in - nothing is saved until you confirm it.`,
     spentOf: (spent: string, total: string) => `${spent} spent of ${total}`,

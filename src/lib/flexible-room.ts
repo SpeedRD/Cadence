@@ -179,3 +179,15 @@ export function recommendationFor(
   if (summary.hasBudget && room.unallocated <= 0) return null;
   return { available: room.available, unallocated: room.unallocated };
 }
+
+/** The id of the Budgets page's category rows section, the target of {@link categoryBudgetsHref}. */
+export const CATEGORY_BUDGETS_SECTION_ID = "category-budgets";
+
+/**
+ * The Dashboard hero's "budget it here" link: the Budgets page for a period,
+ * scrolled to its category rows, where the money the budgets leave in no
+ * budget can be budgeted.
+ */
+export function categoryBudgetsHref(key: string): string {
+  return `/budgets?${new URLSearchParams({ period: key })}#${CATEGORY_BUDGETS_SECTION_ID}`;
+}

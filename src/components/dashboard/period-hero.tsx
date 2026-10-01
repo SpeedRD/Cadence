@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { formatDayMonth, formatPeriodLong, formatPeriodShort } from "@/lib/date-format";
 import type { Dictionary, Locale } from "@/lib/i18n";
+import { categoryBudgetsHref } from "@/lib/flexible-room";
 import { periodKey } from "@/lib/period";
 
 import type { PeriodSummary } from "@/lib/data/period-summary";
@@ -106,10 +107,17 @@ export function PeriodHero({
                     {t.recommendedUnallocated(
                       formatMoney(recommended.available, currency),
                       formatMoney(recommended.unallocated, currency),
-                    )}
+                    )}{" "}
+                    <Link
+                      href={categoryBudgetsHref(periodKey(period))}
+                      className="underline underline-offset-4"
+                    >
+                      {t.recommendedBudgetItHere}
+                    </Link>
+                    {t.recommendedUnallocatedRest}
                   </p>
                   <Button asChild size="sm" variant="outline">
-                    <Link href={`/budgets?${new URLSearchParams({ period: periodKey(period) })}`}>
+                    <Link href={categoryBudgetsHref(periodKey(period))}>
                       {t.setPeriodBudget}
                     </Link>
                   </Button>
