@@ -131,11 +131,14 @@ export default async function GoalDetailPage({
       <Card>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <div className="flex items-baseline justify-between gap-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               <span className="figure figure-lg text-3xl">
                 {formatMoney(summary.displaySaved, display)}
               </span>
-              <span className="text-sm text-muted-foreground tnum">
+              {/* grow + basis-0: the line breaks only when even the label's
+                  narrowest form (its amount, which never splits) no longer
+                  fits beside the figure, instead of overhanging the card. */}
+              <span className="grow basis-0 text-right text-sm text-muted-foreground tnum">
                 {t.percentOf(
                   Math.round(summary.progress * 100),
                   formatMoney(summary.displayTarget, display),

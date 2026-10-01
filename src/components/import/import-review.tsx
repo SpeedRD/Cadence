@@ -975,6 +975,32 @@ function ExtraordinaryRowsPanel({
     setSelected(new Set());
   };
 
+  // One row's state and its answer, read by the card and by the table row.
+  const rowView = (index: number) => {
+    const row = rows[index];
+    const hit = hits[index];
+    const marked = decisions[index] === "extraordinary";
+    return {
+      row,
+      marked,
+      statusLabel: marked ? t.appliedExtraordinary : t.appliedNormal,
+      answerLabel: marked ? t.keepAsNormal : t.markExtraordinary,
+      answer: () => onDecideAction([index], marked ? "normal" : "extraordinary"),
+      // The note and its category's typical amount. The table truncates the
+      // note to one line; a card has the width of the screen and shows all of it.
+      notes: (truncate: boolean) => (
+        <>
+          <span className={truncate ? "block truncate" : "block text-sm break-words"}>{row.note || "-"}</span>
+          {hit ? (
+            <span className="block text-xs text-muted-foreground">
+              {t.typicalForCategory(hit.categoryName, formatMoney(hit.median, hit.medianCurrency))}
+            </span>
+          ) : null}
+        </>
+      ),
+    };
+  };
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -1004,7 +1030,41 @@ function ExtraordinaryRowsPanel({
         ) : null}
       </div>
 
-      <div className="overflow-x-auto rounded-md border border-border/50">
+      {/* Below sm each row is a stacked card, as in the duplicates panel, with
+          its answer at 44px; from sm the table stays. Both read the same row
+          views, so the two presentations can never answer a row differently. */}
+      <ul className="divide-y divide-border/50 rounded-md border border-border/50 sm:hidden">
+        {rowIndexes.map((index) => {
+          const view = rowView(index);
+          return (
+            <li key={index} data-extraordinary-row={index} className="flex flex-col gap-2 p-3">
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  className="mt-0.5 after:-inset-3.5"
+                  checked={selected.has(index)}
+                  onCheckedChange={() => toggleRow(index)}
+                  aria-label={t.selectRowAria}
+                />
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="figure figure-sm text-xs text-muted-foreground">{toISODate(view.row.date)}</span>
+                    <span className="figure text-sm">{formatMoney(view.row.amount, currency)}</span>
+                  </div>
+                  {view.notes(false)}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 pl-7 text-xs">
+                <span className={view.marked ? "text-foreground" : "text-muted-foreground"}>{view.statusLabel}</span>
+                <Button type="button" variant="ghost" size="xs" className="max-sm:h-11" onClick={view.answer}>
+                  {view.answerLabel}
+                </Button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="overflow-x-auto rounded-md border border-border/50 max-sm:hidden">
         <Table>
           <TableHeader>
             <TableRow>
@@ -1017,9 +1077,7 @@ function ExtraordinaryRowsPanel({
           </TableHeader>
           <TableBody>
             {rowIndexes.map((index) => {
-              const row = rows[index];
-              const hit = hits[index];
-              const marked = decisions[index] === "extraordinary";
+              const view = rowView(index);
               return (
                 <TableRow key={index}>
                   <TableCell>
@@ -1029,30 +1087,15 @@ function ExtraordinaryRowsPanel({
                       aria-label={t.selectRowAria}
                     />
                   </TableCell>
-                  <TableCell className="figure figure-sm text-xs">{toISODate(row.date)}</TableCell>
-                  <TableCell className="max-w-[22rem] text-sm">
-                    <span className="block truncate">{row.note || "-"}</span>
-                    {hit ? (
-                      <span className="block text-xs text-muted-foreground">
-                        {t.typicalForCategory(hit.categoryName, formatMoney(hit.median, hit.medianCurrency))}
-                      </span>
-                    ) : null}
-                  </TableCell>
+                  <TableCell className="figure figure-sm text-xs">{toISODate(view.row.date)}</TableCell>
+                  <TableCell className="max-w-[22rem] text-sm">{view.notes(true)}</TableCell>
                   <TableCell className="text-right">
-                    <span className="figure text-sm">{formatMoney(row.amount, currency)}</span>
+                    <span className="figure text-sm">{formatMoney(view.row.amount, currency)}</span>
                   </TableCell>
                   <TableCell className="text-xs">
-                    <span className={marked ? "text-foreground" : "text-muted-foreground"}>
-                      {marked ? t.appliedExtraordinary : t.appliedNormal}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="ml-1"
-                      onClick={() => onDecideAction([index], marked ? "normal" : "extraordinary")}
-                    >
-                      {marked ? t.keepAsNormal : t.markExtraordinary}
+                    <span className={view.marked ? "text-foreground" : "text-muted-foreground"}>{view.statusLabel}</span>
+                    <Button type="button" variant="ghost" size="xs" className="ml-1" onClick={view.answer}>
+                      {view.answerLabel}
                     </Button>
                   </TableCell>
                 </TableRow>
