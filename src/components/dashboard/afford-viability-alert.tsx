@@ -8,7 +8,8 @@ import {
   type AffordTrackedItem,
 } from "@/lib/afford-tracking";
 import { formatMoney } from "@/lib/currency";
-import type { Dictionary } from "@/lib/i18n";
+import { formatPeriodShort } from "@/lib/date-format";
+import type { Dictionary, Locale } from "@/lib/i18n";
 
 /**
  * The plans recorded from Afford whose remaining payments no longer pass
@@ -20,9 +21,11 @@ import type { Dictionary } from "@/lib/i18n";
  */
 export function AffordViabilityAlert({
   tracked,
+  locale,
   t,
 }: {
   tracked: AffordTrackedItem[];
+  locale: Locale;
   t: Dictionary["dashboard"];
 }) {
   const lines = notViableAffordItems(tracked).flatMap((item) => {
@@ -34,7 +37,7 @@ export function AffordViabilityAlert({
         text: t.affordShortItem(
           item.name,
           formatMoney(viability.shortfall, viability.currency),
-          viability.periodLabel,
+          formatPeriodShort(viability.period, locale),
         ),
       },
     ];

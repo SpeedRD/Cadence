@@ -6,8 +6,8 @@ import { PeriodRail } from "@/components/period-rail";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
-import { formatDayMonth } from "@/lib/date";
-import type { Dictionary } from "@/lib/i18n";
+import { formatDayMonth, formatPeriodLong, formatPeriodShort } from "@/lib/date-format";
+import type { Dictionary, Locale } from "@/lib/i18n";
 import { periodKey } from "@/lib/period";
 
 import type { PeriodSummary } from "@/lib/data/period-summary";
@@ -16,6 +16,7 @@ export function PeriodHero({
   summary,
   elapsed,
   recommended = null,
+  locale,
   t,
 }: {
   summary: PeriodSummary;
@@ -29,6 +30,7 @@ export function PeriodHero({
    * or the budgets hold all of it.
    */
   recommended?: { available: number; unallocated: number } | null;
+  locale: Locale;
   t: Dictionary["dashboard"];
 }) {
   const { period, currency } = summary;
@@ -52,7 +54,12 @@ export function PeriodHero({
           <div className="space-y-3">
             <div className="flex items-baseline justify-between gap-3">
               <p className="eyebrow">
-                {t.periodPrefix} {period.period} · {period.longLabel}
+                {t.periodPrefix} {period.period} ·{" "}
+                {/* The long label (with the month spelled out and the year)
+                    is wider than the eyebrow's share of a phone and wraps or
+                    clips the days-left note beside it, in either language. */}
+                <span className="sm:hidden">{formatPeriodShort(period, locale)}</span>
+                <span className="max-sm:hidden">{formatPeriodLong(period, locale)}</span>
               </p>
               <p className="text-xs text-muted-foreground">
                 {summary.daysRemaining === 0
@@ -62,8 +69,8 @@ export function PeriodHero({
             </div>
             <PeriodRail totalDays={period.totalDays} elapsed={elapsed} />
             <div className="flex justify-between text-hint text-muted-foreground">
-              <span>{formatDayMonth(period.start)}</span>
-              <span>{formatDayMonth(period.end)}</span>
+              <span>{formatDayMonth(period.start, locale)}</span>
+              <span>{formatDayMonth(period.end, locale)}</span>
             </div>
           </div>
 
@@ -176,7 +183,7 @@ export function PeriodHero({
                 {formatMoney(summary.committed, currency)}
               </dd>
               <p className="text-hint text-muted-foreground">
-                {t.itemsDueBefore(summary.committedItems.length, formatDayMonth(period.end))}
+                {t.itemsDueBefore(summary.committedItems.length, formatDayMonth(period.end, locale))}
               </p>
             </div>
             <div className="space-y-1">

@@ -6,10 +6,13 @@
  * that keeps an insight out of the Inbox and the nav badge, keyed by the
  * identity of the evidence it was made on (see InsightRef): the same
  * evidence stays hidden, a different period, reason or failure is a new
- * insight. Idempotent, and the row itself never expires (a recurring-
- * pattern suggestion, which has its own permanent table, keeps the same
- * permanent identity here).
+ * insight. Idempotent. A dismissal is not permanent: the Inbox's daily
+ * clean-up (pruneInsightDismissals) drops the ones no current detector can
+ * match and the ones older than DISMISSAL_MAX_AGE_DAYS, a recurring-pattern
+ * suggestion's included (its own RecurringSuggestionDismissal table is not
+ * touched).
  */
+import { randomUUID } from "node:crypto";
 import { cache } from "react";
 
 import type { AffordTrackedItem } from "@/lib/afford-tracking";
@@ -18,6 +21,7 @@ import { getDictionary } from "@/lib/i18n";
 import {
   detectInsights,
   partitionDismissed,
+  staleDismissalReason,
   type Insight,
   type InsightContext,
   type InsightRef,
@@ -58,6 +62,7 @@ export async function loadInsightContext(
   ]);
   return {
     dictionary: getDictionary(context.language),
+    locale: context.language,
     displayCurrency: context.displayCurrency,
     recurringPosting: context.recurringPosting ?? null,
     recurringPostingFailure: context.recurringPostingFailure ?? null,
@@ -140,5 +145,61 @@ export async function dismissInsight(ref: InsightRef): Promise<void> {
     where: { source_key: { source: ref.source, key: ref.key } },
     create: { source: ref.source, key: ref.key },
     update: {},
+  });
+}
+
+/**
+ * The marker row the clean-up below claims its day with. It lives in
+ * InsightDismissal (the table needs no new column or migration for it), under
+ * a source no detector has, so no insight ever matches it and the clean-up
+ * itself never counts it; its dismissedAt is when the clean-up last ran.
+ */
+const PRUNE_MARKER = { source: "maintenance", key: "dismissal-prune" } as const;
+const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+export interface DismissalPruneResult {
+  /** False when the clean-up already ran in the last day (nothing was read or deleted). */
+  ran: boolean;
+  /** Rows dropped because no current detector can match their key. */
+  unmatched: number;
+  /** Rows dropped for being older than DISMISSAL_MAX_AGE_DAYS. */
+  expired: number;
+}
+
+/**
+ * Drops the dismissals that can no longer hide anything - ones no current
+ * detector can match (a removed source, a legacy key) - and the ones older
+ * than DISMISSAL_MAX_AGE_DAYS, judged by staleDismissalReason. At most once a
+ * day, and in one transaction: it first claims the marker row with a single
+ * conditional upsert (inserted, or moved forward only if its last run is more
+ * than a day old), and two Inbox loads at once serialise on that row, so the
+ * second finds it fresh and does nothing. A failure anywhere rolls back the
+ * claim along with the deletes, and the next load tries again. Touches only
+ * InsightDismissal.
+ */
+export async function pruneInsightDismissals(now: Date = new Date()): Promise<DismissalPruneResult> {
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.$queryRaw<{ id: string }[]>`
+      INSERT INTO "InsightDismissal" ("id", "source", "key", "dismissedAt")
+      VALUES (${randomUUID()}, ${PRUNE_MARKER.source}, ${PRUNE_MARKER.key}, ${now})
+      ON CONFLICT ("source", "key") DO UPDATE SET "dismissedAt" = EXCLUDED."dismissedAt"
+      WHERE "InsightDismissal"."dismissedAt" <= ${new Date(now.getTime() - PRUNE_INTERVAL_MS)}
+      RETURNING "id"`;
+    if (claimed.length === 0) return { ran: false, unmatched: 0, expired: 0 };
+
+    const rows = await tx.insightDismissal.findMany({
+      where: { NOT: { source: PRUNE_MARKER.source, key: PRUNE_MARKER.key } },
+      select: { id: true, source: true, key: true, dismissedAt: true },
+    });
+    const result: DismissalPruneResult = { ran: true, unmatched: 0, expired: 0 };
+    const drop: string[] = [];
+    for (const row of rows) {
+      const reason = staleDismissalReason(row, now);
+      if (!reason) continue;
+      result[reason] += 1;
+      drop.push(row.id);
+    }
+    if (drop.length > 0) await tx.insightDismissal.deleteMany({ where: { id: { in: drop } } });
+    return result;
   });
 }

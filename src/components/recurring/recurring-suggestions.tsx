@@ -14,7 +14,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMoney } from "@/lib/currency";
-import { formatDate, toISODate } from "@/lib/date";
+import { toISODate } from "@/lib/date";
+import { formatDate } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import type { RecurringSuggestion } from "@/lib/recurring-detection";
 import {
@@ -94,10 +95,10 @@ export function RecurringSuggestions({
                 <p className="text-hint text-muted-foreground">
                   {t.suggestionEvidence(
                     suggestion.occurrences.length,
-                    formatDate(first.date),
-                    formatDate(last.date),
+                    formatDate(first.date, locale),
+                    formatDate(last.date, locale),
                   )}
-                  {` · ${t.nextLabel} ${suggestion.nextDates.map(formatDate).join(", ")}`}
+                  {` · ${t.nextLabel} ${suggestion.nextDates.map((date) => formatDate(date, locale)).join(", ")}`}
                 </p>
               </div>
               <div className="text-right">

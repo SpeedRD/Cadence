@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/table";
 import { checkInCoverage, MIN_INCOME_HISTORY_PERIODS, showsEssentialFixed } from "@/lib/afford";
 import { formatMoney } from "@/lib/currency";
-import { formatDate } from "@/lib/date";
+import { formatDate, formatPeriodShort } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -123,6 +123,7 @@ function RecordCard({
   confirming,
   canConfirm,
   error,
+  locale,
   t,
 }: {
   variant: "desktop" | "phone";
@@ -137,6 +138,7 @@ function RecordCard({
   confirming: boolean;
   canConfirm: boolean;
   error: string | null;
+  locale: Locale;
   t: ReturnType<typeof getDictionary>["afford"];
 }) {
   const phone = variant === "phone";
@@ -173,7 +175,7 @@ function RecordCard({
             formatMoney(recorded.amount, recorded.currency),
             t.frequencyAdverb[recorded.frequency] ?? recorded.frequency,
             recorded.count,
-            formatDate(recorded.firstDate),
+            formatDate(recorded.firstDate, locale),
             recorded.paidCount,
           )}
         </CardDescription>
@@ -278,6 +280,7 @@ export function AffordResults({
     confirming,
     canConfirm,
     error,
+    locale,
     t,
   };
 
@@ -368,9 +371,9 @@ export function AffordResults({
                         <TableCell className="text-muted-foreground">
                           {t.paymentLabel(installment.index)}
                         </TableCell>
-                        <TableCell>{formatDate(installment.date)}</TableCell>
+                        <TableCell>{formatDate(installment.date, locale)}</TableCell>
                         <TableCell>
-                          {period.period.label}
+                          {formatPeriodShort(period.period, locale)}
                           {index === 0 && period.installments.length > 1 ? (
                             <span className="block text-badge text-muted-foreground">
                               {t.checkedTogether(period.installments.length)}
@@ -426,7 +429,7 @@ export function AffordResults({
               <li key={period.key} className="space-y-3 py-4 first:pt-0 last:pb-0">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium">{period.period.label}</p>
+                    <p className="text-sm font-medium">{formatPeriodShort(period.period, locale)}</p>
                     {period.installments.length > 1 ? (
                       <p className="text-badge text-muted-foreground">
                         {t.checkedTogether(period.installments.length)}
@@ -444,7 +447,7 @@ export function AffordResults({
                       <span className="min-w-0">
                         <span className="text-muted-foreground">{t.paymentLabel(installment.index)}</span>
                         {" · "}
-                        {formatDate(installment.date)}
+                        {formatDate(installment.date, locale)}
                       </span>
                       <span className="figure">{formatMoney(installment.amount, verdict.currency)}</span>
                     </li>
@@ -503,7 +506,7 @@ export function AffordResults({
                   lines.push({
                     key: `${period.key}-account`,
                     text: t.accountShortfall(
-                      period.period.label,
+                      formatPeriodShort(period.period, locale),
                       period.account.name,
                       formatMoney(period.account.shortfall, period.account.currency),
                     ),
@@ -513,7 +516,7 @@ export function AffordResults({
                   lines.push({
                     key: `${period.key}-flexible`,
                     text: t.flexibleShortfall(
-                      period.period.label,
+                      formatPeriodShort(period.period, locale),
                       formatMoney(period.flexible.shortfall, period.flexible.currency),
                     ),
                   });
@@ -537,7 +540,7 @@ export function AffordResults({
               accountName,
               sharedIncomePeriods,
               coverage,
-              verdict.periods.filter((period) => period.confirmed).map((period) => period.period.label),
+              verdict.periods.filter((period) => period.confirmed).map((period) => formatPeriodShort(period.period, locale)),
             )}
           </CardDescription>
         </CardHeader>
@@ -590,7 +593,7 @@ export function AffordResults({
                 {verdict.periods.map((period) => (
                   <TableRow key={period.key}>
                     <TableCell>
-                      {period.period.label}
+                      {formatPeriodShort(period.period, locale)}
                       {period.confirmed ? (
                         <span className="block text-badge text-muted-foreground">{t.projectionConfirmed}</span>
                       ) : sharedIncomePeriods === null ? (
@@ -643,7 +646,7 @@ export function AffordResults({
               {periodsWithEstimate.map((period) => (
                 <li key={period.key}>
                   {t.estimatedGoalFunding(
-                    period.period.label,
+                    formatPeriodShort(period.period, locale),
                     period.estimatedGoals.map((goal) =>
                       t.estimatedGoalItem(formatMoney(goal.amount, period.flexible.currency), goal.name),
                     ),
@@ -658,14 +661,14 @@ export function AffordResults({
             ...(period.flexible.carryover > 0
               ? [
                   <p key={`${period.key}:carryover`} className="text-xs text-muted-foreground">
-                    {t.confirmedCarryoverLine(period.period.label, formatMoney(period.flexible.carryover, period.flexible.currency))}
+                    {t.confirmedCarryoverLine(formatPeriodShort(period.period, locale), formatMoney(period.flexible.carryover, period.flexible.currency))}
                   </p>,
                 ]
               : []),
             ...(period.flexible.cap > 0
               ? [
                   <p key={`${period.key}:cap`} className="text-xs text-muted-foreground">
-                    {t.confirmedCapLine(period.period.label, formatMoney(period.flexible.cap, period.flexible.currency))}
+                    {t.confirmedCapLine(formatPeriodShort(period.period, locale), formatMoney(period.flexible.cap, period.flexible.currency))}
                   </p>,
                 ]
               : []),
@@ -675,7 +678,7 @@ export function AffordResults({
               {t.essentialFixedLine(
                 verdict.periods.map((period) =>
                   t.essentialFixedPeriod(
-                    period.period.label,
+                    formatPeriodShort(period.period, locale),
                     formatMoney(period.flexible.essentialFixed, period.flexible.currency),
                     period.essentialFixedBasis === "unset" ? "none" : period.essentialFixedBasis,
                   ),

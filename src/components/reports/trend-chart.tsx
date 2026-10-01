@@ -1,9 +1,9 @@
 import { formatMoney, formatMoneyCompact } from "@/lib/currency";
-import { formatDayMonth } from "@/lib/date";
+import { formatDayMonth, formatPeriodLong, formatPeriodShort } from "@/lib/date-format";
 import { cn } from "@/lib/utils";
 
 import type { TrendPoint } from "@/lib/data/reports";
-import type { Dictionary } from "@/lib/i18n";
+import type { Dictionary, Locale } from "@/lib/i18n";
 
 /**
  * Spending across the last six pay periods. One series, so no legend; the
@@ -20,11 +20,13 @@ export function TrendChart({
   points,
   currency,
   currentKey,
+  locale,
   t,
 }: {
   points: TrendPoint[];
   currency: string;
   currentKey: string;
+  locale: Locale;
   t: Dictionary["reports"];
 }) {
   const max = points.reduce((highest, point) => Math.max(highest, point.spent), 0);
@@ -59,7 +61,7 @@ export function TrendChart({
               key={point.period.key}
               className="group relative flex h-full flex-1 flex-col justify-end"
               tabIndex={0}
-              aria-label={`${point.period.longLabel}${point.partial ? ` (${t.periodSoFar})` : ""}: ${t.tooltipOut(formatMoney(point.spent, currency))}`}
+              aria-label={`${formatPeriodLong(point.period, locale)}${point.partial ? ` (${t.periodSoFar})` : ""}: ${t.tooltipOut(formatMoney(point.spent, currency))}`}
             >
               {/* Capped and edge-anchored: a centred w-max tooltip on the first
                   or last bar reaches past the card, which clips it (Card is
@@ -72,7 +74,7 @@ export function TrendChart({
                 )}
               >
                 <p className="font-medium">
-                  {point.period.label}
+                  {formatPeriodShort(point.period, locale)}
                   {point.partial ? ` · ${t.periodSoFar}` : ""}
                 </p>
                 <p className="figure figure-sm text-muted-foreground">
@@ -121,8 +123,8 @@ export function TrendChart({
                 : "text-muted-foreground",
             )}
           >
-            <span className="sm:hidden">{formatDayMonth(point.period.start)}</span>
-            <span className="max-sm:hidden">{point.period.label}</span>
+            <span className="sm:hidden">{formatDayMonth(point.period.start, locale)}</span>
+            <span className="max-sm:hidden">{formatPeriodShort(point.period, locale)}</span>
             {point.partial ? <span className="block">{t.periodSoFar}</span> : null}
           </div>
         ))}

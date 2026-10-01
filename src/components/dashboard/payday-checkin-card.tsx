@@ -9,6 +9,7 @@ import { PaydayCheckinDialog } from "@/components/payday/payday-checkin-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney, type RateTable } from "@/lib/currency";
+import { formatPeriodLong } from "@/lib/date-format";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { summarizePaydayDraft } from "@/lib/payday";
@@ -66,7 +67,7 @@ export function PaydayCheckinCard({
     return (
       <Card size="sm">
         <CardHeader>
-          <CardTitle>{t.wizardTitle(draft.periodLabel)}</CardTitle>
+          <CardTitle>{t.wizardTitle(formatPeriodLong(draft.period, locale))}</CardTitle>
           <CardDescription>
             {t.summaryIncome}: {money(figures.income)} · {t.summaryBuffer}: {money(figures.buffer)} ·{" "}
             {t.summaryAvailable}: {money(figures.available)} · {t.flexibleAllocated}: {money(figures.flexibleBudgeted)}

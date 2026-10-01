@@ -36,9 +36,9 @@ import {
   daysBetween,
   daysInMonth,
   DEFAULT_APP_TIMEZONE,
-  formatDate,
   toISODate,
 } from "../src/lib/date";
+import { formatDate, formatPeriodShort } from "../src/lib/date-format";
 import {
   daysRemainingInPeriod,
   isPaydayDate,
@@ -169,7 +169,7 @@ async function main() {
   );
   eq(
     "a stored civil date for Aug 31 renders as Aug 31",
-    formatDate(civilDate(2026, 8, 31)),
+    formatDate(civilDate(2026, 8, 31), "en"),
     "Aug 31, 2026",
   );
 
@@ -191,7 +191,7 @@ async function main() {
   const aug16 = periodForDate(civilDate(2026, 8, 16));
   eq("Aug 16 is period B", aug16.period, "B");
   eq("B ends on the 31st", toISODate(aug16.end), "2026-08-31");
-  eq("B label", aug16.label, "Aug 16-31");
+  eq("B label", formatPeriodShort(aug16, "en"), "Aug 16-31");
   eq("Feb 2026 B ends on the 28th", toISODate(periodForDate(civilDate(2026, 2, 20)).end), "2026-02-28");
   eq("Feb 2024 B ends on the 29th", toISODate(periodForDate(civilDate(2024, 2, 20)).end), "2024-02-29");
   eq("Apr B ends on the 30th", toISODate(periodForDate(civilDate(2026, 4, 30)).end), "2026-04-30");
@@ -6048,7 +6048,7 @@ async function main() {
     const noteRecurring = await import("../src/lib/data/recurring");
     const noteLib = await import("../src/lib/recurring");
     const { getDictionary: noteDictionary } = await import("../src/lib/i18n");
-    const { formatDate: noteFormatDate, formatDayMonth: noteDayMonth } = await import("../src/lib/date");
+    const { formatDate: noteFormatDate, formatDayMonth: noteDayMonth } = await import("../src/lib/date-format");
     const noteToday = civilDate(2026, 9, 28);
     const noteAttempt = async (name: string, run: () => Promise<void>) => {
       try {
@@ -6112,15 +6112,19 @@ async function main() {
     await noteAttempt("copy", async () => {
       const en = noteDictionary("en").recurring;
       const es = noteDictionary("es").recurring;
-      const day = (y: number, m: number, d: number) => noteFormatDate(civilDate(y, m, d));
+      const day = (y: number, m: number, d: number) => noteFormatDate(civilDate(y, m, d), "en");
+      const dia = (y: number, m: number, d: number) => noteFormatDate(civilDate(y, m, d), "es");
       eq("English note, several charges", en.pastDateNote(8, day(2026, 2, 15), day(2026, 9, 15), false), "Saving posts 8 charges dated Feb 15, 2026 - Sep 15, 2026.");
       eq("English note, one charge", en.pastDateNote(1, day(2026, 9, 15), day(2026, 9, 15), false), "Saving posts 1 charge dated Sep 15, 2026.");
       eq("English note, capped", en.pastDateNote(24, day(2026, 1, 1), day(2026, 6, 11), true), "Saving posts 24 charges dated Jan 1, 2026 - Jun 11, 2026; the rest follow on later runs.");
-      eq("Spanish note, several charges", es.pastDateNote(8, day(2026, 2, 15), day(2026, 9, 15), false), "Al guardar se registran 8 cobros con fecha del Feb 15, 2026 al Sep 15, 2026.");
-      eq("Spanish note, one charge", es.pastDateNote(1, day(2026, 9, 15), day(2026, 9, 15), false), "Al guardar se registra 1 cobro con fecha Sep 15, 2026.");
-      eq("Spanish note, capped", es.pastDateNote(24, day(2026, 1, 1), day(2026, 6, 11), true), "Al guardar se registran 24 cobros con fecha del Jan 1, 2026 al Jun 11, 2026; el resto sigue en las siguientes ejecuciones.");
-      eq("the resume toast names the next charge in English", en.itemResumedNext(noteDayMonth(civilDate(2026, 10, 15))), "Resumed. Next charge: Oct 15");
-      eq("and in Spanish", es.itemResumedNext(noteDayMonth(civilDate(2026, 10, 15))), "Reanudado. Próximo cobro: Oct 15");
+      // Flipped by the cleanup list's item 1 (dates follow the app language): the three
+      // Spanish note checks used to expect English month names ("del Feb 15, 2026 al Sep 15, 2026").
+      eq("Spanish note, several charges", es.pastDateNote(8, dia(2026, 2, 15), dia(2026, 9, 15), false), "Al guardar se registran 8 cobros con fecha del 15 feb 2026 al 15 sep 2026.");
+      eq("Spanish note, one charge", es.pastDateNote(1, dia(2026, 9, 15), dia(2026, 9, 15), false), "Al guardar se registra 1 cobro con fecha 15 sep 2026.");
+      eq("Spanish note, capped", es.pastDateNote(24, dia(2026, 1, 1), dia(2026, 6, 11), true), "Al guardar se registran 24 cobros con fecha del 1 ene 2026 al 11 jun 2026; el resto sigue en las siguientes ejecuciones.");
+      eq("the resume toast names the next charge in English", en.itemResumedNext(noteDayMonth(civilDate(2026, 10, 15), "en")), "Resumed. Next charge: Oct 15");
+      // Flipped (item 1): was "Reanudado. Próximo cobro: Oct 15".
+      eq("and in Spanish", es.itemResumedNext(noteDayMonth(civilDate(2026, 10, 15), "es")), "Reanudado. Próximo cobro: 15 oct");
     });
 
     // The toast shows exactly when resuming moved the date.
@@ -6336,7 +6340,7 @@ async function main() {
       const flexibleShort = tracking.summarizeAffordViability(flexibleBreach);
       eq("a flexible-only breach reports the period-wide shortfall in the display currency", flexibleShort.status === "short" ? `${flexibleShort.periodKey}:${flexibleShort.shortfall}:${flexibleShort.currency}:${flexibleShort.check}` : flexibleShort.status, "2026-10-A:400:USD:flexible");
       const laterShort = tracking.summarizeAffordViability(multi);
-      eq("the first failing period is the one named, even when earlier periods pass", laterShort.status === "short" ? `${laterShort.periodKey}:${laterShort.periodLabel}:${laterShort.shortfall}` : laterShort.status, `2026-11-A:${periodInfo({ year: 2026, month: 11, period: "A" }).label}:250`);
+      eq("the first failing period is the one named, even when earlier periods pass", laterShort.status === "short" ? `${laterShort.periodKey}:${formatPeriodShort(laterShort.period, "en")}:${laterShort.shortfall}` : laterShort.status, `2026-11-A:${formatPeriodShort(periodInfo({ year: 2026, month: 11, period: "A" }), "en")}:250`);
       const walked = tracking.remainingInstallments({ nextDate: civilDate(2026, 1, 31), frequency: "MONTHLY", anchorDay: 31, remainingOccurrences: 3 }, 10, civilDate(2026, 1, 1), "2026-01-A");
       eq("the remaining schedule walks from nextDate on the stored anchor day (Jan 31 -> Feb 28 -> Mar 31), every row at the item's amount", walked.map((i) => `${i.index}:${toISODate(i.date)}:${i.amount}:${i.periodKey}`).join(","), "1:2026-01-31:10:2026-01-B,2:2026-02-28:10:2026-02-B,3:2026-03-31:10:2026-03-B");
       const overdueWalk = tracking.remainingInstallments({ nextDate: civilDate(2026, 8, 20), frequency: "MONTHLY", anchorDay: 20, remainingOccurrences: 2 }, 10, affordToday, periodForDate(affordToday).key);
@@ -8252,13 +8256,14 @@ async function main() {
     const sampleDate = new Date("2026-09-15T09:05:00Z");
     eq(
       "en: rateSourceBpd embeds the rate's own formatted date",
-      en.settingsPage.rateSourceBpd(formatDate(sampleDate)),
+      en.settingsPage.rateSourceBpd(formatDate(sampleDate, "en")),
       "from Banco Popular (Sep 15, 2026)",
     );
     eq(
       "es: rateSourceBpd embeds the rate's own formatted date",
-      es.settingsPage.rateSourceBpd(formatDate(sampleDate)),
-      "de Banco Popular (Sep 15, 2026)",
+      es.settingsPage.rateSourceBpd(formatDate(sampleDate, "es")),
+      // Flipped (item 1): was "de Banco Popular (Sep 15, 2026)".
+      "de Banco Popular (15 sep 2026)",
     );
     eq(
       "en: rateSourceOpenErApi is unchanged - no date, open.er-api.com has its own fetchedAt instead",
@@ -9731,6 +9736,7 @@ async function main() {
     const en = getDictionary("en");
     const emptyContext: import("../src/lib/insights").InsightContext = {
       dictionary: en,
+      locale: "en",
       displayCurrency: "USD",
       recurringPosting: null,
       recurringPostingFailure: null,
@@ -10140,7 +10146,7 @@ async function main() {
     eq("... whose account figures put the room at exactly 200: 2,000 in, 1,300 owed, 500 kept back", `${decProjection.account.income}:${round2(decProjection.account.committed - decProjection.account.estimatedGoalFunding)}:${decProjection.account.buffer}`, "2000:1300:500");
     eq("and the estimate Afford itself carries for the goal there is the same 200", decProjection.estimatedGoals.find((g) => g.goalId === forecastGoal.id)?.amount, 200);
     const summary = summarizeGoalForecast(forecast!);
-    eq("the summary names the first short period", summary.status === "short" ? `${summary.period.period.label}:${summary.period.shortfall}` : "on_track", "Dec 1-15:85.71");
+    eq("the summary names the first short period", summary.status === "short" ? `${formatPeriodShort(summary.period.period, "en")}:${summary.period.shortfall}` : "on_track", "Dec 1-15:85.71");
 
     console.log("-- the two goal signals are independent: at risk ahead, on the roadmap now --");
     const roadmapStatus = (await statusesForForecast(forecastContext)).find((s) => s.goalId === forecastGoal.id);
@@ -10639,6 +10645,7 @@ async function main() {
       console.log("-- a posting run that throws is a failure the context carries and the Inbox shows (B45) --");
       const insightContext = (recurringPostingFailure: { reason: string } | null): import("../src/lib/insights").InsightContext => ({
         dictionary: getDictionary("en"),
+        locale: "en",
         displayCurrency: "USD",
         recurringPosting: null,
         recurringPostingFailure,
@@ -14405,6 +14412,210 @@ async function main() {
       await prisma.account.updateMany({ where: { id: { in: archivedForK9 } }, data: { status: "ACTIVE" } });
       await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForK9 } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForK9 } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== cleanup list: dates and labels follow the app language (item 1) ==");
+  {
+    const fmt = await import("../src/lib/date-format");
+    const { monthWindow } = await import("../src/lib/month");
+    const monthsEn = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec";
+    const monthsEs = "ene feb mar abr may jun jul ago sep oct nov dic";
+    const range = Array.from({ length: 12 }, (_, i) => i + 1);
+    eq("English month abbreviations", range.map((m) => fmt.monthShort(m, "en")).join(" "), monthsEn);
+    eq("Spanish month abbreviations", range.map((m) => fmt.monthShort(m, "es")).join(" "), monthsEs);
+    eq("English month names", range.map((m) => fmt.monthLong(m, "en")).join(" "), "January February March April May June July August September October November December");
+    eq("Spanish month names", range.map((m) => fmt.monthLong(m, "es")).join(" "), "enero febrero marzo abril mayo junio julio agosto septiembre octubre noviembre diciembre");
+    eq("every Spanish abbreviation is three letters, so no label grows past English's", range.every((m) => fmt.monthShort(m, "es").length === 3), true);
+
+    const sep16 = civilDate(2026, 9, 16);
+    eq("a date in English", fmt.formatDate(sep16, "en"), "Sep 16, 2026");
+    eq("a date in Spanish", fmt.formatDate(sep16, "es"), "16 sep 2026");
+    eq("a day and month in English", fmt.formatDayMonth(sep16, "en"), "Sep 16");
+    eq("a day and month in Spanish", fmt.formatDayMonth(sep16, "es"), "16 sep");
+    eq("a date does not shift under the timezone: Dec 31 stays Dec 31", `${fmt.formatDate(civilDate(2026, 12, 31), "en")} | ${fmt.formatDate(civilDate(2026, 12, 31), "es")}`, "Dec 31, 2026 | 31 dic 2026");
+    eq("Jan 1 stays Jan 1", `${fmt.formatDate(civilDate(2027, 1, 1), "en")} | ${fmt.formatDate(civilDate(2027, 1, 1), "es")}`, "Jan 1, 2027 | 1 ene 2027");
+
+    const sepB = periodInfo({ year: 2026, month: 9, period: "B" });
+    const sepA = periodInfo({ year: 2026, month: 9, period: "A" });
+    eq("period B short in English", fmt.formatPeriodShort(sepB, "en"), "Sep 16-30");
+    eq("period B short in Spanish", fmt.formatPeriodShort(sepB, "es"), "16-30 sep");
+    eq("period A short in both", `${fmt.formatPeriodShort(sepA, "en")} | ${fmt.formatPeriodShort(sepA, "es")}`, "Sep 1-15 | 1-15 sep");
+    eq("period B long in English", fmt.formatPeriodLong(sepB, "en"), "September 16-30, 2026");
+    eq("period B long in Spanish", fmt.formatPeriodLong(sepB, "es"), "16-30 de septiembre de 2026");
+    eq("a leap-year February B ends on the 29th in both", `${fmt.formatPeriodShort(periodInfo({ year: 2024, month: 2, period: "B" }), "en")} | ${fmt.formatPeriodShort(periodInfo({ year: 2024, month: 2, period: "B" }), "es")}`, "Feb 16-29 | 16-29 feb");
+    eq("a 31-day month's B in Spanish", fmt.formatPeriodShort(periodInfo({ year: 2026, month: 12, period: "B" }), "es"), "16-31 dic");
+    eq("the period carries no English text of its own", Object.keys(sepB).includes("label") || Object.keys(sepB).includes("longLabel"), false);
+
+    const aug = monthWindow({ year: 2026, month: 8 });
+    eq("a calendar month short in both", `${fmt.formatMonthShort(aug, "en")} | ${fmt.formatMonthShort(aug, "es")}`, "Aug 2026 | ago 2026");
+    eq("a calendar month long in both", `${fmt.formatMonthLong(aug, "en")} | ${fmt.formatMonthLong(aug, "es")}`, "August 2026 | agosto de 2026");
+    eq("the month window carries no English text of its own", Object.keys(aug).includes("label") || Object.keys(aug).includes("longLabel"), false);
+
+    // The longest Spanish labels stay inside what a phone column holds: the
+    // short period label is never longer than "30-31 sep" plus a letter,
+    // and the dialogs' longest long label is the one September B carries.
+    const longestShort = Math.max(...range.flatMap((m) => ["A", "B"].map((p) => fmt.formatPeriodShort(periodInfo({ year: 2026, month: m, period: p as "A" | "B" }), "es").length)));
+    eq("no Spanish short period label is longer than 9 characters", longestShort <= 9, true);
+  }
+
+  console.log("\n== cleanup list: goal achievement by dated contributions (item 4) ==");
+  {
+    const clGoals = await import("../src/lib/goals");
+    const clPlan = await import("../src/lib/data/goal-plan");
+    const clGoalData = await import("../src/lib/data/goals");
+    const clPost = (await import("../src/lib/recurring-posting")).postDueRecurringItems;
+    const clToday = civilDate(2026, 10, 1);
+    const clRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+
+    const pausedForCl = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForCl = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const archivedForCl = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForCl } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForCl } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForCl } }, data: { status: "ARCHIVED" } });
+    const clWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify CL " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify CL " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify CL " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    try {
+      const account = await prisma.account.create({ data: { name: "Verify CL Account", currency: "USD", type: "CHECKING" } });
+      const achievedAtOf = async (goalId: string) => (await prisma.goal.findUniqueOrThrow({ where: { id: goalId } })).achievedAt;
+      const savedOf = async (goalId: string) => num((await prisma.goal.findUniqueOrThrow({ where: { id: goalId } })).savedAmount);
+      const contributionItem = (name: string, goalId: string, nextDate: Date) =>
+        prisma.recurringItem.create({
+          data: { name, amount: 10, currency: "USD", frequency: "MONTHLY", active: true, kind: "CONTRIBUTION", nextDate, accountId: account.id, goalId },
+        });
+
+      console.log("-- item 4: a contribution dated after today does not achieve the goal --");
+      const ahead = await prisma.goal.create({ data: { name: "Verify CL Ahead", targetAmount: 100, currency: "USD" } });
+      await prisma.goalContribution.create({ data: { goalId: ahead.id, amount: 100, currency: "USD", date: civilDate(2026, 10, 20), note: "Verify CL Ahead Seed" } });
+      const aheadItem = await contributionItem("Verify CL Ahead Item", ahead.id, civilDate(2026, 10, 1));
+      const aheadRebuild = await clGoals.rebuildGoalSaved(ahead.id, clToday);
+      eq("the cached total holds the contribution dated ahead", await savedOf(ahead.id), 100);
+      eq("a goal whose only contribution is dated after today is not achieved", await achievedAtOf(ahead.id), null);
+      eq("and the rebuild does not report it as just achieved", aheadRebuild.justAchieved, false);
+      const aheadRun = await clPost(clToday);
+      eq("its recurring contribution keeps posting (it is not skipped as goal_achieved)", aheadRun.skipped.some((item) => item.id === aheadItem.id), false);
+      eq("one contribution is written for the occurrence due today", aheadRun.goalContributionsCreated, 1);
+      eq("the goal now holds the seed and the posted contribution", await prisma.goalContribution.count({ where: { goalId: ahead.id } }), 2);
+      eq("the posted contribution is dated today and counts towards the goal", (await prisma.goalContribution.count({ where: { goalId: ahead.id, date: clToday } })), 1);
+      eq("the goal is still not achieved: 10 of 100 is dated today or earlier", await achievedAtOf(ahead.id), null);
+      const aheadSummary = (await clGoalData.listGoals({ displayCurrency: "USD", language: "en", rates: clRates(), today: clToday, currentPeriod: periodForDate(clToday) })).find((goal) => goal.id === ahead.id);
+      eq("the Goals list reads it as open, 10 saved with 100 dated ahead", `${aheadSummary?.achievedAt}:${aheadSummary?.savedAmount}:${aheadSummary?.savedAhead}`, "null:10:100");
+      const aheadPlans = await clPlan.loadGoalPeriodPlans([periodForDate(clToday)], { today: clToday, rates: clRates(), displayCurrency: "USD" });
+      eq("the period plan still counts it open (90 left as of today)", aheadPlans.get(periodForDate(clToday).key)?.find((plan) => plan.goalId === ahead.id)?.open, true);
+
+      console.log("-- item 4: the day it arrives, the goal is achieved --");
+      await clPost(civilDate(2026, 10, 19));
+      eq("a run the day before the contribution's date leaves the goal open", await achievedAtOf(ahead.id), null);
+      await clPost(civilDate(2026, 10, 20));
+      check("a run on the day it falls due marks the goal achieved", (await achievedAtOf(ahead.id)) !== null);
+
+      console.log("-- item 4: a contribution dated today achieves it, as before --");
+      const todayGoal = await prisma.goal.create({ data: { name: "Verify CL Today", targetAmount: 100, currency: "USD" } });
+      await prisma.goalContribution.create({ data: { goalId: todayGoal.id, amount: 100, currency: "USD", date: clToday, note: "Verify CL Today Seed" } });
+      const todayItem = await contributionItem("Verify CL Today Item", todayGoal.id, civilDate(2026, 10, 1));
+      const todayRebuild = await clGoals.rebuildGoalSaved(todayGoal.id, clToday);
+      check("a contribution dated today achieves the goal", (await achievedAtOf(todayGoal.id)) !== null);
+      eq("and the rebuild reports the crossing", todayRebuild.justAchieved, true);
+      const todayRun = await clPost(clToday);
+      eq("posting skips its recurring contribution as goal_achieved", todayRun.skipped.find((item) => item.id === todayItem.id)?.reason, "goal_achieved");
+      eq("nothing is written for it", await prisma.goalContribution.count({ where: { goalId: todayGoal.id } }), 1);
+
+      console.log("-- item 4: a past contribution achieves it, as before --");
+      const pastGoal = await prisma.goal.create({ data: { name: "Verify CL Past", targetAmount: 100, currency: "USD" } });
+      await prisma.goalContribution.create({ data: { goalId: pastGoal.id, amount: 100, currency: "USD", date: civilDate(2026, 9, 1), note: "Verify CL Past Seed" } });
+      await clGoals.rebuildGoalSaved(pastGoal.id, clToday);
+      check("a contribution dated in the past achieves the goal", (await achievedAtOf(pastGoal.id)) !== null);
+
+      console.log("-- item 4: a mixed goal counts only what is dated by today --");
+      const mixed = await prisma.goal.create({ data: { name: "Verify CL Mixed", targetAmount: 100, currency: "USD" } });
+      await prisma.goalContribution.createMany({
+        data: [
+          { goalId: mixed.id, amount: 60, currency: "USD", date: civilDate(2026, 9, 1), note: "Verify CL Mixed Past" },
+          { goalId: mixed.id, amount: 60, currency: "USD", date: civilDate(2026, 11, 1), note: "Verify CL Mixed Ahead" },
+        ],
+      });
+      await clGoals.rebuildGoalSaved(mixed.id, clToday);
+      eq("60 dated by today plus 60 dated ahead is 120 cached but not achieved", `${await savedOf(mixed.id)}:${await achievedAtOf(mixed.id)}`, "120:null");
+      await clGoals.rebuildGoalSaved(mixed.id, civilDate(2026, 11, 1));
+      check("on the later date both count and the goal is achieved", (await achievedAtOf(mixed.id)) !== null);
+
+      console.log("-- item 3: old dismissals are cleaned up, once a day --");
+      const { staleDismissalReason, DISMISSAL_MAX_AGE_DAYS } = await import("../src/lib/insights");
+      const { pruneInsightDismissals } = (await import("../src/lib/data/insights")) as { pruneInsightDismissals?: (now?: Date) => Promise<{ ran: boolean; unmatched: number; expired: number }> };
+      const pruneNow = new Date("2026-10-01T12:00:00Z");
+      const daysAgo = (days: number) => new Date(pruneNow.getTime() - days * 86_400_000);
+      const at = (key: string, source: string, dismissedAt: Date) => ({ source, key, dismissedAt });
+      const reasonOf = (source: string, key: string, days = 1) => staleDismissalReason({ source, key, dismissedAt: daysAgo(days) }, pruneNow);
+      eq("the limit is 120 days", DISMISSAL_MAX_AGE_DAYS, 120);
+      eq("a current-shape key from each detector stays", [
+        reasonOf("not_posting", "item1:goal_achieved"), reasonOf("not_posting", "item1:failed"), reasonOf("afford_viability", "item1:2026-10-B"),
+        reasonOf("goal_behind", "goal1:2026-10-B:plan"), reasonOf("goal_behind", "goal1:2026-10-B:contributed"), reasonOf("goal_forecast_risk", "goal1:2026-10-B"),
+        reasonOf("recurring_suggestion", "acct1:netflix"),
+      ].map(String).join(","), "null,null,null,null,null,null,null");
+      eq("a bare id (the first detectors' key) matches nothing", [
+        reasonOf("not_posting", "cmabc123"), reasonOf("afford_viability", "cmabc123"), reasonOf("goal_behind", "cmabc123"), reasonOf("goal_forecast_risk", "cmabc123"),
+      ].join(","), "unmatched,unmatched,unmatched,unmatched");
+      eq("goal_behind's period-only key (before the plan/contributed statements) matches nothing", reasonOf("goal_behind", "goal1:2026-10-B"), "unmatched");
+      eq("a source no detector has matches nothing", reasonOf("removed_detector", "a:b"), "unmatched");
+      eq("120 days old stays, 121 goes", `${reasonOf("not_posting", "item1:failed", 120)}:${reasonOf("not_posting", "item1:failed", 121)}`, "null:expired");
+      eq("a legacy key that is also old is counted once, as unmatched", reasonOf("goal_behind", "cmabc123", 400), "unmatched");
+
+      await prisma.insightDismissal.deleteMany({ where: { source: "maintenance" } });
+      const strayDismissals = await prisma.insightDismissal.count();
+      eq("fixture isolation: no dismissal exists before this section's rows", strayDismissals, 0);
+      const suggestionDismissal = await prisma.recurringSuggestionDismissal.create({ data: { accountId: account.id, merchantKey: "verify cl merchant" } });
+      const seeded = [
+        at("item1:failed", "not_posting", daysAgo(5)),
+        at("goal1:2026-10-B:plan", "goal_behind", daysAgo(119)),
+        at("acct1:old suggestion", "recurring_suggestion", daysAgo(130)),
+        at("legacyitem", "not_posting", daysAgo(2)),
+        at("legacyplan", "afford_viability", daysAgo(10)),
+        at("legacygoal", "goal_behind", daysAgo(10)),
+        at("legacyforecast", "goal_forecast_risk", daysAgo(10)),
+        at("goal1:2026-09-B", "goal_behind", daysAgo(10)),
+        at("item2:failed", "removed_detector", daysAgo(10)),
+        at("item3:2026-05-A", "afford_viability", daysAgo(200)),
+        at("item4:goal_achieved", "not_posting", daysAgo(121)),
+      ];
+      await prisma.insightDismissal.createMany({ data: seeded });
+      check("the clean-up exists", typeof pruneInsightDismissals === "function");
+      const first = pruneInsightDismissals ? await pruneInsightDismissals(pruneNow) : null;
+      eq("the first run reports what it dropped: 6 unmatched (4 bare ids, the period-only goal_behind key, a removed source), 3 expired", JSON.stringify(first), JSON.stringify({ ran: true, unmatched: 6, expired: 3 }));
+      eq(
+        "it keeps the current, recent dismissals (one at 119 days) and leaves its marker",
+        (await prisma.insightDismissal.findMany()).map((row) => `${row.source}/${row.key}`).sort().join(" "),
+        ["goal_behind/goal1:2026-10-B:plan", "maintenance/dismissal-prune", "not_posting/item1:failed"].join(" "),
+      );
+      eq("RecurringSuggestionDismissal is untouched", await prisma.recurringSuggestionDismissal.count({ where: { id: suggestionDismissal.id } }), 1);
+
+      await prisma.insightDismissal.create({ data: at("legacylater", "not_posting", daysAgo(3)) });
+      const sameDay = pruneInsightDismissals ? await pruneInsightDismissals(new Date(pruneNow.getTime() + 23 * 3_600_000)) : null;
+      eq("a second run within the day does nothing", JSON.stringify(sameDay), JSON.stringify({ ran: false, unmatched: 0, expired: 0 }));
+      eq("so a legacy row added since is still there", await prisma.insightDismissal.count({ where: { key: "legacylater" } }), 1);
+      const nextDay = pruneInsightDismissals ? await pruneInsightDismissals(new Date(pruneNow.getTime() + 25 * 3_600_000)) : null;
+      eq("a run a day later drops it, and the dismissal that was 119 days old has now passed 120", JSON.stringify(nextDay), JSON.stringify({ ran: true, unmatched: 1, expired: 1 }));
+
+      // Two loads at once: the marker claim lets exactly one of them clean up.
+      await prisma.insightDismissal.deleteMany({ where: { source: "maintenance" } });
+      await prisma.insightDismissal.createMany({ data: [at("legacyrace1", "not_posting", daysAgo(1)), at("legacyrace2", "afford_viability", daysAgo(1))] });
+      const raced = pruneInsightDismissals ? await Promise.all([pruneInsightDismissals(pruneNow), pruneInsightDismissals(pruneNow), pruneInsightDismissals(pruneNow)]) : [];
+      eq("three overlapping loads: exactly one runs", raced.filter((result) => result.ran).length, 1);
+      eq("and it dropped both legacy rows, once", raced.reduce((total, result) => total + result.unmatched, 0), 2);
+      eq("the legacy rows are gone and only the current, recent dismissal is left beside the marker", (await prisma.insightDismissal.findMany({ where: { NOT: { source: "maintenance" } } })).map((row) => row.key).join(","), "item1:failed");
+      await prisma.insightDismissal.deleteMany({});
+      await prisma.recurringSuggestionDismissal.deleteMany({ where: { id: suggestionDismissal.id } });
+    } finally {
+      await clWipe();
+      await prisma.account.updateMany({ where: { id: { in: archivedForCl } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForCl } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForCl } }, data: { active: true } });
     }
   }
 

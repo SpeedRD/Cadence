@@ -25,6 +25,7 @@ function dayOfMonthEn(day: number): string {
 
 export const en = {
   common: {
+    close: "Close",
     save: "Save",
     cancel: "Cancel",
     delete: "Delete",
@@ -259,6 +260,10 @@ export const en = {
     notPostingReasonGoalAchieved: "its goal is fully funded",
     notPostingReasonFailed: "last run failed",
     notPostingLink: "Fix on the recurring page",
+    postingRunFailedTitle: "The last recurring posting run failed",
+    postingRunFailedDescription:
+      "Nothing was posted, so recurring items are missing from your balances and committed total until a run succeeds. Cadence tries again on the next request.",
+    postingRunFailedLink: "See why in the Inbox",
     affordShortTitle: (count: number) =>
       count === 1
         ? "1 purchase from Afford no longer fits"

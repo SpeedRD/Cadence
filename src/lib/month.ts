@@ -7,8 +7,6 @@
  * 28/29/30/31), used only for the monthly pace card and monthly reports.
  */
 import {
-  MONTHS_LONG,
-  MONTHS_SHORT,
   civilDate,
   daysBetween,
   daysInMonth,
@@ -24,11 +22,7 @@ export interface MonthWindow extends MonthRef {
   start: Date;
   end: Date;
   totalDays: number;
-  /** "Aug 2026" */
-  label: string;
-  /** "August 2026" */
-  longLabel: string;
-  /** "2026-08" */
+  /** "2026-08". Its text label is formatMonthShort / formatMonthLong (src/lib/date-format.ts), in the app's language. */
   key: string;
 }
 
@@ -39,8 +33,6 @@ export function monthWindow(ref: MonthRef): MonthWindow {
     start: civilDate(ref.year, ref.month, 1),
     end: civilDate(ref.year, ref.month, totalDays),
     totalDays,
-    label: `${MONTHS_SHORT[ref.month - 1]} ${ref.year}`,
-    longLabel: `${MONTHS_LONG[ref.month - 1]} ${ref.year}`,
     key: monthKey(ref),
   };
 }

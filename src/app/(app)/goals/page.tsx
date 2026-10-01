@@ -16,7 +16,8 @@ import { getAppContext } from "@/lib/data/context";
 import { listDebtGoals } from "@/lib/data/debt-payoff";
 import { listGoals } from "@/lib/data/goals";
 import { planPeriodRef } from "@/lib/data/payday";
-import { formatDate, toISODate } from "@/lib/date";
+import { toISODate } from "@/lib/date";
+import { formatDate, formatPeriodShort } from "@/lib/date-format";
 import { MIN_DEBTS_TO_COMPARE } from "@/lib/debt-payoff";
 import { getDictionary } from "@/lib/i18n";
 import { periodKey } from "@/lib/period";
@@ -102,7 +103,7 @@ export default async function GoalsPage() {
                       {goal.achievedAt
                         ? t.reached
                         : goal.targetDate
-                          ? t.targetDate(formatDate(goal.targetDate))
+                          ? t.targetDate(formatDate(goal.targetDate, context.language))
                           : t.noTargetDate}
                       {goal.isDebt ? <Badge variant="outline">{t.debtBadge}</Badge> : null}
                     </p>
@@ -177,7 +178,7 @@ export default async function GoalsPage() {
                         </span>{" "}
                         {t.perPeriod}
                         {goal.projectedEnd
-                          ? ` · ${t.onTrackApprox(formatDate(goal.projectedEnd))}`
+                          ? ` · ${t.onTrackApprox(formatDate(goal.projectedEnd, context.language))}`
                           : ""}
                       </>
                     ) : (
@@ -203,7 +204,7 @@ export default async function GoalsPage() {
                 {goal.plan.planned !== null && (goal.plan.planned > 0 || goal.plan.contributed > 0) ? (
                   <p className="text-xs text-muted-foreground">
                     {t.planVersusContributed(
-                      goal.plan.period.label,
+                      formatPeriodShort(goal.plan.period, context.language),
                       formatMoney(goal.plan.planned, context.displayCurrency),
                       formatMoney(goal.plan.contributed, context.displayCurrency),
                     )}
@@ -211,7 +212,7 @@ export default async function GoalsPage() {
                 ) : goal.plan.contributed > 0 ? (
                   <p className="text-xs text-muted-foreground">
                     {t.contributedInPeriod(
-                      goal.plan.period.label,
+                      formatPeriodShort(goal.plan.period, context.language),
                       formatMoney(goal.plan.contributed, context.displayCurrency),
                     )}
                   </p>

@@ -34,9 +34,10 @@ import {
   summarizeAffordViability,
   type AffordTrackedItem,
 } from "@/lib/afford-tracking";
-import { formatDate, toISODate } from "@/lib/date";
+import { toISODate } from "@/lib/date";
+import { formatDate, formatPeriodShort } from "@/lib/date-format";
 import { summarizeGoalForecast, type GoalForecast } from "@/lib/goal-forecast";
-import type { Dictionary } from "@/lib/i18n";
+import type { Dictionary, Locale } from "@/lib/i18n";
 import type { RecurringSuggestion } from "@/lib/recurring-detection";
 import type { RecurringPostingSummary, RecurringSkipReason } from "@/lib/recurring-posting";
 
@@ -98,6 +99,43 @@ export interface InsightRef {
   key: string;
 }
 
+/**
+ * The shape of a key each detector can still produce. A dismissal whose key
+ * is not of its source's shape - the bare item, goal or plan id the first
+ * detectors keyed by (before B32 added the period and reason), the
+ * period-only goal_behind key before K3 added the statement - can never
+ * match a current insight, so nothing is hiding behind it. A Record over
+ * InsightSource, so a new detector cannot be added without saying here what
+ * its keys look like.
+ */
+const DISMISSAL_KEY_SHAPES: Record<InsightSource, RegExp> = {
+  not_posting: /^[^:]+:[a-z_]+$/,
+  posting_run_failed: /^run$/,
+  afford_viability: /^[^:]+:\d{4}-\d{2}-[AB]$/,
+  recurring_suggestion: /^[^:]+:[\s\S]+$/,
+  goal_behind: /^[^:]+:\d{4}-\d{2}-[AB]:(plan|contributed)$/,
+  goal_forecast_risk: /^[^:]+:\d{4}-\d{2}-[AB]$/,
+};
+
+/** A dismissal older than this many days is dropped by the Inbox's daily clean-up. */
+export const DISMISSAL_MAX_AGE_DAYS = 120;
+
+/**
+ * Why a stored dismissal is dropped, or null when it stays: "unmatched" when
+ * no current detector can produce its key (removed source or legacy key
+ * shape), "expired" when it is older than DISMISSAL_MAX_AGE_DAYS. Unmatched
+ * wins when both hold, so each row is counted once.
+ */
+export function staleDismissalReason(
+  row: { source: string; key: string; dismissedAt: Date },
+  now: Date,
+): "unmatched" | "expired" | null {
+  const shape = isInsightSource(row.source) ? DISMISSAL_KEY_SHAPES[row.source] : null;
+  if (!shape || !shape.test(row.key)) return "unmatched";
+  const ageMs = now.getTime() - row.dismissedAt.getTime();
+  return ageMs > DISMISSAL_MAX_AGE_DAYS * 86_400_000 ? "expired" : null;
+}
+
 export interface Insight extends InsightRef {
   /** `${source}:${key}` - unique across sources. */
   id: string;
@@ -121,11 +159,13 @@ export function insightId(ref: InsightRef): string {
  *   recurringSuggestions the pattern detector's current suggestions (findRecurringSuggestions)
  *   goalRoadmaps         every goal's period plan and its two statements (getGoalRoadmapStatuses)
  *   goalForecasts        every dated goal's walk to its target date through Afford's projection (forecastGoalFunding)
- * plus the dictionary the titles and labels are written in and the display
+ * plus the dictionary the titles and labels are written in (and the language
+ * the dates and period names in them are spelled in) and the display
  * currency the roadmap figures are in.
  */
 export interface InsightContext {
   dictionary: Dictionary;
+  locale: Locale;
   /** What the goal roadmap figures are in (AppContext.displayCurrency). */
   displayCurrency: string;
   recurringPosting: RecurringPostingSummary | null;
@@ -228,7 +268,7 @@ export const detectPostingRunFailed: InsightDetector = ({ dictionary, recurringP
  * the same check advisory), and it is keyed by the item and that failing
  * period, so a dismissal hides this shortfall and not a new one elsewhere.
  */
-export const detectAffordViability: InsightDetector = ({ dictionary, affordRechecks }) => {
+export const detectAffordViability: InsightDetector = ({ dictionary, locale, affordRechecks }) => {
   const t = dictionary.inbox;
   return notViableAffordItems(affordRechecks).flatMap((item) => {
     const viability = summarizeAffordViability(item.verdict);
@@ -245,7 +285,7 @@ export const detectAffordViability: InsightDetector = ({ dictionary, affordReche
         title: t.affordTitle(item.name),
         evidence: [
           { kind: "money", label: t.affordShortfall, amount: viability.shortfall, currency: viability.currency },
-          { kind: "text", label: t.affordPeriod, value: viability.periodLabel },
+          { kind: "text", label: t.affordPeriod, value: formatPeriodShort(viability.period, locale) },
           {
             kind: "money",
             label: t.affordInstallment,
@@ -279,7 +319,7 @@ export const detectAffordViability: InsightDetector = ({ dictionary, affordReche
  * detector currently suggests, keyed like the card's own rows (and like
  * RecurringSuggestionDismissal) by account + merchant key.
  */
-export const detectRecurringSuggestions: InsightDetector = ({ dictionary, recurringSuggestions }) => {
+export const detectRecurringSuggestions: InsightDetector = ({ dictionary, locale, recurringSuggestions }) => {
   const t = dictionary.inbox;
   return recurringSuggestions.map((suggestion) => {
     const key = `${suggestion.accountId}:${suggestion.merchantKey}`;
@@ -303,8 +343,8 @@ export const detectRecurringSuggestions: InsightDetector = ({ dictionary, recurr
           label: t.suggestionCharges,
           value: t.suggestionChargesValue(
             suggestion.occurrences.length,
-            formatDate(first.date),
-            formatDate(last.date),
+            formatDate(first.date, locale),
+            formatDate(last.date, locale),
           ),
         },
         { kind: "text", label: t.suggestionAccount, value: suggestion.accountName },
@@ -339,7 +379,7 @@ export const detectRecurringSuggestions: InsightDetector = ({ dictionary, recurr
  * Keyed by the goal, the period and the statement, so dismissing one hides
  * neither the other nor the same statement in another period.
  */
-export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency, goalRoadmaps }) => {
+export const detectGoalsBehind: InsightDetector = ({ dictionary, locale, displayCurrency, goalRoadmaps }) => {
   const t = dictionary.inbox;
   const money = (label: string, amount: number): InsightEvidence => ({ kind: "money", label, amount, currency: displayCurrency });
   return goalRoadmaps.flatMap((status) => {
@@ -356,7 +396,7 @@ export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency
           money(t.goalBehindBy, status.planningShortfall),
           money(t.goalRoadmap, status.byHand),
           money(t.goalPlanned, status.planned),
-          { kind: "text", label: t.goalPeriod, value: status.period.label },
+          { kind: "text", label: t.goalPeriod, value: formatPeriodShort(status.period, locale) },
           ...(status.targetDate ? [{ kind: "date", label: t.goalTarget, date: toISODate(status.targetDate) } satisfies InsightEvidence] : []),
           ...(status.roomShortfall > 0 ? [money(t.goalRoomShortfall, status.roomShortfall)] : []),
         ],
@@ -377,7 +417,7 @@ export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency
           money(t.goalPlanned, status.planned),
           ...(status.scheduled > 0 ? [money(t.goalScheduled, status.scheduled)] : []),
           money(t.goalContributed, status.contributed),
-          { kind: "text", label: t.goalPeriod, value: status.period.label },
+          { kind: "text", label: t.goalPeriod, value: formatPeriodShort(status.period, locale) },
         ],
         actionHref: `/goals/${status.goalId}`,
         dismissible: true,
@@ -407,7 +447,7 @@ export const detectGoalsBehind: InsightDetector = ({ dictionary, displayCurrency
  * first short period, so a dismissal hides that shortfall and not one that
  * appears in a different period.
  */
-export const detectGoalForecastRisk: InsightDetector = ({ dictionary, goalForecasts }) => {
+export const detectGoalForecastRisk: InsightDetector = ({ dictionary, locale, goalForecasts }) => {
   const t = dictionary.inbox;
   return goalForecasts.flatMap((forecast) => {
     const summary = summarizeGoalForecast(forecast);
@@ -424,7 +464,7 @@ export const detectGoalForecastRisk: InsightDetector = ({ dictionary, goalForeca
         title: t.forecastTitle(forecast.name),
         evidence: [
           { kind: "money", label: t.forecastShortfall, amount: period.shortfall, currency: forecast.currency },
-          { kind: "text", label: t.forecastPeriod, value: period.period.label },
+          { kind: "text", label: t.forecastPeriod, value: formatPeriodShort(period.period, locale) },
           { kind: "money", label: t.forecastPace, amount: period.pace, currency: forecast.currency },
           ...(period.scheduled > 0
             ? [{ kind: "money", label: t.forecastScheduled, amount: period.scheduled, currency: forecast.currency } satisfies InsightEvidence]

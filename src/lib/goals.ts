@@ -370,6 +370,15 @@ export function savedFromContributions(
 }
 
 /**
+ * The contributions dated on or before `today`: the ones that count towards a
+ * goal being achieved. Dates are UTC-midnight calendar days, so the
+ * comparison is exact.
+ */
+export function contributionsOnOrBefore<T extends { date: Date }>(contributions: readonly T[], today: Date): T[] {
+  return contributions.filter((contribution) => contribution.date.getTime() <= today.getTime());
+}
+
+/**
  * The same rebuild, reporting whether *this* call is the one that crossed the
  * target - i.e. the goal had no achievedAt going in and has one coming out.
  *
@@ -417,13 +426,18 @@ export async function rebuildGoalSaved(
 
     const contributions = await tx.goalContribution.findMany({
       where: { goalId },
-      select: { amount: true, currency: true },
+      select: { amount: true, currency: true, date: true },
     });
 
+    // The cached total holds every contribution, whatever its date; reaching
+    // the target is judged on the ones dated today or earlier, the same
+    // "saved as of today" every page shows (D42), so a contribution dated
+    // later cannot mark the goal achieved before its day.
     const saved = savedFromContributions(contributions, goal.currency, rates);
+    const savedToDate = savedFromContributions(contributionsOnOrBefore(contributions, today), goal.currency, rates);
 
     const target = num(goal.targetAmount);
-    const achieved = target > 0 && saved >= target;
+    const achieved = target > 0 && savedToDate >= target;
 
     await tx.goal.update({
       where: { id: goalId },
@@ -438,6 +452,28 @@ export async function rebuildGoalSaved(
 
     return { saved, justAchieved: achieved && goal.achievedAt === null };
   });
+}
+
+/**
+ * Marks the goals whose last contribution has come due. A contribution dated
+ * ahead is in the cached total from the day it is logged but does not
+ * achieve the goal (rebuildGoalSaved), so the day it arrives nothing has
+ * written the goal's achievedAt: the cached total holds the target and
+ * achievedAt is still null, which is exactly what this looks for. Called at
+ * the head of every posting run, before posting reads achievedAt; a caught-up
+ * database costs the one query.
+ */
+export async function markGoalsReachedByDate(today: Date): Promise<number> {
+  const candidates = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Goal"
+    WHERE "achievedAt" IS NULL
+      AND "targetAmount" > 0
+      AND "savedAmount" >= "targetAmount"
+      AND EXISTS (SELECT 1 FROM "GoalContribution" c WHERE c."goalId" = "Goal"."id")`;
+  for (const goal of candidates) {
+    await rebuildGoalSaved(goal.id, today);
+  }
+  return candidates.length;
 }
 
 /** Self-heal every goal if the cached values ever drift. */

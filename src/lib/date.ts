@@ -10,36 +10,6 @@
 
 import type { Dictionary } from "@/lib/i18n";
 
-export const MONTHS_SHORT = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-] as const;
-
-export const MONTHS_LONG = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-] as const;
-
 const MS_PER_DAY = 86_400_000;
 
 /** Build a UTC-midnight date from calendar parts (month is 1-12). */
@@ -176,16 +146,6 @@ export function minDate(a: Date, b: Date): Date {
 
 export function maxDate(a: Date, b: Date): Date {
   return a.getTime() >= b.getTime() ? a : b;
-}
-
-/** "Aug 16, 2026" */
-export function formatDate(date: Date): string {
-  return `${MONTHS_SHORT[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}`;
-}
-
-/** "Aug 16" */
-export function formatDayMonth(date: Date): string {
-  return `${MONTHS_SHORT[date.getUTCMonth()]} ${date.getUTCDate()}`;
 }
 
 /** "in 3 days" / "today" / "5 days ago" */

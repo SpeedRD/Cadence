@@ -19,6 +19,7 @@ function dayOfMonthEs(day: number): string {
 
 export const es = {
   common: {
+    close: "Cerrar",
     save: "Guardar",
     cancel: "Cancelar",
     delete: "Eliminar",
@@ -248,6 +249,10 @@ export const es = {
     notPostingReasonGoalAchieved: "su meta ya está completa",
     notPostingReasonFailed: "la última ejecución falló",
     notPostingLink: "Arreglar en la página de recurrentes",
+    postingRunFailedTitle: "La última ejecución de registro de recurrentes falló",
+    postingRunFailedDescription:
+      "No se registró nada, así que los elementos recurrentes faltan en tus saldos y en tu total comprometido hasta que una ejecución se complete. Cadence lo intenta de nuevo en la siguiente solicitud.",
+    postingRunFailedLink: "Ver el motivo en la Bandeja",
     affordShortTitle: (count: number) =>
       count === 1
         ? "1 compra desde Cuotas ya no encaja"

@@ -24,7 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatDate, fromISODate } from "@/lib/date";
+import { fromISODate } from "@/lib/date";
+import { formatDate } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { TRANSACTION_SOURCES, TRANSACTION_TYPES } from "@/lib/labels";
 
@@ -156,7 +157,7 @@ export function TransactionFilters({
   const formatDay = (value: string | undefined) => {
     if (!value) return undefined;
     const date = fromISODate(value);
-    return date ? formatDate(date) : value;
+    return date ? formatDate(date, locale) : value;
   };
   const chips = [
     ...SELECT_KEYS.filter((key) => isSet(values[key])).map((key) => ({

@@ -16,9 +16,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useLocale } from "@/components/shell/locale-provider";
 import { Switch } from "@/components/ui/switch";
 import { formatMoney } from "@/lib/currency";
-import { formatDayMonth } from "@/lib/date";
+import { formatDayMonth } from "@/lib/date-format";
 import { round2 } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type { Dictionary } from "@/lib/i18n";
@@ -88,12 +89,13 @@ function SubscriptionRow({
   className?: string;
   t: Dictionary["payday"];
 }) {
+  const locale = useLocale();
   return (
     <div className={cn("flex flex-wrap items-center justify-between gap-2 text-sm", className)}>
       <span className="min-w-0 flex-1">
         {item.name}{" "}
         <span className="text-xs text-muted-foreground">
-          {formatDayMonth(item.nextDate)}
+          {formatDayMonth(item.nextDate, locale)}
           {item.occurrenceCount + item.ledgerOccurrences > 1
             ? ` · ${t.chargesThisPeriod(item.occurrenceCount + item.ledgerOccurrences, formatMoney(item.perOccurrenceAmount, item.currency))}`
             : ""}
@@ -104,7 +106,7 @@ function SubscriptionRow({
           <span key={`${part.transactionId}:${part.currency}`} className="block text-xs text-muted-foreground">
             {t.coveredBy(
               formatMoney(part.amount, part.currency),
-              part.depositLabel ?? t.depositOf(formatDayMonth(part.depositDate)),
+              part.depositLabel ?? t.depositOf(formatDayMonth(part.depositDate, locale)),
             )}
           </span>
         ))}
@@ -312,6 +314,7 @@ export function StepCommitments({
   pickAnAccountLabel: string;
   t: Dictionary["payday"];
 }) {
+  const locale = useLocale();
   const subscriptionById = new Map(subscriptions.map((item) => [item.recurringItemId, item]));
   // An account's room before any goal drew on it, to tell "to spare after its
   // subscriptions and buffer" from "still to spare after the goals above".
@@ -497,7 +500,7 @@ export function StepCommitments({
               <div key={item.recurringItemId} className="flex items-center justify-between gap-2 text-sm">
                 <span>
                   {item.name}{" "}
-                  <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate)}</span>
+                  <span className="text-xs text-muted-foreground">{formatDayMonth(item.nextDate, locale)}</span>
                 </span>
                 <span className="flex items-center gap-1.5">
                   {item.overdue ? <AlreadyLoggedBadge label={t.overdueBadge} /> : null}
@@ -522,7 +525,7 @@ export function StepCommitments({
                 <span className="min-w-0 flex-1">
                   {item.name}{" "}
                   <span className="text-xs text-muted-foreground">
-                    {formatDayMonth(item.nextDate)} · {reasonText(item.reason)}
+                    {formatDayMonth(item.nextDate, locale)} · {reasonText(item.reason)}
                   </span>
                 </span>
                 <span className="figure text-muted-foreground">{formatMoney(item.nativeAmount, item.currency)}</span>

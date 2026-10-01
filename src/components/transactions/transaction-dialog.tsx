@@ -27,7 +27,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { ConversionPreview } from "@/components/form/conversion-preview";
 import { CURRENCIES, formatMoney, type RateTable } from "@/lib/currency";
 import type { MoneyRow } from "@/lib/account-money";
-import { formatDayMonth, toISODate } from "@/lib/date";
+import { toISODate } from "@/lib/date";
+import { formatDayMonth } from "@/lib/date-format";
 import { canBeEarmarked, defaultEarmarkAmount, stillAskedOf, type EarmarkOption } from "@/lib/earmarks";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { parseAmountInput, round2 } from "@/lib/money";
@@ -606,7 +607,7 @@ export function TransactionDialog({
                               <SelectItem key={option.occurrenceKey} value={option.occurrenceKey}>
                                 {t.earmarkOption(
                                   option.name,
-                                  formatDayMonth(option.dueDate),
+                                  formatDayMonth(option.dueDate, locale),
                                   formatMoney(stillAskedOf(option, values.id), option.currency),
                                 )}
                               </SelectItem>

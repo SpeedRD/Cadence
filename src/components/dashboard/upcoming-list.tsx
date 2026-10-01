@@ -1,8 +1,9 @@
 import { PiggyBank, Repeat } from "lucide-react";
 
 import { formatMoney } from "@/lib/currency";
-import { formatDayMonth, formatRelativeDays } from "@/lib/date";
-import type { Dictionary } from "@/lib/i18n";
+import { formatRelativeDays } from "@/lib/date";
+import { formatDayMonth } from "@/lib/date-format";
+import type { Dictionary, Locale } from "@/lib/i18n";
 import { skipReasonLabel } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
@@ -17,12 +18,14 @@ export function UpcomingList({
   items,
   today,
   displayCurrency,
+  locale,
   t,
   common,
 }: {
   items: UpcomingItem[];
   today: Date;
   displayCurrency: string;
+  locale: Locale;
   t: Dictionary["dashboard"];
   common: Dictionary["common"];
 }) {
@@ -51,7 +54,7 @@ export function UpcomingList({
                   item.overdue || item.wontPostReason ? "text-[var(--warning)]" : "text-muted-foreground",
                 )}
               >
-                {formatDayMonth(item.nextDate)} ·{" "}
+                {formatDayMonth(item.nextDate, locale)} ·{" "}
                 {item.wontPostReason
                   ? t.wontPostNotCounted(skipReasonLabel(item.wontPostReason, t))
                   : item.overdue

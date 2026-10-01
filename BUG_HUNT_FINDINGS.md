@@ -172,7 +172,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** anyone with a dated goal that is also auto-funded. Afford understates room in half the periods and overstates it in the other half, by the contribution amount each time. The Inbox forecast raises or misses "can't keep the pace" accordingly.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** give Afford the gross pace (remaining ÷ periods left). Per period, subtract that period's own scheduled contributions to the goal, floored at 0.
-- **Status:** fixed (K3, QUANTITIES_MAP.md D5). Afford and the goal forecast ask each period its own by-hand figure: the pace fixed at the plan period's start, less that period's own recurring contributions to the goal (already among its commitments). Harness ("a goal's period plan (K3)", D5 / B11): a 30,000 goal due Dec 30 with a 2,000 contribution on the 10th is asked 5,000 in the B periods and 3,000 in the A periods, by the forecast and by Afford, before and after the contribution posts (was 3,000, then 4,666.67, in every period).
+- **Status:** fixed (K3, QUANTITIES_MAP.md D5). Afford and the goal forecast ask each period its own by-hand figure: the pace fixed at the plan period's payday, less that period's own recurring contributions to the goal (already among its commitments). Harness ("a goal's period plan (K3)", D5 / B11): a 30,000 goal due Dec 30 with a 2,000 contribution on the 10th is asked 5,000 in the B periods and 3,000 in the A periods, by the forecast and by Afford, before and after the contribution posts (was 3,000, then 4,666.67, in every period).
 
 ### B12. The debt comparator reads the netted pace as the minimum payment, so a debt paid by an auto-contribution shows as never paid off
 - **What:** `listDebtGoals` sets each dated debt's `minimum` to the roadmap pace. That pace is net of recurring contributions, and the simulation never adds those contributions back. The minimum also flips between the A and B plan halves (see B11).
@@ -195,7 +195,7 @@ Confidence is about whether the defect is real, not how often it happens.
 - **Who / direction:** every dated goal with a recurring contribution, every period. A false alarm; it also claims the room could not cover the pace, which is false.
 - **Severity / confidence:** Medium / High. Evidence: DB run.
 - **Fix:** measure a period's roadmap against the balance at the plan period's start, adding back contributions dated inside the plan period, so it stays fixed through the period.
-- **Status:** fixed (K3, D4). The pace is fixed at the plan period's start and the period's scheduled contributions are counted whole, so a posting mid-period moves neither: 3,000 by hand before and after the Oct 10 posting, no "behind" insight.
+- **Status:** fixed (K3, D4). The pace is fixed at the plan period's payday and the period's scheduled contributions are counted whole, so a posting mid-period moves neither: 3,000 by hand before and after the Oct 10 posting, no "behind" insight.
 
 ### B14. Items that will never post still count as committed and still net the roadmap, and the alert says the opposite
 - **What:** `getPeriodSummary`, the check-in draft and confirm, and the Goals page's due-contribution netting all include items that posting skips forever:

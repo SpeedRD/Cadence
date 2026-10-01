@@ -1,7 +1,8 @@
 "use server";
 
 import { getSettings, requireAuth } from "@/lib/auth";
-import { formatDayMonth, today } from "@/lib/date";
+import { today } from "@/lib/date";
+import { formatDayMonth } from "@/lib/date-format";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { num } from "@/lib/money";
@@ -138,7 +139,7 @@ export async function toggleRecurringAction(
   // Resuming may have moved the next charge forward (skipMissedOccurrences);
   // say where it is now. Nothing extra when the date stayed.
   if (item.active) return done(t.itemPaused);
-  return done(result.movedTo ? t.itemResumedNext(formatDayMonth(result.movedTo)) : t.itemResumed);
+  return done(result.movedTo ? t.itemResumedNext(formatDayMonth(result.movedTo, locale)) : t.itemResumed);
 }
 
 /** The rest of an installment plan was paid in one go outside the app. */

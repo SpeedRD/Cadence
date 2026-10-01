@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/stat";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAppContext } from "@/lib/data/context";
-import { getInsightState } from "@/lib/data/insights";
+import { getInsightState, pruneInsightDismissals } from "@/lib/data/insights";
 import { getDictionary } from "@/lib/i18n";
 import { inboxEmptyDescription } from "@/lib/insights";
 
@@ -19,7 +19,12 @@ export const metadata = { title: "Inbox - Cadence" };
  * evidence only); nothing here changes the signal itself.
  */
 export default async function InboxPage() {
+  // The daily clean-up of dismissals that can no longer hide anything. It runs
+  // after the insights are read, so this page shows what it showed before the
+  // clean-up; a row dropped for its age lets its insight back from the next
+  // load. A failure is logged, never shown - the page does not depend on it.
   const [context, { insights, dismissedCount }] = await Promise.all([getAppContext(), getInsightState()]);
+  await pruneInsightDismissals().catch((error) => console.error("[inbox] dismissal clean-up failed", error));
   const t = getDictionary(context.language).inbox;
   const critical = insights.filter((insight) => insight.severity === "critical");
   const advisory = insights.filter((insight) => insight.severity === "advisory");
