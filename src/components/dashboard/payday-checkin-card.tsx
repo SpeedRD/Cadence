@@ -78,6 +78,14 @@ export function PaydayCheckinCard({
           <p className="text-xs text-muted-foreground">
             {t.summaryCushion}: <span className="figure">{money(figures.cushion)}</span> - {t.summaryCushionHint}
           </p>
+          {draft.carryoverAdjustment ? (
+            <p className="text-xs text-muted-foreground">
+              {t.carryoverAdjusted(
+                formatMoney(draft.carryoverAdjustment.by, draft.displayCurrency, { signDisplay: "always" }),
+                formatPeriodLong(draft.carryoverAdjustment.from, locale),
+              )}
+            </p>
+          ) : null}
           {figures.flexibleBudgeted === 0 && figures.essential === 0 ? (
             <p className="text-xs text-muted-foreground">
               {t.noAllocationsSavedNote}{" "}

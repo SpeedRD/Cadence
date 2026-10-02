@@ -109,7 +109,7 @@ export async function loadGoalPeriodPlans(
     }),
     // When each period's pay landed, which opens its contribution window
     // (the plan period's too: a later period is paced from it).
-    loadPayLanded([...periods, clock.plan]),
+    loadPayLanded([...periods, clock.plan], context),
   ]);
 
   for (const period of periods) {

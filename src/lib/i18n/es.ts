@@ -669,6 +669,8 @@ export const es = {
       over_deposit: "Los montos apartados suman más que este depósito",
       over_occurrence: "Es más de lo que falta por ese pago",
       not_depositable: "Solo un ingreso o dinero que entra de fuera puede apartarse para un pago",
+      adopted_paycheck:
+        "Este depósito es parte del pago de un chequeo de pago confirmado: el plan ya lo cuenta como ingreso, así que no puede apartarse también para un pago",
     },
     earmarkNotSavedWithDeposit: (reason: string) => `El depósito se guardó, pero no el pago para el que está apartado: ${reason}`,
     // Un cargo registrado antes de publicarse que puede ser un pago próximo en otra moneda.
@@ -1549,6 +1551,18 @@ export const es = {
     incomeAmount: "Ingreso recibido",
     oneOffIncomeAmount: "De eso, único",
     oneOffIncomeTooHigh: "La parte única no puede ser mayor que el ingreso recibido.",
+    ledgerDepositsHeading: "Ya en tu libro para este periodo",
+    ledgerDepositEarmarked: (amount: string) => `menos ${amount} apartados para un pago recurrente`,
+    ledgerDepositsSetAside: (count: number) =>
+      count === 1
+        ? "1 depósito marcado como único o apartado para un pago no cuenta como pago"
+        : `${count} depósitos marcados como únicos o apartados para un pago no cuentan como pago`,
+    ledgerDepositsHint:
+      "El monto empieza en su suma, y se quedan como están. Escribe más si parte de este pago aún no está en el libro: solo la diferencia se registra como una nueva transacción de ingreso.",
+    incomeBelowLedgerInline: (amount: string) =>
+      `No puede ser menor que los ${amount} que ya están en tu libro para este periodo.`,
+    incomeBelowLedger: (accounts: { name: string; inLedger: string }[]) =>
+      `No se guardó nada: el ingreso de ${accounts.map((a) => `${a.name} no puede ser menor que los ${a.inLedger}`).join(", y el de ")} que ya están en tu libro para este periodo. Esos depósitos son el pago de este periodo y se quedan como están.`,
     incomeNotePlaceholder: "Salario, pago freelance, bono...",
     totalIncome: "Ingreso total",
 
@@ -1641,6 +1655,8 @@ export const es = {
     summaryIncome: "Ingreso",
     summaryCarryover: "Remanente incluido",
     summaryCarryoverProvisional: (amount: string) => `${amount} provisional - se cuenta cuando termine el periodo anterior`,
+    carryoverAdjusted: (by: string, period: string) =>
+      `Remanente ajustado en ${by} desde que se asentó: lo que dejó ${period} cambió después de terminar, por ejemplo gastos con fecha en ese periodo que se registraron más tarde.`,
     summaryCushion: "Ya en tus cuentas",
     summaryCushionHint: "Lo que tus cuentas tenían antes de este pago. Se guarda como reserva: no cuenta en este plan.",
     summarySubscriptions: "Suscripciones",
@@ -1675,15 +1691,19 @@ export const es = {
     step5Title: "Confirma tu plan",
     confirmSnapshotsNote:
       "Los saldos reportados se registran solo para auditoría - nunca cambian el saldo de la cuenta.",
-    confirmIncomeNote: (counts: { created: number; updated: number; removed: number }, amount: string) => {
+    confirmIncomeNote: (counts: { created: number; updated: number; removed: number; adopted: number }, amount: string) => {
       const parts = [
         counts.created > 0 ? `${counts.created} ${counts.created === 1 ? "se crea" : "se crean"}` : null,
         counts.updated > 0 ? `${counts.updated} ${counts.updated === 1 ? "se actualiza" : "se actualizan"}` : null,
         counts.removed > 0 ? `${counts.removed} ${counts.removed === 1 ? "se elimina" : "se eliminan"}` : null,
       ].filter((part): part is string => part !== null);
-      if (parts.length === 0) return "No se crea ni cambia ninguna transacción de ingreso.";
+      const adopted =
+        counts.adopted > 0
+          ? `${counts.adopted} ${counts.adopted === 1 ? "depósito que ya está" : "depósitos que ya están"} en tu libro ${counts.adopted === 1 ? "cuenta tal como está" : "cuentan tal como están"}, sin registrarse de nuevo`
+          : null;
+      if (parts.length === 0) return adopted ? `Ingreso, ${amount} en total: ${adopted}.` : "No se crea ni cambia ninguna transacción de ingreso.";
       const changed = counts.created + counts.updated + counts.removed;
-      return `Transacciones de ingreso, ${amount} en total: ${parts.join(", ")}${changed === counts.created ? "" : " - las que este chequeo ya había registrado se cambian en su lugar, no se agregan de nuevo"}.`;
+      return `Transacciones de ingreso, ${amount} en total: ${parts.join(", ")}${changed === counts.created ? "" : " - las que este chequeo ya había registrado se cambian en su lugar, no se agregan de nuevo"}${adopted ? `; ${adopted}` : ""}.`;
     },
     confirmUnallocatedNote: (amount: string) =>
       `${amount} queda sin asignar: no se guarda como presupuesto y pasa al chequeo del próximo periodo junto con lo que los presupuestos no gasten.`,
@@ -1711,5 +1731,7 @@ export const es = {
     confirmedMeanwhile:
       "Este chequeo se confirmó desde otra ventana o con un segundo toque mientras se guardaba este, así que esta vez no se guardó nada. Cierra el chequeo y ábrelo de nuevo para ver el plan que quedó guardado.",
     acknowledgeZeroBufferFirst: "Reconoce la advertencia de colchón en cero antes de confirmar",
+    changedSinceLoaded:
+      "Este chequeo se cambió en otra pestaña o ventana después de que lo abriste, así que no se guardó nada. Recarga la página para ver el plan como está ahora y vuelve a hacer tus cambios.",
   },
 } as const satisfies Dictionary;

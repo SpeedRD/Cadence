@@ -66,7 +66,10 @@ export async function saveTransactionAction(
   // saved with it.
   const earmarks = earmarkLinesFrom(formData);
   if ("error" in earmarks) return fail(localizeValidationMessage(earmarks.error, locale));
-  const earmarkMessage = (issue: EarmarkIssue | "not_depositable") => t.earmarkIssues[issue];
+  const earmarkMessage = (issue: EarmarkIssue | "not_depositable" | "adopted_paycheck") => t.earmarkIssues[issue];
+  // The deposit as saved, for the rule that a confirmed check-in's adopted
+  // pay cannot be earmarked (checkEarmarks).
+  const depositFacts = { date: values.date, isOneOffIncome: values.isOneOffIncome, reimbursesTransactionId: values.reimbursesTransactionId };
 
   const referenceError = await checkReferences(t, [values.accountId], values.categoryId, !id);
   if (referenceError) return fail(referenceError);
@@ -166,6 +169,7 @@ export async function saveTransactionAction(
       type: values.type,
       source: existing.source,
       transferDirection: values.transferDirection,
+      ...depositFacts,
     };
     if (earmarks.offered) {
       const check = await checkEarmarks(deposit, earmarks.requests, await getAppContext());
@@ -185,7 +189,7 @@ export async function saveTransactionAction(
     if (requests.length > 0) {
       const inAccount = await storedTransactionValues(values, async () => (await getAppContext()).rates, null, charged.amount);
       const check = await checkEarmarks(
-        { id: null, accountId: values.accountId, amount: inAccount.amount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection },
+        { id: null, accountId: values.accountId, amount: inAccount.amount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection, ...depositFacts },
         requests,
         await getAppContext(),
       );
@@ -195,7 +199,7 @@ export async function saveTransactionAction(
     const created = await createManualTransaction(values, { getContext: getAppContext, chargedAmount: charged.amount });
     if (requests.length > 0) {
       const saved = await saveEarmarks(
-        { id: created.id, accountId: values.accountId, amount: created.storedAmount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection },
+        { id: created.id, accountId: values.accountId, amount: created.storedAmount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection, ...depositFacts },
         requests,
         await getAppContext(),
       );

@@ -41,7 +41,11 @@
  *           found rather than inherited. No occurrence may be both settled by
  *           a charge (RecurringSettlement) and posted, and no item may have
  *           one schedule slot paid twice under two keys (a settlement left on
- *           a key its schedule no longer has).
+ *           a key its schedule no longer has). A confirmed check-in must not
+ *           count its paycheck beside deposits the ledger already held for it
+ *           when it was confirmed (a CSV salary imported first): those are
+ *           adopted, so what the check-in itself adds plus them never comes
+ *           to more than the paycheck the user typed.
  *   pair 5  a deposit the user earmarked for a recurring occurrence
  *           (RecurringEarmark, src/lib/earmarks.ts) and the occurrence it
  *           covers: the earmarked part lowers what the occurrence asks of the
@@ -1303,12 +1307,88 @@ async function main(): Promise<number> {
         `why: ${verdict.reason}; ${verdict.days} day${verdict.days === 1 ? "" : "s"} apart`,
       ]);
     }
+    // (d) A confirmed check-in's paycheck vs the deposits the ledger already
+    // held for it when it was confirmed. Its own SQL for which deposits those
+    // are: ordinary INCOME rows on the account (not the check-in's own
+    // PAYDAY_CHECKIN rows, not one-off income, not a payback of a shared
+    // expense), less any part earmarked for a recurring payment, dated from
+    // five days before the period's first day to five days before the next
+    // period's (a payday is never more than three days early, so this is the
+    // income window), created before the check-in was last confirmed (its
+    // allocations are rewritten on every confirm). The check-in owes them
+    // adoption. What the check-in itself adds to its period's income is the
+    // app's own snapshotIncome (src/lib/period-income.ts); those deposits
+    // count as rows in the same period (loadPeriodIncome, "fact", confirms
+    // both are in). Together they must not exceed the paycheck typed: any
+    // excess is money counted twice - DOUBLE when it is pay-sized (half the
+    // paycheck or more, the size of a salary deposit), POSSIBLE when smaller
+    // (a refund or interest the check-in did not take in).
+    const { snapshotIncome } = await import("../src/lib/period-income");
+    const { loadPeriodIncome } = await import("../src/lib/data/period-income");
+    const paydaySnapshots = await prisma.paydayAccountSnapshot.findMany({
+      where: { checkin: { status: "CONFIRMED" }, incomeEntered: { gt: 0 } },
+      select: {
+        accountId: true,
+        incomeEntered: true,
+        oneOffIncome: true,
+        adoptedIncome: true,
+        currency: true,
+        account: { select: { name: true, currency: true } },
+        checkin: { select: { year: true, month: true, period: true, updatedAt: true, allocations: { select: { createdAt: true } } } },
+      },
+    });
+    const firstDayOf = (year: number, month: number, period: string) => civilDate(year, month, period === "A" ? 1 : 16);
+    const firstDayAfter = (year: number, month: number, period: string) =>
+      period === "A" ? civilDate(year, month, 16) : month === 12 ? civilDate(year + 1, 1, 1) : civilDate(year, month + 1, 1);
+    let paychecksChecked = 0;
+    for (const snapshot of paydaySnapshots) {
+      const { year, month, period } = snapshot.checkin;
+      const allocationTimes = snapshot.checkin.allocations.map((row) => row.createdAt.getTime());
+      const confirmedAt = new Date(allocationTimes.length > 0 ? Math.max(...allocationTimes) : snapshot.checkin.updatedAt.getTime());
+      const from = addDays(firstDayOf(year, month, period), -5);
+      const until = addDays(firstDayAfter(year, month, period), -5);
+      const deposits = await prisma.$queryRaw<{ id: string; date: Date; amount: string; currency: string; source: string; note: string | null; earmarks: { amount: string; currency: string }[] | null }[]>`
+        SELECT t.id, t.date, t.amount::text AS amount, t.currency, t.source::text AS source, t.note,
+               (SELECT json_agg(json_build_object('amount', e.amount::text, 'currency', e.currency)) FROM "RecurringEarmark" e WHERE e."transactionId" = t.id) AS earmarks
+        FROM "Transaction" t
+        WHERE t."accountId" = ${snapshot.accountId} AND t.type = 'INCOME' AND t.source <> 'PAYDAY_CHECKIN'
+          AND NOT t."isOneOffIncome" AND t."reimbursesTransactionId" IS NULL
+          AND t.date >= ${from} AND t.date < ${until} AND t."createdAt" <= ${confirmedAt}`;
+      paychecksChecked += 1;
+      if (deposits.length === 0) continue;
+      const inAccount = (amount: number, currency: string) => convert(amount, currency, snapshot.account.currency, rates);
+      const earmarkedOf = (row: (typeof deposits)[number]) => (row.earmarks ?? []).reduce((sum, earmark) => sum + inAccount(Number(earmark.amount), earmark.currency), 0);
+      const held = round2(deposits.reduce((sum, row) => sum + Math.max(0, inAccount(Number(row.amount), row.currency) - earmarkedOf(row)), 0));
+      const paycheck = num(snapshot.incomeEntered);
+      const ownPart = snapshotIncome(
+        {
+          accountId: snapshot.accountId,
+          incomeEntered: paycheck,
+          oneOffIncome: snapshot.oneOffIncome === null ? null : num(snapshot.oneOffIncome),
+          adoptedIncome: snapshot.adoptedIncome === null ? null : num(snapshot.adoptedIncome),
+          currency: snapshot.currency,
+        },
+        "fact",
+      );
+      const excess = round2(ownPart + held - paycheck);
+      if (excess <= 0.01) continue;
+      const key = `${year}-${String(month).padStart(2, "0")}-${period}`;
+      const counted = (await loadPeriodIncome([{ year, month, period: period as "A" | "B" }], "fact", context)).get(key)?.byAccount.get(snapshot.accountId) ?? 0;
+      if (counted + 0.01 < ownPart + held) continue;
+      flag(4, excess + 0.005 >= paycheck / 2 ? "DOUBLE" : "POSSIBLE", `check-in ${key} counts ${snapshot.account.name}'s paycheck beside ${money(held, snapshot.account.currency)} the ledger already held for it`, [
+        `paycheck typed: ${money(paycheck, snapshot.currency)}, of it adopted from the ledger: ${snapshot.adoptedIncome === null ? "none recorded" : money(num(snapshot.adoptedIncome), snapshot.currency)}; the check-in itself adds ${money(ownPart, snapshot.currency)}`,
+        ...deposits.map((row) => `in the ledger before it was confirmed: Transaction ${row.id} (${row.source}, ${toISODate(row.date)}) ${money(Number(row.amount), row.currency)}${row.earmarks ? `, ${money(earmarkedOf(row), snapshot.account.currency)} earmarked` : ""}${row.note ? ` "${row.note}"` : ""}`),
+        `its period counts ${money(counted, snapshot.account.currency)} for the account: ${money(excess, snapshot.account.currency)} more than the paycheck`,
+      ]);
+    }
+
     const written = await prisma.$queryRaw<{ source: string; currency: string; n: number }[]>`
       SELECT source::text AS source, currency, count(*)::int AS n FROM "Transaction"
       WHERE (source = 'RECURRING' AND type = 'EXPENSE') OR (source = 'PAYDAY_CHECKIN' AND type = 'INCOME')
       GROUP BY 1, 2 ORDER BY 1, 2`;
     info(`settled and posted: ${settledAndPosted} of ${settlements.length} settlement${settlements.length === 1 ? "" : "s"} name an occurrence that also has a RECURRING row`);
     info(`slots: ${slotsChecked} consumed occurrence${slotsChecked === 1 ? "" : "s"} of ${byItem.size} item${byItem.size === 1 ? "" : "s"} checked for one slot paid twice`);
+    info(`paychecks: ${paychecksChecked} confirmed check-in paycheck${paychecksChecked === 1 ? "" : "s"} checked against the deposits the ledger held for them when confirmed`);
     info(
       `existing pairs: ${doubles + possibles} (${doubles} double, ${possibles} possible) from ${candidates.length} candidate pair${candidates.length === 1 ? "" : "s"} against ${written.map((group) => `${group.n} ${group.source} ${group.currency}`).join(", ") || "no written rows"}`,
     );

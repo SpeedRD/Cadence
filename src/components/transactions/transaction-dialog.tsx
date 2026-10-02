@@ -27,7 +27,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { ConversionPreview } from "@/components/form/conversion-preview";
 import { CURRENCIES, formatMoney, type RateTable } from "@/lib/currency";
 import type { MoneyRow } from "@/lib/account-money";
-import { toISODate } from "@/lib/date";
+import { fromISODate, toISODate } from "@/lib/date";
+import { isAdoptedDeposit, type AdoptedWindow } from "@/lib/period-income";
 import { formatDayMonth } from "@/lib/date-format";
 import { canBeEarmarked, defaultEarmarkAmount, stillAskedOf, type EarmarkOption } from "@/lib/earmarks";
 import { getDictionary, type Locale } from "@/lib/i18n";
@@ -84,6 +85,7 @@ export function TransactionDialog({
   categories,
   openSharedExpenses,
   earmarkOptions,
+  adoptedWindows = [],
   values,
   rates,
   trigger,
@@ -97,6 +99,8 @@ export function TransactionDialog({
   openSharedExpenses: OpenSharedExpense[];
   /** The upcoming payments a deposit can be set aside for - see listEarmarkOptions. */
   earmarkOptions: EarmarkOption[];
+  /** Where a confirmed check-in adopted deposits as pay (loadAdoptedWindows): a deposit there is not offered for a payment. */
+  adoptedWindows?: AdoptedWindow[];
   values: TransactionFormValues;
   /** The request's rate table, for the conversion preview (ConversionPreview). */
   rates: RateTable["rates"];
@@ -178,11 +182,32 @@ export function TransactionDialog({
   // charged to the same account, each line defaulting to the smaller of what
   // the deposit has left and what the payment still asks, in the account's
   // currency, until the user types an amount of their own.
-  const canEarmark = canBeEarmarked({
-    type,
-    source: values.source ?? "MANUAL",
-    transferDirection: type === "EXTERNAL_TRANSFER" ? direction : null,
-  });
+  // A deposit a confirmed check-in adopted as pay is the plan's income
+  // already, like a check-in's own paycheck, so it is not offered either
+  // (isAdoptedDeposit; the server refuses it too). Judged on the date and
+  // account as they stand in the form.
+  const [dateText, setDateText] = useState(values.date);
+  const adoptedDate = fromISODate(dateText);
+  const adopted =
+    adoptedDate !== null &&
+    isAdoptedDeposit(
+      {
+        accountId: accountId ?? "",
+        date: adoptedDate,
+        type,
+        source: values.source ?? "MANUAL",
+        isOneOffIncome,
+        reimbursesTransactionId: reimbursesId === "none" ? null : reimbursesId,
+      },
+      adoptedWindows,
+    );
+  const canEarmark =
+    !adopted &&
+    canBeEarmarked({
+      type,
+      source: values.source ?? "MANUAL",
+      transferDirection: type === "EXTERNAL_TRANSFER" ? direction : null,
+    });
   const [earmarkOn, setEarmarkOn] = useState((values.earmarks ?? []).length > 0);
   const [earmarkLines, setEarmarkLines] = useState<EarmarkLine[]>(() => linesFrom(values.earmarks));
   const accountCurrency = accounts.find((account) => account.id === accountId)?.currency;
@@ -358,6 +383,7 @@ export function TransactionDialog({
             type="date"
             name="date"
             defaultValue={values.date}
+            onChange={(event) => setDateText(event.target.value)}
             required
           />
         </Field>

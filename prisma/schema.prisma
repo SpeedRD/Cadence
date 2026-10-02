@@ -620,9 +620,19 @@ model PaydayAccountSnapshot {
   /// src/lib/data/period-income.ts), like a one-off income row. Null on
   /// snapshots written before it existed, read as 0.
   oneOffIncome          Decimal? @db.Decimal(14, 2)
+  /// The part of incomeEntered that deposits already in the ledger held when
+  /// the check-in was confirmed (ordinary INCOME rows on the account in the
+  /// period's income window, see loadLedgerDeposits in src/lib/data/period-income.ts), in the same
+  /// currency. The check-in adopts them as they are - never edits or deletes
+  /// them - and its own INCOME row (incomeTransactionId) holds only the rest,
+  /// incomeEntered - adoptedIncome. Period income counts the deposits as rows
+  /// and the snapshot for that rest, so the money is counted once. Null on
+  /// snapshots written before it existed, read as 0.
+  adoptedIncome         Decimal? @db.Decimal(14, 2)
   incomeNote            String?
-  /// The actual INCOME Transaction created for incomeEntered > 0, if any - so
-  /// re-confirming updates/removes that one row instead of creating another.
+  /// The actual INCOME Transaction created for the part of incomeEntered the
+  /// ledger did not already hold (incomeEntered - adoptedIncome > 0), if any -
+  /// so re-confirming updates/removes that one row instead of creating another.
   incomeTransactionId   String?  @unique
   currency              String
   createdAt             DateTime @default(now())

@@ -681,6 +681,8 @@ export const en = {
       over_deposit: "The amounts set aside add up to more than this deposit",
       over_occurrence: "That is more than the payment still asks",
       not_depositable: "Only income or money coming in from outside can be set aside for a payment",
+      adopted_paycheck:
+        "This deposit is part of a confirmed payday check-in's paycheck: the plan already counts it as income, so it can't be set aside for a payment too",
     },
     earmarkNotSavedWithDeposit: (reason: string) => `The deposit was saved, but not what it is set aside for: ${reason}`,
     // A charge entered before posting that may be an upcoming payment in another currency.
@@ -1566,6 +1568,16 @@ export const en = {
     incomeAmount: "Income received",
     oneOffIncomeAmount: "Of which one-off",
     oneOffIncomeTooHigh: "The one-off part can't be more than the income received.",
+    ledgerDepositsHeading: "Already in your ledger for this period",
+    ledgerDepositEarmarked: (amount: string) => `less ${amount} set aside for a recurring payment`,
+    ledgerDepositsSetAside: (count: number) =>
+      `${count} deposit${count === 1 ? "" : "s"} marked one-off or set aside for a payment ${count === 1 ? "is" : "are"} not counted as pay`,
+    ledgerDepositsHint:
+      "The amount starts at their sum, and they stay as they are. Type more if part of this pay isn't in the ledger yet: only the difference is recorded as a new income transaction.",
+    incomeBelowLedgerInline: (amount: string) =>
+      `Can't be less than the ${amount} already in your ledger for this period.`,
+    incomeBelowLedger: (accounts: { name: string; inLedger: string }[]) =>
+      `Nothing was saved: the income for ${accounts.map((a) => `${a.name} can't be less than the ${a.inLedger}`).join(", and for ")} already in your ledger for this period. Those deposits are this period's pay and stay as they are.`,
     incomeNotePlaceholder: "Salary, freelance payment, bonus...",
     totalIncome: "Total income",
 
@@ -1658,6 +1670,8 @@ export const en = {
     summaryIncome: "Income",
     summaryCarryover: "Included carryover",
     summaryCarryoverProvisional: (amount: string) => `${amount} provisional - counted once last period ends`,
+    carryoverAdjusted: (by: string, period: string) =>
+      `Carryover adjusted by ${by} since it settled: what ${period} left changed after it ended, for example spending dated in it that was recorded later.`,
     summaryCushion: "Already in your accounts",
     summaryCushionHint: "What your accounts held before this pay. Kept as a cushion - not counted in this plan.",
     summarySubscriptions: "Subscriptions",
@@ -1692,15 +1706,19 @@ export const en = {
     step5Title: "Confirm your plan",
     confirmSnapshotsNote:
       "Balance snapshots are recorded for audit only - they never change account balances.",
-    confirmIncomeNote: (counts: { created: number; updated: number; removed: number }, amount: string) => {
+    confirmIncomeNote: (counts: { created: number; updated: number; removed: number; adopted: number }, amount: string) => {
       const parts = [
         counts.created > 0 ? `${counts.created} created` : null,
         counts.updated > 0 ? `${counts.updated} updated` : null,
         counts.removed > 0 ? `${counts.removed} removed` : null,
       ].filter((part): part is string => part !== null);
-      if (parts.length === 0) return "No income transaction is created or changed.";
+      const adopted =
+        counts.adopted > 0
+          ? `${counts.adopted} deposit${counts.adopted === 1 ? "" : "s"} already in your ledger ${counts.adopted === 1 ? "is" : "are"} counted as ${counts.adopted === 1 ? "it is" : "they are"}, not recorded again`
+          : null;
+      if (parts.length === 0) return adopted ? `Income, ${amount} in total: ${adopted}.` : "No income transaction is created or changed.";
       const changed = counts.created + counts.updated + counts.removed;
-      return `Income transactions, ${amount} in total: ${parts.join(", ")}${changed === counts.created ? "" : " - the ones this check-in recorded before are changed in place, not added again"}.`;
+      return `Income transactions, ${amount} in total: ${parts.join(", ")}${changed === counts.created ? "" : " - the ones this check-in recorded before are changed in place, not added again"}${adopted ? `; ${adopted}` : ""}.`;
     },
     confirmUnallocatedNote: (amount: string) =>
       `${amount} stays unallocated: it is not written as a budget, and it carries to the next period's check-in with whatever the budgets leave unspent.`,
@@ -1728,6 +1746,8 @@ export const en = {
     confirmedMeanwhile:
       "This check-in was confirmed from another window or a second tap while this one was being saved, so nothing was saved this time. Close the check-in and open it again to see the plan that was saved.",
     acknowledgeZeroBufferFirst: "Acknowledge the zero-buffer warning before confirming",
+    changedSinceLoaded:
+      "This check-in was changed in another tab or window after you opened it, so nothing was saved. Reload the page to see the plan as it is now, then make your changes again.",
   },
 };
 

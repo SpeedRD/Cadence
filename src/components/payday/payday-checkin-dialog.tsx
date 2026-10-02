@@ -26,7 +26,7 @@ import { formatPeriodLong } from "@/lib/date-format";
 import type { PaydayCheckinDraft } from "@/lib/data/payday";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { round2 } from "@/lib/money";
-import { oneOffIncomeIssue } from "@/lib/period-income";
+import { ledgerDepositsIssue, oneOffIncomeIssue } from "@/lib/period-income";
 import {
   draftAccountBuffers,
   draftFlexibleRoom,
@@ -233,13 +233,17 @@ export function PaydayCheckinDialog({
   const needsZeroBufferAck =
     plannedBuffer <= 0 || (serverAcknowledgements?.needsZeroBufferAck ?? false);
   // What confirming does to each account's paycheck row (archived accounts are
-  // left as they stand): a new row, the one already recorded updated, or
-  // that one removed when the income goes back to 0.
+  // left as they stand): a new row for what the income holds beyond the
+  // deposits already in the ledger, the one already recorded updated, or
+  // that one removed when nothing is left beyond them - and those deposits
+  // adopted as they are.
   const editable = plan.accounts.filter((a) => !a.readOnly);
+  const beyondLedger = (a: (typeof editable)[number]) => round2(a.incomeEntered - a.ledgerDepositsTotal) > 0;
   const incomeChanges = {
-    created: editable.filter((a) => a.incomeEntered > 0 && !a.hasIncomeTransaction).length,
-    updated: editable.filter((a) => a.incomeEntered > 0 && a.hasIncomeTransaction).length,
-    removed: editable.filter((a) => a.incomeEntered <= 0 && a.hasIncomeTransaction).length,
+    created: editable.filter((a) => beyondLedger(a) && !a.hasIncomeTransaction).length,
+    updated: editable.filter((a) => beyondLedger(a) && a.hasIncomeTransaction).length,
+    removed: editable.filter((a) => !beyondLedger(a) && a.hasIncomeTransaction).length,
+    adopted: editable.reduce((sum, a) => sum + a.ledgerDeposits.length, 0),
   };
   const budgetCount = plan.essentialCategories.length + plan.flexibleCategories.length;
   const allocatedCategoryCount = [...plan.essentialCategories, ...flexibleCategories].filter(
@@ -321,8 +325,14 @@ export function PaydayCheckinDialog({
   }
 
   // Step 2 holds until every one-off part is between 0 and its income - the
-  // same rule the confirm's schema applies (oneOffIncomeIssue).
-  const incomeValid = plan.accounts.every((a) => oneOffIncomeIssue(a.incomeEntered, a.oneOffIncome) === null);
+  // same rule the confirm's schema applies (oneOffIncomeIssue) - and no income
+  // is below the deposits the ledger already holds for it, which confirm
+  // refuses (ledgerDepositsIssue).
+  const incomeValid = plan.accounts.every(
+    (a) =>
+      oneOffIncomeIssue(a.incomeEntered, a.oneOffIncome) === null &&
+      (a.readOnly || ledgerDepositsIssue(a.incomeEntered, a.ledgerDepositsTotal) === null),
+  );
   const canConfirm =
     incomeValid &&
     (!needsDeficitAck || acknowledgedDeficit) &&
@@ -358,6 +368,7 @@ export function PaydayCheckinDialog({
     includedCarryover: plan.includedCarryover,
     acknowledgedDeficit,
     acknowledgedZeroBuffer,
+    checkinVersion: plan.checkinVersion,
   });
 
   return (
@@ -455,6 +466,7 @@ export function PaydayCheckinDialog({
                 availableCarryover={plan.availableCarryover}
                 carryoverBasis={plan.carryoverBasis}
                 carryoverProvisional={plan.carryoverProvisional}
+                carryoverAdjustment={plan.carryoverAdjustment}
                 includedCarryover={plan.includedCarryover}
                 room={room}
                 totalIncome={totalIncome}

@@ -25,8 +25,8 @@ export function StepConfirm({
   formError,
   t,
 }: {
-  /** What confirming does to the paycheck rows: new ones, ones this check-in recorded before updated, or removed at 0. */
-  incomeChanges: { created: number; updated: number; removed: number };
+  /** What confirming does to the paycheck rows: new ones, ones this check-in recorded before updated, or removed at 0, and the deposits already in the ledger it adopts as they are. */
+  incomeChanges: { created: number; updated: number; removed: number; adopted: number };
   totalIncome: number;
   /** Available less the flexible rows: not written as a budget, carried to the next period. */
   unallocated: number;

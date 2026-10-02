@@ -19,11 +19,12 @@ import {
 import { useLocale } from "@/components/shell/locale-provider";
 import { Switch } from "@/components/ui/switch";
 import { formatMoney } from "@/lib/currency";
-import { formatDayMonth } from "@/lib/date-format";
+import { formatDayMonth, formatPeriodLong } from "@/lib/date-format";
 import { round2 } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type { Dictionary } from "@/lib/i18n";
 import type { FlexibleRoom } from "@/lib/flexible-room";
+import type { CarryoverAdjustment } from "@/lib/data/flexible-room";
 import type {
   AccountBufferBreakdown,
   CoverShortfallSuggestion,
@@ -254,6 +255,7 @@ export function StepCommitments({
   availableCarryover,
   carryoverBasis,
   carryoverProvisional,
+  carryoverAdjustment,
   includedCarryover,
   room,
   totalIncome,
@@ -292,6 +294,8 @@ export function StepCommitments({
   carryoverBasis: CarryoverBasis;
   /** The period the carryover comes from is still running: the amount is shown as provisional and not counted. */
   carryoverProvisional: boolean;
+  /** The confirmed carryover moved after it settled (R8): said once, under the summary's carryover line. */
+  carryoverAdjustment: CarryoverAdjustment | null;
   includedCarryover: number;
   /** K4 over the plan being drafted: the summary's carryover line, the provisional amount and the cushion come from it. */
   room: FlexibleRoom;
@@ -706,6 +710,14 @@ export function StepCommitments({
           {room.provisionalCarryover > 0 ? (
             <p className="text-xs text-muted-foreground">
               {t.summaryCarryoverProvisional(formatMoney(room.provisionalCarryover, displayCurrency))}
+            </p>
+          ) : null}
+          {carryoverAdjustment && Math.abs(includedCarryover - carryoverAdjustment.current) < 0.005 ? (
+            <p className="text-xs text-muted-foreground">
+              {t.carryoverAdjusted(
+                formatMoney(carryoverAdjustment.by, displayCurrency, { signDisplay: "always" }),
+                formatPeriodLong(carryoverAdjustment.from, locale),
+              )}
             </p>
           ) : null}
           <div className="flex justify-between text-muted-foreground">

@@ -703,6 +703,10 @@ export const paydayConfirmSchema = z.object({
   includedCarryover: signedPlanAmount,
   acknowledgedDeficit: z.boolean(),
   acknowledgedZeroBuffer: z.boolean(),
+  // The confirmed check-in the wizard was opened on (PaydayCheckinDraft
+  // .checkinVersion), null for a fresh one: confirm refuses when the stored
+  // check-in is another. The wizard always sends it; absent skips the check.
+  checkinVersion: z.string().max(40).nullable().optional(),
 });
 
 const INSTALLMENT_COUNT_MESSAGE = `Use between 1 and ${MAX_INSTALLMENTS} installments`;

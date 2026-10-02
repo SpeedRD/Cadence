@@ -21,11 +21,13 @@ import {
   type EarmarkRequest,
 } from "@/lib/earmarks";
 import { round2 } from "@/lib/money";
+import { isAdoptedDeposit } from "@/lib/period-income";
 import { nextPeriod, periodInfo, type PeriodInfo } from "@/lib/period";
 import { wholeAmount } from "@/lib/period-commitments";
 import { prisma } from "@/lib/prisma";
 import { itemIdFromOccurrenceKey } from "@/lib/recurring-settlement";
 
+import { loadAdoptedWindows } from "@/lib/data/period-income";
 import { loadCommitments } from "@/lib/data/period-commitments";
 
 import type { AppContext } from "@/lib/data/context";
@@ -84,9 +86,19 @@ export interface EarmarkDeposit {
   type: string;
   source: string;
   transferDirection: string | null;
+  /**
+   * The deposit's date and income flags as saved: a deposit a confirmed
+   * check-in adopted as pay (isAdoptedDeposit) cannot be earmarked. Absent
+   * skips that check.
+   */
+  date?: Date;
+  isOneOffIncome?: boolean;
+  reimbursesTransactionId?: string | null;
 }
 
-export type EarmarkCheck = { ok: true; options: EarmarkOption[] } | { ok: false; issue: EarmarkIssue | "not_depositable" };
+export type EarmarkCheck =
+  | { ok: true; options: EarmarkOption[] }
+  | { ok: false; issue: EarmarkIssue | "not_depositable" | "adopted_paycheck" };
 
 /**
  * Whether `requests` can be written for `deposit` (earmarkIssue over the
@@ -100,6 +112,25 @@ export async function checkEarmarks(
 ): Promise<EarmarkCheck> {
   if (requests.length === 0) return { ok: true, options: [] };
   if (!canBeEarmarked(deposit)) return { ok: false, issue: "not_depositable" };
+  // Part of a confirmed check-in's paycheck: already the plan's income, so
+  // setting it aside for a payment would count the money twice - the rule a
+  // check-in's own paycheck row is under (canBeEarmarked).
+  if (
+    deposit.date &&
+    isAdoptedDeposit(
+      {
+        accountId: deposit.accountId,
+        date: deposit.date,
+        type: deposit.type,
+        source: deposit.source,
+        isOneOffIncome: deposit.isOneOffIncome ?? false,
+        reimbursesTransactionId: deposit.reimbursesTransactionId ?? null,
+      },
+      await loadAdoptedWindows(),
+    )
+  ) {
+    return { ok: false, issue: "adopted_paycheck" };
+  }
   const options = (await listEarmarkOptions(context)).filter(
     (option) => option.accountId === deposit.accountId,
   );

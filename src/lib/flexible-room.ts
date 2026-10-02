@@ -134,19 +134,23 @@ export function unallocatedRoom(room: Pick<FlexibleRoom, "essential" | "availabl
 }
 
 /**
- * What a period leaves the next one as carryover (decision 2): its budget
- * and the money its plan left in no budget, less its budget spending (K6),
- * never below 0. So an unallocated amount reaches the next period once, and
- * a budget raised later on the Budgets page moves money from the unallocated
- * part to the budgeted part without counting it twice. A period with neither
- * a budget nor a confirmed plan has nothing to measure against.
+ * What a period leaves the next one as carryover (decision 2). With a
+ * confirmed plan, the plan's room - its essential budgets and what it left
+ * flexible categories, budgeted or not - less its budget spending (K6),
+ * never below 0: an unallocated amount reaches the next period once, and a
+ * budget raised later on the Budgets page only moves money between the
+ * budgeted and unallocated parts. A budget set above the plan is not money
+ * the period had (R7), so it adds nothing. essential + available does not
+ * move with the essential budgets either, since available is what the plan
+ * left after them. Without a confirmed plan, the period's budget less its
+ * spending; with neither, there is nothing to measure against.
  */
 export function leftoverFrom(
   period: { periodBudget: number; hasBudget: boolean; spent: number },
   room: Pick<FlexibleRoom, "essential" | "available"> | null,
 ): { amount: number; basis: "prior_period_budget" | "no_prior_budget" } {
   if (!period.hasBudget && !room) return { amount: 0, basis: "no_prior_budget" };
-  const planned = room ? Math.max(period.periodBudget, round2(room.essential + room.available)) : period.periodBudget;
+  const planned = room ? round2(room.essential + room.available) : period.periodBudget;
   return { amount: Math.max(0, round2(planned - period.spent)), basis: "prior_period_budget" };
 }
 
@@ -161,6 +165,41 @@ export const PROVISIONAL_CARRYOVER_BASIS = "provisional";
  */
 export function carryoverIsProvisional(previousEnd: Date, today: Date): boolean {
   return previousEnd.getTime() >= today.getTime();
+}
+
+/**
+ * The CARRYOVER allocation basis of a carryover that moved after it settled
+ * (R8): rows dated in the period it comes from, arriving later, changed what
+ * that period leaves. Its recommendedAmount keeps the amount it settled at
+ * (or was confirmed at, when it was never provisional), its plannedAmount
+ * and the check-in's includedCarryover follow the period's leftover.
+ */
+export const ADJUSTED_CARRYOVER_BASIS = "adjusted";
+
+/**
+ * Whether a settled carryover is still kept in step with what the period it
+ * comes from leaves, on `today`: from the day after that period ends (before
+ * then it is provisional) through the last day of the period that took it.
+ * Once that period is over too, the carryover stays as it last stood.
+ */
+export function carryoverReconciles(previousEnd: Date, periodEnd: Date, today: Date): boolean {
+  return today.getTime() > previousEnd.getTime() && today.getTime() <= periodEnd.getTime();
+}
+
+/**
+ * How much a carryover moved since it settled, from its CARRYOVER
+ * allocation: null unless it was adjusted (ADJUSTED_CARRYOVER_BASIS) and now
+ * stands at another amount. Amounts in the allocation's currency.
+ */
+export function carryoverAdjustmentOf(row: {
+  basis: string | null;
+  recommendedAmount: number;
+  plannedAmount: number;
+}): { settled: number; current: number; by: number } | null {
+  if (row.basis !== ADJUSTED_CARRYOVER_BASIS) return null;
+  const by = round2(row.plannedAmount - row.recommendedAmount);
+  if (Math.abs(by) < 0.005) return null;
+  return { settled: row.recommendedAmount, current: row.plannedAmount, by };
 }
 
 /**

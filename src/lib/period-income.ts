@@ -12,9 +12,13 @@
  * money (fundingWindow, from the day the pay landed). A check-in's paycheck
  * counts in the period its check-in planned, whatever day it was entered: its
  * snapshot stands for it, and its PAYDAY_CHECKIN row is never counted a
- * second time. A paycheck brought in by CSV or typed by hand is put to the
- * user when it may be a check-in's paycheck already recorded
- * (planPostedDuplicates), so one paycheck is one row.
+ * second time. Deposits the ledger already held for the period when the
+ * check-in was confirmed are adopted, not recorded again: they count as the
+ * rows they are, and the snapshot only for the part of the paycheck beyond
+ * them (IncomeSnapshot.adoptedIncome). A paycheck brought in by CSV or typed
+ * by hand after the check-in is put to the user when it may be a check-in's
+ * paycheck already recorded (planPostedDuplicates), so one paycheck is one
+ * row.
  * Income the user marked as one-off and a deposit paying back a shared
  * expense are not pay for a period: they count by the day they arrived.
  *
@@ -62,6 +66,12 @@ export interface IncomeSnapshot {
   incomeEntered: number;
   /** The part of it the user said is one-off; null (a snapshot from before the field) reads as 0. */
   oneOffIncome: number | null;
+  /**
+   * The part of it deposits already in the ledger held when it was confirmed
+   * (PaydayAccountSnapshot.adoptedIncome): those rows count themselves, in the
+   * same period. Null or absent (a snapshot from before the field) reads as 0.
+   */
+  adoptedIncome?: number | null;
   currency: string;
 }
 
@@ -96,10 +106,60 @@ export function rowIncome(row: IncomeRow, basis: IncomeBasis): number {
   return Math.max(0, row.amount - Math.max(0, row.earmarked ?? 0));
 }
 
-/** What a check-in paycheck adds on `basis`, in the snapshot's currency. */
+/**
+ * What a check-in paycheck adds on `basis`, in the snapshot's currency: the
+ * part of it the check-in recorded itself, beyond the deposits it adopted
+ * (those count as rows). As an estimate its one-off part is left out too; a
+ * one-off part larger than that own part comes out of the adopted deposits,
+ * which count in the same period, so the figure can go below 0 by as much as
+ * they hold - never more.
+ */
 export function snapshotIncome(snapshot: IncomeSnapshot, basis: IncomeBasis): number {
-  if (basis === "fact") return snapshot.incomeEntered;
-  return Math.max(0, snapshot.incomeEntered - (snapshot.oneOffIncome ?? 0));
+  const adopted = Math.max(0, snapshot.adoptedIncome ?? 0);
+  const own = snapshot.incomeEntered - adopted;
+  if (basis === "fact") return own;
+  return Math.max(-adopted, own - (snapshot.oneOffIncome ?? 0));
+}
+
+/**
+ * A confirmed check-in's adoption on one account: the income window of the
+ * period it planned, on an account whose snapshot adopted deposits the
+ * ledger already held (PaydayAccountSnapshot.adoptedIncome > 0).
+ */
+export interface AdoptedWindow {
+  accountId: string;
+  from: Date;
+  /** Exclusive. */
+  until: Date;
+}
+
+/**
+ * Whether a deposit is one a confirmed check-in adopted as pay: an ordinary
+ * INCOME row - not a check-in's own paycheck row, not one-off income, not a
+ * payback of a shared expense, the rows Step 2 lists - dated in an adoption
+ * window on its account. Like a check-in's own paycheck, it is the plan's
+ * income, so it cannot also be earmarked for a recurring payment
+ * (src/lib/earmarks.ts) - that would count the money twice.
+ */
+export function isAdoptedDeposit(
+  row: { accountId: string; date: Date; type: string; source: string; isOneOffIncome: boolean; reimbursesTransactionId: string | null },
+  windows: readonly AdoptedWindow[],
+): boolean {
+  if (row.type !== "INCOME" || row.source === "PAYDAY_CHECKIN" || row.isOneOffIncome) return false;
+  if (reimbursedExpenseIdFromTransaction(row) !== null) return false;
+  const day = row.date.getTime();
+  return windows.some((window) => window.accountId === row.accountId && day >= window.from.getTime() && day < window.until.getTime());
+}
+
+/**
+ * Why `income` is not acceptable for an account whose deposits in the
+ * period's income window already hold `inLedger`, or null when it is: the
+ * check-in adopts those deposits, so the paycheck cannot be less than they
+ * hold (the difference above them is recorded as the check-in's own row).
+ * Cents are forgiven, as the amounts are typed.
+ */
+export function ledgerDepositsIssue(income: number, inLedger: number): "below_ledger" | null {
+  return income + 0.005 < inLedger ? "below_ledger" : null;
 }
 
 /**

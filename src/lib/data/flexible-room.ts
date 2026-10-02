@@ -28,13 +28,25 @@
  * none of it; the first read of the check-in's room once that period has
  * ended settles it: the period's final leftover (periodLeftover) is written
  * to includedCarryover and to the allocation, in one guarded update, so it
- * happens once. From then on it is an ordinary stored carryover.
+ * happens once. From then on it is a stored carryover, kept in step with
+ * that period while the check-in's own period is current (R8): rows dated in
+ * the period it comes from can arrive after it settled - a statement
+ * imported after month end - and the first read that finds its leftover
+ * changed writes the new amount to includedCarryover and the allocation
+ * (basis ADJUSTED_CARRYOVER_BASIS, recommendedAmount kept as the amount it
+ * settled at), guarded on the amount it read, so each change is written
+ * once. A carryover included after that period had already ended is
+ * reconciled the same way. Once the check-in's own period ends it stays as
+ * it last stood.
  */
 import { roomFromProjection } from "@/lib/afford";
 import { convert } from "@/lib/currency";
 import { periodBudgetFrom } from "@/lib/budget-spending";
 import {
+  ADJUSTED_CARRYOVER_BASIS,
+  carryoverAdjustmentOf,
   carryoverIsProvisional,
+  carryoverReconciles,
   cushionFrom,
   flexibleRoomFrom,
   leftoverFrom,
@@ -80,6 +92,21 @@ export interface ConfirmedRoom extends FlexibleRoom {
   unallocated: number;
   /** The last day of the period a provisional carryover comes from; null when none is provisional. */
   carryoverSettlesAfter: Date | null;
+  /**
+   * The carryover moved after it settled, because what the period before
+   * leaves changed (R8): the amount it settled at and the one it stands at
+   * now, display currency. Null when it never moved.
+   */
+  carryoverAdjustment: CarryoverAdjustment | null;
+}
+
+/** A settled carryover that has since moved (carryoverAdjustmentOf), in the display currency, with the period it comes from. */
+export interface CarryoverAdjustment {
+  settled: number;
+  current: number;
+  by: number;
+  /** The period the carryover comes from: the one whose later rows moved it. */
+  from: PeriodInfo;
 }
 
 type RoomContext = Pick<AppContext, "displayCurrency" | "rates" | "today">;
@@ -105,7 +132,7 @@ async function readCheckins(periods: readonly PeriodInfo[]) {
       snapshots: { select: { accountId: true, currency: true, incomeEntered: true, reportedBalance: true } },
       allocations: {
         where: { type: { in: ["GOAL", "BUFFER", "ESSENTIAL_CATEGORY", "FLEXIBLE_CATEGORY", "CARRYOVER"] } },
-        select: { id: true, type: true, goalId: true, categoryId: true, accountId: true, plannedAmount: true, currency: true, basis: true },
+        select: { id: true, type: true, goalId: true, categoryId: true, accountId: true, plannedAmount: true, recommendedAmount: true, currency: true, basis: true },
       },
     },
   });
@@ -118,9 +145,47 @@ function provisionalRow(checkin: CheckinRow) {
 }
 
 /**
- * What `period` leaves the next one as carryover (leftoverFrom): its budget
- * and its plan's unallocated money, less its budget spending (K6). What a
- * check-in for the next period offers, and what settles a provisional one.
+ * The check-in's settled CARRYOVER row while it is still kept in step with
+ * the period it comes from (carryoverReconciles): one the user included, or
+ * one already adjusted (it may have gone to 0). Null otherwise.
+ */
+function reconcilingRow(checkin: CheckinRow, today: Date) {
+  const row = checkin.allocations.find((allocation) => allocation.type === "CARRYOVER") ?? null;
+  if (!row || row.basis === PROVISIONAL_CARRYOVER_BASIS) return null;
+  if (!(num(row.plannedAmount) > 0 || row.basis === ADJUSTED_CARRYOVER_BASIS)) return null;
+  return carryoverReconciles(periodInfo(previousPeriod(checkin)).end, periodInfo(checkin).end, today) ? row : null;
+}
+
+/**
+ * How far the carryover of the check-in for `period` moved since it settled
+ * (carryoverAdjustmentOf over its CARRYOVER allocation), in the display
+ * currency; null when it has not. What the confirmed card and the wizard's
+ * Step 3 say beside the carryover.
+ */
+export function carryoverAdjustmentFor(
+  row: { basis: string | null; recommendedAmount: unknown; plannedAmount: unknown; currency: string } | null | undefined,
+  period: PeriodRef,
+  context: Pick<AppContext, "displayCurrency" | "rates">,
+): CarryoverAdjustment | null {
+  const moved = row
+    ? carryoverAdjustmentOf({
+        basis: row.basis,
+        recommendedAmount: num(row.recommendedAmount as never),
+        plannedAmount: num(row.plannedAmount as never),
+      })
+    : null;
+  if (!row || !moved) return null;
+  const toDisplay = (amount: number) => round2(convert(amount, row.currency, context.displayCurrency, context.rates));
+  const settled = toDisplay(moved.settled);
+  const current = toDisplay(moved.current);
+  return { settled, current, by: round2(current - settled), from: periodInfo(previousPeriod(period)) };
+}
+
+/**
+ * What `period` leaves the next one as carryover (leftoverFrom): its plan's
+ * room - its budget, when it has no confirmed plan - less its budget spending
+ * (K6). What a check-in for the next period offers, what settles a
+ * provisional one and what keeps a settled one reconciled.
  */
 export async function periodLeftover(
   period: PeriodRef,
@@ -170,6 +235,61 @@ async function settleCarryover(checkin: CheckinRow, context: RoomContext, depth:
 }
 
 /**
+ * Keeps one check-in's settled carryover in step with what the period before
+ * it leaves (R8): when that leftover moved, writes it, guarded on the amount
+ * read, so two readers at once write each change once.
+ */
+async function reconcileCarryover(checkin: CheckinRow, context: RoomContext, depth: number): Promise<void> {
+  const row = reconcilingRow(checkin, context.today);
+  if (!row) return;
+  const live = await periodLeftover(previousPeriod(checkin), context, depth + 1);
+  const amount = round2(convert(live.amount, context.displayCurrency, row.currency, context.rates));
+  if (Math.abs(amount - num(row.plannedAmount)) < 0.005) return;
+  await prisma.$transaction(async (tx) => {
+    const moved = await tx.paydayPlanAllocation.updateMany({
+      where: { id: row.id, basis: row.basis, plannedAmount: row.plannedAmount },
+      data: { basis: ADJUSTED_CARRYOVER_BASIS, plannedAmount: amount },
+    });
+    if (moved.count === 1) {
+      await tx.paydayCheckin.update({
+        where: { id: checkin.id },
+        data: { includedCarryover: round2(convert(amount, row.currency, checkin.currency, context.rates)) },
+      });
+    }
+  });
+}
+
+/**
+ * Brings the carryovers of the check-ins of `periods` up to date before they
+ * are read: settles a provisional one whose period has ended, and keeps a
+ * settled one in step while it is reconciled. Returns the check-ins, read
+ * again when anything may have been written.
+ */
+async function settledCheckins(infos: readonly PeriodInfo[], context: RoomContext, depth: number): Promise<CheckinRow[]> {
+  const checkins = await readCheckins(infos);
+  if (checkins.length === 0 || depth >= MAX_SETTLE_DEPTH) return checkins;
+  const endedProvisional = checkins.filter(
+    (checkin) =>
+      provisionalRow(checkin) !== null &&
+      !carryoverIsProvisional(periodInfo(previousPeriod(checkin)).end, context.today),
+  );
+  const reconciling = checkins.filter((checkin) => reconcilingRow(checkin, context.today) !== null);
+  if (endedProvisional.length === 0 && reconciling.length === 0) return checkins;
+  for (const checkin of endedProvisional) await settleCarryover(checkin, context, depth);
+  for (const checkin of reconciling) await reconcileCarryover(checkin, context, depth);
+  return readCheckins(infos);
+}
+
+/**
+ * settledCheckins for the check-ins of `periods`, for a reader that reads
+ * the check-in rows itself (the wizard's draft): its carryover is then the
+ * one the confirmed card shows.
+ */
+export async function settleCarryovers(periods: readonly PeriodRef[], context: RoomContext): Promise<void> {
+  if (periods.length > 0) await settledCheckins(periods.map(periodInfo), context, 0);
+}
+
+/**
  * K4 ("confirmed") for every period in `periods` that has a confirmed
  * check-in, keyed by period key; a period without one is absent.
  * `commitments` is loadCommitments() over the periods when the caller has
@@ -185,17 +305,8 @@ export async function loadConfirmedRooms(
   if (infos.length === 0) return result;
   const depth = options.depth ?? 0;
 
-  let checkins = await readCheckins(infos);
+  const checkins = await settledCheckins(infos, context, depth);
   if (checkins.length === 0) return result;
-  const endedProvisional = checkins.filter(
-    (checkin) =>
-      provisionalRow(checkin) !== null &&
-      !carryoverIsProvisional(periodInfo(previousPeriod(checkin)).end, context.today),
-  );
-  if (endedProvisional.length > 0 && depth < MAX_SETTLE_DEPTH) {
-    for (const checkin of endedProvisional) await settleCarryover(checkin, context, depth);
-    checkins = await readCheckins(infos);
-  }
 
   const confirmed = infos.filter((info) => checkins.some((checkin) => periodInfo(checkin).key === info.key));
   const [budgets, commitments] = await Promise.all([
@@ -296,6 +407,11 @@ export async function loadConfirmedRooms(
       flexibleBudgeted: categoryTotal("FLEXIBLE_CATEGORY"),
       unallocated: unallocatedRoom(room, budget.periodBudget),
       carryoverSettlesAfter: provisional ? previous.end : null,
+      carryoverAdjustment: carryoverAdjustmentFor(
+        checkin.allocations.find((allocation) => allocation.type === "CARRYOVER"),
+        checkin,
+        context,
+      ),
     });
   }
   return result;

@@ -12,6 +12,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { listEarmarkOptions } from "@/lib/data/earmark-targets";
+import { loadAdoptedWindows } from "@/lib/data/period-income";
 import { loadDepositEarmarks } from "@/lib/data/earmarks";
 import { getDictionary } from "@/lib/i18n";
 import {
@@ -77,8 +78,9 @@ export default async function TransactionsPage({
   // What a new deposit can be linked to, plus whatever this page's deposits
   // already point at, so editing one of them keeps its link on offer.
   // And the upcoming payments a deposit can be set aside for, with what this
-  // page's deposits are already set aside for.
-  const [openSharedExpenses, earmarkOptions, depositEarmarks] = await Promise.all([
+  // page's deposits are already set aside for, and where a confirmed check-in
+  // adopted deposits as pay (those are not offered).
+  const [openSharedExpenses, earmarkOptions, depositEarmarks, adoptedWindows] = await Promise.all([
     listOpenSharedExpenses(
       context,
       result.rows
@@ -87,6 +89,7 @@ export default async function TransactionsPage({
     ),
     listEarmarkOptions(context),
     loadDepositEarmarks(result.rows.map((row) => row.id)),
+    loadAdoptedWindows(),
   ]);
 
   const buildPageHref = (page: number) => {
@@ -139,6 +142,7 @@ export default async function TransactionsPage({
                 categories={categories}
                 openSharedExpenses={openSharedExpenses}
                 earmarkOptions={earmarkOptions}
+                adoptedWindows={adoptedWindows}
                 values={{ date: today, currency: context.displayCurrency }}
                 rates={context.rates.rates}
                 locale={context.language}
@@ -159,6 +163,7 @@ export default async function TransactionsPage({
               categories={categories}
               openSharedExpenses={openSharedExpenses}
               earmarkOptions={earmarkOptions}
+              adoptedWindows={adoptedWindows}
               values={{ date: today, currency: context.displayCurrency }}
               rates={context.rates.rates}
               locale={context.language}
@@ -227,6 +232,7 @@ export default async function TransactionsPage({
               categories={categories}
               openSharedExpenses={openSharedExpenses}
               earmarkOptions={earmarkOptions}
+              adoptedWindows={adoptedWindows}
               depositEarmarks={Object.fromEntries(depositEarmarks)}
               displayCurrency={context.displayCurrency}
               rates={context.rates.rates}

@@ -43,6 +43,7 @@ import { cn } from "@/lib/utils";
 import type { DepositEarmark } from "@/lib/data/earmarks";
 import type { OpenSharedExpense, TransactionRow } from "@/lib/data/transactions";
 import type { EarmarkOption } from "@/lib/earmarks";
+import type { AdoptedWindow } from "@/lib/period-income";
 
 /** The sign and tone every amount on this page is shown with. */
 function amountStyle(row: TransactionRow) {
@@ -420,6 +421,7 @@ export function TransactionTable({
   categories,
   openSharedExpenses,
   earmarkOptions,
+  adoptedWindows = [],
   depositEarmarks,
   displayCurrency,
   rates,
@@ -432,6 +434,8 @@ export function TransactionTable({
   openSharedExpenses: OpenSharedExpense[];
   /** For the edit dialog's "This money is for an upcoming payment" - see TransactionDialog. */
   earmarkOptions: EarmarkOption[];
+  /** Where a confirmed check-in adopted deposits as pay (loadAdoptedWindows) - passed to the edit dialog. */
+  adoptedWindows?: AdoptedWindow[];
   /** What each deposit on the page is set aside for, by transaction id. */
   depositEarmarks: Record<string, DepositEarmark[]>;
   displayCurrency: string;
@@ -584,6 +588,7 @@ export function TransactionTable({
           categories={categories}
           openSharedExpenses={openSharedExpenses}
           earmarkOptions={earmarkOptions}
+          adoptedWindows={adoptedWindows}
           locale={locale}
           open
           onOpenChange={(next) => !next && setEditing(null)}

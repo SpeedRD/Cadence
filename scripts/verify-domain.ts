@@ -2430,6 +2430,17 @@ async function main() {
     bufferFloorCurrency: paydaySettings.bufferFloorCurrency,
   };
 
+  // The first section's Verify Checking holds a 100 USD deposit on Aug 18,
+  // inside Aug 16-31's income window. A check-in now adopts the deposits the
+  // ledger holds for its period and refuses less (R1), so this section, whose
+  // plans pay only its own accounts, would have to record that 100 too. It is
+  // held out of the section as one-off income (not pay, so not adopted) and
+  // put back at the section's cleanup.
+  const incidentalDeposit = await prisma.transaction.findFirstOrThrow({
+    where: { account: { name: "Verify Checking" }, type: "INCOME", date: civilDate(2026, 8, 18) },
+  });
+  await prisma.transaction.update({ where: { id: incidentalDeposit.id }, data: { isOneOffIncome: true } });
+
   const paydayChecking = await prisma.account.create({
     data: { name: "Verify Payday Checking", currency: "USD", type: "CHECKING" },
   });
@@ -3588,6 +3599,7 @@ async function main() {
   await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Payday" } } });
   await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Payday" } } });
   await prisma.category.update({ where: { id: billsCategory.id }, data: { isEssentialFixed: false } });
+  await prisma.transaction.update({ where: { id: incidentalDeposit.id }, data: { isOneOffIncome: false } });
   console.log("  ok   payday fixtures removed");
 
   console.log("\n-- Gmail OAuth redirect URI --");
@@ -12618,24 +12630,41 @@ async function main() {
       }
 
       console.log("-- a salary landing three days before the modelled payday, and the contribution made from it --");
-      {
+      for (const history of [false, true]) {
         const main = await wAccount("Main");
+        // R4: a deposit is pay - it opens the goal money - only when it is at
+        // least half the account's most recent confirmed paycheck.
+        if (history) await wCheckin(wRef(2026, 8, "B"), civilDate(2026, 8, 14), { accountId: main.id, amount: 45000 });
         await prisma.transaction.create({ data: { date: civilDate(2026, 8, 28), amount: 45000, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window PAYROLL", source: "CSV" } });
         const fund = await wGoal("Fund", 60000, civilDate(2027, 6, 30), [[3000, civilDate(2026, 8, 28)]]);
         const sep2 = wContext(civilDate(2026, 9, 2));
         const salary = (await wIncome([wRef(2026, 9, "A"), wRef(2026, 8, "B")], "fact", sep2));
         const plan = (await wGoals(sep2)).find((goal) => goal.id === fund.id) as { plan?: { period?: { key: string }; contributed?: number } } | undefined;
-        eq(
-          "window: salary and contribution on Fri Aug 28 (Mon Aug 31 is the modelled payday) both belong to Sep 1-15: its income 45,000, its contributed 3,000 (contributed was 0, filed in Aug 16-31)",
-          `${salary.get("2026-09-A")?.byAccount.get(main.id) ?? 0}:${plan?.plan?.period?.key}:${plan?.plan?.contributed}`,
-          "45000:2026-09-A:3000",
-        );
+        if (history) {
+          eq(
+            "window: salary and contribution on Fri Aug 28 (Mon Aug 31 is the modelled payday), the account's last confirmed paycheck 45,000, both belong to Sep 1-15: its income 45,000, its contributed 3,000 (contributed was 0, filed in Aug 16-31)",
+            `${salary.get("2026-09-A")?.byAccount.get(main.id) ?? 0}:${plan?.plan?.period?.key}:${plan?.plan?.contributed}`,
+            "45000:2026-09-A:3000",
+          );
+        } else {
+          // Flipped deliberately with R4 (was 45000:2026-09-A:3000): with no
+          // confirmed paycheck to measure it against, no deposit opens the
+          // window early, so the goal money opens on the Aug 31 payday and the
+          // 3,000 moved on Aug 28 is Aug 16-31's. Income attribution is not
+          // affected.
+          eq(
+            "window: salary and contribution on Fri Aug 28 with no confirmed paycheck on record: the income is Sep 1-15's (45,000), the goal money opens on the Mon Aug 31 payday, so Sep 1-15 contributed 0 (R4; was 3,000)",
+            `${salary.get("2026-09-A")?.byAccount.get(main.id) ?? 0}:${plan?.plan?.period?.key}:${plan?.plan?.contributed}`,
+            "45000:2026-09-A:0",
+          );
+        }
         await wWipe();
       }
 
       console.log("-- goal money on Oct 12: before Oct 16-31's pay lands, and the day it lands --");
-      {
+      for (const history of [false, true]) {
         const main = await wAccount("Main");
+        if (history) await wCheckin(wRef(2026, 10, "A"), civilDate(2026, 9, 30), { accountId: main.id, amount: 45000 });
         type Planned = { plan?: { period?: { key: string }; contributed?: number } } | undefined;
         const fund = await wGoal("Oct fund", 30000, civilDate(2026, 12, 31), [[2000, civilDate(2026, 10, 12)]]);
         const planOn = async (today: Date) => ((await wGoals(wContext(today))).find((goal) => goal.id === fund.id) as Planned)?.plan;
@@ -12649,11 +12678,22 @@ async function main() {
         const income = await wIncome([wRef(2026, 10, "A"), wRef(2026, 10, "B")], "fact", wContext(civilDate(2026, 10, 16)));
         const afterSalaryOct12 = await planOn(civilDate(2026, 10, 12));
         const oct16 = await planOn(civilDate(2026, 10, 16));
-        eq(
-          "window: with the salary deposited Oct 12 and the contribution the same day, both count for Oct 16-31: its income 45,000, its contributed 2,000, and Oct 1-15 contributed 0",
-          `${income.get("2026-10-B")?.byAccount.get(main.id) ?? 0}:${oct16?.period?.key}:${oct16?.contributed}:${afterSalaryOct12?.period?.key}:${afterSalaryOct12?.contributed}`,
-          "45000:2026-10-B:2000:2026-10-A:0",
-        );
+        if (history) {
+          eq(
+            "window: with the salary deposited Oct 12 (the account's last confirmed paycheck 45,000) and the contribution the same day, both count for Oct 16-31: its income 45,000, its contributed 2,000, and Oct 1-15 contributed 0",
+            `${income.get("2026-10-B")?.byAccount.get(main.id) ?? 0}:${oct16?.period?.key}:${oct16?.contributed}:${afterSalaryOct12?.period?.key}:${afterSalaryOct12?.contributed}`,
+            "45000:2026-10-B:2000:2026-10-A:0",
+          );
+        } else {
+          // Flipped deliberately with R4 (was 45000:2026-10-B:2000:2026-10-A:0):
+          // with no confirmed paycheck on record the Oct 12 deposit does not
+          // open Oct 16-31's goal money early; it opens on the Oct 15 payday.
+          eq(
+            "window: the salary deposited Oct 12 with no confirmed paycheck on record counts for Oct 16-31 (45,000), but the 2,000 moved that day stays Oct 1-15's: the goal money opens on the Oct 15 payday (R4; was Oct 16-31's)",
+            `${income.get("2026-10-B")?.byAccount.get(main.id) ?? 0}:${oct16?.period?.key}:${oct16?.contributed}:${afterSalaryOct12?.period?.key}:${afterSalaryOct12?.contributed}`,
+            "45000:2026-10-B:0:2026-10-A:2000",
+          );
+        }
         await wWipe();
       }
 
@@ -12676,20 +12716,38 @@ async function main() {
       }
 
       console.log("-- the user's goal: Pay back money, 29,000 due Sun Nov 15 2026 --");
-      for (const [label, movedOn] of [["moved on the Sep 30 payday", civilDate(2026, 9, 30)], ["moved Mon Sep 28, the day a salary landed before the payday", civilDate(2026, 9, 28)]] as const) {
+      for (const [label, movedOn, refund] of [
+        ["moved on the Sep 30 payday", civilDate(2026, 9, 30), false],
+        ["moved Mon Sep 28, the day a salary landed before the payday", civilDate(2026, 9, 28), false],
+        // R4: beside it, a refund landing that day is not pay - the salary
+        // lands on the payday, so the 5,571.32 moved Sep 28 is September's.
+        ["moved Mon Sep 28, the day a 1,500 refund landed, the salary on the Sep 30 payday", civilDate(2026, 9, 28), true],
+      ] as const) {
         const main = await wAccount("Goal account");
+        // The account's paycheck on record: Sep 16-30's check-in, 45,000. A
+        // deposit is pay - it opens the goal money - only at half of it (R4).
+        await wCheckin(wRef(2026, 9, "B"), civilDate(2026, 9, 15), { accountId: main.id, amount: 45000 });
         // The salary that funds Oct 1-15, recorded (by CSV) the day it landed.
-        await prisma.transaction.create({ data: { date: movedOn, amount: 45000, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window PAYROLL", source: "CSV" } });
+        await prisma.transaction.create({ data: { date: refund ? civilDate(2026, 9, 30) : movedOn, amount: 45000, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window PAYROLL", source: "CSV" } });
+        if (refund) await prisma.transaction.create({ data: { date: movedOn, amount: 1500, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window REFUND", source: "CSV" } });
         const payBack = await wGoal("Pay back money", 29000, civilDate(2026, 11, 15), [[8285.94, civilDate(2026, 9, 15)], [4000.09, civilDate(2026, 9, 15)], [5571.32, movedOn]]);
         await wCheckin(wRef(2026, 10, "A"), civilDate(2026, 9, 30), null, [{ goalId: payBack.id, accountId: main.id, amount: 5571.32 }]);
         const read = async (today: Date) => (await wGoals(wContext(today))).find((goal) => goal.id === payBack.id) as { displayPerPeriod?: number; periodsLeft?: number; plan?: { period?: { key: string }; planned?: number; contributed?: number } } | undefined;
         const sep30 = await read(civilDate(2026, 9, 30));
         const oct15 = await read(civilDate(2026, 10, 15));
-        eq(
-          `window, user's goal (${label}): Oct 1-15 5,571.32 planned and 5,571.32 contributed, pace 4,178.49 over 4; from Oct 15, 3,714.22 over 3`,
-          `${sep30?.plan?.period?.key}:${sep30?.plan?.planned}:${sep30?.plan?.contributed}:${sep30?.displayPerPeriod}:${sep30?.periodsLeft}|${oct15?.displayPerPeriod}:${oct15?.periodsLeft}`,
-          "2026-10-A:5571.32:5571.32:4178.49:4|3714.22:3",
-        );
+        if (refund) {
+          eq(
+            `window, user's goal (${label}): Oct 1-15 5,571.32 planned and 0 contributed, the 5,571.32 counted before its pace (11,142.65 left over 4: 2,785.66); from Oct 15, 3,714.22 over 3 (R4; the refund opened the window: 5,571.32 contributed, 4,178.49)`,
+            `${sep30?.plan?.period?.key}:${sep30?.plan?.planned}:${sep30?.plan?.contributed}:${sep30?.displayPerPeriod}:${sep30?.periodsLeft}|${oct15?.displayPerPeriod}:${oct15?.periodsLeft}`,
+            "2026-10-A:5571.32:0:2785.66:4|3714.22:3",
+          );
+        } else {
+          eq(
+            `window, user's goal (${label}): Oct 1-15 5,571.32 planned and 5,571.32 contributed, pace 4,178.49 over 4; from Oct 15, 3,714.22 over 3`,
+            `${sep30?.plan?.period?.key}:${sep30?.plan?.planned}:${sep30?.plan?.contributed}:${sep30?.displayPerPeriod}:${sep30?.periodsLeft}|${oct15?.displayPerPeriod}:${oct15?.periodsLeft}`,
+            "2026-10-A:5571.32:5571.32:4178.49:4|3714.22:3",
+          );
+        }
         await wWipe();
       }
     } finally {
@@ -15134,6 +15192,467 @@ async function main() {
       await prisma.account.updateMany({ where: { id: { in: archivedForReview } }, data: { status: "ACTIVE" } });
       await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForReview } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForReview } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== adversarial review: pay and check-in (R1 R4 R7 R8 R22), a second tab confirming ==");
+  {
+    // Public APIs only, every new field or argument reached through `?.` or
+    // passed where the tree before ignores it, so this block also runs
+    // against the code before the fixes and fails there on each finding.
+    // The review's numbers: USD 1 = DOP 60 = EUR 0.9, buffer 10% with a 2,000
+    // DOP floor, display DOP. Fixtures `Verify Pay ...` and one category;
+    // every other active item is paused, open goal parked and active account
+    // archived meanwhile, and the Sep 16-30 / Oct 1-15 2026 budgets set
+    // aside, all restored in the finally.
+    const pPayday = await import("../src/lib/data/payday");
+    const pIncome = await import("../src/lib/data/period-income");
+    const pGoals = await import("../src/lib/data/goal-plan");
+    const pRoom = await import("../src/lib/data/flexible-room");
+    const { formatMoney: pMoney } = await import("../src/lib/currency");
+    const { formatPeriodLong: pPeriodLong } = await import("../src/lib/date-format");
+    const { getDictionary: pDictionary } = await import("../src/lib/i18n");
+    const pRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const pContext = (today: Date) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: pRates(),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    });
+    const pDay = (month: number, day: number) => civilDate(2026, month, day);
+    type PRef = { year: number; month: number; period: "A" | "B" };
+    const sepB: PRef = { year: 2026, month: 9, period: "B" };
+    const octA: PRef = { year: 2026, month: 10, period: "A" };
+    const pPeriods = { OR: [sepB, octA].map((ref) => ({ year: ref.year, month: ref.month, period: ref.period })) };
+    const pWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Pay " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { year: 2026, month: { in: [9, 10] } } });
+      await prisma.budget.deleteMany({ where: pPeriods });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Pay " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Pay " } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Pay " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    const pAccount = (name: string, currency = "DOP") => prisma.account.create({ data: { name: `Verify Pay ${name}`, currency, type: "CHECKING" } });
+    const pDeposit = (accountId: string, date: Date, amount: number, note: string, currency = "DOP") =>
+      prisma.transaction.create({ data: { accountId, date, amount, currency, type: "INCOME", source: "CSV", note, externalId: `verify-pay:${note}:${toISODate(date)}` } });
+    type PAccountInput = { accountId: string; incomeEntered: number; reportedBalance?: number; oneOffIncome?: number };
+    const pInput = (ref: PRef, accounts: PAccountInput[], extra: Record<string, unknown> = {}) => ({
+      ...ref,
+      accounts: accounts.map((a) => ({ accountId: a.accountId, reportedBalance: a.reportedBalance ?? 0, incomeEntered: a.incomeEntered, oneOffIncome: a.oneOffIncome ?? 0, incomeNote: null })),
+      goals: [],
+      essentialCategories: [],
+      flexibleCategories: [] as { categoryId: string; plannedAmount: number }[],
+      includedCarryover: 0,
+      acknowledgedDeficit: false,
+      acknowledgedZeroBuffer: false,
+      ...extra,
+    });
+    const pConfirm = async (input: ReturnType<typeof pInput>, today: Date) =>
+      (await pPayday.confirmPaydayCheckin(input as Parameters<typeof pPayday.confirmPaydayCheckin>[0], pContext(today))) as { ok: boolean; reason?: string; acknowledgements?: { available: number } };
+    const pVerdict = (result: { ok: boolean; reason?: string; acknowledgements?: { available: number } }) =>
+      result.ok ? "ok" : `${result.reason}${result.acknowledgements ? ` ${result.acknowledgements.available}` : ""}`;
+    const pIncomeRows = async (accountId: string) =>
+      (await prisma.transaction.findMany({ where: { accountId, type: "INCOME" }, orderBy: [{ date: "asc" }, { createdAt: "asc" }] }))
+        .map((row) => `${toISODate(row.date)} ${num(row.amount)} ${row.source}`)
+        .join(", ");
+    const pIncomeOf = async (ref: PRef, today: Date) => {
+      const key = periodInfo(ref).key;
+      const fact = (await pIncome.loadPeriodIncome([ref], "fact", pContext(today))).get(key)?.total;
+      const estimate = (await pIncome.loadPeriodIncome([ref], "estimate", pContext(today))).get(key)?.total;
+      return `${fact}/${estimate}`;
+    };
+    type PDraftAccount = { accountId: string; incomeEntered: number; ledgerDeposits?: { date: Date; amount: number }[] };
+    type PDraft = { accounts: PDraftAccount[]; includedCarryover: number; checkinVersion?: string | null; carryoverAdjustment?: { by: number } | null };
+    const pDraft = async (ref: PRef, today: Date) => (await pPayday.getPaydayCheckinDraft(pContext(today), ref)) as unknown as PDraft;
+    const pDraftAccount = async (ref: PRef, today: Date, accountId: string) => (await pDraft(ref, today)).accounts.find((a) => a.accountId === accountId);
+    const en = pDictionary("en").payday as unknown as Record<string, unknown>;
+    const es = pDictionary("es").payday as unknown as Record<string, unknown>;
+
+    check("pay review: no check-in for Sep-Oct 2026 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: { year: 2026, month: { in: [9, 10] } } })) === 0);
+    const pausedForPay = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForPay = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const archivedForPay = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    const stashedBudgetsForPay = await prisma.budget.findMany({ where: pPeriods });
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForPay } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForPay } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForPay } }, data: { status: "ARCHIVED" } });
+    await prisma.budget.deleteMany({ where: pPeriods });
+    const pGroceries = await prisma.category.create({ data: { name: "Verify Pay Groceries", kind: "EXPENSE", color: "#888888" } });
+    const pSpend = (accountId: string, date: Date, amount: number, note: string) =>
+      prisma.transaction.create({ data: { accountId, date, amount, currency: "DOP", type: "EXPENSE", source: "CSV", note, categoryId: pGroceries.id, externalId: `verify-pay:${note}:${toISODate(date)}` } });
+    const { loadBudgetSpent: pSpent } = await import("../src/lib/data/budget-spending");
+    eq("pay review: no budget spending dated Sep 16-30 2026 is left over from an earlier section", (await pSpent([periodInfo(sepB)], pContext(pDay(10, 1)))).get(periodInfo(sepB).key)?.total ?? 0, 0);
+    try {
+      // ---------------------------------------------------------------------
+      console.log("\n-- R1: a check-in after the pay is already in the ledger --");
+      {
+        const sep30 = pDay(9, 30);
+        const popular = await pAccount("Popular");
+        const csv = await pDeposit(popular.id, sep30, 60000, "NOMINA");
+        const fresh = await pDraftAccount(octA, sep30, popular.id);
+        eq("R1: Step 2 lists the 60,000 the CSV import already holds for Oct 1-15 (was nothing)", (fresh?.ledgerDeposits ?? []).map((d) => `${toISODate(d.date)} ${d.amount}`).join(", "), "2026-09-30 60000");
+        eq("R1: and prefills the income with their sum, 60,000 (was 0)", fresh?.incomeEntered, 60000);
+        eq("R1: confirming 60,000 succeeds", pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 60000 }]), sep30)), "ok");
+        eq("R1: the ledger holds the paycheck once, the CSV row (was a second 60,000 PAYDAY_CHECKIN row beside it)", await pIncomeRows(popular.id), "2026-09-30 60000 CSV");
+        const csvAfter = await prisma.transaction.findUniqueOrThrow({ where: { id: csv.id } });
+        eq("R1: the CSV row is never modified: source, externalId, amount, date and note as imported", `${csvAfter.source} ${csvAfter.externalId} ${num(csvAfter.amount)} ${toISODate(csvAfter.date)} ${csvAfter.note}`, "CSV verify-pay:NOMINA:2026-09-30 60000 2026-09-30 NOMINA");
+        eq("R1: Oct 1-15 income counts it once, 60,000 as fact and as estimate (was 120,000 / 120,000)", await pIncomeOf(octA, sep30), "60000/60000");
+        const snapshot = (await prisma.paydayAccountSnapshot.findFirstOrThrow({ where: { accountId: popular.id } })) as { incomeEntered: unknown; incomeTransactionId: string | null; adoptedIncome?: unknown };
+        eq(
+          "R1: the snapshot records the 60,000 paycheck with all of it adopted and no row of its own",
+          `${num(snapshot.incomeEntered as never)} ${snapshot.adoptedIncome == null ? "none" : num(snapshot.adoptedIncome as never)} ${snapshot.incomeTransactionId ?? "no row"}`,
+          "60000 60000 no row",
+        );
+        const reopened = await pDraftAccount(octA, sep30, popular.id);
+        eq("R1: reopening prefills 60,000 and lists the same deposit", `${reopened?.incomeEntered} ${(reopened?.ledgerDeposits ?? []).length}`, "60000 1");
+        const again = await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: reopened?.incomeEntered ?? 0 }]), sep30);
+        eq(
+          "R1: re-confirming what reopening shows leaves the ledger and the income as they were (was the same two rows, 120,000)",
+          `${pVerdict(again)} | ${await pIncomeRows(popular.id)} | ${await pIncomeOf(octA, sep30)}`,
+          "ok | 2026-09-30 60000 CSV | 60000/60000",
+        );
+        await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 63000 }]), sep30);
+        await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 63000 }]), sep30);
+        eq(
+          "R1: 63,000 against the 60,000 in the ledger records only the 3,000 difference, once over two confirms (was a 63,000 row beside the CSV row)",
+          `${await pIncomeRows(popular.id)} | ${await pIncomeOf(octA, sep30)}`,
+          "2026-09-30 60000 CSV, 2026-09-30 3000 PAYDAY_CHECKIN | 63000/63000",
+        );
+        eq("R1: reopening then prefills 63,000: the deposit plus the 3,000 the check-in recorded", (await pDraftAccount(octA, sep30, popular.id))?.incomeEntered, 63000);
+        const stored = await prisma.paydayCheckin.findFirstOrThrow({ where: { year: 2026, month: 10, period: "A" } });
+        const less = await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 50000 }]), sep30);
+        eq("R1: 50,000 against the 60,000 in the ledger is refused (was accepted, a 50,000 row kept beside the CSV row)", pVerdict(less), "below_ledger_deposits");
+        const storedAfter = await prisma.paydayCheckin.findFirstOrThrow({ where: { year: 2026, month: 10, period: "A" } });
+        eq("R1: and nothing was written", `${await pIncomeRows(popular.id)} | ${storedAfter.updatedAt.getTime() === stored.updatedAt.getTime()}`, "2026-09-30 60000 CSV, 2026-09-30 3000 PAYDAY_CHECKIN | true");
+        await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 60000 }]), sep30);
+        eq("R1: back to 60,000, the 3,000 row the check-in created is removed and the CSV row kept", await pIncomeRows(popular.id), "2026-09-30 60000 CSV");
+        const refusal = (dictionary: Record<string, unknown>) =>
+          typeof dictionary.incomeBelowLedger === "function" ? (dictionary.incomeBelowLedger as (a: { name: string; inLedger: string }[]) => string)([{ name: "Popular", inLedger: "DOP 60,000.00" }]) : "absent";
+        eq("R1: the refusal says why, in English", refusal(en), "Nothing was saved: the income for Popular can't be less than the DOP 60,000.00 already in your ledger for this period. Those deposits are this period's pay and stay as they are.");
+        eq("R1: and in Spanish", refusal(es), "No se guardó nada: el ingreso de Popular no puede ser menor que los DOP 60,000.00 que ya están en tu libro para este periodo. Esos depósitos son el pago de este periodo y se quedan como están.");
+        await pWipe();
+
+        // The user's shape: Popular gets a 20,191 net deposit and a 3,000
+        // extra (typed as one-off); BSC has no income.
+        const userPopular = await pAccount("Popular");
+        const bsc = await pAccount("BSC");
+        await pDeposit(userPopular.id, sep30, 20191, "NOMINA");
+        const shape = await pConfirm(pInput(octA, [{ accountId: userPopular.id, incomeEntered: 23191, oneOffIncome: 3000 }, { accountId: bsc.id, incomeEntered: 0 }]), sep30);
+        eq(
+          "R1, the user's shape: 23,191 typed (3,000 one-off) over a 20,191 deposit records one 3,000 row; Oct 1-15 income 23,191 as fact, 20,191 as estimate (was a 23,191 row, 43,382 / 40,382)",
+          `${pVerdict(shape)} | ${await pIncomeRows(userPopular.id)} | ${await pIncomeOf(octA, sep30)}`,
+          "ok | 2026-09-30 20191 CSV, 2026-09-30 3000 PAYDAY_CHECKIN | 23191/20191",
+        );
+        await pWipe();
+
+        // A deposit partly earmarked for a recurring payment: that part
+        // already lowers the payment's cost, so it is never the plan's income
+        // too - the check-in adopts the deposit less it.
+        const earmarkedAccount = await pAccount("Popular");
+        const salary = await pDeposit(earmarkedAccount.id, sep30, 60000, "NOMINA");
+        const installment = await prisma.recurringItem.create({
+          data: { name: "Verify Pay Installment", amount: 10000, currency: "DOP", frequency: "MONTHLY", anchorDay: 10, nextDate: pDay(10, 10), active: false, kind: "SUBSCRIPTION", accountId: earmarkedAccount.id },
+        });
+        await prisma.recurringEarmark.create({ data: { transactionId: salary.id, occurrenceKey: `${installment.id}:2026-10-10`, recurringItemId: installment.id, dueDate: pDay(10, 10), amount: 10000, currency: "DOP" } });
+        const earmarkedDraft = await pDraftAccount(octA, sep30, earmarkedAccount.id);
+        eq(
+          "R1: a 60,000 deposit with 10,000 earmarked for an installment is listed and prefilled as 50,000 of pay (was nothing, 0)",
+          `${(earmarkedDraft?.ledgerDeposits ?? []).map((d) => `${toISODate(d.date)} ${d.amount}`).join(", ")} | ${earmarkedDraft?.incomeEntered}`,
+          "2026-09-30 50000 | 50000",
+        );
+        const earmarkedConfirm = await pConfirm(pInput(octA, [{ accountId: earmarkedAccount.id, incomeEntered: 50000 }]), sep30);
+        const earmarkedRoom = (await pRoom.loadConfirmedRooms([octA], pContext(sep30))).get(periodInfo(octA).key);
+        eq(
+          "R1: confirming 50,000 adopts it with no row of its own; the plan's income is 50,000, the period's fact 60,000 and estimate 50,000",
+          `${pVerdict(earmarkedConfirm)} | ${await pIncomeRows(earmarkedAccount.id)} | ${earmarkedRoom?.income} | ${await pIncomeOf(octA, sep30)}`,
+          "ok | 2026-09-30 60000 CSV | 50000 | 60000/50000",
+        );
+        const earmarkedSnapshot = (await prisma.paydayAccountSnapshot.findFirstOrThrow({ where: { accountId: earmarkedAccount.id } })) as { adoptedIncome?: unknown };
+        eq(
+          "R1 follow-up: the snapshot adopts only the 50,000 not earmarked, and Step 2 counts the deposit among those partly set aside",
+          `${earmarkedSnapshot.adoptedIncome == null ? "none" : num(earmarkedSnapshot.adoptedIncome as never)} | ${(earmarkedDraft as { ledgerDepositsSetAside?: number } | undefined)?.ledgerDepositsSetAside ?? "absent"}`,
+          "50000 | 1",
+        );
+        await pWipe();
+
+        // A deposit marked one-off is not pay: never listed, never adopted,
+        // and Step 2 says one deposit in the window is not counted as pay.
+        const oneOffAccount = await pAccount("Popular");
+        await pDeposit(oneOffAccount.id, sep30, 60000, "NOMINA");
+        const bonus = await prisma.transaction.create({
+          data: { accountId: oneOffAccount.id, date: sep30, amount: 5000, currency: "DOP", type: "INCOME", source: "CSV", note: "BONO", externalId: "verify-pay:BONO", isOneOffIncome: true },
+        });
+        const oneOffDraft = (await pDraftAccount(octA, sep30, oneOffAccount.id)) as (PDraftAccount & { ledgerDepositsSetAside?: number }) | undefined;
+        eq(
+          "R1 follow-up: a 5,000 deposit marked one-off beside the 60,000 salary is not listed or prefilled, and is counted as not pay (was nothing listed, 0)",
+          `${(oneOffDraft?.ledgerDeposits ?? []).map((d) => `${toISODate(d.date)} ${d.amount}`).join(", ")} | ${oneOffDraft?.incomeEntered} | ${oneOffDraft?.ledgerDepositsSetAside ?? "absent"}`,
+          "2026-09-30 60000 | 60000 | 1",
+        );
+        const oneOffConfirm = await pConfirm(pInput(octA, [{ accountId: oneOffAccount.id, incomeEntered: 60000 }]), sep30);
+        const oneOffSnapshot = (await prisma.paydayAccountSnapshot.findFirstOrThrow({ where: { accountId: oneOffAccount.id } })) as { adoptedIncome?: unknown };
+        eq(
+          "R1 follow-up: confirming 60,000 adopts the salary only: adopted 60,000, both deposits untouched, Oct 1-15 income 60,000 (the bonus counts on its own day, in Sep 16-30)",
+          `${pVerdict(oneOffConfirm)} | ${oneOffSnapshot.adoptedIncome == null ? "none" : num(oneOffSnapshot.adoptedIncome as never)} | ${await pIncomeRows(oneOffAccount.id)} | ${await pIncomeOf(octA, sep30)}`,
+          "ok | 60000 | 2026-09-30 60000 CSV, 2026-09-30 5000 CSV | 60000/60000",
+        );
+        const setAsideLine = (dictionary: Record<string, unknown>, count: number) =>
+          typeof dictionary.ledgerDepositsSetAside === "function" ? (dictionary.ledgerDepositsSetAside as (n: number) => string)(count) : "absent";
+        eq("R1 follow-up: Step 2's line, in English", `${setAsideLine(en, 1)} / ${setAsideLine(en, 2)}`, "1 deposit marked one-off or set aside for a payment is not counted as pay / 2 deposits marked one-off or set aside for a payment are not counted as pay");
+        eq("R1 follow-up: and in Spanish", `${setAsideLine(es, 1)} / ${setAsideLine(es, 2)}`, "1 depósito marcado como único o apartado para un pago no cuenta como pago / 2 depósitos marcados como únicos o apartados para un pago no cuentan como pago");
+
+        // The salary is now this check-in's pay: like a check-in's own
+        // paycheck it cannot be earmarked for a recurring payment. The
+        // one-off bonus beside it, never adopted, still can.
+        const { saveEarmarks: pSaveEarmarks } = await import("../src/lib/data/earmark-targets");
+        await prisma.recurringItem.create({
+          data: { name: "Verify Pay Installment", amount: 3000, currency: "DOP", frequency: "MONTHLY", anchorDay: 10, nextDate: pDay(10, 10), active: true, kind: "SUBSCRIPTION", accountId: oneOffAccount.id },
+        });
+        const installmentKey = `${(await prisma.recurringItem.findFirstOrThrow({ where: { name: "Verify Pay Installment" } })).id}:2026-10-10`;
+        const salaryRow = await prisma.transaction.findFirstOrThrow({ where: { accountId: oneOffAccount.id, note: "NOMINA" } });
+        const depositOf = (row: { id: string; amount: unknown; date: Date; isOneOffIncome: boolean }) => ({
+          id: row.id,
+          accountId: oneOffAccount.id,
+          amount: num(row.amount as never),
+          type: "INCOME",
+          source: "CSV",
+          transferDirection: null,
+          date: row.date,
+          isOneOffIncome: row.isOneOffIncome,
+          reimbursesTransactionId: null,
+        });
+        const earmarkContext = { today: sep30, rates: pRates(), currentPeriod: periodForDate(sep30) };
+        const refused = await pSaveEarmarks(depositOf(salaryRow), [{ occurrenceKey: installmentKey, amount: 3000 }], earmarkContext);
+        eq(
+          "R1 follow-up: earmarking 3,000 of the adopted salary for an installment is refused, and nothing is written (was accepted)",
+          `${refused.ok ? "ok" : refused.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: salaryRow.id } })}`,
+          "adopted_paycheck | 0",
+        );
+        const bonusSaved = await pSaveEarmarks(depositOf(bonus), [{ occurrenceKey: installmentKey, amount: 3000 }], earmarkContext);
+        eq("R1 follow-up guard: the one-off bonus, not adopted, can still be earmarked", `${bonusSaved.ok ? "ok" : bonusSaved.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: bonus.id } })}`, "ok | 1");
+        const issues = (dictionary: Record<string, unknown>) => ((dictionary.earmarkIssues ?? {}) as Record<string, string>).adopted_paycheck ?? "absent";
+        eq("R1 follow-up: the refusal, in English", issues(pDictionary("en").transactions as unknown as Record<string, unknown>), "This deposit is part of a confirmed payday check-in's paycheck: the plan already counts it as income, so it can't be set aside for a payment too");
+        eq("R1 follow-up: and in Spanish", issues(pDictionary("es").transactions as unknown as Record<string, unknown>), "Este depósito es parte del pago de un chequeo de pago confirmado: el plan ya lo cuenta como ingreso, así que no puede apartarse también para un pago");
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R4: only pay opens a period's goal money and Step 1's date --");
+      {
+        // 10-A's pay lands Wed Sep 30; 5,000 of September money moved to
+        // "Emergency" (50,000 by Dec 31) on Mon Sep 28; read on Oct 2.
+        const r4 = async (setup: (popularId: string) => Promise<void>, paycheck: number | null) => {
+          const popular = await pAccount("Popular");
+          if (paycheck !== null) {
+            await prisma.paydayCheckin.create({
+              data: {
+                ...sepB,
+                checkinDate: pDay(9, 15),
+                currency: "DOP",
+                totalIncome: paycheck,
+                status: "CONFIRMED",
+                snapshots: { create: [{ accountId: popular.id, expectedLedgerBalance: 0, reportedBalance: 0, difference: 0, incomeEntered: paycheck, currency: "DOP" }] },
+              },
+            });
+          }
+          const goal = await prisma.goal.create({ data: { name: "Verify Pay Emergency", targetAmount: 50000, currency: "DOP", targetDate: pDay(12, 31), savedAmount: 5000 } });
+          await setup(popular.id);
+          await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 5000, currency: "DOP", date: pDay(9, 28), accountId: popular.id } });
+          const oct2 = pContext(pDay(10, 2));
+          const landed = await (pIncome.loadPayLanded as unknown as (periods: PRef[], context: unknown) => Promise<(ref: PRef) => Date | null>)([octA], oct2);
+          const plans = await pGoals.loadGoalPeriodPlans([periodInfo(sepB), periodInfo(octA)], oct2);
+          const of = (key: string) => plans.get(key)?.find((plan) => plan.goalId === goal.id);
+          const ledger = await pPayday.reconciliationLedger(octA, oct2);
+          const read = `${landed(octA) ? toISODate(landed(octA)!) : "payday"} | 09-B ${of("2026-09-B")?.contributed} 10-A ${of("2026-10-A")?.contributed} pace ${of("2026-10-A")?.pace} | ledger ${toISODate(ledger.date)}`;
+          await pWipe();
+          return read;
+        };
+        const september = "2026-09-30 | 09-B 5000 10-A 0 pace 6428.57 | ledger 2026-09-29";
+        eq(
+          "R4, the review's case: a 25 USD refund (1,500) on Sep 27 with no confirmed paycheck does not open Oct 1-15's window: the 5,000 is Sep 16-30's, pace 45,000 / 7 = 6,428.57 (was opened Sep 27: 10-A 5,000, pace 7,142.86, ledger Sep 26)",
+          await r4(async (id) => { await pDeposit(id, pDay(9, 27), 1500, "REFUND"); await pDeposit(id, pDay(9, 30), 60000, "NOMINA"); }, null),
+          "payday | 09-B 5000 10-A 0 pace 6428.57 | ledger 2026-09-29",
+        );
+        eq(
+          "R4: a 1,500 refund on Sep 27 beside a 60,000 confirmed paycheck: the window opens with the salary on Sep 30 (was Sep 27)",
+          await r4(async (id) => { await pDeposit(id, pDay(9, 27), 1500, "REFUND"); await pDeposit(id, pDay(9, 30), 60000, "NOMINA"); }, 60000),
+          september,
+        );
+        eq(
+          "R4: 300 of interest on Sep 28: the same (was Sep 28)",
+          await r4(async (id) => { await pDeposit(id, pDay(9, 28), 300, "INTERES"); await pDeposit(id, pDay(9, 30), 60000, "NOMINA"); }, 60000),
+          september,
+        );
+        eq(
+          "R4: a 25 USD deposit on a USD account on Sep 27 (no paycheck on that account): the same (was Sep 27)",
+          await r4(async (id) => {
+            const dollars = await pAccount("Dollars", "USD");
+            await pDeposit(dollars.id, pDay(9, 27), 25, "USD", "USD");
+            await pDeposit(id, pDay(9, 30), 60000, "NOMINA");
+          }, 60000),
+          september,
+        );
+        eq(
+          "R4, the user's case: 20,191 landing Mon Sep 28 against a 23,191 confirmed paycheck opens it that day (as before)",
+          await r4(async (id) => { await pDeposit(id, pDay(9, 28), 20191, "NOMINA"); }, 23191),
+          "2026-09-28 | 09-B 0 10-A 5000 pace 7142.86 | ledger 2026-09-27",
+        );
+        eq(
+          "R4: exactly half of the 23,191 paycheck (11,595.50) is pay",
+          (await r4(async (id) => { await pDeposit(id, pDay(9, 28), 11595.5, "HALF"); }, 23191)).split(" | ")[0],
+          "2026-09-28",
+        );
+        eq(
+          "R4: a cent less (11,595.49) is not (was Sep 28)",
+          (await r4(async (id) => { await pDeposit(id, pDay(9, 28), 11595.49, "HALF"); }, 23191)).split(" | ")[0],
+          "payday",
+        );
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R7: carryover when budgets exceed the plan --");
+      {
+        const popular = await pAccount("Popular");
+        eq("R7: Sep 16-30 confirmed with 50,000 (buffer 5,000)", pVerdict(await pConfirm(pInput(sepB, [{ accountId: popular.id, incomeEntered: 50000 }]), pDay(9, 15))), "ok");
+        const room = (await pRoom.loadConfirmedRooms([sepB], pContext(pDay(10, 1)))).get(periodInfo(sepB).key);
+        eq("R7: its plan leaves 45,000", room ? round2(room.essential + room.available) : null, 45000);
+        await prisma.budget.create({ data: { ...sepB, categoryId: pGroceries.id, amount: 60000, currency: "DOP" } });
+        await pSpend(popular.id, pDay(9, 20), 10000, "SUPER");
+        const offered = async (today: Date) => (await pPayday.getAvailableCarryover(octA, pContext(today))).amount;
+        eq(
+          "R7: Groceries raised to 60,000 and 10,000 spent: the carryover offered to Oct 1-15 is the plan's 45,000 less 10,000 = 35,000, on Sep 30 and Oct 1 (was 50,000, the unspent budget)",
+          `${await offered(pDay(9, 30))} ${await offered(pDay(10, 1))}`,
+          "35000 35000",
+        );
+        await prisma.budget.updateMany({ where: { ...sepB, categoryId: pGroceries.id }, data: { amount: 20000 } });
+        eq("R7 guard: Groceries at 20,000, 25,000 of the plan unallocated: still 35,000, the unallocated part counted once (as before)", await offered(pDay(10, 1)), 35000);
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R8: a settled carryover and rows that arrive later --");
+      {
+        const popular = await pAccount("Popular");
+        await pConfirm(pInput(sepB, [{ accountId: popular.id, incomeEntered: 50000 }]), pDay(9, 15));
+        await pSpend(popular.id, pDay(9, 20), 10000, "SUPER");
+        const offered = await pPayday.getAvailableCarryover(octA, pContext(pDay(9, 30)));
+        eq("R8: Sep 16-30 leaves 35,000, provisional on Sep 30", `${offered.amount} ${offered.provisional}`, "35000 true");
+        eq("R8: Oct 1-15 confirmed on Sep 30 with 60,000 and the 35,000", pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 60000 }], { includedCarryover: 35000 }), pDay(9, 30))), "ok");
+        type PRoomRead = { carryover: number; available: number; carryoverAdjustment?: { by: number; settled: number; current: number; from: { key: string } } | null };
+        const read = async (today: Date) => {
+          const room = (await pRoom.loadConfirmedRooms([octA], pContext(today))).get(periodInfo(octA).key) as unknown as PRoomRead;
+          const checkin = await prisma.paydayCheckin.findFirstOrThrow({ where: { ...octA }, include: { allocations: { where: { type: "CARRYOVER" } } } });
+          const adjustment = room.carryoverAdjustment ? `${room.carryoverAdjustment.by} from ${room.carryoverAdjustment.from.key}` : "none";
+          return { room, checkin, row: checkin.allocations[0], text: `${room.carryover} ${room.available} ${adjustment}` };
+        };
+        eq("R8: on Oct 1 it settles at 35,000; Oct 1-15's available 89,000", (await read(pDay(10, 1))).text, "35000 89000 none");
+        const late = await pSpend(popular.id, pDay(9, 29), 15000, "LATE");
+        const oct3 = await read(pDay(10, 3));
+        eq("R8: on Oct 3 a CSV brings a 15,000 expense dated Sep 29: the carryover follows Sep 16-30's leftover to 20,000, available 74,000, adjusted by -15,000 (was 35,000 and 89,000)", oct3.text, "20000 74000 -15000 from 2026-09-B");
+        eq(
+          "R8: written once as an adjustment: includedCarryover 20,000; the allocation planned 20,000, the settled 35,000 kept as its recommendation",
+          `${num(oct3.checkin.includedCarryover)} ${oct3.row.basis} ${num(oct3.row.recommendedAmount)} ${num(oct3.row.plannedAmount)}`,
+          "20000 adjusted 35000 20000",
+        );
+        eq("R8: reading again writes nothing (the check-in's updatedAt is unchanged)", (await read(pDay(10, 3))).checkin.updatedAt.getTime(), oct3.checkin.updatedAt.getTime());
+        const draft = await pDraft(octA, pDay(10, 3));
+        eq("R8: Step 3's draft carries the same carryover and adjustment", `${draft.includedCarryover} ${draft.carryoverAdjustment?.by ?? "none"}`, "20000 -15000");
+        const line = (dictionary: Record<string, unknown>, locale: "en" | "es") =>
+          typeof dictionary.carryoverAdjusted === "function"
+            ? (dictionary.carryoverAdjusted as (by: string, period: string) => string)(pMoney(-15000, "DOP", { signDisplay: "always" }), pPeriodLong(periodInfo(sepB), locale))
+            : "absent";
+        eq(
+          "R8: the line says by how much and why, in English",
+          line(en, "en"),
+          `Carryover adjusted by ${pMoney(-15000, "DOP", { signDisplay: "always" })} since it settled: what ${pPeriodLong(periodInfo(sepB), "en")} left changed after it ended, for example spending dated in it that was recorded later.`,
+        );
+        eq(
+          "R8: and in Spanish",
+          line(es, "es"),
+          `Remanente ajustado en ${pMoney(-15000, "DOP", { signDisplay: "always" })} desde que se asentó: lo que dejó ${pPeriodLong(periodInfo(sepB), "es")} cambió después de terminar, por ejemplo gastos con fecha en ese periodo que se registraron más tarde.`,
+        );
+        await prisma.transaction.delete({ where: { id: late.id } });
+        eq("R8: the late expense deleted on Oct 5, the carryover is 35,000 again and the line goes", (await read(pDay(10, 5))).text, "35000 89000 none");
+        await pSpend(popular.id, pDay(9, 29), 15000, "LATE");
+        eq("R8: brought in again on Oct 6, 20,000", (await read(pDay(10, 6))).text, "20000 74000 -15000 from 2026-09-B");
+        await pSpend(popular.id, pDay(9, 28), 1000, "LATER");
+        const oct16 = await read(pDay(10, 16));
+        eq(
+          "R8: from Oct 16, Oct 1-15 over, it stops adjusting: a 1,000 expense dated Sep 28 leaves it at 20,000 while Sep 16-30's live leftover is 19,000 (was 35,000 throughout)",
+          `${oct16.room.carryover} ${(await pRoom.periodLeftover(sepB, pContext(pDay(10, 16)))).amount}`,
+          "20000 19000",
+        );
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R22: re-confirming after an income account is archived --");
+      {
+        const a = await pAccount("A");
+        const b = await pAccount("B");
+        const oct2 = pDay(10, 2);
+        const both: PAccountInput[] = [{ accountId: a.id, incomeEntered: 40000 }, { accountId: b.id, incomeEntered: 20000, reportedBalance: -8000 }];
+        const flexible = (amount: number) => ({ flexibleCategories: [{ categoryId: pGroceries.id, plannedAmount: amount }] });
+        eq("R22: before archiving, a 50,000 flexible plan is refused, available 46,000", pVerdict(await pConfirm(pInput(octA, both, flexible(50000)), oct2)), "deficit_not_acknowledged 46000");
+        eq("R22: 40,000 confirms", pVerdict(await pConfirm(pInput(octA, both, flexible(40000)), oct2)), "ok");
+        await prisma.account.update({ where: { id: b.id }, data: { status: "ARCHIVED" } });
+        eq(
+          "R22: B archived, re-confirming 50,000 is still refused at 46,000: B's 2,000 buffer and 8,000 gap stay in the deficit check (was accepted)",
+          pVerdict(await pConfirm(pInput(octA, [both[0]], flexible(50000)), oct2)),
+          "deficit_not_acknowledged 46000",
+        );
+        const acknowledged = await pConfirm(pInput(octA, [both[0]], { ...flexible(50000), acknowledgedDeficit: true }), oct2);
+        const checkin = await prisma.paydayCheckin.findFirstOrThrow({ where: { ...octA }, include: { allocations: { where: { type: "BUFFER" } } } });
+        const groceries = await prisma.budget.findFirstOrThrow({ where: { ...octA, categoryId: pGroceries.id } });
+        const room = (await pRoom.loadConfirmedRooms([octA], pContext(oct2))).get(periodInfo(octA).key);
+        eq(
+          "R22: acknowledged, it keeps B's stored buffer (6,000 protected, two BUFFER rows), caps Groceries at 46,000 as before archiving, and the confirmed room reads 46,000 (was 4,000, one row, 50,000, 48,000)",
+          `${pVerdict(acknowledged)} ${num(checkin.protectedBuffer)} ${checkin.allocations.length} ${num(groceries.amount)} ${room?.available}`,
+          "ok 6000 2 46000 46000",
+        );
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- a second tab confirming a check-in the first one loaded --");
+      {
+        const popular = await pAccount("Popular");
+        const oct2 = pDay(10, 2);
+        const version = (draft: PDraft) => (draft.checkinVersion === undefined ? {} : { checkinVersion: draft.checkinVersion });
+        const tabA = await pDraft(octA, oct2);
+        const tabB = await pDraft(octA, oct2);
+        eq("tab: a fresh check-in's version is null", tabA.checkinVersion === undefined ? "absent" : tabA.checkinVersion, null);
+        eq("tab: tab A confirms 60,000", pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 60000 }], version(tabA)), oct2)), "ok");
+        eq(
+          "tab: tab B, opened before A confirmed, is refused when it confirms 55,000 (was accepted, overwriting A's plan)",
+          pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 55000 }], version(tabB)), oct2)),
+          "changed_since_loaded",
+        );
+        eq("tab: A's 60,000 stands (was 55,000)", num((await prisma.paydayCheckin.findFirstOrThrow({ where: { ...octA } })).totalIncome), 60000);
+        const reloaded = await pDraft(octA, oct2);
+        eq("tab: after reloading, the version is the stored check-in's", reloaded.checkinVersion === undefined ? "absent" : reloaded.checkinVersion, (await prisma.paydayCheckin.findFirstOrThrow({ where: { ...octA } })).updatedAt.toISOString());
+        eq("tab: and B's 55,000 confirms", pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 55000 }], version(reloaded)), oct2)), "ok");
+        eq(
+          "tab: a reload taken before that confirm is stale in turn",
+          pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 58000 }], version(reloaded)), oct2)),
+          "changed_since_loaded",
+        );
+        eq("tab: the message says to reload, in English", en.changedSinceLoaded ?? "absent", "This check-in was changed in another tab or window after you opened it, so nothing was saved. Reload the page to see the plan as it is now, then make your changes again.");
+        eq("tab: and in Spanish", es.changedSinceLoaded ?? "absent", "Este chequeo se cambió en otra pestaña o ventana después de que lo abriste, así que no se guardó nada. Recarga la página para ver el plan como está ahora y vuelve a hacer tus cambios.");
+        await pWipe();
+      }
+    } finally {
+      await pWipe();
+      await prisma.category.deleteMany({ where: { id: pGroceries.id } });
+      if (stashedBudgetsForPay.length > 0) await prisma.budget.createMany({ data: stashedBudgetsForPay });
+      await prisma.account.updateMany({ where: { id: { in: archivedForPay } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForPay } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForPay } }, data: { active: true } });
     }
   }
 

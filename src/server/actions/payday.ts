@@ -65,6 +65,14 @@ export async function confirmPaydayCheckinAction(
   if (!result.ok) {
     if (result.reason === "no_active_accounts") return fail(t.noActiveAccounts);
     if (result.reason === "confirmed_meanwhile") return fail(t.confirmedMeanwhile);
+    if (result.reason === "changed_since_loaded") return fail(t.changedSinceLoaded);
+    if (result.reason === "below_ledger_deposits") {
+      return fail(
+        t.incomeBelowLedger(
+          result.accounts.map((account) => ({ name: account.name, inLedger: formatMoney(account.inLedger, account.currency) })),
+        ),
+      );
+    }
     const message =
       result.reason === "deficit_not_acknowledged"
         ? t.acknowledgeDeficitFirst

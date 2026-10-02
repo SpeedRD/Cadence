@@ -91,8 +91,9 @@ export type TransactionEditBlock =
  * (its amount and date belong to the GoalContribution on the goal's page;
  * re-saving it here would leave the goal's progress and the ledger
  * disagreeing), and the paycheck a payday check-in recorded (the check-in's
- * snapshot keeps the same figure as incomeEntered and points at this row by
- * id: period income is read from the snapshot, the next check-in's expected
+ * snapshot points at this row by id and holds its amount as the part of
+ * incomeEntered beyond the deposits it adopted: period income is read from
+ * the snapshot, the next check-in's expected
  * balance subtracts it, and a re-confirm rewrites or recreates the row - so
  * editing or deleting it here would desync all three; change the income by
  * re-running that period's check-in instead). There is no paired row to
