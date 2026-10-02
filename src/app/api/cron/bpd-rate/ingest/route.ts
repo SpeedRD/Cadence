@@ -79,6 +79,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ stored: false, reason: result.reason }, { status: 400 });
   }
 
+  // An older rate than the stored one is not a failure, but nothing was stored:
+  // say so, with a 200 so the scraper's run is not marked failed.
+  if (result.note) {
+    console.log(
+      `[bpd-rate-ingest] kept the stored Banco Popular rate: it is newer than the one offered (as of ${asOf.toISOString()})`,
+    );
+    return NextResponse.json({ stored: false, kept: result.note, asOf: asOf.toISOString() });
+  }
+
   console.log(
     `[bpd-rate-ingest] stored Banco Popular rate (USD sell ${dollarSellRate}, EUR sell ${euroSellRate}, as of ${asOf.toISOString()})`,
   );

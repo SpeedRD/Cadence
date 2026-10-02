@@ -13,6 +13,7 @@ import { convert } from "@/lib/currency";
 import { addDays } from "@/lib/date";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { loadPairedCharges } from "@/lib/data/recurring-settlement";
 import {
   detectRecurringPatterns,
   type RecurringCandidate,
@@ -42,10 +43,14 @@ export interface SuggestionRef {
 /**
  * Every pattern in the organic ledger worth suggesting, most charges first.
  * Only active accounts are read: an item on an archived account could never
- * post, so accepting would be refused anyway. Reads only.
+ * post, so accepting would be refused anyway. A charge that already pays an
+ * occurrence of an item - paired by a RecurringSettlement row, or by the
+ * settlement plan before posting records it (loadPairedCharges) - is that
+ * item's, not evidence of a second pattern, whatever account it left. Reads
+ * only.
  */
 export async function findRecurringSuggestions(context: AppContext): Promise<RecurringSuggestion[]> {
-  const [transactions, items, dismissed, accounts, categories] = await Promise.all([
+  const [found, items, dismissed, accounts, categories, paired] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         type: "EXPENSE",
@@ -54,6 +59,7 @@ export async function findRecurringSuggestions(context: AppContext): Promise<Rec
         note: { not: null },
         date: { gte: addDays(context.today, -DETECTION_LOOKBACK_DAYS) },
         account: { status: "ACTIVE" },
+        recurringSettlement: { is: null },
       },
       select: {
         id: true,
@@ -72,12 +78,14 @@ export async function findRecurringSuggestions(context: AppContext): Promise<Rec
       },
     }),
     prisma.recurringItem.findMany({
-      select: { name: true, amount: true, currency: true, accountId: true, categoryId: true, active: true },
+      select: { name: true, note: true, amount: true, currency: true, accountId: true, categoryId: true, active: true },
     }),
     prisma.recurringSuggestionDismissal.findMany({ select: { accountId: true, merchantKey: true } }),
     prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true, name: true } }),
     prisma.category.findMany({ select: { id: true, name: true } }),
+    loadPairedCharges(context.today),
   ]);
+  const transactions = found.filter((row) => !paired.has(row.id));
 
   const candidates = detectRecurringPatterns({
     // A charge is suggested as what it was entered as (K7): a subscription billed

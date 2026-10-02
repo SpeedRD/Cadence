@@ -76,7 +76,12 @@ export async function fetchBpdRates(): Promise<BpdRates | null> {
 }
 
 export type StoreBpdRatesResult =
-  | { ok: true }
+  /**
+   * `note` is set when nothing was written because the stored rate is of a
+   * later date than this one: the run is not a failure (the bank's feed can
+   * be re-read out of order), it just has nothing newer to add.
+   */
+  | { ok: true; note?: "kept_newer_rate" }
   | { ok: false; reason: "out_of_range" | "invalid_as_of" | "outside_freshness_window" };
 
 /**
@@ -89,7 +94,9 @@ export type StoreBpdRatesResult =
  * exactly the drift this function exists to make impossible.
  *
  * Writes nothing unless every check passes - a rejection leaves the table
- * exactly as it was.
+ * exactly as it was. A rate is stored only if its `asOf` is on or after the
+ * stored one's: an older one (a re-run, a slow scrape landing after a newer
+ * one) returns ok with the note "kept_newer_rate" and writes nothing.
  */
 export async function storeBpdRates(
   rates: BpdRates,
@@ -103,6 +110,14 @@ export async function storeBpdRates(
   }
   if (!isWithinFreshnessWindow(rates.asOf, now)) {
     return { ok: false, reason: "outside_freshness_window" };
+  }
+
+  const storedRows = await prisma.exchangeRate.findMany({
+    where: { baseCurrency: BASE_CURRENCY, source: BPD_SOURCE },
+    select: { asOf: true },
+  });
+  if (storedRows.some((row) => row.asOf && row.asOf.getTime() > rates.asOf.getTime())) {
+    return { ok: true, note: "kept_newer_rate" };
   }
 
   const entries = toRateTableEntries(rates);
@@ -189,7 +204,8 @@ export async function getBpdRates(): Promise<BpdRates | null> {
   const fetched = await fetchBpdRates();
   if (!fetched) return null;
   const persisted = await storeBpdRates(fetched, now);
-  if (!persisted.ok) return null;
+  // A fetched rate older than the stored one was not stored; do not hand it out either.
+  if (!persisted.ok || persisted.note) return null;
 
   return fetched;
 }

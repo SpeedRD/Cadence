@@ -16,7 +16,7 @@
  *     monthly windows start at the first calendar month that starts on or after
  *     that same period.
  *   - Spending skips a partial first period: the period of the first recorded
- *     activity counts only when the activity starts within its first
+ *     spending (an expense, not a paycheck) counts only when it starts within its first
  *     FIRST_PERIOD_MAX_START_DAY days, the coverage the monthly average asks of
  *     a first month (FIRST_MONTH_MAX_START_DAY in src/lib/data/monthly.ts).
  *     Income needs no such rule: an average of income counts from the oldest
@@ -46,7 +46,7 @@ export type HistoryPurpose = "income" | "spending";
 export interface HistoryBounds {
   /** Settings.incomeHistoryStartDate ("count history from"); null or absent is no bound. */
   historyStart?: Date | null;
-  /** The first recorded activity (getFirstActivityDate); read for spending only. */
+  /** The first recorded spending (getFirstActivityDate - not income); read for spending only. */
   firstActivity?: Date | null;
 }
 

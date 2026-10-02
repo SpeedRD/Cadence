@@ -15724,6 +15724,191 @@ async function main() {
     }
   }
 
+  console.log("\n== adversarial review: suggestions, the Banco Popular rate and the history boundary (R14 R21 R26 R27) ==");
+  {
+    // Public APIs only, so this block also runs against the code before the
+    // fixes and fails there on each finding. The review's numbers; fixtures
+    // are `Verify R14 ...`, `Verify R27 ...` and the bpd rows, which are put
+    // back as they were. The R27 rows are dated 2024, before anything else in
+    // the database, so they are its first activity.
+    const rDetection = await import("../src/lib/recurring-detection");
+    const rSuggestions = await import("../src/lib/data/recurring-suggestions");
+    const rReports = await import("../src/lib/data/reports");
+    const rMonthly = await import("../src/lib/data/monthly");
+    const { storeBpdRates: rStoreBpd } = await import("../src/lib/bpd-rates");
+    const { postDueRecurringItems: rPost } = await import("../src/lib/recurring-posting");
+    const { advanceDate: rAdvance } = await import("../src/lib/recurring");
+    const rRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const rContext = (today: Date) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: rRates(),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    });
+
+    console.log("-- R26: semi-monthly anchors read through posting's own weekend rule (pure) --");
+    {
+      // Anchors 1 and 16: Aug 1 2026 is a Saturday and Aug 16 a Sunday, so
+      // posting realizes them on Fri Jul 31 and Fri Aug 14; Sep 1 is a Tuesday.
+      const shifted = [civilDate(2026, 7, 31), civilDate(2026, 8, 14), civilDate(2026, 9, 1)];
+      const fit = rDetection.inferCadence(shifted);
+      eq("Jul 31, Aug 14 and Sep 1 read as SEMI_MONTHLY", fit?.cadence, "SEMI_MONTHLY");
+      eq("... on the true anchors 1 and 16 (they were read as 1 and 14)", fit?.anchorDays.join(","), "1,16");
+      eq(
+        "... which are the dates posting walks from Jul 31 with those anchors: Aug 14, Sep 1, Sep 16",
+        [civilDate(2026, 7, 31), civilDate(2026, 8, 14), civilDate(2026, 9, 1)].map((date) => toISODate(rAdvance(date, "SEMI_MONTHLY", 1, 16))).join(","),
+        "2026-08-14,2026-09-01,2026-09-16",
+      );
+      eq(
+        "a longer run of the same shifted charges (Sep 16, Oct 1 too) reads the same",
+        rDetection.inferCadence([...shifted, civilDate(2026, 9, 16), civilDate(2026, 10, 1)])?.anchorDays.join(","),
+        "1,16",
+      );
+      eq(
+        "anchors 1 and 15 with no shift still read as 1 and 15",
+        rDetection.inferCadence([civilDate(2026, 6, 1), civilDate(2026, 6, 15), civilDate(2026, 7, 1), civilDate(2026, 7, 15)])?.anchorDays.join(","),
+        "1,15",
+      );
+    }
+
+    console.log("-- R14: a pattern an active item already tracks from another account is not suggested (pure) --");
+    {
+      const landlord = (date: Date, id: string) =>
+        ({
+          id,
+          date,
+          amount: 25000,
+          currency: "DOP",
+          type: "EXPENSE",
+          source: "MANUAL",
+          accountId: "acct-b",
+          categoryId: null,
+          note: "Transferencia Verify Landlord",
+          externalId: null,
+          isExtraordinary: false,
+        }) as import("../src/lib/recurring-detection").DetectableTransaction;
+      const rentCharges = [landlord(civilDate(2026, 7, 1), "r14-1"), landlord(civilDate(2026, 8, 1), "r14-2"), landlord(civilDate(2026, 9, 1), "r14-3")];
+      const rentItem = (extra: Record<string, unknown> = {}) => ({
+        trackedItems: [{ name: "Verify Rent", note: "Transferencia Verify Landlord", amount: 25000, currency: "DOP", accountId: "acct-a", categoryId: null, active: true, ...extra }],
+      });
+      const rentDetect = (extra: ReturnType<typeof rentItem> | { trackedItems: [] }) =>
+        rDetection.detectRecurringPatterns({ transactions: rentCharges, dismissed: [], today: civilDate(2026, 9, 17), ...extra });
+      eq("with no item at all the pattern is offered", rentDetect({ trackedItems: [] }).length, 1);
+      eq("Rent on account A at 25,000 DOP, paid from account B under the landlord's name, is tracked: nothing is offered", rentDetect(rentItem()).length, 0);
+      eq("... not when the amount differs", rentDetect(rentItem({ amount: 19000 })).length, 1);
+      eq("... not when the currency differs", rentDetect(rentItem({ currency: "USD" })).length, 1);
+      eq("... not when the item is paused", rentDetect(rentItem({ active: false })).length, 1);
+      eq("... not when its note names another merchant", rentDetect(rentItem({ note: "Transferencia Verify Someone Else" })).length, 1);
+    }
+
+    console.log("-- R21: an older Banco Popular rate does not overwrite a newer one --");
+    {
+      const bpdRows = () => prisma.exchangeRate.findMany({ where: { source: "bpd" }, orderBy: { targetCurrency: "asc" } });
+      const bpdBefore = await bpdRows();
+      const now = new Date(Date.UTC(2026, 9, 2, 15, 0, 0));
+      const oct1 = new Date(Date.UTC(2026, 9, 1));
+      const sep30 = new Date(Date.UTC(2026, 8, 30));
+      const snapshot = async () => (await bpdRows()).map((row) => `${row.targetCurrency}=${Number(row.rate)}@${row.asOf?.toISOString()}/${row.fetchedAt.toISOString()}`).join(",");
+      try {
+        await prisma.exchangeRate.deleteMany({ where: { source: "bpd" } });
+        eq("asOf Oct 1 at 63.20 is stored", JSON.stringify(await rStoreBpd({ dollarSellRate: 63.2, euroSellRate: 72, asOf: oct1 }, now)), JSON.stringify({ ok: true }));
+        const stored = await snapshot();
+        const older = (await rStoreBpd({ dollarSellRate: 62.4, euroSellRate: 71, asOf: sep30 }, now)) as { ok: boolean; note?: string };
+        eq("a re-run with asOf Sep 30 at 62.40 still returns ok ...", older.ok, true);
+        eq("... with a note that it kept the newer rate", older.note, "kept_newer_rate");
+        eq("... and wrote nothing: the row stays 63.20 as of Oct 1, fetchedAt included", await snapshot(), stored);
+        eq("the stored dollar rate is 63.20 as of Oct 1", (await bpdRows()).filter((row) => row.targetCurrency === "DOP").map((row) => `${Number(row.rate)}@${row.asOf?.toISOString()}`).join(), `63.2@${oct1.toISOString()}`);
+        const sameDay = (await rStoreBpd({ dollarSellRate: 63.5, euroSellRate: 72, asOf: oct1 }, now)) as { ok: boolean; note?: string };
+        eq("a correction for the same asOf is written (on or after counts): 63.50", `${sameDay.ok}:${sameDay.note ?? "none"}:${Number((await bpdRows()).find((row) => row.targetCurrency === "DOP")?.rate)}`, "true:none:63.5");
+        await rStoreBpd({ dollarSellRate: 64, euroSellRate: 72, asOf: new Date(Date.UTC(2026, 9, 2)) }, now);
+        eq("a newer asOf (Oct 2) replaces it: 64", Number((await bpdRows()).find((row) => row.targetCurrency === "DOP")?.rate), 64);
+      } finally {
+        await prisma.exchangeRate.deleteMany({ where: { source: "bpd" } });
+        if (bpdBefore.length > 0) await prisma.exchangeRate.createMany({ data: bpdBefore });
+      }
+    }
+
+    console.log("-- R27: the spending history starts at the first spending row, not the first paycheck --");
+    {
+      const strayBefore2025 =
+        (await prisma.transaction.count({ where: { date: { lt: civilDate(2025, 1, 1) }, type: { in: ["EXPENSE", "INCOME"] } } })) +
+        (await prisma.goalContribution.count({ where: { date: { lt: civilDate(2025, 1, 1) } } }));
+      eq("R27 fixture isolation: nothing in the database predates 2025", strayBefore2025, 0);
+      const account = await prisma.account.create({ data: { name: "Verify R27 Account", currency: "DOP", type: "CHECKING" } });
+      try {
+        const row = (date: Date, amount: number, type: "INCOME" | "EXPENSE") =>
+          prisma.transaction.create({ data: { date, amount, currency: "DOP", type, accountId: account.id, source: "MANUAL", note: type === "INCOME" ? "Verify R27 paycheck" : null } });
+        await row(civilDate(2024, 7, 1), 90000, "INCOME");
+        await row(civilDate(2024, 9, 1), 31000, "EXPENSE");
+        await row(civilDate(2024, 9, 16), 31000, "EXPENSE");
+        const oct5 = rContext(civilDate(2024, 10, 5));
+        eq("the first activity is the first spending row: Sep 1 (it was the Jul 1 paycheck)", toISODate((await rMonthly.getFirstActivityDate()) as Date), "2024-09-01");
+        const trend = await rReports.getSpendingTrendSummary(oct5 as Parameters<typeof rReports.getSpendingTrendSummary>[0], 7);
+        eq("Reports averages the periods with spending: 31,000 over 2 (it was 10,333.33 over 6)", `${trend.average?.average}:${trend.average?.periods}`, "31000:2");
+        eq(
+          "the monthly windows start at September, not July (they were Jul, Aug and Sep)",
+          (await rMonthly.getCompletedMonthWindows(oct5 as Parameters<typeof rMonthly.getCompletedMonthWindows>[0])).map((window) => window.key).join(","),
+          "2024-09",
+        );
+      } finally {
+        await prisma.transaction.deleteMany({ where: { accountId: account.id } });
+        await prisma.account.delete({ where: { id: account.id } });
+      }
+    }
+
+    console.log("-- R14: the suggestions loader leaves out a charge the settlement plan pairs with an item --");
+    {
+      const paused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((item) => item.id);
+      await prisma.recurringItem.updateMany({ where: { id: { in: paused } }, data: { active: false } });
+      const restoreRates = await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.9 });
+      const wipe = async () => {
+        const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify R14 " } }, select: { id: true } })).map((a) => a.id);
+        await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+        await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+        await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify R14 " } } });
+        await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+        await prisma.category.deleteMany({ where: { name: { startsWith: "Verify R14 " } } });
+      };
+      try {
+        const today = civilDate(2026, 9, 17);
+        const accountA = await prisma.account.create({ data: { name: "Verify R14 A", currency: "DOP", type: "CHECKING" } });
+        const accountB = await prisma.account.create({ data: { name: "Verify R14 B", currency: "DOP", type: "CHECKING" } });
+        const rent = await prisma.category.create({ data: { name: "Verify R14 Rent", kind: "EXPENSE" } });
+        // The item is on account A; every charge is paid from account B.
+        await prisma.recurringItem.create({
+          data: { name: "Verify R14 Rent", amount: 25000, currency: "DOP", kind: "SUBSCRIPTION", frequency: "MONTHLY", nextDate: civilDate(2026, 7, 1), anchorDay: 1, active: true, categoryId: rent.id, accountId: accountA.id },
+        });
+        const charge = (date: Date, amount: number, note: string, categoryId: string | null) =>
+          prisma.transaction.create({ data: { date, amount, currency: "DOP", type: "EXPENSE", accountId: accountB.id, categoryId, note, source: "MANUAL" } });
+        for (const date of [civilDate(2026, 7, 1), civilDate(2026, 8, 1), civilDate(2026, 9, 1)]) await charge(date, 25000, "Transferencia Verify R14 Landlord", rent.id);
+        // Not an item's: this one must still be offered.
+        for (const date of [civilDate(2026, 7, 9), civilDate(2026, 8, 9), civilDate(2026, 9, 9)]) await charge(date, 777, "Verify R14 Climbing Gym", null);
+        const offered = async () =>
+          (await rSuggestions.findRecurringSuggestions(rContext(today) as Parameters<typeof rSuggestions.findRecurringSuggestions>[0]))
+            .filter((suggestion) => suggestion.accountId === accountB.id)
+            .map((suggestion) => suggestion.merchantKey)
+            .sort()
+            .join("|");
+        eq("Rent 25,000 on account A, paid Jul 1, Aug 1 and Sep 1 from account B: only the unrelated gym is offered", await offered(), "VERIFY CLIMBING GYM");
+        await rPost(today);
+        eq(
+          "posting records the three pairings as RecurringSettlement rows and writes no RECURRING row for Rent",
+          `${await prisma.recurringSettlement.count({ where: { transaction: { accountId: accountB.id } } })}:${await prisma.transaction.count({ where: { accountId: accountA.id, source: "RECURRING" } })}`,
+          "3:0",
+        );
+        eq("... and after the pairings are RecurringSettlement rows the rent is still not offered", await offered(), "VERIFY CLIMBING GYM");
+      } finally {
+        await wipe();
+        await restoreRates();
+        await prisma.recurringItem.updateMany({ where: { id: { in: paused } }, data: { active: true } });
+      }
+    }
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });

@@ -76,6 +76,8 @@ export interface DetectableTransaction {
 /** A RecurringItem as far as "is this pattern already tracked?" needs it. */
 export interface TrackedRecurringItem {
   name: string;
+  /** The item's note: an accepted suggestion keeps the charges' description there, so the merchant. */
+  note?: string | null;
   amount: number;
   currency: string;
   accountId: string | null;
@@ -358,30 +360,79 @@ function betterFit(a: PatternFit, b: PatternFit | null): boolean {
   return a.exact > b.exact;
 }
 
+/** The gap, in days of the month, between a semi-monthly's two anchors when it splits the month evenly. */
+const HALF_MONTH_DAYS = 15;
+
+/** The anchors people actually pick: the 1st, the 15th, the 16th and the month's end. */
+const COMMON_SEMI_MONTHLY_ANCHORS: ReadonlySet<number> = new Set([1, 15, 16, 30, 31]);
+
+/**
+ * How many of `dates` posting would itself produce for a SEMI_MONTHLY item on
+ * these two anchors. Posting's rule (advanceDate) is the judge, not a copy of
+ * it: a date is one of the item's occurrences exactly when walking from the
+ * day before lands on it, whatever weekend shift put it there - so a
+ * Saturday 1st realized on the Friday before is explained by the anchor 1,
+ * and a Friday the 14th by the anchor 14.
+ */
+function realizedByPosting(dates: readonly Date[], anchors: readonly [number, number]): number {
+  return dates.filter((date) => advanceDate(addDays(date, -1), "SEMI_MONTHLY", anchors[0], anchors[1]).getTime() === date.getTime()).length;
+}
+
+/**
+ * The better of two anchor pairs: the one more occurrences land on (exactly,
+ * by a weekend shift or a Monday slip), then the one posting itself would
+ * produce more of them on, then the one on the common anchors, then the one
+ * with more exact hits, then the one whose anchors sit nearest half a month
+ * apart. The last settles dates that two pairs explain equally: Aug 15 and 16
+ * 2026 are a Saturday and a Sunday, so Fri Aug 14 is the 15th's and the
+ * 16th's alike, and Jul 31, Aug 14 and Sep 1 fit 1 and 15 as well as 1 and 16;
+ * 1 and 16 are the two halves of a month, and a charge on Sep 15 or 16 would
+ * settle it. Equal on all five, the earlier pair stands.
+ */
+function betterAnchorFit(
+  a: AnchorFit & { realized: number },
+  b: (AnchorFit & { realized: number }) | null,
+): boolean {
+  if (!b) return true;
+  if (a.matched !== b.matched) return a.matched > b.matched;
+  if (a.realized !== b.realized) return a.realized > b.realized;
+  const commonA = a.anchorDays.filter((anchor) => COMMON_SEMI_MONTHLY_ANCHORS.has(anchor)).length;
+  const commonB = b.anchorDays.filter((anchor) => COMMON_SEMI_MONTHLY_ANCHORS.has(anchor)).length;
+  if (commonA !== commonB) return commonA > commonB;
+  if (a.exact !== b.exact) return a.exact > b.exact;
+  const spread = (fit: AnchorFit) => Math.abs(fit.anchorDays[1] - fit.anchorDays[0] - HALF_MONTH_DAYS);
+  return spread(a) < spread(b);
+}
+
 /**
  * The two anchor days, 12-19 days apart, that the most occurrences land on.
  * Null unless requiredMatches of them land on one of the two and both
- * anchors are used. Ties go to the fit with more exact hits, then to the
- * lower pair, so the result never depends on iteration luck.
+ * anchors are used. Several pairs can explain the same dates - Jul 31, Aug 14
+ * and Sep 1 are as much anchors 1 and 14 as 1 and 16, because the 1st and the
+ * 16th were pulled back off a weekend - so the pair posting's own rule
+ * reproduces the dates with wins (realizedByPosting), then the common
+ * anchors, then more exact hits, then the anchors nearest half a month apart
+ * (betterAnchorFit), then the lower pair, so the result never depends on
+ * iteration luck.
  */
 export function fitSemiMonthlyAnchors(dates: readonly Date[]): AnchorFit | null {
   const distinct = distinctDays(dates);
   if (distinct.length < MIN_OCCURRENCES) return null;
 
-  let best: (AnchorFit & { hitsPerAnchor: number[] }) | null = null;
+  let best: (AnchorFit & { hitsPerAnchor: number[]; realized: number }) | null = null;
   for (let first = 1; first <= 31; first += 1) {
     for (
       let second = first + SEMI_MONTHLY_ANCHOR_GAP.min;
       second <= Math.min(31, first + SEMI_MONTHLY_ANCHOR_GAP.max);
       second += 1
     ) {
-      const fit = scoreAnchors(distinct, [first, second]);
+      const fit = { ...scoreAnchors(distinct, [first, second]), realized: realizedByPosting(distinct, [first, second]) };
       if (fit.hitsPerAnchor.some((hits) => hits === 0)) continue;
-      if (betterFit(fit, best)) best = fit;
+      if (betterAnchorFit(fit, best)) best = fit;
     }
   }
   if (!best || best.matched < requiredMatches(distinct.length)) return null;
-  const { hitsPerAnchor: _hits, ...fit } = best;
+  const { hitsPerAnchor: _hits, realized: _realized, ...fit } = best;
   return fit;
 }
 
@@ -587,8 +638,11 @@ function normalizeForMatch(value: string): string {
  * without becoming a different subscription. Absent a name match, the item
  * must sit on the same account and category, with currency equal and amount
  * within the band - shapeMatches has no name signal to fall back on, so it
- * needs both. Only an active item counts - a paused one is not tracking
- * anything, and the pattern is worth pointing out again.
+ * needs both. An item whose note names the merchant, with the same currency
+ * and an amount within the band, tracks the pattern from any account: the
+ * rent an item on one account pays from another is still that rent. Only an
+ * active item counts - a paused one is not tracking anything, and the pattern
+ * is worth pointing out again.
  */
 function isTracked(
   candidate: { accountId: string; merchantKey: string; amount: number; currency: string; categoryId: string | null },
@@ -604,6 +658,9 @@ function isTracked(
     if (nameMatches) return true;
     if (item.currency !== candidate.currency) return false;
     if (Math.abs(item.amount - candidate.amount) > tolerance) return false;
+    const noteKey = item.note ? normalizeForMatch(cleanMerchantKey(item.note)) : "";
+    const noteMatches = noteKey.length >= 3 && key.length >= 3 && (noteKey.includes(key) || key.includes(noteKey));
+    if (noteMatches) return true;
     const shapeMatches =
       item.accountId === candidate.accountId &&
       item.categoryId !== null &&
