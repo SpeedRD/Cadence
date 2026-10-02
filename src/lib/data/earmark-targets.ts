@@ -92,6 +92,8 @@ export interface EarmarkDeposit {
    * skips that check.
    */
   date?: Date;
+  /** When the deposit was written; null for one not written yet. */
+  createdAt?: Date | null;
   isOneOffIncome?: boolean;
   reimbursesTransactionId?: string | null;
 }
@@ -121,6 +123,7 @@ export async function checkEarmarks(
       {
         accountId: deposit.accountId,
         date: deposit.date,
+        createdAt: deposit.createdAt ?? null,
         type: deposit.type,
         source: deposit.source,
         isOneOffIncome: deposit.isOneOffIncome ?? false,

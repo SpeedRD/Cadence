@@ -60,6 +60,8 @@ export interface TransactionFormValues {
   /** With externalId, lets canBeSharedExpense decide whether the share switch is offered; a new row is MANUAL. */
   source?: string;
   externalId?: string | null;
+  /** When the row being edited was written (absent for a new one): see isAdoptedDeposit. */
+  createdAt?: Date | null;
   /**
    * The row being edited as stored, in its account's currency (K7), with the
    * currency of the account it is on - so the conversion preview says when
@@ -194,6 +196,7 @@ export function TransactionDialog({
       {
         accountId: accountId ?? "",
         date: adoptedDate,
+        createdAt: values.createdAt ?? null,
         type,
         source: values.source ?? "MANUAL",
         isOneOffIncome,

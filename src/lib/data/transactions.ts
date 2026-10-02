@@ -48,6 +48,8 @@ export interface SharedExpenseDetails {
 export interface TransactionRow extends SharedExpenseDetails {
   id: string;
   date: Date;
+  /** When the row was written: whether a confirmed check-in adopted it (isAdoptedDeposit in src/lib/period-income.ts) depends on it. */
+  createdAt: Date;
   /** As stored: in the account's currency (K7), or - on a row written before K7 - as it was entered. */
   amount: number;
   currency: string;
@@ -220,6 +222,7 @@ export async function listTransactions(
         : null,
       isExtraordinary: transaction.isExtraordinary,
       isOneOffIncome: transaction.isOneOffIncome,
+      createdAt: transaction.createdAt,
       reimbursesTransactionId: transaction.reimbursesTransactionId,
       note: transaction.note,
       transferId: transaction.transferId,

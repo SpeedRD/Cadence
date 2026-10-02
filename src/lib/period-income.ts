@@ -131,24 +131,49 @@ export interface AdoptedWindow {
   from: Date;
   /** Exclusive. */
   until: Date;
+  /**
+   * When the check-in was last confirmed (its updatedAt, which settling or
+   * adjusting a carryover leaves alone): only a deposit that existed then is
+   * in the paycheck it adopted.
+   */
+  confirmedAt: Date;
 }
 
 /**
  * Whether a deposit is one a confirmed check-in adopted as pay: an ordinary
  * INCOME row - not a check-in's own paycheck row, not one-off income, not a
  * payback of a shared expense, the rows Step 2 lists - dated in an adoption
- * window on its account. Like a check-in's own paycheck, it is the plan's
- * income, so it cannot also be earmarked for a recurring payment
- * (src/lib/earmarks.ts) - that would count the money twice.
+ * window on its account, and already in the ledger when that check-in was
+ * last confirmed. Like a check-in's own paycheck, it is the plan's income, so
+ * it cannot also be earmarked for a recurring payment (src/lib/earmarks.ts) -
+ * that would count the money twice. A deposit that arrived after the
+ * confirmation (a family transfer toward an installment) is not in the
+ * paycheck the check-in recorded, and can be. `createdAt` null is a deposit
+ * not written yet: it arrives after every confirmation.
  */
 export function isAdoptedDeposit(
-  row: { accountId: string; date: Date; type: string; source: string; isOneOffIncome: boolean; reimbursesTransactionId: string | null },
+  row: {
+    accountId: string;
+    date: Date;
+    createdAt: Date | null;
+    type: string;
+    source: string;
+    isOneOffIncome: boolean;
+    reimbursesTransactionId: string | null;
+  },
   windows: readonly AdoptedWindow[],
 ): boolean {
   if (row.type !== "INCOME" || row.source === "PAYDAY_CHECKIN" || row.isOneOffIncome) return false;
-  if (reimbursedExpenseIdFromTransaction(row) !== null) return false;
+  if (reimbursedExpenseIdFromTransaction(row) !== null || row.createdAt === null) return false;
   const day = row.date.getTime();
-  return windows.some((window) => window.accountId === row.accountId && day >= window.from.getTime() && day < window.until.getTime());
+  const created = row.createdAt.getTime();
+  return windows.some(
+    (window) =>
+      window.accountId === row.accountId &&
+      day >= window.from.getTime() &&
+      day < window.until.getTime() &&
+      created <= window.confirmedAt.getTime(),
+  );
 }
 
 /**

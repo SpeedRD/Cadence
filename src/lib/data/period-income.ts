@@ -236,11 +236,11 @@ export async function loadLedgerDeposits(
 export async function loadAdoptedWindows(): Promise<AdoptedWindow[]> {
   const snapshots = await prisma.paydayAccountSnapshot.findMany({
     where: { adoptedIncome: { gt: 0 }, checkin: { status: "CONFIRMED" } },
-    select: { accountId: true, checkin: { select: { year: true, month: true, period: true } } },
+    select: { accountId: true, checkin: { select: { year: true, month: true, period: true, updatedAt: true } } },
   });
   return snapshots.map((snapshot) => {
     const window = incomeWindow(snapshot.checkin);
-    return { accountId: snapshot.accountId, from: window.from, until: window.until };
+    return { accountId: snapshot.accountId, from: window.from, until: window.until, confirmedAt: snapshot.checkin.updatedAt };
   });
 }
 

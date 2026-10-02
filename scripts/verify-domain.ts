@@ -15411,11 +15411,11 @@ async function main() {
         // one-off bonus beside it, never adopted, still can.
         const { saveEarmarks: pSaveEarmarks } = await import("../src/lib/data/earmark-targets");
         await prisma.recurringItem.create({
-          data: { name: "Verify Pay Installment", amount: 3000, currency: "DOP", frequency: "MONTHLY", anchorDay: 10, nextDate: pDay(10, 10), active: true, kind: "SUBSCRIPTION", accountId: oneOffAccount.id },
+          data: { name: "Verify Pay Installment", amount: 5000, currency: "DOP", frequency: "MONTHLY", anchorDay: 10, nextDate: pDay(10, 10), active: true, kind: "SUBSCRIPTION", accountId: oneOffAccount.id },
         });
         const installmentKey = `${(await prisma.recurringItem.findFirstOrThrow({ where: { name: "Verify Pay Installment" } })).id}:2026-10-10`;
         const salaryRow = await prisma.transaction.findFirstOrThrow({ where: { accountId: oneOffAccount.id, note: "NOMINA" } });
-        const depositOf = (row: { id: string; amount: unknown; date: Date; isOneOffIncome: boolean }) => ({
+        const depositOf = (row: { id: string; amount: unknown; date: Date; createdAt: Date; isOneOffIncome: boolean }) => ({
           id: row.id,
           accountId: oneOffAccount.id,
           amount: num(row.amount as never),
@@ -15423,6 +15423,7 @@ async function main() {
           source: "CSV",
           transferDirection: null,
           date: row.date,
+          createdAt: row.createdAt,
           isOneOffIncome: row.isOneOffIncome,
           reimbursesTransactionId: null,
         });
@@ -15435,6 +15436,21 @@ async function main() {
         );
         const bonusSaved = await pSaveEarmarks(depositOf(bonus), [{ occurrenceKey: installmentKey, amount: 3000 }], earmarkContext);
         eq("R1 follow-up guard: the one-off bonus, not adopted, can still be earmarked", `${bonusSaved.ok ? "ok" : bonusSaved.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: bonus.id } })}`, "ok | 1");
+        // A deposit that lands after the check-in was confirmed - a family
+        // transfer toward the installment, in the same window on the same
+        // account - is not in the paycheck it adopted, so it can be earmarked.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        const family = await prisma.transaction.create({
+          data: { accountId: oneOffAccount.id, date: pDay(10, 1), amount: 2000, currency: "DOP", type: "INCOME", source: "MANUAL", note: "TRANSFERENCIA FAMILIA" },
+        });
+        const familySaved = await pSaveEarmarks(depositOf(family), [{ occurrenceKey: installmentKey, amount: 2000 }], earmarkContext);
+        eq(
+          "R1 second follow-up: a 2,000 family transfer created after Oct 1-15 was confirmed, in its window, can be earmarked for the installment (was refused as adopted)",
+          `${familySaved.ok ? "ok" : familySaved.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: family.id } })}`,
+          "ok | 1",
+        );
+        const salaryAgain = await pSaveEarmarks(depositOf(salaryRow), [{ occurrenceKey: installmentKey, amount: 1000 }], earmarkContext);
+        eq("R1 second follow-up: the salary the check-in adopted still cannot", `${salaryAgain.ok ? "ok" : salaryAgain.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: salaryRow.id } })}`, "adopted_paycheck | 0");
         const issues = (dictionary: Record<string, unknown>) => ((dictionary.earmarkIssues ?? {}) as Record<string, string>).adopted_paycheck ?? "absent";
         eq("R1 follow-up: the refusal, in English", issues(pDictionary("en").transactions as unknown as Record<string, unknown>), "This deposit is part of a confirmed payday check-in's paycheck: the plan already counts it as income, so it can't be set aside for a payment too");
         eq("R1 follow-up: and in Spanish", issues(pDictionary("es").transactions as unknown as Record<string, unknown>), "Este depósito es parte del pago de un chequeo de pago confirmado: el plan ya lo cuenta como ingreso, así que no puede apartarse también para un pago");
@@ -15619,6 +15635,58 @@ async function main() {
       }
 
       // ---------------------------------------------------------------------
+      console.log("\n-- settling or adjusting a carryover is not an edit: the wizard's version survives it --");
+      {
+        const popular = await pAccount("Popular");
+        const version = (draft: PDraft) => (draft.checkinVersion === undefined ? {} : { checkinVersion: draft.checkinVersion });
+        const stamp = async () => (await prisma.paydayCheckin.findFirstOrThrow({ where: { ...octA } })).updatedAt.toISOString();
+        await pConfirm(pInput(sepB, [{ accountId: popular.id, incomeEntered: 50000 }]), pDay(9, 15));
+        await pSpend(popular.id, pDay(9, 20), 10000, "SUPER");
+        await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 60000 }], { includedCarryover: 35000 }), pDay(9, 30));
+        // Opened on Sep 30 (the carryover still provisional); another page
+        // read on Oct 1 settles it before the user confirms.
+        const openedSep30 = await pDraft(octA, pDay(9, 30));
+        const beforeSettle = await stamp();
+        await pRoom.loadConfirmedRooms([octA], pContext(pDay(10, 1)));
+        const settled = await prisma.paydayCheckin.findFirstOrThrow({ where: { ...octA }, include: { allocations: { where: { type: "CARRYOVER" } } } });
+        eq(
+          "version: settling the carryover on Oct 1 writes it (35,000, basis no longer provisional) and leaves the check-in's updatedAt as it was",
+          `${num(settled.includedCarryover)} ${settled.allocations[0]?.basis} ${settled.updatedAt.toISOString() === beforeSettle}`,
+          "35000 prior_period_budget true",
+        );
+        eq(
+          "version: so the wizard opened before the settle still confirms on Oct 1 (was refused as changed since loaded)",
+          pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 60000 }], { includedCarryover: 35000, ...version(openedSep30) }), pDay(10, 1))),
+          "ok",
+        );
+        // Opened on Oct 2; a 15,000 expense dated Sep 29 arrives and the
+        // dashboard's read on Oct 3 adjusts the carryover before the confirm.
+        const openedOct2 = await pDraft(octA, pDay(10, 2));
+        const beforeAdjust = await stamp();
+        await pSpend(popular.id, pDay(9, 29), 15000, "LATE");
+        const adjusted = (await pRoom.loadConfirmedRooms([octA], pContext(pDay(10, 3)))).get(periodInfo(octA).key) as unknown as { carryover: number };
+        eq(
+          "version: adjusting it to 20,000 on Oct 3 leaves updatedAt as it was",
+          `${adjusted.carryover} ${(await stamp()) === beforeAdjust}`,
+          "20000 true",
+        );
+        eq(
+          "version: so the wizard opened on Oct 2 still confirms on Oct 3 (was refused as changed since loaded)",
+          pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 60000 }], { includedCarryover: 20000, ...version(openedOct2) }), pDay(10, 3))),
+          "ok",
+        );
+        // A real second confirm still conflicts.
+        const tabA = await pDraft(octA, pDay(10, 3));
+        const tabB = await pDraft(octA, pDay(10, 3));
+        eq("version: tab A confirms", pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 61000 }], { includedCarryover: 20000, ...version(tabA) }), pDay(10, 3))), "ok");
+        eq(
+          "version: tab B, opened before A's confirm, is still refused",
+          pVerdict(await pConfirm(pInput(octA, [{ accountId: popular.id, incomeEntered: 62000 }], { includedCarryover: 20000, ...version(tabB) }), pDay(10, 3))),
+          "changed_since_loaded",
+        );
+        await pWipe();
+      }
+
       console.log("\n-- a second tab confirming a check-in the first one loaded --");
       {
         const popular = await pAccount("Popular");

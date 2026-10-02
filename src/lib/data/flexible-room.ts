@@ -64,6 +64,7 @@ import { loadBudgetSpent } from "@/lib/data/budget-spending";
 import { loadCommitments } from "@/lib/data/period-commitments";
 
 import type { AppContext } from "@/lib/data/context";
+import type { Prisma } from "@/generated/prisma/client";
 import type { ConfirmPaydayCheckinContext } from "@/lib/data/payday";
 
 /** One account as a confirmed check-in recorded it, amounts in the account's currency. */
@@ -228,10 +229,20 @@ async function settleCarryover(checkin: CheckinRow, context: RoomContext, depth:
       where: { id: row.id, basis: PROVISIONAL_CARRYOVER_BASIS },
       data: { basis: settled.basis, recommendedAmount: amount, plannedAmount: amount, currency: checkin.currency },
     });
-    if (moved.count === 1) {
-      await tx.paydayCheckin.update({ where: { id: checkin.id }, data: { includedCarryover: amount } });
-    }
+    if (moved.count === 1) await storeCarryover(tx, checkin.id, amount);
   });
+}
+
+/**
+ * Writes a settled or adjusted carryover to the check-in, keeping its
+ * updatedAt as read in the same transaction: the check-in's version, which a
+ * wizard open on it confirms against (PaydayCheckinDraft.checkinVersion).
+ * Settling or adjusting a carryover is not an edit of the check-in, so it
+ * must not make that confirm look like a second tab's.
+ */
+async function storeCarryover(tx: Prisma.TransactionClient, checkinId: string, includedCarryover: number): Promise<void> {
+  const { updatedAt } = await tx.paydayCheckin.findUniqueOrThrow({ where: { id: checkinId }, select: { updatedAt: true } });
+  await tx.paydayCheckin.update({ where: { id: checkinId }, data: { includedCarryover, updatedAt } });
 }
 
 /**
@@ -250,12 +261,7 @@ async function reconcileCarryover(checkin: CheckinRow, context: RoomContext, dep
       where: { id: row.id, basis: row.basis, plannedAmount: row.plannedAmount },
       data: { basis: ADJUSTED_CARRYOVER_BASIS, plannedAmount: amount },
     });
-    if (moved.count === 1) {
-      await tx.paydayCheckin.update({
-        where: { id: checkin.id },
-        data: { includedCarryover: round2(convert(amount, row.currency, checkin.currency, context.rates)) },
-      });
-    }
+    if (moved.count === 1) await storeCarryover(tx, checkin.id, round2(convert(amount, row.currency, checkin.currency, context.rates)));
   });
 }
 

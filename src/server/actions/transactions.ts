@@ -68,7 +68,8 @@ export async function saveTransactionAction(
   if ("error" in earmarks) return fail(localizeValidationMessage(earmarks.error, locale));
   const earmarkMessage = (issue: EarmarkIssue | "not_depositable" | "adopted_paycheck") => t.earmarkIssues[issue];
   // The deposit as saved, for the rule that a confirmed check-in's adopted
-  // pay cannot be earmarked (checkEarmarks).
+  // pay cannot be earmarked (checkEarmarks). A new deposit has no createdAt
+  // yet: it arrives after every confirmation, so no check-in adopted it.
   const depositFacts = { date: values.date, isOneOffIncome: values.isOneOffIncome, reimbursesTransactionId: values.reimbursesTransactionId };
 
   const referenceError = await checkReferences(t, [values.accountId], values.categoryId, !id);
@@ -170,6 +171,7 @@ export async function saveTransactionAction(
       source: existing.source,
       transferDirection: values.transferDirection,
       ...depositFacts,
+      createdAt: existing.createdAt,
     };
     if (earmarks.offered) {
       const check = await checkEarmarks(deposit, earmarks.requests, await getAppContext());

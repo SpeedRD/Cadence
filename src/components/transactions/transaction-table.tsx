@@ -621,6 +621,7 @@ export function TransactionTable({
             earmarks: depositEarmarks[editingPlain.id] ?? [],
             source: editingPlain.source,
             externalId: editingPlain.externalId,
+            createdAt: editingPlain.createdAt,
           }}
         />
       ) : null}
