@@ -51,10 +51,14 @@
  *                      hand-logged contribution's own expense already has its
  *                      GoalContribution, so settling with one writes nothing.
  *   already posted  -> a RECURRING row for this exact (item, due date) already
- *                      exists, so the unique key would reject a second one.
- *                      Rolling forward anyway is what keeps an item whose
- *                      nextDate was moved back onto a posted day from failing
- *                      the same write on every future run, for ever.
+ *                      exists, so the unique key would reject a second one -
+ *                      or posting already settled it with a charge
+ *                      (settlementClaimed). Rolling forward anyway is what
+ *                      keeps an item whose nextDate was moved back onto a
+ *                      posted or settled day from failing the same write on
+ *                      every future run, for ever, and nothing is written or
+ *                      counted again: no second GoalContribution, no second
+ *                      installment.
  *
  * A finite item (RecurringItem.remainingOccurrences set - an installment plan
  * from the Afford calculator) counts down by one per occurrence it posts or
@@ -76,7 +80,11 @@
  * Two overlapping runs can never double-post because each occurrence is
  * claimed with a compare-and-swap on nextDate inside the same database
  * transaction that writes its rows, and the Transaction's (source, externalId)
- * unique key pins each (item, due date) pair as a second guard.
+ * unique key pins each (item, due date) pair as a second guard. The claim
+ * holds the item's row lock from its first statement, the lock the user's
+ * "It's that payment" takes too (recordUpcomingPayment), and reads the
+ * occurrence's settlement under it, so an answer recorded while the run was
+ * planning is the pairing the claim keeps, never a second row beside it.
  */
 import { exactAmountIn, inAccountCurrency } from "@/lib/account-money";
 import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
@@ -86,7 +94,8 @@ import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
 import { MAX_OCCURRENCES_PER_ITEM, advanceDate, skipReasonFor, type RecurringSkipReason } from "@/lib/recurring";
-import { recurringExternalId } from "@/lib/recurring-settlement";
+import { manualContributionIdFromTransaction } from "@/lib/transactions";
+import { recurringExternalId, settlementClaimed } from "@/lib/recurring-settlement";
 
 import { loadSettlementPlan, type PlannedCharge } from "@/lib/data/recurring-settlement";
 
@@ -124,7 +133,7 @@ export interface RecurringPostingSummary {
   skipped: SkippedRecurringItem[];
   /** Occurrences rolled forward without posting because the charge was already in the ledger. */
   occurrencesAlreadyLogged: number;
-  /** Occurrences rolled forward whose RECURRING row already existed. */
+  /** Occurrences rolled forward whose RECURRING row already existed, or that posting had already settled. */
   occurrencesAlreadyPosted: number;
   /** Items that hit MAX_OCCURRENCES_PER_ITEM and still have occurrences due. */
   itemsCapped: number;
@@ -199,17 +208,53 @@ async function postOccurrence(
 
   try {
     const outcome = await prisma.$transaction(async (tx) => {
+      // The item's row lock, before anything is read: an "It's that payment"
+      // answer for this occurrence (recordUpcomingPayment, which takes the
+      // same lock) either committed before this claim and is read below, or
+      // waits and then finds the occurrence claimed.
+      await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${item.id} FOR UPDATE`;
+      // A pairing recorded for this occurrence, read now rather than taken
+      // from the plan: the user's answer may have landed since the plan was
+      // loaded, and one posting already claimed is never claimed again.
+      const recorded = await tx.recurringSettlement.findUnique({
+        where: { occurrenceKey: externalId },
+        select: {
+          claimedByPostingAt: true,
+          transaction: {
+            select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, accountId: true, source: true, externalId: true },
+          },
+        },
+      });
       // This occurrence's rows already exist (its nextDate was moved back onto
-      // a day that had been posted). Creating the Transaction would violate
-      // (source, externalId) and roll back the claim with it, leaving the item
-      // to fail identically on every future run. Keep the roll-forward
-      // instead - without spending an installment, which the first posting
-      // already did.
+      // a day that had been posted, or that posting had settled). Creating
+      // the Transaction would violate (source, externalId) and roll back the
+      // claim with it, leaving the item to fail identically on every future
+      // run; settling it again would add a second GoalContribution. Keep the
+      // roll-forward instead - without spending an installment, which the
+      // first claim already did.
       const alreadyPosted =
+        (recorded !== null && settlementClaimed(recorded)) ||
         (await tx.transaction.findUnique({
           where: { source_externalId: { source: "RECURRING", externalId } },
           select: { id: true },
         })) !== null;
+      // Recorded ahead by the user: settled by that row's charge, whatever
+      // the plan said when it was loaded.
+      const settles: PlannedCharge | null = alreadyPosted
+        ? null
+        : recorded
+          ? {
+              id: recorded.transaction.id,
+              date: recorded.transaction.date,
+              amount: num(recorded.transaction.amount),
+              currency: recorded.transaction.currency,
+              originalAmount: recorded.transaction.originalAmount === null ? null : num(recorded.transaction.originalAmount),
+              originalCurrency: recorded.transaction.originalCurrency,
+              accountId: recorded.transaction.accountId,
+              isContributionTwin: manualContributionIdFromTransaction(recorded.transaction) !== null,
+              alreadyRecorded: true,
+            }
+          : settledBy;
 
       // A contribution about to add money to its goal first checks, under the
       // goal's row lock (the one rebuildGoalSaved takes), that the goal still
@@ -217,7 +262,7 @@ async function postOccurrence(
       // achievedAt, so a contribution another run wrote a moment ago counts.
       // Only rows dated today or earlier count, as in rebuildGoalSaved: a
       // contribution dated ahead has not reached the goal yet.
-      const writesContribution = goalId !== null && !alreadyPosted && !settledBy?.isContributionTwin;
+      const writesContribution = goalId !== null && !alreadyPosted && !settles?.isContributionTwin;
       if (writesContribution) {
         await tx.$queryRaw`SELECT "id" FROM "Goal" WHERE "id" = ${goalId} FOR UPDATE`;
         const goal = await tx.goal.findUnique({ where: { id: goalId }, select: { currency: true, targetAmount: true } });
@@ -263,23 +308,22 @@ async function postOccurrence(
       // and the claim is rolled back for the next run to plan again.
       // A pairing the user recorded before the occurrence fell due is kept as
       // it is - it must still be there, with the same charge.
-      if (settledBy) {
-        const charge = await tx.transaction.findUnique({ where: { id: settledBy.id }, select: { id: true } });
-        const recorded = !charge
+      // The pairing records the claim (claimedByPostingAt): a nextDate moved
+      // back onto this day later rolls past it without settling it again.
+      if (settles) {
+        const charge = await tx.transaction.findUnique({ where: { id: settles.id }, select: { id: true } });
+        const kept = !charge
           ? { count: 0 }
-          : settledBy.alreadyRecorded
-            ? {
-                count:
-                  (await tx.recurringSettlement.findUnique({ where: { occurrenceKey: externalId }, select: { transactionId: true } }))
-                    ?.transactionId === settledBy.id
-                    ? 1
-                    : 0,
-              }
+          : settles.alreadyRecorded
+            ? await tx.recurringSettlement.updateMany({
+                where: { occurrenceKey: externalId, transactionId: settles.id, claimedByPostingAt: null },
+                data: { claimedByPostingAt: new Date() },
+              })
             : await tx.recurringSettlement.createMany({
-                data: [{ transactionId: settledBy.id, occurrenceKey: externalId, recurringItemId: item.id, kind: item.kind, dueDate: due }],
+                data: [{ transactionId: settles.id, occurrenceKey: externalId, recurringItemId: item.id, kind: item.kind, dueDate: due, claimedByPostingAt: new Date() }],
                 skipDuplicates: true,
               });
-        if (recorded.count === 0) throw new SettlementLost();
+        if (kept.count === 0) throw new SettlementLost();
         if (!writesContribution || !goalId) {
           return { result: "already_logged" as const, goalContribution: false, completed, counted };
         }
@@ -293,9 +337,9 @@ async function postOccurrence(
         await tx.goalContribution.create({
           data: {
             goalId,
-            amount: exactAmountIn(settledBy, goalCurrency) ?? round2(convert(settledBy.amount, settledBy.currency, goalCurrency, rates)),
+            amount: exactAmountIn(settles, goalCurrency) ?? round2(convert(settles.amount, settles.currency, goalCurrency, rates)),
             currency: goalCurrency,
-            date: settledBy.date,
+            date: settles.date,
             note: item.name,
             recurringItemId: item.id,
             recurringExternalId: externalId,

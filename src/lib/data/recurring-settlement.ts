@@ -12,20 +12,32 @@
  * src/lib/data/posted-duplicates.ts) has its RecurringSettlement row already:
  * it is settled by that row's charge, never offered to the matcher, and the
  * charge is no candidate for any other occurrence. The matcher's rules are
- * not involved.
+ * not involved. So does one posting already claimed (settlementClaimed) that
+ * a nextDate moved back walks again - but that one is rolled past like a
+ * posted one, without counting against an installment plan.
+ *
+ * Only items posting will post are planned: an item it skips
+ * (skipReasonFor - no account, an archived one, no goal, a goal reached)
+ * claims no charge, or its look-alike would post the same money.
  */
 import { num } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
-import { advanceDate } from "@/lib/recurring";
+import { advanceDate, skipReasonFor } from "@/lib/recurring";
+import { addDays } from "@/lib/date";
 import {
+  SETTLEMENT_LEAD_DAYS,
+  itemIdFromOccurrenceKey,
   planSettlements,
   recurringExternalId,
+  settlementClaimed,
   settlementSpan,
   type SettlementCharge,
   type SettlementItem,
   type SettlementOccurrence,
 } from "@/lib/recurring-settlement";
 import { manualContributionIdFromTransaction } from "@/lib/transactions";
+
+import type { RecurringKind } from "@/generated/prisma/enums";
 
 /** Never walk more occurrences of one item than this, however far behind it has fallen. */
 const MAX_SETTLEMENT_WALK = 400;
@@ -49,14 +61,32 @@ export interface PlannedCharge {
 export interface SettlementPlan {
   /** Occurrences whose RECURRING row already exists (a nextDate moved back onto a posted day). */
   posted: Set<string>;
+  /**
+   * Occurrences posting already claimed with a charge (settlementClaimed)
+   * that a nextDate moved back walks again: rolled past without counting, as
+   * a posted one is. Also in `settledBy`.
+   */
+  claimed: Set<string>;
   /** The charge that already paid each settled occurrence, by recurringExternalId. */
   settledBy: Map<string, PlannedCharge>;
+  /**
+   * The occurrence each charge in `settledBy` pays and its item's kind, by
+   * charge id - the pairings posting will record, before it has. Budget
+   * spending leaves such a charge out as it does one already recorded
+   * (pairedCharges).
+   */
+  byCharge: Map<string, { key: string; kind: RecurringKind }>;
+}
+
+/** Whether a walk rolls past `key` without counting it against an installment plan: its RECURRING row exists, or posting already claimed it. */
+export function rolledPast(plan: Pick<SettlementPlan, "posted" | "claimed">, key: string): boolean {
+  return plan.posted.has(key) || plan.claimed.has(key);
 }
 
 export async function loadSettlementPlan(through: Date): Promise<SettlementPlan> {
-  const plan: SettlementPlan = { posted: new Set(), settledBy: new Map() };
+  const plan: SettlementPlan = { posted: new Set(), claimed: new Set(), settledBy: new Map(), byCharge: new Map() };
 
-  const rows = await prisma.recurringItem.findMany({
+  const found = await prisma.recurringItem.findMany({
     where: { active: true, nextDate: { lte: through } },
     select: {
       id: true,
@@ -71,9 +101,14 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
       anchorDay: true,
       secondAnchorDay: true,
       remainingOccurrences: true,
+      accountId: true,
+      account: { select: { status: true } },
+      goal: { select: { achievedAt: true } },
     },
   });
+  const rows = found.filter((row) => skipReasonFor(row) === null);
   if (rows.length === 0) return plan;
+  const kindById = new Map(rows.map((row) => [row.id, row.kind]));
 
   // Every unclaimed due date through `through`, before the countdown: an
   // occurrence whose RECURRING row already exists is rolled past without
@@ -101,6 +136,7 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
     where: { occurrenceKey: { in: keys } },
     select: {
       occurrenceKey: true,
+      claimedByPostingAt: true,
       transaction: {
         select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, accountId: true, source: true, externalId: true },
       },
@@ -118,6 +154,7 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
       isContributionTwin: manualContributionIdFromTransaction(charge) !== null,
       alreadyRecorded: true,
     });
+    if (settlementClaimed(recorded)) plan.claimed.add(recorded.occurrenceKey);
   }
 
   const occurrences: SettlementOccurrence[] = [];
@@ -126,17 +163,21 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
     for (const due of dates) {
       if (left <= 0) break;
       const key = recurringExternalId(row.id, due);
-      if (plan.posted.has(key)) continue;
+      if (rolledPast(plan, key)) continue;
       // Already settled: one installment accounted for, nothing to match.
       if (plan.settledBy.has(key)) {
         left -= 1;
         continue;
       }
-      occurrences.push({ itemId: row.id, due });
+      occurrences.push({ itemId: row.id, due, nextDue: advanceDate(due, row.frequency, row.anchorDay, row.secondAnchorDay) });
       left -= 1;
     }
   }
-  const span = settlementSpan(occurrences.map((occurrence) => occurrence.due));
+  for (const [key, charge] of plan.settledBy) {
+    const kind = kindById.get(itemIdFromOccurrenceKey(key) ?? "");
+    if (kind) plan.byCharge.set(charge.id, { key, kind });
+  }
+  const span = settlementSpan(occurrences);
   if (!span) return plan;
 
   // The look-alike guard is judged over every active item, not only the ones
@@ -221,6 +262,23 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
 
   for (const [key, chargeId] of planSettlements({ items, occurrences, charges })) {
     plan.settledBy.set(key, plannedById.get(chargeId) as PlannedCharge);
+    const kind = kindById.get(itemIdFromOccurrenceKey(key) ?? "");
+    if (kind) plan.byCharge.set(chargeId, { key, kind });
   }
   return plan;
+}
+
+/**
+ * Every charge dated on or before `through` that pays a recurring occurrence,
+ * by charge id, with the occurrence's key and its item's kind: the pairings
+ * the settlement plan makes before posting records them. A charge can pay an
+ * occurrence due up to SETTLEMENT_LEAD_DAYS after it, so the plan reaches
+ * that far past `through`; its due-date order keeps every earlier pairing
+ * what it would be planned through `through` alone. Budget spending (K6)
+ * leaves these out exactly as it leaves out a charge whose RecurringSettlement
+ * posting already wrote - the period commitments count the occurrence as
+ * settled either way.
+ */
+export async function loadPairedCharges(through: Date): Promise<Map<string, { key: string; kind: RecurringKind }>> {
+  return (await loadSettlementPlan(addDays(through, SETTLEMENT_LEAD_DAYS))).byCharge;
 }

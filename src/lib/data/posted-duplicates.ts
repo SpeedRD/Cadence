@@ -28,7 +28,7 @@ import { num, type DecimalLike } from "@/lib/money";
 import { fundedPeriodFor, periodInfo } from "@/lib/period";
 import { scheduleDates } from "@/lib/period-commitments";
 import { prisma } from "@/lib/prisma";
-import { skipReasonFor } from "@/lib/recurring";
+import { advanceDate, skipReasonFor } from "@/lib/recurring";
 import {
   itemIdFromOccurrenceKey,
   paycheckWindow,
@@ -40,7 +40,7 @@ import {
   type PostedEntry,
 } from "@/lib/recurring-settlement";
 
-import { loadSettlementPlan } from "@/lib/data/recurring-settlement";
+import { loadSettlementPlan, rolledPast } from "@/lib/data/recurring-settlement";
 
 import type { Prisma } from "@/generated/prisma/client";
 import type { RateTable } from "@/lib/currency";
@@ -59,6 +59,8 @@ export interface PostedMatchRow {
   kind: "recurring" | "paycheck" | "upcoming";
   /** The recurring item's name (the row's note once the item is gone), or the paycheck's note. */
   label: string | null;
+  /** The account it is on (for an upcoming occurrence, the item's). */
+  accountName: string;
   /** YYYY-MM-DD */
   date: string;
   amount: number;
@@ -75,14 +77,21 @@ export interface PostedMatch {
   posted: PostedMatchRow;
   others: PostedMatchRow[];
   /**
+   * The incoming row's account, when it is not the posted row's: a charge
+   * on another card than the one the item posts to. The question names both.
+   */
+  entryAccountName: string | null;
+  /**
    * What choosing the posted charge writes on `posted`: the incoming amount and
    * currency in place of its own - as the incoming row stores them, in the
-   * account's currency, with what it was entered as - nothing else. Null when they already agree,
-   * and always for a paycheck (a check-in owns it), a contribution's ledger
-   * half (its GoalContribution must stay in step) and an ambiguous match
-   * (which row is meant is not known).
+   * account's currency, with what it was entered as - and, for a charge on
+   * another account, that account: the money left from there. Nothing else.
+   * Null when they already agree, and always for a paycheck (a check-in owns
+   * it), an ambiguous match (which row is meant is not known) and, on its
+   * own account, a contribution's ledger half (its GoalContribution must stay
+   * in step; on another account the match is exact, so the money is the same).
    */
-  rewrite: StoredMoney | null;
+  rewrite: (StoredMoney & { accountId?: string }) | null;
 }
 
 type Client = Prisma.TransactionClient;
@@ -114,13 +123,15 @@ export async function findPostedDuplicates(
     latest = maxDate(latest, entry.date);
   }
 
+  // A RECURRING row on any account: a charge from another card than the one
+  // the item posts to is its money too (planPostedDuplicates). A paycheck
+  // only on the deposit's own account.
   const rows = await client.transaction.findMany({
     where: {
-      accountId: { in: accountIds },
       date: { gte: addDays(earliest, -LOOKUP_MARGIN_DAYS), lte: addDays(latest, LOOKUP_MARGIN_DAYS) },
       OR: [
         { source: "RECURRING", type: "EXPENSE" },
-        { source: "PAYDAY_CHECKIN", type: "INCOME" },
+        { source: "PAYDAY_CHECKIN", type: "INCOME", accountId: { in: accountIds } },
       ],
     },
     select: {
@@ -146,11 +157,11 @@ export async function findPostedDuplicates(
   const itemIds = [...new Set(recurringKeys.map(itemIdFromOccurrenceKey).filter((id): id is string => id !== null))];
   const paycheckIds = rows.filter((row) => row.source === "PAYDAY_CHECKIN").map((row) => row.id);
 
-  const [postedItems, activeItems, contributionKeys, snapshots] = await Promise.all([
+  const [postedItems, activeItems, contributionKeys, snapshots, accounts] = await Promise.all([
     itemIds.length
       ? client.recurringItem.findMany({
           where: { id: { in: itemIds } },
-          select: { id: true, name: true, amount: true, currency: true, categoryId: true },
+          select: { id: true, name: true, amount: true, currency: true, categoryId: true, frequency: true, anchorDay: true, secondAnchorDay: true },
         })
       : [],
     // The look-alike guard is judged over every active item, as posting judges it.
@@ -170,13 +181,22 @@ export async function findPostedDuplicates(
           select: { incomeTransactionId: true, checkin: { select: { year: true, month: true, period: true } } },
         })
       : [],
+    client.account.findMany({
+      where: { id: { in: [...new Set([...accountIds, ...rows.map((row) => row.accountId), ...upcoming.map((entry) => entry.accountId)])] } },
+      select: { id: true, name: true },
+    }),
   ]);
+  const accountName = new Map(accounts.map((account) => [account.id, account.name]));
 
   const toMatchable = (item: { id: string; name: string; amount: DecimalLike; currency: string; categoryId: string | null }): MatchableItem => ({
-    ...item,
+    id: item.id,
+    name: item.name,
     amount: num(item.amount),
+    currency: item.currency,
+    categoryId: item.categoryId,
   });
   const itemById = new Map(postedItems.map((item) => [item.id, toMatchable(item)]));
+  const scheduleById = new Map(postedItems.map((item) => [item.id, item]));
   const contributionHalves = new Set(contributionKeys.map((row) => row.recurringExternalId as string));
   const plannedByPaycheck = new Map(
     snapshots.map((snapshot) => [snapshot.incomeTransactionId as string, periodInfo(snapshot.checkin)]),
@@ -187,7 +207,12 @@ export async function findPostedDuplicates(
   const rewritable = new Set<string>();
   for (const row of rows) {
     const kind = row.source === "RECURRING" ? "recurring" : "paycheck";
-    const item = kind === "recurring" && row.externalId ? (itemById.get(itemIdFromOccurrenceKey(row.externalId) ?? "") ?? null) : null;
+    const itemId = kind === "recurring" && row.externalId ? (itemIdFromOccurrenceKey(row.externalId) ?? "") : "";
+    const item = itemById.get(itemId) ?? null;
+    const schedule = scheduleById.get(itemId);
+    const keyDue = row.externalId ? fromISODate(row.externalId.slice(row.externalId.lastIndexOf(":") + 1)) : null;
+    // The item's next occurrence bounds this one's window past its period.
+    const nextDue = schedule && keyDue ? advanceDate(keyDue, schedule.frequency, schedule.anchorDay, schedule.secondAnchorDay) : null;
     const planned = plannedByPaycheck.get(row.id);
     posted.push({
       id: row.id,
@@ -202,13 +227,14 @@ export async function findPostedDuplicates(
       // A paycheck whose snapshot is gone falls back to the funding window of
       // the period its own day funds.
       window:
-        kind === "paycheck" ? paycheckWindow(planned ?? fundedPeriodFor(row.date)) : settlementWindow(row.date),
+        kind === "paycheck" ? paycheckWindow(planned ?? fundedPeriodFor(row.date)) : settlementWindow(row.date, nextDue),
       item,
     });
     viewById.set(row.id, {
       id: row.id,
       kind,
       label: item?.name ?? row.note,
+      accountName: accountName.get(row.accountId) ?? "",
       date: toISODate(row.date),
       amount: num(row.amount),
       currency: row.currency,
@@ -221,6 +247,7 @@ export async function findPostedDuplicates(
       id: entry.id,
       kind: "upcoming",
       label: entry.item?.name ?? null,
+      accountName: accountName.get(entry.accountId) ?? "",
       date: toISODate(entry.date),
       amount: entry.amount,
       currency: entry.currency,
@@ -244,7 +271,9 @@ export async function findPostedDuplicates(
     const primary = viewById.get(verdict.postedId) as PostedMatchRow;
     const postedEntry = posted.find((row) => row.id === verdict.postedId) as PostedEntry;
     const incomingMoney = rewriteFor(storedMoney(entry), postedEntry);
+    const otherAccount = postedEntry.accountId !== entry.accountId;
     const differs =
+      otherAccount ||
       primary.currency !== incomingMoney.currency ||
       Math.round(primary.amount * 100) !== Math.round(incomingMoney.amount * 100) ||
       (postedEntry.originalCurrency ?? null) !== incomingMoney.originalCurrency ||
@@ -255,8 +284,15 @@ export async function findPostedDuplicates(
       ambiguous: verdict.ambiguous,
       posted: primary,
       others: verdict.candidateIds.slice(1).map((id) => viewById.get(id) as PostedMatchRow),
+      entryAccountName: otherAccount ? (accountName.get(entry.accountId) ?? "") : null,
       rewrite:
-        differs && !verdict.ambiguous && rewritable.has(primary.id) ? incomingMoney : null,
+        !differs || verdict.ambiguous || postedEntry.kind !== "recurring"
+          ? null
+          : otherAccount
+            ? { ...incomingMoney, accountId: entry.accountId }
+            : rewritable.has(primary.id)
+              ? incomingMoney
+              : null,
     });
   }
   return result;
@@ -341,10 +377,11 @@ async function loadUpcomingEntries(
     const matchable: MatchableItem = { id: item.id, name: item.name, amount: num(item.amount), currency: item.currency, categoryId: item.categoryId };
     for (const date of scheduleDates({ ...item }, earliest, {
       through,
-      alreadyPosted: (due) => plan.posted.has(recurringExternalId(item.id, due)),
+      alreadyPosted: (due) => rolledPast(plan, recurringExternalId(item.id, due)),
     })) {
       const key = recurringExternalId(item.id, date.dueDate);
       if (date.dueDate.getTime() < from.getTime() || plan.posted.has(key) || plan.settledBy.has(key)) continue;
+      const nextDue = advanceDate(date.dueDate, item.frequency, item.anchorDay, item.secondAnchorDay);
       entries.push({
         id: key,
         kind: "upcoming",
@@ -355,7 +392,7 @@ async function loadUpcomingEntries(
         currency: item.currency,
         originalAmount: null,
         originalCurrency: null,
-        window: settlementWindow(date.dueDate),
+        window: settlementWindow(date.dueDate, nextDue),
         item: matchable,
       });
     }
@@ -405,14 +442,17 @@ export async function lookUpPostedDuplicates(
  * "It's the posted charge": the incoming row is not written, and when the
  * match carries a rewrite, the posted RECURRING row takes the incoming amount
  * and currency - the bank's or the receipt's figure for the money that really
- * moved, in the account's currency, with what it was entered as. No other field changes, a paycheck is never touched, and nothing is
- * deleted. Returns whether the posted row changed.
+ * moved, in the account's currency, with what it was entered as - and, for a
+ * charge on another account, moves to that account. No other field changes,
+ * a paycheck is never touched, and nothing is deleted. Returns whether the
+ * posted row changed.
  */
 export async function applyPostedMatch(client: Client, match: PostedMatch): Promise<boolean> {
   if (!match.rewrite) return false;
   const updated = await client.transaction.updateMany({
     where: { id: match.posted.id, source: "RECURRING" },
     data: {
+      ...(match.rewrite.accountId ? { accountId: match.rewrite.accountId } : {}),
       amount: match.rewrite.amount,
       currency: match.rewrite.currency,
       originalAmount: match.rewrite.originalAmount,
@@ -647,6 +687,10 @@ export async function keepEntryAsUpcoming(
   if (!match || match.kind !== "upcoming" || match.posted.id !== input.occurrenceKey) return { ok: false, reason: "match_gone" };
 
   const outcome = await prisma.$transaction(async (tx) => {
+    // The item's lock before the entry's, the order posting's claim takes
+    // them in (the item, then the charge it settles with).
+    const itemId = itemIdFromOccurrenceKey(input.occurrenceKey);
+    if (itemId) await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${itemId} FOR UPDATE`;
     await tx.$queryRaw`SELECT "id" FROM "Transaction" WHERE "id" = ${entry.id} FOR UPDATE`;
     const current = await tx.transaction.findUnique({
       where: { id: entry.id },
@@ -672,6 +716,13 @@ export async function keepEntryAsUpcoming(
  * not past the due date, and no RECURRING row for it - and both of
  * RecurringSettlement's unique keys refuse a second pairing of either side;
  * otherwise "match_gone" and nothing is written.
+ *
+ * It first takes the item's row lock, the one posting's claim takes before
+ * it reads anything (postOccurrence in src/lib/recurring-posting.ts), so the
+ * two serialize on the due date: an answer that lands first is the pairing
+ * the claim then keeps; one that waits on a claim finds the occurrence
+ * claimed. The row leaves claimedByPostingAt empty, which is what tells
+ * posting to claim it once, counting its installment.
  */
 export async function recordUpcomingPayment(
   tx: Client,
@@ -681,6 +732,7 @@ export async function recordUpcomingPayment(
   const itemId = itemIdFromOccurrenceKey(occurrenceKey);
   const dueDate = fromISODate(occurrenceKey.slice(occurrenceKey.lastIndexOf(":") + 1));
   if (!itemId || !dueDate) return "match_gone";
+  await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${itemId} FOR UPDATE`;
   const item = await tx.recurringItem.findFirst({
     where: { id: itemId, active: true, nextDate: { lte: dueDate } },
     select: { id: true, name: true, kind: true },

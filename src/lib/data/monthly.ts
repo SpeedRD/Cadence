@@ -83,6 +83,7 @@ import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX, manualContributionIdFromTransac
 import type { AppContext } from "@/lib/data/context";
 import { getFirstActivityDate } from "@/lib/data/history-window";
 import { loadCommitments } from "@/lib/data/period-commitments";
+import { loadPairedCharges } from "@/lib/data/recurring-settlement";
 import type { SpendingLine } from "@/lib/data/period-summary";
 import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
 
@@ -402,7 +403,7 @@ async function computeMonthActuals(
   typicalOnly = false,
 ): Promise<MonthActuals> {
   const rangeEnd = minDate(window.end, throughDate);
-  const [transactions, goalContributions] = await Promise.all([
+  const [transactions, goalContributions, paired] = await Promise.all([
     prisma.transaction.findMany({
       where: { type: "EXPENSE", date: { gte: window.start, lte: rangeEnd } },
       select: {
@@ -427,6 +428,9 @@ async function computeMonthActuals(
       where: { date: { gte: window.start, lte: rangeEnd } },
       select: { id: true, amount: true, currency: true, recurringExternalId: true },
     }),
+    // A charge the settlement plan pairs with an occurrence posting has not
+    // recorded yet stands for it already, as in budget spending (K6).
+    loadPairedCharges(rangeEnd),
   ]);
 
   const toDisplay = (amount: number, currency: string) =>
@@ -469,7 +473,7 @@ async function computeMonthActuals(
   const occurrenceKeyOf = (tx: (typeof transactions)[number]): string | null => {
     if (tx.source === "RECURRING") return tx.externalId;
     if (manualContributionTwinIds.has(tx.id)) return null;
-    return tx.recurringSettlement?.occurrenceKey ?? null;
+    return tx.recurringSettlement?.occurrenceKey ?? paired.get(tx.id)?.key ?? null;
   };
 
   // An auto-posted occurrence is one event written as two rows. The pairing key
@@ -501,7 +505,7 @@ async function computeMonthActuals(
     // an occurrence stays savings even after the item behind it is gone.
     const isContribution =
       pairedContributionKeys.has(key) ||
-      tx.recurringSettlement?.kind === "CONTRIBUTION" ||
+      (tx.recurringSettlement?.kind ?? paired.get(tx.id)?.kind) === "CONTRIBUTION" ||
       item?.kind === "CONTRIBUTION";
     const amount = toDisplay(num(tx.amount), tx.currency);
 

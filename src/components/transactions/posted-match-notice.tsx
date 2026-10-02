@@ -1,5 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { formatMoney } from "@/lib/currency";
+import { fromISODate } from "@/lib/date";
+import { formatDate } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 
 import type { PostedMatch, PostedMatchRow } from "@/lib/data/posted-duplicates";
@@ -9,9 +11,16 @@ function labelOf(row: PostedMatchRow, t: ReturnType<typeof getDictionary>["trans
   return row.label ?? (row.kind === "paycheck" ? t.isRecordedPaycheck : t.isPostedCharge);
 }
 
+/** A posted row's date ("YYYY-MM-DD") as the app writes dates. */
+function dateOf(row: PostedMatchRow, locale: Locale): string {
+  const date = fromISODate(row.date);
+  return date ? formatDate(date, locale) : row.date;
+}
+
 /**
  * What a row being brought in matched: the posted recurring charge or the
- * recorded paycheck, its date and amount, the other candidates when the
+ * recorded paycheck, its date and amount, both accounts when the row is on
+ * another account than the posted charge, the other candidates when the
  * look-alike guard could not choose, and - when `showOutcome` - what choosing
  * "It's the posted charge" does: the posted row's old and new amount, or both
  * amounts for a paycheck, which never changes. Shared by the CSV review, the
@@ -45,16 +54,19 @@ export function PostedMatchNotice({
           </Badge>
         ) : null}
         {match.kind === "paycheck"
-          ? t.postedMatchPaycheck(posted.date, postedMoney)
+          ? t.postedMatchPaycheck(dateOf(posted, locale), postedMoney)
           : match.kind === "upcoming"
-            ? t.postedMatchUpcoming(labelOf(posted, t), posted.date, postedMoney)
-            : t.postedMatchRecurring(labelOf(posted, t), posted.date, postedMoney)}
+            ? t.postedMatchUpcoming(labelOf(posted, t), dateOf(posted, locale), postedMoney)
+            : t.postedMatchRecurring(labelOf(posted, t), dateOf(posted, locale), postedMoney)}
       </span>
+      {match.entryAccountName ? (
+        <span className="block">{t.postedMatchOtherAccount(posted.accountName, match.entryAccountName)}</span>
+      ) : null}
       {match.ambiguous ? (
         <span className="block">
           {t.postedMatchOthers(
             match.others
-              .map((row) => `${labelOf(row, t)} ${row.date} ${formatMoney(row.amount, row.currency)}`)
+              .map((row) => `${labelOf(row, t)} ${dateOf(row, locale)} ${formatMoney(row.amount, row.currency)}`)
               .join("; "),
           )}
         </span>
@@ -64,6 +76,10 @@ export function PostedMatchNotice({
           <span className="block">{t.upcomingMatchOutcome}</span>
         ) : match.kind === "paycheck" ? (
           <span className="block">{t.postedMatchBothAmounts(postedMoney, incomingMoney)}</span>
+        ) : match.rewrite?.accountId && match.entryAccountName ? (
+          <span className="block">
+            {t.postedMatchMovesAccount(posted.accountName, match.entryAccountName, formatMoney(match.rewrite.amount, match.rewrite.currency))}
+          </span>
         ) : match.rewrite ? (
           <span className="block">
             {t.postedMatchUpdates(postedMoney, formatMoney(match.rewrite.amount, match.rewrite.currency))}

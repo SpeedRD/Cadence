@@ -34,6 +34,7 @@ import {
 import { enteredMoney, enteredShare, rateLine } from "@/lib/account-money";
 import { formatMoney, type RateTable } from "@/lib/currency";
 import { toISODate } from "@/lib/date";
+import { formatDayMonth } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { canBeExtraordinary, transactionEditBlock } from "@/lib/transactions";
 import { deleteTransactionAction, setExtraordinaryAction } from "@/server/actions/transactions";
@@ -639,7 +640,12 @@ export function TransactionTable({
           description={
             deleting.transferId
               ? t.deleteTransferDescription
-              : t.deleteTransactionDescription
+              : deleting.settles
+                ? `${(deleting.settles.posts ? t.deleteSettlesPosts : t.deleteSettlesDropped)(
+                    deleting.settles.itemName,
+                    formatDayMonth(deleting.settles.dueDate, locale),
+                  )} ${t.deleteTransactionDescription}`
+                : t.deleteTransactionDescription
           }
           confirmLabel={common.delete}
           keepLabel={common.keepIt}

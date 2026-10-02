@@ -385,6 +385,10 @@ export const en = {
     deleteTransferDescription: "Both sides of the transfer are removed together.",
     deleteTransactionTitle: "Delete this transaction?",
     deleteTransactionDescription: "This cannot be undone.",
+    deleteSettlesDropped: (name: string, date: string) =>
+      `This charge paid the ${name} payment due ${date}. If you delete it, that payment won't be posted again.`,
+    deleteSettlesPosts: (name: string, date: string) =>
+      `This charge is kept as the ${name} payment due ${date}. If you delete it, that payment will be posted on its due date.`,
     editTransaction: "Edit transaction",
     newTransaction: "New transaction",
     manualDescription: "Logged manually - source stays as Manual.",
@@ -569,6 +573,9 @@ export const en = {
     postedMatchPossible: "Possible match",
     postedMatchUpdates: (from: string, to: string) => `As the posted charge, it changes from ${from} to ${to}`,
     postedMatchStaysAsIs: "As the posted charge, it stays as it is",
+    postedMatchOtherAccount: (posted: string, entry: string) => `The posted charge is on ${posted}; this one is on ${entry}`,
+    postedMatchMovesAccount: (from: string, to: string, amount: string) =>
+      `Answering "It's the posted charge" moves the posted charge from ${from} to ${to}, the account the money left, at ${amount}`,
     postedMatchBothAmounts: (recorded: string, deposit: string) =>
       `Paycheck recorded: ${recorded}. This deposit: ${deposit}. The paycheck stays as recorded.`,
     isPostedCharge: "It's the posted charge",
@@ -869,6 +876,10 @@ export const en = {
     deleteItemTitle: (name: string) => `Delete ${name}?`,
     stopsCounting: "It no longer counts as a commitment and nothing more is posted for it. Safe to spend does not change. Transactions it already posted stay.",
     itemUpdated: "Recurring item updated",
+    paymentsMoved: (moves: string) => `The payment already recorded moved to the new date: ${moves}.`,
+    paymentMove: (from: string, to: string) => `${from} to ${to}`,
+    paymentsReleased: (dates: string) =>
+      `The charge recorded for ${dates} no longer fits the new date, so that payment will be posted when it falls due.`,
     itemAdded: "Recurring item added",
     itemDeleted: "Recurring item deleted",
     itemNoLongerExists: "That item no longer exists",

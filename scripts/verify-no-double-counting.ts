@@ -34,10 +34,14 @@
  *   pair 4  a row Cadence wrote itself - an occurrence's RECURRING row, or
  *           the paycheck a payday check-in recorded - versus a charge or
  *           deposit brought in for the same money (a CSV row, an approved
- *           receipt, a manual entry). Existing pairs are found with the
- *           entry points' own matcher (findPostedDuplicates in
- *           src/lib/data/posted-duplicates.ts), and no occurrence may be
- *           both settled by a charge (RecurringSettlement) and posted.
+ *           receipt, a manual entry). Existing pairs are found with this
+ *           script's own matching in SQL and plain code, wider than the
+ *           entry points' (any account, the posted row's half-month and five
+ *           days either side), never with their matcher, so a gap in it is
+ *           found rather than inherited. No occurrence may be both settled by
+ *           a charge (RecurringSettlement) and posted, and no item may have
+ *           one schedule slot paid twice under two keys (a settlement left on
+ *           a key its schedule no longer has).
  *   pair 5  a deposit the user earmarked for a recurring occurrence
  *           (RecurringEarmark, src/lib/earmarks.ts) and the occurrence it
  *           covers: the earmarked part lowers what the occurrence asks of the
@@ -1126,95 +1130,187 @@ async function main(): Promise<number> {
   // =========================================================================
   console.log("\n== pair 4: a charge or deposit brought in vs the row Cadence wrote for it ==");
   // =========================================================================
+  // Its own matching, in SQL and plain code - never the entry points' matcher
+  // (planPostedDuplicates / planSettlements), so a gap in those (a window
+  // that ends too early, an account they do not look at) shows up here
+  // instead of being inherited. Deliberately wider than the app's rules: a
+  // finding is a pair to look at, not a verdict.
   {
-    const { findPostedDuplicates } = await import("../src/lib/data/posted-duplicates");
+    const normalized = (value: string | null | undefined) => (value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const cents = (value: number) => Math.round(value * 100);
+    type MoneyShape = { amount: number; currency: string; originalAmount: number | null; originalCurrency: string | null };
+    // The same money, exactly: some currency both rows hold a figure in - as
+    // stored, or as entered before being stored in another.
+    const sameMoney = (a: MoneyShape, b: MoneyShape) => {
+      const figures = (row: MoneyShape) => [
+        [row.currency, row.amount],
+        ...(row.originalCurrency !== null && row.originalAmount !== null ? [[row.originalCurrency, row.originalAmount] as const] : []),
+      ] as const;
+      return figures(a).some(([ca, va]) => figures(b).some(([cb, vb]) => ca === cb && Math.abs(cents(va as number) - cents(vb as number)) <= 1));
+    };
 
-    // An occurrence is either posted (its RECURRING row) or settled by a
-    // charge the user entered (RecurringSettlement), never both.
-    const settlements = await prisma.recurringSettlement.findMany({
-      select: { id: true, occurrenceKey: true, transactionId: true, dueDate: true },
-    });
-    const postedForSettled = settlements.length
-      ? await prisma.transaction.findMany({
-          where: { source: "RECURRING", externalId: { in: settlements.map((settlement) => settlement.occurrenceKey) } },
-          select: { id: true, externalId: true, date: true, amount: true, currency: true },
-        })
-      : [];
-    const postedByKey = new Map(postedForSettled.map((row) => [row.externalId as string, row]));
+    // (a) An occurrence settled by a charge (RecurringSettlement) and posted
+    // (its RECURRING row) both.
+    const settlements = await prisma.$queryRaw<{ id: string; occurrenceKey: string; transactionId: string; dueDate: Date; kind: string; postedId: string | null; postedDate: Date | null; postedAmount: string | null; postedCurrency: string | null }[]>`
+      SELECT s.id, s."occurrenceKey", s."transactionId", s."dueDate", s.kind::text AS kind,
+             t.id AS "postedId", t.date AS "postedDate", t.amount::text AS "postedAmount", t.currency AS "postedCurrency"
+      FROM "RecurringSettlement" s
+      LEFT JOIN "Transaction" t ON t.source = 'RECURRING' AND t."externalId" = s."occurrenceKey"`;
     let settledAndPosted = 0;
     for (const settlement of settlements) {
-      const posted = postedByKey.get(settlement.occurrenceKey);
-      if (!posted) continue;
+      if (!settlement.postedId) continue;
       settledAndPosted += 1;
       flag(4, "DOUBLE", `occurrence ${settlement.occurrenceKey} is both settled by a charge and posted`, [
         `settled:  RecurringSettlement ${settlement.id} -> Transaction ${settlement.transactionId} (due ${toISODate(settlement.dueDate)})`,
-        `posted:   Transaction ${posted.id} (${toISODate(posted.date)}) ${money(num(posted.amount), posted.currency)}`,
+        `posted:   Transaction ${settlement.postedId} (${toISODate(settlement.postedDate!)}) ${money(Number(settlement.postedAmount), settlement.postedCurrency!)}`,
       ]);
     }
 
-    // Every row brought in, as one batch, against every row Cadence wrote. A
-    // charge a settlement already pairs with an occurrence, and a hand-logged
-    // contribution's own expense (pair 1's twin), are already accounted for
-    // and are not judged again here.
-    const brought = await prisma.transaction.findMany({
-      where: {
-        type: { in: ["EXPENSE", "INCOME"] },
-        source: { notIn: ["RECURRING", "PAYDAY_CHECKIN", "OPENING_BALANCE"] },
-        transferId: null,
-        recurringSettlement: { is: null },
-      },
-      select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, type: true, accountId: true, categoryId: true, note: true, source: true, externalId: true },
-    });
-    const incoming = brought
-      .filter((row) => manualContributionIdFromTransaction(row) === null)
-      .map((row) => ({
-        key: row.id,
-        accountId: row.accountId,
-        type: row.type as "EXPENSE" | "INCOME",
-        date: row.date,
-        amount: num(row.amount),
-        currency: row.currency,
-        originalAmount: row.originalAmount === null ? null : num(row.originalAmount),
-        originalCurrency: row.originalCurrency,
-        rate: row.rate === null ? null : num(row.rate),
-        categoryId: row.categoryId,
-        note: row.note,
-      }));
-    const byId = new Map(brought.map((row) => [row.id, row]));
-    const pairs = await findPostedDuplicates(incoming, rates, prisma);
-    for (const [id, match] of pairs) {
-      const row = byId.get(id)!;
-      const posted = match.posted;
-      flag(
-        4,
-        match.possible ? "POSSIBLE" : "DOUBLE",
-        `${row.source} ${row.type.toLowerCase()} ${row.id} duplicates the ${posted.kind === "paycheck" ? "paycheck" : `posted charge "${posted.label ?? "?"}"`} ${posted.id}`,
-        [
-          `brought in: Transaction ${row.id} (${row.source}, ${toISODate(row.date)}) ${money(num(row.amount), row.currency)}${row.note ? ` "${row.note}"` : ""}`,
-          `written:    Transaction ${posted.id} (${posted.kind === "paycheck" ? "PAYDAY_CHECKIN" : "RECURRING"}, ${posted.date}) ${money(posted.amount, posted.currency)}`,
-          ...(match.possible
-            ? [
-                row.currency !== posted.currency
-                  ? "amounts agree only after conversion at the stored rates: a possible match"
-                  : "the row names neither the item nor its category and is not within a few days of it: a possible match",
-              ]
-            : []),
-          ...(match.ambiguous
-            ? [`ambiguous: could also be ${match.others.map((other) => `${other.id} (${other.label ?? "?"}, ${other.date})`).join(", ")}`]
-            : []),
-        ],
-      );
-    }
-    const written = await prisma.transaction.groupBy({
-      by: ["source", "type", "currency"],
-      where: { OR: [{ source: "RECURRING", type: "EXPENSE" }, { source: "PAYDAY_CHECKIN", type: "INCOME" }] },
-      _count: { _all: true },
-    });
-    info(
-      `settled and posted: ${settledAndPosted} of ${settlements.length} settlement${settlements.length === 1 ? "" : "s"} name an occurrence that also has a RECURRING row`,
+    // (b) One schedule slot paid twice under two keys: an item's consumed
+    // occurrences (RECURRING rows and settlements, by the due date in their
+    // key) closer together than its schedule ever puts two - the same
+    // calendar month for a monthly item, the same year for a yearly one,
+    // under half the interval for weekly and biweekly, under half the gap
+    // between its two days (less two days of weekend shift) for a
+    // semi-monthly one. A schedule edit that left a settlement on the old
+    // key while the new one posted is this.
+    const consumed = await prisma.$queryRaw<{ itemId: string; due: Date; key: string; how: string; rowId: string }[]>`
+      SELECT left("externalId", length("externalId") - 11) AS "itemId", to_date(right("externalId", 10), 'YYYY-MM-DD') AS due,
+             "externalId" AS key, 'posted' AS how, id AS "rowId"
+      FROM "Transaction" WHERE source = 'RECURRING' AND type = 'EXPENSE' AND "externalId" ~ ':[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+      UNION ALL
+      SELECT left("occurrenceKey", length("occurrenceKey") - 11), to_date(right("occurrenceKey", 10), 'YYYY-MM-DD'),
+             "occurrenceKey", 'settled', "transactionId"
+      FROM "RecurringSettlement" WHERE "occurrenceKey" ~ ':[0-9]{4}-[0-9]{2}-[0-9]{2}$'`;
+    const schedules = new Map(
+      (
+        await prisma.$queryRaw<{ id: string; name: string; frequency: string; anchorDay: number | null; secondAnchorDay: number | null; categoryId: string | null }[]>`
+          SELECT id, name, frequency::text AS frequency, "anchorDay", "secondAnchorDay", "categoryId" FROM "RecurringItem"`
+      ).map((row) => [row.id, row]),
     );
+    const byItem = new Map<string, typeof consumed>();
+    for (const row of consumed) byItem.set(row.itemId, [...(byItem.get(row.itemId) ?? []), row]);
+    let slotsChecked = 0;
+    for (const [itemId, rows] of byItem) {
+      const schedule = schedules.get(itemId);
+      if (!schedule) continue;
+      const sorted = [...rows].sort((a, b) => a.due.getTime() - b.due.getTime());
+      slotsChecked += sorted.length;
+      const tooClose = (a: Date, b: Date) => {
+        const days = Math.round((b.getTime() - a.getTime()) / 86_400_000);
+        switch (schedule.frequency) {
+          case "MONTHLY":
+            return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth();
+          case "YEARLY":
+            return a.getUTCFullYear() === b.getUTCFullYear();
+          case "WEEKLY":
+            return days < 3.5;
+          case "BIWEEKLY":
+            return days < 7;
+          default: {
+            const gap = Math.abs((schedule.anchorDay ?? 1) - (schedule.secondAnchorDay ?? 16));
+            return days < Math.max(1, Math.min(gap, 30 - gap) / 2 - 2);
+          }
+        }
+      };
+      for (let i = 1; i < sorted.length; i += 1) {
+        const [earlier, later] = [sorted[i - 1], sorted[i]];
+        if (earlier.key === later.key || !tooClose(earlier.due, later.due)) continue;
+        flag(4, "DOUBLE", `"${schedule.name}" (${schedule.frequency}) has one slot paid twice: ${toISODate(earlier.due)} ${earlier.how} and ${toISODate(later.due)} ${later.how}`, [
+          `${earlier.how}: ${earlier.key} (${earlier.how === "posted" ? "RECURRING row" : "settled by Transaction"} ${earlier.rowId})`,
+          `${later.how}: ${later.key} (${later.how === "posted" ? "RECURRING row" : "settled by Transaction"} ${later.rowId})`,
+          "its schedule never puts two occurrences this close: a settlement left on a key the schedule no longer has, or two items for one bill",
+        ]);
+      }
+    }
+
+    // (c) A charge brought in (CSV, receipt, manual entry) on any account
+    // holding exactly the money of a RECURRING row, dated in that row's
+    // half-month widened by five days each side; a deposit holding exactly a
+    // check-in paycheck's money on its account within ten days of it. Rows a
+    // settlement already pairs, transfer legs and hand-logged contributions'
+    // own expenses (pair 1) are accounted for and left out.
+    const candidates = await prisma.$queryRaw<
+      {
+        postedId: string; postedKind: string; postedAccount: string; postedDate: Date; postedAmount: string; postedCurrency: string; postedOriginalAmount: string | null; postedOriginalCurrency: string | null; postedKey: string | null;
+        broughtId: string; broughtSource: string; broughtAccount: string; broughtDate: Date; broughtAmount: string; broughtCurrency: string; broughtOriginalAmount: string | null; broughtOriginalCurrency: string | null; broughtNote: string | null; broughtCategory: string | null;
+      }[]
+    >`
+      WITH posted AS (
+        SELECT id, 'recurring' AS kind, "accountId", date, amount, currency, "originalAmount", "originalCurrency", "externalId",
+               to_date(right("externalId", 10), 'YYYY-MM-DD') AS due
+        FROM "Transaction"
+        WHERE source = 'RECURRING' AND type = 'EXPENSE' AND "externalId" ~ ':[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        UNION ALL
+        SELECT id, 'paycheck', "accountId", date, amount, currency, "originalAmount", "originalCurrency", NULL, date
+        FROM "Transaction" WHERE source = 'PAYDAY_CHECKIN' AND type = 'INCOME'
+      ), bounds AS (
+        SELECT *,
+          CASE WHEN extract(day FROM due) <= 15 THEN date_trunc('month', due)::date ELSE date_trunc('month', due)::date + 15 END - 5 AS lo,
+          CASE WHEN extract(day FROM due) <= 15 THEN date_trunc('month', due)::date + 14 ELSE (date_trunc('month', due) + interval '1 month - 1 day')::date END + 5 AS hi
+        FROM posted
+      ), brought AS (
+        SELECT t.* FROM "Transaction" t
+        WHERE t.type IN ('EXPENSE', 'INCOME') AND t.source NOT IN ('RECURRING', 'PAYDAY_CHECKIN', 'OPENING_BALANCE') AND t."transferId" IS NULL
+          AND NOT EXISTS (SELECT 1 FROM "RecurringSettlement" s WHERE s."transactionId" = t.id)
+          AND (t."externalId" IS NULL OR t."externalId" NOT LIKE ${`${MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX}%`})
+      )
+      SELECT p.id AS "postedId", p.kind AS "postedKind", p."accountId" AS "postedAccount", p.date AS "postedDate", p.amount::text AS "postedAmount", p.currency AS "postedCurrency",
+             p."originalAmount"::text AS "postedOriginalAmount", p."originalCurrency" AS "postedOriginalCurrency", p."externalId" AS "postedKey",
+             b.id AS "broughtId", b.source::text AS "broughtSource", b."accountId" AS "broughtAccount", b.date AS "broughtDate", b.amount::text AS "broughtAmount", b.currency AS "broughtCurrency",
+             b."originalAmount"::text AS "broughtOriginalAmount", b."originalCurrency" AS "broughtOriginalCurrency", b.note AS "broughtNote", b."categoryId" AS "broughtCategory"
+      FROM bounds p JOIN brought b
+        ON (p.kind = 'recurring' AND b.type = 'EXPENSE' AND b.date BETWEEN p.lo AND p.hi)
+        OR (p.kind = 'paycheck' AND b.type = 'INCOME' AND b."accountId" = p."accountId" AND b.date BETWEEN p.date - 10 AND p.date + 10)`;
+    type Verdict = { kind: "DOUBLE" | "POSSIBLE"; reason: string; days: number; row: (typeof candidates)[number] };
+    const verdicts: Verdict[] = [];
+    for (const row of candidates) {
+      const posted: MoneyShape = { amount: Number(row.postedAmount), currency: row.postedCurrency, originalAmount: row.postedOriginalAmount === null ? null : Number(row.postedOriginalAmount), originalCurrency: row.postedOriginalCurrency };
+      const brought: MoneyShape = { amount: Number(row.broughtAmount), currency: row.broughtCurrency, originalAmount: row.broughtOriginalAmount === null ? null : Number(row.broughtOriginalAmount), originalCurrency: row.broughtOriginalCurrency };
+      const days = Math.abs(Math.round((row.broughtDate.getTime() - row.postedDate.getTime()) / 86_400_000));
+      const sameAccount = row.broughtAccount === row.postedAccount;
+      const item = row.postedKey ? schedules.get(row.postedKey.slice(0, -11)) : undefined;
+      const names = Boolean(item) && ((normalized(item!.name).length > 0 && normalized(row.broughtNote).includes(normalized(item!.name))) || (item!.categoryId !== null && item!.categoryId === row.broughtCategory));
+      if (sameMoney(posted, brought)) {
+        if (row.postedKind === "paycheck") verdicts.push({ kind: "DOUBLE", reason: "the paycheck's exact amount, within ten days", days, row });
+        else if (names) verdicts.push({ kind: "DOUBLE", reason: `exact amount, names the item${sameAccount ? "" : ", on another account"}`, days, row });
+        else if (sameAccount && days <= 4) verdicts.push({ kind: "DOUBLE", reason: "exact amount on the same account within four days", days, row });
+        else verdicts.push({ kind: "POSSIBLE", reason: `exact amount${sameAccount ? "" : " on another account"}, but it names neither the item nor its category${sameAccount ? " and is more than four days away" : ""}`, days, row });
+      } else if (sameAccount && row.postedKind === "recurring") {
+        const inBrought = convert(posted.amount, posted.currency, brought.currency, rates);
+        if (inBrought > 0 && Math.abs(brought.amount - inBrought) <= 0.03 * inBrought && (posted.currency !== brought.currency || posted.originalCurrency !== null || brought.originalCurrency !== null)) {
+          verdicts.push({ kind: "POSSIBLE", reason: "amounts agree only after conversion at the stored rates", days, row });
+        }
+      }
+    }
+    // One brought-in row, one posted row: strongest and nearest first.
+    verdicts.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "DOUBLE" ? -1 : 1) || a.days - b.days || a.row.broughtId.localeCompare(b.row.broughtId));
+    const usedPosted = new Set<string>();
+    const usedBrought = new Set<string>();
+    let doubles = 0;
+    let possibles = 0;
+    for (const verdict of verdicts) {
+      const { row } = verdict;
+      if (usedPosted.has(row.postedId) || usedBrought.has(row.broughtId)) continue;
+      usedPosted.add(row.postedId);
+      usedBrought.add(row.broughtId);
+      if (verdict.kind === "DOUBLE") doubles += 1;
+      else possibles += 1;
+      const label = row.postedKind === "paycheck" ? "paycheck" : `posted charge "${(row.postedKey && schedules.get(row.postedKey.slice(0, -11))?.name) ?? "?"}"`;
+      flag(4, verdict.kind, `${row.broughtSource} row ${row.broughtId} duplicates the ${label} ${row.postedId}`, [
+        `brought in: Transaction ${row.broughtId} (${row.broughtSource}, ${toISODate(row.broughtDate)}, account ${row.broughtAccount}) ${money(Number(row.broughtAmount), row.broughtCurrency)}${row.broughtNote ? ` "${row.broughtNote}"` : ""}`,
+        `written:    Transaction ${row.postedId} (${row.postedKind === "paycheck" ? "PAYDAY_CHECKIN" : `RECURRING ${row.postedKey}`}, ${toISODate(row.postedDate)}, account ${row.postedAccount}) ${money(Number(row.postedAmount), row.postedCurrency)}`,
+        `why: ${verdict.reason}; ${verdict.days} day${verdict.days === 1 ? "" : "s"} apart`,
+      ]);
+    }
+    const written = await prisma.$queryRaw<{ source: string; currency: string; n: number }[]>`
+      SELECT source::text AS source, currency, count(*)::int AS n FROM "Transaction"
+      WHERE (source = 'RECURRING' AND type = 'EXPENSE') OR (source = 'PAYDAY_CHECKIN' AND type = 'INCOME')
+      GROUP BY 1, 2 ORDER BY 1, 2`;
+    info(`settled and posted: ${settledAndPosted} of ${settlements.length} settlement${settlements.length === 1 ? "" : "s"} name an occurrence that also has a RECURRING row`);
+    info(`slots: ${slotsChecked} consumed occurrence${slotsChecked === 1 ? "" : "s"} of ${byItem.size} item${byItem.size === 1 ? "" : "s"} checked for one slot paid twice`);
     info(
-      `existing pairs: ${pairs.size} (${[...pairs.values()].filter((match) => !match.possible).length} exact, ${[...pairs.values()].filter((match) => match.possible).length} possible) - ${incoming.length} row${incoming.length === 1 ? "" : "s"} brought in (${brought.length - incoming.length} contribution twin${brought.length - incoming.length === 1 ? "" : "s"} left to pair 1) against ${written.map((group) => `${group._count._all} ${group.source} ${group.currency}`).join(", ") || "no written rows"}`,
+      `existing pairs: ${doubles + possibles} (${doubles} double, ${possibles} possible) from ${candidates.length} candidate pair${candidates.length === 1 ? "" : "s"} against ${written.map((group) => `${group.n} ${group.source} ${group.currency}`).join(", ") || "no written rows"}`,
     );
     sectionResult(4);
   }

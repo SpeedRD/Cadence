@@ -21,6 +21,7 @@ import {
 } from "@/lib/budget-spending";
 
 import { SPENDING_ROW_SELECT, spendingRowFrom } from "@/lib/data/budget-spending";
+import { loadPairedCharges } from "@/lib/data/recurring-settlement";
 import { loadPeriodIncome } from "@/lib/data/period-income";
 import { periodCommitments } from "@/lib/data/period-commitments";
 
@@ -202,7 +203,7 @@ export async function getPeriodSummary(
   const { rates, displayCurrency } = context;
   const range = periodRange(period);
 
-  const [budgets, transactions, categories, commitments, incomeByPeriod] = await Promise.all([
+  const [budgets, transactions, categories, commitments, incomeByPeriod, paired] = await Promise.all([
     prisma.budget.findMany({
       where: { year: period.year, month: period.month, period: period.period },
     }),
@@ -216,6 +217,9 @@ export async function getPeriodSummary(
     // the period it funds - a check-in's in the period it planned, any other
     // from the payday it landed on - not in the calendar half it is dated in.
     loadPeriodIncome([period], "fact", context),
+    // Charges the settlement plan pairs with an occurrence before posting
+    // records it: the commitments count them as settled already (K6).
+    loadPairedCharges(period.end),
   ]);
 
   const toDisplay = (amount: number, currency: string) =>
@@ -227,7 +231,7 @@ export async function getPeriodSummary(
   );
 
   const categoryById = new Map(categories.map((category) => [category.id, category]));
-  const rows = transactions.map(spendingRowFrom);
+  const rows = transactions.map((row) => spendingRowFrom(row, paired));
   // The budget's figures - the overall spent and each category's row - are
   // one population (K6): what the plan did not already reserve.
   const budget = budgetSpentFrom(rows, categoryById, toDisplay);

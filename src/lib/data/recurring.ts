@@ -1,9 +1,19 @@
-import { convert } from "@/lib/currency";
-import { today as todayInAppZone } from "@/lib/date";
+import { convert, type RateTable } from "@/lib/currency";
+import { addDays, today as todayInAppZone, toISODate } from "@/lib/date";
+import { recomputeGoalSaved } from "@/lib/goals";
 import { num, round2 } from "@/lib/money";
 import { nextPeriod, periodForDate, periodInfo, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, paidPastOccurrences, semiMonthlyAnchorsCollide, skipReasonFor } from "@/lib/recurring";
+import { getRateTable } from "@/lib/rates";
+import { advanceDate, firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, paidPastOccurrences, semiMonthlyAnchorsCollide, skipReasonFor } from "@/lib/recurring";
+import {
+  planPostedDuplicates,
+  planSettlements,
+  recurringExternalId,
+  settlementClaimed,
+  settlementWindow,
+} from "@/lib/recurring-settlement";
+import { manualContributionIdFromTransaction } from "@/lib/transactions";
 
 import { loadCommitments } from "@/lib/data/period-commitments";
 
@@ -348,11 +358,44 @@ export async function setRecurringItemActive(
   });
 }
 
+/** A recorded payment that an edit of its item's schedule moved to another occurrence. */
+export interface SettlementMove {
+  itemName: string;
+  from: Date;
+  to: Date;
+}
+
+/** A recorded payment an edit of its item's schedule let go: the charge no longer pays any occurrence. */
+export interface SettlementRelease {
+  itemName: string;
+  dueDate: Date;
+}
+
+export interface RecurringEditResult {
+  /** Rows written: 0 when the item moved on since the form was read, or is gone. */
+  written: number;
+  settlements: { rekeyed: SettlementMove[]; released: SettlementRelease[] };
+}
+
 /**
  * The Recurring form's edit, in one place. Writes every field the form
  * carries, guarded by the `updatedAt` it was rendered with (no rows match once
  * the item has moved on; the caller tells the user to reopen). Returns how
- * many rows were written.
+ * many rows were written - see updateRecurringItemDetailed for what else it
+ * did.
+ */
+export async function updateRecurringItem(
+  id: string,
+  updatedAt: Date | null,
+  values: Prisma.RecurringItemUncheckedUpdateManyInput & { nextDate: Date; frequency: RecurringFrequency },
+  today: Date = todayInAppZone(),
+): Promise<number> {
+  return (await updateRecurringItemDetailed(id, updatedAt, values, today)).written;
+}
+
+/**
+ * The Recurring form's edit, and what it did to the payments recorded for
+ * the item (shown in the save's toast).
  *
  * When the edit is what makes the item postable again - it was paused, on
  * an archived or missing account, missing a goal or on an achieved one, and
@@ -362,59 +405,251 @@ export async function setRecurringItemActive(
  * user typed by hand is theirs: it is saved as typed, in the past or not.
  * `values.nextDate` is compared with the stored one, so an edit that leaves
  * the date alone is recognised without the form having to say so.
+ *
+ * An edit of the schedule (next date, frequency, anchors) also moves the
+ * item's recorded payments (RecurringSettlement) the new schedule would
+ * otherwise charge again, so none is left on a key the schedule no longer
+ * has while the occurrence that replaced it posts the same money
+ * (reconcileSettlements). The write, and that, happen under the item's row
+ * lock, the one posting's claim takes.
  */
-export async function updateRecurringItem(
+export async function updateRecurringItemDetailed(
   id: string,
   updatedAt: Date | null,
   values: Prisma.RecurringItemUncheckedUpdateManyInput & { nextDate: Date; frequency: RecurringFrequency },
   today: Date = todayInAppZone(),
-): Promise<number> {
-  const before = await prisma.recurringItem.findUnique({
-    where: { id },
-    include: { account: { select: { status: true } }, goal: { select: { achievedAt: true } } },
-  });
-  if (!before) return 0;
+  rates?: RateTable,
+): Promise<RecurringEditResult> {
+  const none: RecurringEditResult = { written: 0, settlements: { rekeyed: [], released: [] } };
+  const goalsToRebuild = new Set<string>();
+  const result = await prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${id} FOR UPDATE`;
+      const before = await tx.recurringItem.findUnique({
+        where: { id },
+        include: { account: { select: { status: true } }, goal: { select: { achievedAt: true } } },
+      });
+      if (!before) return none;
 
-  let nextDate = values.nextDate;
-  if (isBlocked(before) && before.nextDate.getTime() === values.nextDate.getTime() && values.nextDate.getTime() < today.getTime()) {
-    const [account, goal] = await Promise.all([
-      typeof values.accountId === "string"
-        ? prisma.account.findUnique({ where: { id: values.accountId }, select: { status: true } })
-        : null,
-      typeof values.goalId === "string"
-        ? prisma.goal.findUnique({ where: { id: values.goalId }, select: { achievedAt: true } })
-        : null,
-    ]);
-    const after = {
-      kind: (values.kind as RecurringKind | undefined) ?? before.kind,
-      accountId: typeof values.accountId === "string" ? values.accountId : null,
-      goalId: typeof values.goalId === "string" ? values.goalId : null,
-      account,
-      goal,
-    };
-    if (values.active !== false && skipReasonFor(after) === null) {
-      nextDate = firstOccurrenceOnOrAfter(
-        {
-          nextDate: values.nextDate,
-          frequency: values.frequency,
-          anchorDay: typeof values.anchorDay === "number" ? values.anchorDay : before.anchorDay,
-          secondAnchorDay: typeof values.secondAnchorDay === "number" ? values.secondAnchorDay : null,
+      let nextDate = values.nextDate;
+      if (isBlocked(before) && before.nextDate.getTime() === values.nextDate.getTime() && values.nextDate.getTime() < today.getTime()) {
+        const [account, goal] = await Promise.all([
+          typeof values.accountId === "string"
+            ? tx.account.findUnique({ where: { id: values.accountId }, select: { status: true } })
+            : null,
+          typeof values.goalId === "string"
+            ? tx.goal.findUnique({ where: { id: values.goalId }, select: { achievedAt: true } })
+            : null,
+        ]);
+        const after = {
+          kind: (values.kind as RecurringKind | undefined) ?? before.kind,
+          accountId: typeof values.accountId === "string" ? values.accountId : null,
+          goalId: typeof values.goalId === "string" ? values.goalId : null,
+          account,
+          goal,
+        };
+        if (values.active !== false && skipReasonFor(after) === null) {
+          nextDate = firstOccurrenceOnOrAfter(
+            {
+              nextDate: values.nextDate,
+              frequency: values.frequency,
+              anchorDay: typeof values.anchorDay === "number" ? values.anchorDay : before.anchorDay,
+              secondAnchorDay: typeof values.secondAnchorDay === "number" ? values.secondAnchorDay : null,
+            },
+            today,
+          );
+        }
+      }
+
+      const written = await tx.recurringItem.updateMany({
+        where: {
+          id,
+          ...(updatedAt ? { updatedAt } : {}),
+          // Moving the date is only right if nothing has moved it since it was read.
+          ...(nextDate.getTime() !== values.nextDate.getTime() ? { nextDate: before.nextDate } : {}),
         },
-        today,
+        data: { ...values, nextDate },
+      });
+      if (written.count === 0) return none;
+
+      const after = await tx.recurringItem.findUniqueOrThrow({ where: { id } });
+      const scheduleChanged =
+        after.nextDate.getTime() !== before.nextDate.getTime() ||
+        after.frequency !== before.frequency ||
+        after.anchorDay !== before.anchorDay ||
+        after.secondAnchorDay !== before.secondAnchorDay;
+      const settlements = scheduleChanged
+        ? await reconcileSettlements(tx, after, before.nextDate, rates, goalsToRebuild)
+        : { rekeyed: [], released: [] };
+      return { written: written.count, settlements };
+    },
+    { timeout: 20000 },
+  );
+  for (const goalId of goalsToRebuild) await recomputeGoalSaved(goalId);
+  return result;
+}
+
+/** How far past a recorded payment's due date the new schedule is walked for the occurrence that replaces it. */
+const RECONCILE_REACH_DAYS = 62;
+
+/**
+ * Moves each recorded payment of `item` whose occurrence the item's new
+ * schedule no longer has to the occurrence that replaces it, or lets it go.
+ *
+ *   - A pairing posting has not claimed yet (the user's "It's that payment",
+ *     settlementClaimed false) is always looked at. One whose due date is on
+ *     the new schedule stays; any other moves to the new occurrence nearest
+ *     its old due date that is free (no RECURRING row, no other recorded
+ *     payment) and that the charge still pays, or is released: the charge is
+ *     an ordinary one again, and the occurrence that replaced it posts on its
+ *     due date.
+ *   - A pairing posting already claimed is history, and stays, unless the
+ *     schedule moved back (`formerNext`, the nextDate before the edit) so that
+ *     it walks again the span posting had claimed. Then one not on the new
+ *     schedule moves to a free new occurrence in that span that the charge
+ *     still pays - the occurrence that replaced it - and otherwise stays: it
+ *     paid what it paid.
+ *
+ * "Pays" is the settlement rules: planSettlements, the one matcher posting
+ * uses, against the new occurrence; for the user's own answer also the
+ * question that produced it (planPostedDuplicates' upcoming occurrence, which
+ * takes an amount in the account's currency within
+ * CROSS_CURRENCY_MATCH_TOLERANCE). Moving or releasing a contribution's
+ * pairing moves or removes its GoalContribution with it, so the goal counts
+ * the money exactly when the ledger does. A moved pairing keeps whether
+ * posting has claimed it, so a claimed one is rolled past, never counted
+ * again.
+ */
+async function reconcileSettlements(
+  tx: Prisma.TransactionClient,
+  item: Prisma.RecurringItemGetPayload<object>,
+  formerNext: Date,
+  rates: RateTable | undefined,
+  goalsToRebuild: Set<string>,
+): Promise<RecurringEditResult["settlements"]> {
+  const movedBack = item.nextDate.getTime() < formerNext.getTime();
+  const moves: RecurringEditResult["settlements"] = { rekeyed: [], released: [] };
+  const recorded = (
+    await tx.recurringSettlement.findMany({
+      where: { recurringItemId: item.id },
+      select: {
+        id: true,
+        occurrenceKey: true,
+        dueDate: true,
+        claimedByPostingAt: true,
+        transaction: {
+          select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, accountId: true, categoryId: true, note: true, source: true, externalId: true },
+        },
+      },
+      orderBy: { dueDate: "asc" },
+    })
+  ).filter(
+    (row) =>
+      !settlementClaimed(row) ||
+      (movedBack &&
+        row.dueDate.getTime() < formerNext.getTime() &&
+        row.dueDate.getTime() >= addDays(item.nextDate, -RECONCILE_REACH_DAYS).getTime()),
+  );
+  if (recorded.length === 0) return moves;
+
+  const walkTo = addDays(recorded[recorded.length - 1].dueDate, RECONCILE_REACH_DAYS);
+  const schedule: Date[] = [];
+  for (let cursor = item.nextDate; cursor.getTime() <= walkTo.getTime() && schedule.length < 400; ) {
+    schedule.push(cursor);
+    cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
+  }
+  const nextAfter = (due: Date) => advanceDate(due, item.frequency, item.anchorDay, item.secondAnchorDay);
+  const onSchedule = new Set(schedule.map((due) => toISODate(due)));
+  const scheduleKeys = schedule.map((due) => recurringExternalId(item.id, due));
+  const taken = new Set([
+    ...(
+      await tx.transaction.findMany({ where: { source: "RECURRING", externalId: { in: scheduleKeys } }, select: { externalId: true } })
+    ).map((row) => row.externalId as string),
+    ...(await tx.recurringSettlement.findMany({ where: { occurrenceKey: { in: scheduleKeys } }, select: { occurrenceKey: true } })).map(
+      (row) => row.occurrenceKey,
+    ),
+  ]);
+  const guard = (
+    await tx.recurringItem.findMany({
+      where: { active: true },
+      select: { id: true, name: true, amount: true, currency: true, categoryId: true, kind: true, goalId: true },
+    })
+  ).map((row) => ({ ...row, amount: num(row.amount), goalId: row.kind === "CONTRIBUTION" ? row.goalId : null }));
+  const self = {
+    id: item.id,
+    name: item.name,
+    amount: num(item.amount),
+    currency: item.currency,
+    categoryId: item.categoryId,
+    kind: item.kind,
+    goalId: item.kind === "CONTRIBUTION" ? item.goalId : null,
+  };
+  const items = guard.some((row) => row.id === item.id) ? guard : [...guard, self];
+  let table = rates;
+
+  for (const row of recorded) {
+    if (onSchedule.has(toISODate(row.dueDate))) continue;
+    const claimed = settlementClaimed(row);
+    const charge = row.transaction;
+    const contributionId = manualContributionIdFromTransaction(charge);
+    const contributionGoalId = contributionId
+      ? ((await tx.goalContribution.findUnique({ where: { id: contributionId }, select: { goalId: true } }))?.goalId ?? null)
+      : null;
+    const amount = num(charge.amount);
+    const originalAmount = charge.originalAmount === null ? null : num(charge.originalAmount);
+    const pays = async (due: Date): Promise<boolean> => {
+      const occurrence = { itemId: item.id, due, nextDue: nextAfter(due) };
+      const settled = planSettlements({
+        items,
+        occurrences: [occurrence],
+        charges: [{ id: charge.id, date: charge.date, amount, currency: charge.currency, originalAmount, originalCurrency: charge.originalCurrency, categoryId: charge.categoryId, note: charge.note, contributionGoalId }],
+      });
+      if (settled.size > 0) return true;
+      // The user's own answer: the question that produced it.
+      if (claimed || item.kind !== "SUBSCRIPTION" || !item.accountId || charge.accountId !== item.accountId) return false;
+      table ??= await getRateTable();
+      return planPostedDuplicates({
+        incoming: [{ key: charge.id, accountId: charge.accountId, type: "EXPENSE", date: charge.date, amount, currency: charge.currency, originalAmount, originalCurrency: charge.originalCurrency, rate: charge.rate === null ? null : num(charge.rate), categoryId: charge.categoryId, note: charge.note }],
+        posted: [{ id: "next", kind: "upcoming", accountId: item.accountId, type: "EXPENSE", date: due, amount: self.amount, currency: item.currency, window: settlementWindow(due, nextAfter(due)), item: self }],
+        items,
+        rates: table,
+      }).has(charge.id);
+    };
+    const candidates = schedule
+      .filter((due) => !taken.has(recurringExternalId(item.id, due)) && (!claimed || due.getTime() < formerNext.getTime()))
+      .sort(
+        (a, b) =>
+          Math.abs(a.getTime() - row.dueDate.getTime()) - Math.abs(b.getTime() - row.dueDate.getTime()) || a.getTime() - b.getTime(),
       );
+    let target: Date | null = null;
+    for (const due of candidates) {
+      if (await pays(due)) {
+        target = due;
+        break;
+      }
+    }
+
+    if (target) {
+      const key = recurringExternalId(item.id, target);
+      taken.add(key);
+      await tx.recurringSettlement.update({
+        where: { id: row.id },
+        data: { occurrenceKey: key, dueDate: target },
+      });
+      const moved = await tx.goalContribution.updateMany({ where: { recurringExternalId: row.occurrenceKey }, data: { recurringExternalId: key } });
+      if (moved.count > 0 && item.goalId) goalsToRebuild.add(item.goalId);
+      moves.rekeyed.push({ itemName: item.name, from: row.dueDate, to: target });
+    } else if (!claimed) {
+      await tx.recurringSettlement.delete({ where: { id: row.id } });
+      const removed = await tx.goalContribution.findMany({ where: { recurringExternalId: row.occurrenceKey }, select: { goalId: true } });
+      if (removed.length > 0) {
+        await tx.goalContribution.deleteMany({ where: { recurringExternalId: row.occurrenceKey } });
+        for (const contribution of removed) goalsToRebuild.add(contribution.goalId);
+      }
+      moves.released.push({ itemName: item.name, dueDate: row.dueDate });
     }
   }
-
-  const written = await prisma.recurringItem.updateMany({
-    where: {
-      id,
-      ...(updatedAt ? { updatedAt } : {}),
-      // Moving the date is only right if nothing has moved it since it was read.
-      ...(nextDate.getTime() !== values.nextDate.getTime() ? { nextDate: before.nextDate } : {}),
-    },
-    data: { ...values, nextDate },
-  });
-  return written.count;
+  return moves;
 }
 
 /**

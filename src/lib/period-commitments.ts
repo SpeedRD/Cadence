@@ -139,6 +139,8 @@ export interface LedgerItemInfo {
 /** posting's settlement plan (loadSettlementPlan), in the shape the planner reads. */
 export interface CommitmentSettlementPlan {
   posted: ReadonlySet<string>;
+  /** Settled occurrences posting already claimed: walked past without counting, as posted ones are. */
+  claimed?: ReadonlySet<string>;
   settledBy: ReadonlyMap<string, OccurrenceCharge>;
 }
 
@@ -158,8 +160,8 @@ export interface ScheduledDate {
  * walks them (advanceDate: the stored anchor, SEMI_MONTHLY's two anchors,
  * month-end clamping), each filed in its period - a date before today in the
  * current period. A finite item stops at its countdown, spent the way posting
- * spends it: a date `alreadyPosted` names (its RECURRING row exists) is rolled
- * past without spending an installment. `through` bounds the walk; without
+ * spends it: a date `alreadyPosted` names (its RECURRING row exists, or
+ * posting already settled it) is rolled past without spending an installment. `through` bounds the walk; without
  * it, only the countdown (or the walk cap) does.
  */
 export function scheduleDates(
@@ -261,7 +263,10 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
     const dates = scheduleDates(item, input.today, {
       through,
       currentPeriodKey: currentKey,
-      alreadyPosted: (due) => input.settlement.posted.has(recurringExternalId(item.id, due)),
+      alreadyPosted: (due) => {
+        const key = recurringExternalId(item.id, due);
+        return input.settlement.posted.has(key) || (input.settlement.claimed?.has(key) ?? false);
+      },
     });
     for (const date of dates) {
       const key = recurringExternalId(item.id, date.dueDate);

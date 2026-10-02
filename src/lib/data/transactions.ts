@@ -2,6 +2,7 @@ import { exactAmountIn, moneyRow } from "@/lib/account-money";
 import { convert } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { settlementClaimed } from "@/lib/recurring-settlement";
 import {
   isOpenSharedExpense,
   reimbursementProgress,
@@ -69,6 +70,15 @@ export interface TransactionRow extends SharedExpenseDetails {
    * locks the row up front, as the actions would refuse it after the fact.
    */
   hasLinkedGoalContribution: boolean;
+  /**
+   * The recurring payment this charge stands for (its RecurringSettlement),
+   * so deleting it can say what happens to that payment: `posts` false when
+   * posting already rolled past the occurrence - deleting the charge drops it
+   * for good - true when the user recorded it ahead ("It's that payment") and
+   * the occurrence will post on its due date instead. Null on any other row,
+   * and once the item is gone.
+   */
+  settles: { itemName: string; dueDate: Date; posts: boolean } | null;
   /** The user marked this expense as a one-off - see Transaction.isExtraordinary. */
   isExtraordinary: boolean;
   /** The user marked this income as a one-off - see Transaction.isOneOffIncome. */
@@ -126,7 +136,9 @@ export async function listTransactions(
       include: {
         account: { select: { name: true } },
         category: { select: { name: true, color: true } },
-        recurringSettlement: { select: { occurrenceKey: true } },
+        recurringSettlement: {
+          select: { occurrenceKey: true, dueDate: true, claimedByPostingAt: true, recurringItem: { select: { name: true } } },
+        },
       },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       skip: (page - 1) * PAGE_SIZE,
@@ -199,6 +211,13 @@ export async function listTransactions(
       source: transaction.source,
       externalId: transaction.externalId,
       hasLinkedGoalContribution: contributionKey !== null && pairedKeys.has(contributionKey),
+      settles: transaction.recurringSettlement?.recurringItem
+        ? {
+            itemName: transaction.recurringSettlement.recurringItem.name,
+            dueDate: transaction.recurringSettlement.dueDate,
+            posts: !settlementClaimed(transaction.recurringSettlement),
+          }
+        : null,
       isExtraordinary: transaction.isExtraordinary,
       isOneOffIncome: transaction.isOneOffIncome,
       reimbursesTransactionId: transaction.reimbursesTransactionId,

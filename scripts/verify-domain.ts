@@ -4948,10 +4948,17 @@ async function main() {
       return `${toISODate(window.start)}..${toISODate(window.end)}`;
     };
     eq("the lead is five days", SETTLEMENT_LEAD_DAYS, 5);
+    // Flipped back by the review follow-up (R2's window): a window ends at
+    // the later of its period's end and the due date plus PROXIMITY_DAYS, so
+    // these due dates, all more than four days before their period ends,
+    // keep the period's end (the first fix had every window end four days
+    // after its period). The end-of-period case is checked just below.
     eq("due on a period's first day: reaches five days back into the period before", windowOf(civilDate(2026, 10, 1)), "2026-09-26..2026-10-15");
     eq("due on the 3rd: three days back", windowOf(civilDate(2026, 10, 3)), "2026-09-28..2026-10-15");
     eq("due mid-period: exactly the pay period", windowOf(civilDate(2026, 10, 10)), "2026-10-01..2026-10-15");
     eq("due on the 16th: back into the A period's last days", windowOf(civilDate(2026, 10, 16)), "2026-10-11..2026-10-31");
+    eq("due on the 13th: four days past it, into the next period", windowOf(civilDate(2026, 10, 13)), "2026-10-01..2026-10-17");
+    eq("due on the 31st: four days into November", windowOf(civilDate(2026, 10, 31)), "2026-10-16..2026-11-04");
 
     console.log("\n-- the matcher (pure) --");
     const item = (id: string, overrides: Partial<{ name: string; amount: number; categoryId: string | null; kind: "SUBSCRIPTION" | "CONTRIBUTION"; goalId: string | null }> = {}) => ({
@@ -5098,21 +5105,28 @@ async function main() {
     await settleRun(civilDate(2026, 8, 20));
     const fundContribution = await prisma.goalContribution.findFirst({ where: { goalId: goal.id } });
     eq("the goal counts the transfer once", `${fundContribution?.recurringExternalId}:${num(fundContribution?.amount)}`, `${auto.id}:2026-08-20:300`);
+    // Flipped for the adversarial review (R6): the settlement plan already
+    // pairs the transfer with the Aug 20 occurrence before posting records
+    // it, so budget spending left it out before posting ran as well as after
+    // (this read 300: spending until posting wrote the settlement).
     eq(
-      "the period budget stops counting the transfer as spending once it is the contribution's twin",
+      "the period budget leaves the transfer out once the plan pairs it, before posting records it as after",
       round2(spentBefore - (await getPeriodSummary(augustB, augustContext)).spent),
-      300,
+      0,
     );
     // Flipped for build part 4 (the pace's matcher reads K6's population):
     // before posting settles it, the transfer filed under Shopping is budget
     // spending, so the pace calls it lifestyle as the budget does - it used to
     // match it to the item by name and count it as savings already (this read
     // 0, savings unchanged). Settled, it is the contribution's twin in both.
+    // Flipped again for the adversarial review (R6): the plan's pairing is
+    // the twin before posting records it, so the pace already counted the 300
+    // as savings and settling changes nothing (this read 300:300:0).
     const monthAfter = await classifyCompletedMonth(augustWindow, augustContext, autoForMatch, categoryMeta);
     eq(
-      "the monthly pace counts it once: settling it moves the 300 from lifestyle to savings/investing, and the month's outflow is unchanged",
+      "the monthly pace counts it once: savings/investing as soon as the plan pairs it, and settling it changes nothing",
       `${round2(monthAfter.savingsInvesting - savingsBefore)}:${round2(monthBefore.lifestyle - monthAfter.lifestyle)}:${round2(monthAfter.totalOutflow - monthBefore.totalOutflow)}`,
-      "300:300:0",
+      "0:0:0",
     );
     const { listTransactions } = await import("../src/lib/data/transactions");
     const listed = (await listTransactions({ accountId: checking.id }, augustContext)).rows.find((row) => row.id === transfer.id);
@@ -5306,9 +5320,17 @@ async function main() {
       );
 
       const nextPeriod = await prisma.transaction.create({ data: { date: civilDate(2026, 10, 16), amount: 15.49, currency: "USD", type: "EXPENSE", accountId: card.id, categoryId: subsId, note: "netflix", source: "MANUAL" } });
+      // Flipped for the adversarial review (R2): the day after an Oct 15
+      // occurrence is inside its window now (it was the next period's, so
+      // never asked); five days after still is not.
       eq(
-        "an entry dated in the next pay period is outside the occurrence's window: no question",
+        "an entry dated the day after an Oct 15 occurrence, in the next pay period, is asked about it",
         (await findPostedDuplicates([{ key: nextPeriod.id, accountId: card.id, type: "EXPENSE", date: nextPeriod.date, amount: 15.49, currency: "USD", note: "netflix", categoryId: subsId }], rates)).size,
+        1,
+      );
+      eq(
+        "an entry dated five days after it, past PROXIMITY_DAYS into the next period, is not",
+        (await findPostedDuplicates([{ key: nextPeriod.id, accountId: card.id, type: "EXPENSE", date: civilDate(2026, 10, 20), amount: 15.49, currency: "USD", note: "netflix", categoryId: subsId }], rates)).size,
         0,
       );
       const other = await prisma.transaction.create({ data: { date: civilDate(2026, 10, 16), amount: 15.49, currency: "USD", type: "EXPENSE", accountId: card.id, categoryId: subsId, note: "netflix", transferId: null, source: "CSV", externalId: "verify-posted-not-manual" } });
@@ -5636,9 +5658,18 @@ async function main() {
       });
       const weekly = planPostedDuplicates({ incoming: [charge("x", 10), charge("y", 3)], posted: [postedAt("p3", 3), postedAt("p10", 10)], items: [item], rates });
       eq("weekly occurrences in one period: each charge pairs with its own date's row", `${weekly.get("y")?.postedId}:${weekly.get("x")?.postedId}:${weekly.get("x")?.ambiguous}`, "p3:p10:false");
-      eq("another account never matches", planPostedDuplicates({ incoming: [charge("x", 3, { accountId: "b" })], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
+      // Flipped for the adversarial review (R11): another account matches on
+      // the exact rule, strong only when the row names the item.
+      eq("another account matches on the exact amount, strong when it names the item", planPostedDuplicates({ incoming: [charge("x", 3, { accountId: "b" })], posted: [postedAt("p3", 3)], items: [item], rates }).get("x")?.possible, false);
+      eq("another account, not naming the item, is only a possible match", planPostedDuplicates({ incoming: [charge("x", 3, { accountId: "b", categoryId: null })], posted: [postedAt("p3", 3)], items: [item], rates }).get("x")?.possible, true);
       eq("a deposit never matches a charge", planPostedDuplicates({ incoming: [charge("x", 3, { type: "INCOME" })], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
+      // Flipped back by the review follow-up (R2's window): a row posted on
+      // the 3rd reaches only its period's end, so the next period's first
+      // days are outside it again (the first fix took them in); one posted on
+      // the 13th reaches four days into the next period.
       eq("outside the window (the next period) never matches", planPostedDuplicates({ incoming: [charge("x", 16)], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
+      eq("outside the window (further into the next period) never matches", planPostedDuplicates({ incoming: [charge("x", 20)], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
+      eq("a row posted on the 13th takes a charge on the 16th, in the next period", planPostedDuplicates({ incoming: [charge("x", 16)], posted: [postedAt("p13", 13)], items: [item], rates }).get("x")?.postedId, "p13");
       eq("a cent apart is the same amount", planPostedDuplicates({ incoming: [charge("x", 3, { amount: 500.01 })], posted: [postedAt("p3", 3)], items: [item], rates }).get("x")?.possible, false);
       eq("two cents apart in the same currency is not", planPostedDuplicates({ incoming: [charge("x", 3, { amount: 500.02 })], posted: [postedAt("p3", 3)], items: [item], rates }).size, 0);
       // 500 DOP = 4.1667 EUR at these rates; the edge is 3% of the converted posted amount.
@@ -14625,6 +14656,485 @@ async function main() {
     eq("budget-it-here link: the period's Budgets page, at the category rows", categoryBudgetsHref("2026-10-B"), "/budgets?period=2026-10-B#category-budgets");
     eq("budget-it-here link: its hash is the section id the page sets", categoryBudgetsHref("2026-10-A").split("#")[1], CATEGORY_BUDGETS_SECTION_ID);
     eq("budget-it-here link: carries no ?suggested (that is the Set this period's budget link)", categoryBudgetsHref("2026-10-A").includes("suggested"), false);
+  }
+
+  console.log("\n== adversarial review: posting and settlement (R2 R5 R6 R9 R10 R11 R12), a deleted settling charge, an upcoming payment racing posting ==");
+  {
+    // Public APIs only, every new one reached through `?.`, so this block also
+    // runs against the code before the fixes and fails there on each finding.
+    // The review's numbers: USD 1 = DOP 60 = EUR 0.9. Fixtures are `Verify
+    // Review ...`; every other active item is paused, open goal parked and
+    // active account archived meanwhile, all restored in the finally.
+    const rSettle = (await import("../src/lib/recurring-settlement")) as Record<string, unknown> & typeof import("../src/lib/recurring-settlement");
+    const rPlan = await import("../src/lib/data/recurring-settlement");
+    const rPost = (await import("../src/lib/recurring-posting")).postDueRecurringItems;
+    const rDuplicates = (await import("../src/lib/data/posted-duplicates")) as Record<string, unknown> & typeof import("../src/lib/data/posted-duplicates");
+    const rCommitments = await import("../src/lib/data/period-commitments");
+    const rSpent = await import("../src/lib/data/budget-spending");
+    const rRecurring = (await import("../src/lib/data/recurring")) as Record<string, unknown> & typeof import("../src/lib/data/recurring");
+    const rTransactions = await import("../src/lib/data/transactions");
+    const rManual = await import("../src/lib/data/manual-transaction");
+    const { transactionSchema: rSchema } = await import("../src/lib/validation");
+    const { getDictionary: rDictionary } = await import("../src/lib/i18n");
+    const rRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const rContext = (today: Date) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: rRates(),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    });
+    const rDay = (month: number, day: number) => civilDate(2026, month, day);
+    const rKey = (itemId: string, due: Date) => `${itemId}:${toISODate(due)}`;
+    const oct = (day: number) => rDay(10, day);
+    const oct10A = periodInfo({ year: 2026, month: 10, period: "A" });
+    const sep09B = periodInfo({ year: 2026, month: 9, period: "B" });
+    const rWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Review " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Review " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Review " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Review " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+      await prisma.category.deleteMany({ where: { name: { startsWith: "Verify Review " } } });
+    };
+    const rAccount = (name: string) => prisma.account.create({ data: { name: `Verify Review ${name}`, currency: "DOP", type: "CHECKING" } });
+    const rItem = (data: { name: string; amount: number; currency?: string; nextDate: Date; anchorDay: number; accountId: string; frequency?: "WEEKLY" | "MONTHLY"; categoryId?: string | null; kind?: "SUBSCRIPTION" | "CONTRIBUTION"; goalId?: string | null; remainingOccurrences?: number | null }) =>
+      prisma.recurringItem.create({
+        data: {
+          name: `Verify Review ${data.name}`,
+          amount: data.amount,
+          currency: data.currency ?? "DOP",
+          frequency: data.frequency ?? "MONTHLY",
+          anchorDay: data.anchorDay,
+          nextDate: data.nextDate,
+          active: true,
+          kind: data.kind ?? "SUBSCRIPTION",
+          accountId: data.accountId,
+          categoryId: data.categoryId ?? null,
+          goalId: data.goalId ?? null,
+          remainingOccurrences: data.remainingOccurrences ?? null,
+        },
+      });
+    const rCharge = (data: { accountId: string; date: Date; amount: number; note: string; source?: "MANUAL" | "CSV"; categoryId?: string | null }) =>
+      prisma.transaction.create({
+        data: { accountId: data.accountId, date: data.date, amount: data.amount, currency: "DOP", type: "EXPENSE", source: data.source ?? "CSV", note: data.note, categoryId: data.categoryId ?? null },
+      });
+    const rIncoming = (key: string, accountId: string, date: Date, amount: number, note: string) => ({
+      key,
+      accountId,
+      type: "EXPENSE" as const,
+      date,
+      amount,
+      currency: "DOP",
+      originalAmount: null,
+      originalCurrency: null,
+      rate: null,
+      categoryId: null,
+      note,
+    });
+    const rRecurringRows = (itemId: string) => prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${itemId}:` } }, orderBy: { date: "asc" } });
+    const rDetailedUpdate = rRecurring.updateRecurringItemDetailed as
+      | undefined
+      | ((id: string, updatedAt: Date | null, values: Record<string, unknown>, today: Date, rates?: RateTable) => Promise<{ written: number; settlements: { rekeyed: { from: Date; to: Date; itemName: string }[]; released: { dueDate: Date; itemName: string }[] } }>);
+    const rEditSchedule = async (id: string, nextDate: Date, anchorDay: number, today: Date) => {
+      const values = { nextDate, frequency: "MONTHLY" as const, anchorDay };
+      if (rDetailedUpdate) return rDetailedUpdate(id, null, values, today, rRates());
+      return { written: await rRecurring.updateRecurringItem(id, null, values, today), settlements: { rekeyed: [], released: [] } };
+    };
+
+    const pausedForReview = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForReview = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const archivedForReview = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForReview } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForReview } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForReview } }, data: { status: "ARCHIVED" } });
+    const restoreReviewRates = await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.9 });
+    try {
+      // ---------------------------------------------------------------------
+      console.log("\n-- R2: a charge dated 1-4 days after an end-of-period due date --");
+      {
+        const window = rSettle.settlementWindow(oct(15));
+        eq("R2: an occurrence due Oct 15 can be settled by a charge up to PROXIMITY_DAYS later (Oct 19)", toISODate(window.end), "2026-10-19");
+        eq("R2: with its next occurrence a month away, still Oct 19", toISODate((rSettle.settlementWindow as (d: Date, n?: Date | null) => { end: Date })(oct(15), rDay(11, 15)).end), "2026-10-19");
+        eq("R2 guard: a weekly occurrence due Oct 13 (next Oct 20) reaches Oct 16, the last day nearer it", toISODate((rSettle.settlementWindow as (d: Date, n?: Date | null) => { end: Date })(oct(13), oct(20)).end), "2026-10-16");
+        eq("R2 guard: one due Oct 3 (next Oct 10) keeps its period's end", toISODate((rSettle.settlementWindow as (d: Date, n?: Date | null) => { end: Date })(oct(3), oct(10)).end), "2026-10-15");
+        const a = await rAccount("Checking");
+        // Posted first, then the bank row arrives a day later: the after-posting question.
+        const internet = await rItem({ name: "Internet", amount: 2800, nextDate: oct(15), anchorDay: 15, accountId: a.id });
+        await rPost(oct(15));
+        const posted = await rRecurringRows(internet.id);
+        eq("R2: the Internet bill posted 2,800 on Oct 15", posted.map((row) => `${toISODate(row.date)} ${num(row.amount)}`).join(","), "2026-10-15 2800");
+        const ask = async (date: Date) => (await rDuplicates.findPostedDuplicates([rIncoming("row", a.id, date, 2800, "CLARO HOGAR")], rRates())).get("row");
+        eq("R2: the bank row dated Oct 16 is put to the user as the posted charge", (await ask(oct(16)))?.posted.id ?? null, posted[0]?.id ?? "?");
+        eq("R2: within PROXIMITY_DAYS of the posted row, a strong match", (await ask(oct(16)))?.possible, false);
+        eq("R2: the same row dated Oct 14 was already asked", (await ask(oct(14)))?.posted.id ?? null, posted[0]?.id ?? "?");
+        eq("R2: Oct 20, five days after, is not", (await ask(oct(20))) ?? null, null);
+        // Follow-up: past the period's end only as far as the due date plus
+        // PROXIMITY_DAYS, so a mid-period due date keeps its period's end.
+        eq("R2 window: due mid-period (Oct 5) it ends with its period, Oct 15", toISODate(rSettle.settlementWindow(oct(5)).end), "2026-10-15");
+        const phone = await rItem({ name: "Phone", amount: 1700, nextDate: oct(5), anchorDay: 5, accountId: a.id });
+        await rPost(oct(5));
+        const askPhone = async (date: Date) => (await rDuplicates.findPostedDuplicates([rIncoming("row", a.id, date, 1700, "ALTICE")], rRates())).get("row");
+        eq("R2 window: a charge 13 days after a mid-period due date (Oct 5 -> Oct 18) is not asked about", (await askPhone(oct(18))) ?? null, null);
+        eq("R2 window: one inside its period (Oct 9) still is", (await askPhone(oct(9)))?.posted.id ?? null, (await rRecurringRows(phone.id))[0]?.id ?? "?");
+
+        // Brought in before posting ran: settlement takes it.
+        const water = await rItem({ name: "Water", amount: 1200, nextDate: oct(15), anchorDay: 15, accountId: a.id });
+        const waterCharge = await rCharge({ accountId: a.id, date: oct(17), amount: 1200, note: "Verify Review Water" });
+        const waterRun = await rPost(oct(17));
+        eq("R2: posting on Oct 17 settles the Oct 15 water bill with the Oct 17 charge", waterRun.occurrencesAlreadyLogged, 1);
+        eq("R2: and writes no RECURRING row beside it", (await rRecurringRows(water.id)).length, 0);
+        eq("R2: the settlement names that charge", (await prisma.recurringSettlement.findUnique({ where: { occurrenceKey: rKey(water.id, oct(15)) } }))?.transactionId ?? null, waterCharge.id);
+
+        // The next occurrence's charge is never taken: a weekly item due Tue
+        // Oct 13 and Tue Oct 20. Past the period end a charge belongs to the
+        // occurrence it is nearer to.
+        const weekly = await rItem({ name: "Laundry", amount: 500, nextDate: oct(13), anchorDay: 13, accountId: a.id, frequency: "WEEKLY" });
+        const early = await rCharge({ accountId: a.id, date: oct(19), amount: 500, note: "Verify Review Laundry" });
+        const weeklyPlan = await rPlan.loadSettlementPlan(oct(20));
+        eq("R2 guard: a charge on Oct 19, a day before the Oct 20 occurrence, pays Oct 20", weeklyPlan.settledBy.get(rKey(weekly.id, oct(20)))?.id ?? null, early.id);
+        eq("R2 guard: and not the Oct 13 one, four days past its period's end", weeklyPlan.settledBy.has(rKey(weekly.id, oct(13))), false);
+        const late = await rCharge({ accountId: a.id, date: oct(16), amount: 500, note: "Verify Review Laundry" });
+        const bothPlan = await rPlan.loadSettlementPlan(oct(20));
+        eq("R2 guard: with Oct 16's charge too, Oct 13 takes Oct 16", bothPlan.settledBy.get(rKey(weekly.id, oct(13)))?.id ?? null, late.id);
+        eq("R2 guard: and Oct 20 still takes Oct 19", bothPlan.settledBy.get(rKey(weekly.id, oct(20)))?.id ?? null, early.id);
+        await rWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R5: a schedule edit after \"It's that payment\" --");
+      {
+        const a = await rAccount("Checking");
+        const cloud = await rItem({ name: "Cloud", amount: 10, currency: "EUR", nextDate: oct(5), anchorDay: 5, accountId: a.id });
+        const charge = await rCharge({ accountId: a.id, date: oct(3), amount: 667, note: "Google storage", source: "MANUAL" });
+        const recorded = await prisma.$transaction((tx) => rDuplicates.recordUpcomingPayment(tx, charge.id, rKey(cloud.id, oct(5))));
+        eq("R5: the 667 DOP charge of Oct 3 is recorded as the Oct 5 payment", typeof recorded === "object" ? recorded.itemName : recorded, "Verify Review Cloud");
+        const moved = await rEditSchedule(cloud.id, oct(6), 6, oct(3));
+        eq("R5: the due date edited to Oct 6 saves", moved.written, 1);
+        eq("R5: the recorded payment moves to the Oct 6 occurrence", (await prisma.recurringSettlement.findFirst({ where: { transactionId: charge.id } }))?.occurrenceKey ?? null, rKey(cloud.id, oct(6)));
+        eq("R5: the save says so (moved from Oct 5 to Oct 6)", moved.settlements.rekeyed.map((m) => `${toISODate(m.from)}>${toISODate(m.to)}`).join(","), "2026-10-05>2026-10-06");
+        const run = await rPost(oct(6));
+        eq("R5: posting on Oct 6 writes nothing for it", (await rRecurringRows(cloud.id)).length, 0);
+        eq("R5: it settles the occurrence with the recorded charge", run.occurrencesAlreadyLogged, 1);
+        const commitments = (await rCommitments.periodCommitments(oct10A, rContext(oct(7)))).filter((o) => o.itemId === cloud.id);
+        eq("R5: Oct 1-15 lists one occurrence, settled at 667", commitments.map((o) => `${toISODate(o.dueDate)} ${o.status} ${round2(o.amount)}`).join(","), "2026-10-06 settled 667");
+
+        // Moved where the charge can no longer be that payment: released.
+        const music = await rItem({ name: "Tidal", amount: 10, currency: "EUR", nextDate: oct(5), anchorDay: 5, accountId: a.id });
+        const musicCharge = await rCharge({ accountId: a.id, date: oct(3), amount: 667, note: "Tidal", source: "MANUAL" });
+        await prisma.$transaction((tx) => rDuplicates.recordUpcomingPayment(tx, musicCharge.id, rKey(music.id, oct(5))));
+        const away = await rEditSchedule(music.id, oct(20), 20, oct(3));
+        eq("R5: moved to Oct 20, the Oct 3 charge is outside its window, so the pairing is released", await prisma.recurringSettlement.count({ where: { transactionId: musicCharge.id } }), 0);
+        eq("R5: the save says so", away.settlements.released.map((m) => toISODate(m.dueDate)).join(","), "2026-10-05");
+        const later = (await rCommitments.loadCommitments([oct10A, periodInfo({ year: 2026, month: 10, period: "B" })], rContext(oct(4))));
+        eq("R5: Oct 20 is outstanding again, at the item's charge", (later.get("2026-10-B") ?? []).filter((o) => o.itemId === music.id).map((o) => `${toISODate(o.dueDate)} ${o.status}`).join(","), "2026-10-20 outstanding");
+        eq("R5: and the Oct 5 occurrence is gone from Oct 1-15", (later.get("2026-10-A") ?? []).filter((o) => o.itemId === music.id).length, 0);
+        const unchanged = await rEditSchedule(cloud.id, rDay(11, 6), 6, oct(7));
+        eq("R5: an edit that leaves the schedule alone moves nothing", unchanged.settlements.rekeyed.length + unchanged.settlements.released.length, 0);
+
+        const en = rDictionary("en").recurring as Record<string, unknown>;
+        const es = rDictionary("es").recurring as Record<string, unknown>;
+        check("R5: the toast strings exist in English and Spanish", ["paymentsMoved", "paymentMove", "paymentsReleased"].every((k) => typeof en[k] === "function" && typeof es[k] === "function"));
+        if (typeof en.paymentsMoved === "function" && typeof es.paymentsMoved === "function") {
+          eq("R5: the English toast", `${en.itemUpdated}. ${(en.paymentsMoved as (m: string) => string)((en.paymentMove as (a: string, b: string) => string)("Oct 5", "Oct 6"))}`, "Recurring item updated. The payment already recorded moved to the new date: Oct 5 to Oct 6.");
+          eq("R5: the Spanish toast", `${es.itemUpdated}. ${(es.paymentsMoved as (m: string) => string)((es.paymentMove as (a: string, b: string) => string)("5 oct", "6 oct"))}`, "Elemento recurrente actualizado. El pago ya registrado pasó a la nueva fecha: del 5 oct al 6 oct.");
+        }
+        await rWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R6: a charge the plan pairs with an upcoming occurrence --");
+      {
+        const a = await rAccount("Checking");
+        const gymCategory = await prisma.category.create({ data: { name: "Verify Review Gym Cat", kind: "EXPENSE", color: "#000000" } });
+        const gym = await rItem({ name: "Gym", amount: 2500, nextDate: oct(10), anchorDay: 10, accountId: a.id, categoryId: gymCategory.id });
+        await rCharge({ accountId: a.id, date: oct(2), amount: 2500, note: "Verify Review Gym", source: "MANUAL", categoryId: gymCategory.id });
+        const at = rContext(oct(3));
+        const commitments = (await rCommitments.periodCommitments(oct10A, at)).filter((o) => o.itemId === gym.id);
+        eq("R6: Oct 1-15 counts the gym as settled 2,500", commitments.map((o) => `${o.status} ${o.amount}`).join(","), "settled 2500");
+        eq("R6: no settlement row yet", await prisma.recurringSettlement.count({ where: { recurringItemId: gym.id } }), 0);
+        const spent = (await rSpent.loadBudgetSpent([oct10A], at)).get(oct10A.key);
+        eq("R6: the charge is not also budget spending", spent?.byCategory.get(gymCategory.id)?.spent ?? 0, 0);
+        const { getPeriodSummary } = await import("../src/lib/data/period-summary");
+        const summary = await getPeriodSummary(oct10A, at as unknown as Parameters<typeof getPeriodSummary>[1]);
+        eq("R6: nor on the Budgets page's category row", summary.categories.find((line) => line.categoryId === gymCategory.id)?.budgetSpent ?? 0, 0);
+        eq("R6: Reports still shows what was spent", summary.categories.find((line) => line.categoryId === gymCategory.id)?.spent ?? 0, 2500);
+        await rPost(oct(10));
+        eq("R6: once posting records the pairing, still not spending", (await rSpent.loadBudgetSpent([oct10A], at)).get(oct10A.key)?.byCategory.get(gymCategory.id)?.spent ?? 0, 0);
+        await rWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R9: a posted row whose date is edited into the next period --");
+      {
+        const a = await rAccount("Checking");
+        const rent = await rItem({ name: "Rent", amount: 25000, nextDate: rDay(9, 30), anchorDay: 30, accountId: a.id });
+        await rPost(rDay(9, 30));
+        const [row] = await rRecurringRows(rent.id);
+        await prisma.transaction.update({ where: { id: row.id }, data: { date: oct(1) } });
+        const at = rContext(oct(3));
+        const only = async (periods: ReturnType<typeof periodInfo>[]) => {
+          const result = await rCommitments.loadCommitments(periods, at);
+          return periods.map((p) => `${p.key}:${(result.get(p.key) ?? []).filter((o) => o.itemId === rent.id).map((o) => `${o.status} ${o.amount}`).join("+")}`).join(" ");
+        };
+        eq("R9: Sep 16-30 alone still holds the rent", await only([sep09B]), "2026-09-B:posted 25000");
+        eq("R9: Oct 1-15 alone does not", await only([oct10A]), "2026-10-A:");
+        eq("R9: both together agree", await only([sep09B, oct10A]), "2026-09-B:posted 25000 2026-10-A:");
+        await rWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R10: an item posting will skip takes no charge --");
+      {
+        const oldCard = await rAccount("Old Card");
+        const newCard = await rAccount("New Card");
+        const oldItem = await rItem({ name: "Music", amount: 350, nextDate: oct(5), anchorDay: 5, accountId: oldCard.id });
+        const newItem = await rItem({ name: "Music", amount: 350, nextDate: oct(5), anchorDay: 5, accountId: newCard.id });
+        await prisma.account.update({ where: { id: oldCard.id }, data: { status: "ARCHIVED" } });
+        const charge = await rCharge({ accountId: newCard.id, date: oct(4), amount: 350, note: "VERIFY REVIEW MUSIC" });
+        check("R10: the old item has the lower id, so it would win a tie", oldItem.id.localeCompare(newItem.id) < 0);
+        const plan = await rPlan.loadSettlementPlan(oct(5));
+        eq("R10: the plan does not give the charge to the item on the archived card", plan.settledBy.has(rKey(oldItem.id, oct(5))), false);
+        eq("R10: it gives it to the new item", plan.settledBy.get(rKey(newItem.id, oct(5)))?.id ?? null, charge.id);
+        const run = await rPost(oct(5));
+        eq("R10: posting skips the old item", run.skipped.find((s) => s.id === oldItem.id)?.reason ?? null, "account_archived");
+        eq("R10: and posts nothing for the new one", (await rRecurringRows(newItem.id)).length, 0);
+        eq("R10: the ledger holds the charge once", await prisma.transaction.count({ where: { accountId: newCard.id, type: "EXPENSE" } }), 1);
+        await rWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R11: a charge on another account after posting --");
+      {
+        const a = await rAccount("Checking");
+        const b = await rAccount("Card");
+        const gym = await rItem({ name: "Pilates", amount: 2500, nextDate: oct(10), anchorDay: 10, accountId: a.id });
+        await rPost(oct(10));
+        const [posted] = await rRecurringRows(gym.id);
+        const asked = await rDuplicates.findPostedDuplicates(
+          [rIncoming("named", b.id, oct(11), 2500, "Verify Review Pilates"), rIncoming("off", b.id, oct(11), 2520, "Verify Review Pilates")],
+          rRates(),
+        );
+        const named = asked.get("named") as (ReturnType<typeof asked.get> & { entryAccountName?: string | null; posted: { accountName?: string } }) | undefined;
+        eq("R11: the card's charge on Oct 11 is put to the user as the posted gym charge", named?.posted.id ?? null, posted?.id ?? "?");
+        eq("R11: naming the item, it is a strong match", named?.possible, false);
+        eq("R11: the question names the posted row's account", named?.posted.accountName ?? null, "Verify Review Checking");
+        eq("R11: and the charge's own", named?.entryAccountName ?? null, "Verify Review Card");
+        eq("R11: another account needs the exact amount: 2,520 is not asked", asked.has("off"), false);
+        eq("R11: a charge on another account that does not name the item is only a possible match", (await rDuplicates.findPostedDuplicates([rIncoming("plain", b.id, oct(11), 2500, "POS 4411")], rRates())).get("plain")?.possible, true);
+        {
+          const { getDictionary: fDictionary } = await import("../src/lib/i18n");
+          const en = fDictionary("en").transactions as Record<string, unknown>;
+          const es = fDictionary("es").transactions as Record<string, unknown>;
+          const moves = (d: Record<string, unknown>) => (typeof d.postedMatchMovesAccount === "function" ? (d.postedMatchMovesAccount as (...a: string[]) => string)("Verify Review Checking", "Verify Review Card", "DOP 2,500.00") : "");
+          eq("R11 question: answering it moves the posted row to the account the money left (English)", moves(en), "Answering \"It's the posted charge\" moves the posted charge from Verify Review Checking to Verify Review Card, the account the money left, at DOP 2,500.00");
+          eq("R11 question: the same in Spanish", moves(es), "Responder \"Es el cargo registrado\" mueve el cargo registrado de Verify Review Checking a Verify Review Card, la cuenta de la que salió el dinero, por DOP 2,500.00");
+          const recurringLine = (d: Record<string, unknown>) => (d.postedMatchRecurring as (n: string, date: string, a: string) => string)("Gym", "Oct 10, 2026", "DOP 2,500.00");
+          eq("R11 question: the posted date is read through the app's formatter, not ISO", recurringLine(en), "Matches Gym, posted Oct 10, 2026 for DOP 2,500.00");
+          const { PostedMatchNotice } = (await import("../src/components/transactions/posted-match-notice")) as Record<string, unknown>;
+          const { renderToStaticMarkup } = await import("react-dom/server");
+          const { createElement } = await import("react");
+          if (named && typeof PostedMatchNotice === "function") {
+            for (const [locale, date] of [["en", "Oct 10, 2026"], ["es", "10 oct 2026"]] as const) {
+              const html = renderToStaticMarkup(createElement(PostedMatchNotice as never, { match: named, incoming: { amount: 2500, currency: "DOP" }, showOutcome: true, locale } as never)).replace(/\u00a0/g, " ");
+              check(`R11 question (${locale}): the notice shows the posted date as ${date}, never 2026-10-10`, html.includes(date) && !html.includes("2026-10-10"), html);
+            }
+          }
+        }
+        eq("R11: on the same account the question names no second account", ((await rDuplicates.findPostedDuplicates([rIncoming("same", a.id, oct(11), 2500, "Verify Review Pilates")], rRates())).get("same") as { entryAccountName?: string | null } | undefined)?.entryAccountName ?? null, null);
+        // "It's the posted charge" for a hand entry on the card: the posted row moves to the card.
+        const { id: _id, ...manual } = rSchema.parse({ date: "2026-10-11", amount: "2500", currency: "DOP", type: "EXPENSE", accountId: b.id, categoryId: "none", note: "Verify Review Pilates" });
+        const created = await rManual.createManualTransaction(manual, { getContext: async () => rContext(oct(11)) as never, getRates: async () => rRates() });
+        eq("R11: a hand entry on the card is asked about the posted charge", created.posted?.match.posted.id ?? null, posted?.id ?? "?");
+        if (created.posted) {
+          const kept = await rDuplicates.keepPostedInsteadOfEntry({ transactionId: created.id, savedDigest: created.posted.savedDigest, postedId: posted.id }, rRates());
+          eq("R11: answering \"It's the posted charge\" keeps one row", kept.ok && (await prisma.transaction.count({ where: { accountId: { in: [a.id, b.id] }, type: "EXPENSE" } })), 1);
+          eq("R11: on the card the money left from", (await prisma.transaction.findUnique({ where: { id: posted.id } }))?.accountId ?? null, b.id);
+        }
+        await rWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R12: moving the date back onto a settled occurrence --");
+      {
+        const a = await rAccount("Checking");
+        const goal = await prisma.goal.create({ data: { name: "Verify Review Goal", targetAmount: 50000, currency: "DOP" } });
+        const savings = await rItem({ name: "Savings", amount: 5000, nextDate: oct(5), anchorDay: 5, accountId: a.id, kind: "CONTRIBUTION", goalId: goal.id, remainingOccurrences: 3 });
+        await rCharge({ accountId: a.id, date: oct(4), amount: 5000, note: "Verify Review Savings" });
+        await rPost(oct(5));
+        const state = async () => {
+          const item = await prisma.recurringItem.findUniqueOrThrow({ where: { id: savings.id } });
+          const saved = num((await prisma.goal.findUniqueOrThrow({ where: { id: goal.id } })).savedAmount);
+          const twins = await prisma.goalContribution.count({ where: { recurringExternalId: rKey(savings.id, oct(5)) } });
+          return `saved ${saved} remaining ${item.remainingOccurrences} next ${toISODate(item.nextDate)} contributions ${twins}`;
+        };
+        eq("R12: the Oct 4 charge settled the Oct 5 contribution", await state(), "saved 5000 remaining 2 next 2026-11-05 contributions 1");
+        await rEditSchedule(savings.id, oct(5), 5, oct(5));
+        const again = await rPost(oct(5));
+        eq("R12: moved back onto Oct 5 and posted again, nothing more is saved or counted down", await state(), "saved 5000 remaining 2 next 2026-11-05 contributions 1");
+        eq("R12: no RECURRING row either", (await rRecurringRows(savings.id)).length, 0);
+        eq("R12: the run reports it as already accounted for, not logged again", again.occurrencesAlreadyLogged, 0);
+
+        // A posted occurrence the date is moved back onto: unchanged, rolled past.
+        const tv = await rItem({ name: "TV", amount: 900, nextDate: oct(6), anchorDay: 6, accountId: a.id, remainingOccurrences: 3 });
+        await rPost(oct(6));
+        await rEditSchedule(tv.id, oct(6), 6, oct(6));
+        await rPost(oct(6));
+        const tvItem = await prisma.recurringItem.findUniqueOrThrow({ where: { id: tv.id } });
+        eq("R12: a posted occurrence moved back onto is rolled past, its installment not spent again", `${tvItem.remainingOccurrences} ${toISODate(tvItem.nextDate)} ${(await rRecurringRows(tv.id)).length}`, "2 2026-11-06 1");
+
+        // Moved back across a claimed settlement and re-anchored: the
+        // settlement follows to the new day, which is not counted again.
+        const phone = await rItem({ name: "Phone", amount: 1500, nextDate: oct(7), anchorDay: 7, accountId: a.id, remainingOccurrences: 3 });
+        await rCharge({ accountId: a.id, date: oct(6), amount: 1500, note: "Verify Review Phone" });
+        await rPost(oct(7));
+        const rekey = await rEditSchedule(phone.id, oct(8), 8, oct(7));
+        eq("R12: re-anchored from the 7th to the 8th, the claimed payment moves to Oct 8", rekey.settlements.rekeyed.map((m) => toISODate(m.to)).join(","), "2026-10-08");
+        await rPost(oct(8));
+        const phoneItem = await prisma.recurringItem.findUniqueOrThrow({ where: { id: phone.id } });
+        eq("R12: posting on Oct 8 writes nothing and spends no installment", `${phoneItem.remainingOccurrences} ${toISODate(phoneItem.nextDate)} ${(await rRecurringRows(phone.id)).length}`, "2 2026-11-08 0");
+        await rWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- deleting a charge that settled an occurrence: the warning names the item and the due date --");
+      {
+        const a = await rAccount("Checking");
+        const water = await rItem({ name: "Power", amount: 3100, nextDate: oct(12), anchorDay: 12, accountId: a.id });
+        const charge = await rCharge({ accountId: a.id, date: oct(11), amount: 3100, note: "Verify Review Power" });
+        await rPost(oct(12));
+        const page = await rTransactions.listTransactions({ accountId: a.id }, rContext(oct(13)) as never);
+        const row = page.rows.find((r) => r.id === charge.id) as (typeof page.rows)[number] & { settles?: { itemName: string; dueDate: Date; posts: boolean } | null };
+        eq("delete: the row says which payment it settled", row?.settles ? `${row.settles.itemName} ${toISODate(row.settles.dueDate)} posts:${row.settles.posts}` : null, "Verify Review Power 2026-10-12 posts:false");
+        const en = rDictionary("en").transactions as Record<string, unknown>;
+        const es = rDictionary("es").transactions as Record<string, unknown>;
+        check("delete: the warning exists in English and Spanish, both cases", ["deleteSettlesDropped", "deleteSettlesPosts"].every((k) => typeof en[k] === "function" && typeof es[k] === "function"));
+        if (typeof en.deleteSettlesDropped === "function") {
+          const text = (en.deleteSettlesDropped as (name: string, date: string) => string)("Verify Review Power", "Oct 12");
+          check("delete: the English warning names the item and the date", text.includes("Verify Review Power") && text.includes("Oct 12"), text);
+        }
+        // The behavior is kept: the occurrence it paid is dropped for good.
+        await prisma.transaction.delete({ where: { id: charge.id } });
+        await rPost(oct(13));
+        eq("delete: once deleted, the Oct 12 payment is not charged again", (await rRecurringRows(water.id)).length, 0);
+        eq("delete: and the item stays on Nov 12", toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: water.id } })).nextDate), "2026-11-12");
+        // A payment recorded ahead ("It's that payment") is released instead: it posts on its date.
+        const eurItem = await rItem({ name: "Box", amount: 10, currency: "EUR", nextDate: oct(20), anchorDay: 20, accountId: a.id });
+        const ahead = await rCharge({ accountId: a.id, date: oct(14), amount: 667, note: "Box", source: "MANUAL" });
+        await prisma.$transaction((tx) => rDuplicates.recordUpcomingPayment(tx, ahead.id, rKey(eurItem.id, oct(20))));
+        const page2 = await rTransactions.listTransactions({ accountId: a.id }, rContext(oct(14)) as never);
+        const row2 = page2.rows.find((r) => r.id === ahead.id) as (typeof page2.rows)[number] & { settles?: { posts: boolean } | null };
+        eq("delete: a payment recorded ahead says its occurrence would post again", row2?.settles?.posts ?? null, true);
+        await rWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- a pairing recorded ahead (\"It's that payment\") counts one installment, whenever it was recorded --");
+      {
+        // Real dates: the writer stamps nothing from the clock now, but the
+        // createdAt marker this replaced read the clock, so "on the due date"
+        // is today as the clock has it.
+        const clock = new Date();
+        const today = civilDate(clock.getUTCFullYear(), clock.getUTCMonth() + 1, clock.getUTCDate());
+        const yesterday = addDays(today, -1);
+        const a = await rAccount("Checking");
+        const plan = async (name: string, due: Date) => {
+          const item = await rItem({ name, amount: 163.71, currency: "EUR", nextDate: due, anchorDay: due.getUTCDate(), accountId: a.id, remainingOccurrences: 6 });
+          const charge = await rCharge({ accountId: a.id, date: addDays(due, -1), amount: 10914, note: name, source: "MANUAL" });
+          return { item, charge, key: rKey(item.id, due) };
+        };
+        const state = async (id: string) => {
+          const item = await prisma.recurringItem.findUniqueOrThrow({ where: { id } });
+          return `remaining ${item.remainingOccurrences} posted ${(await rRecurringRows(id)).length} settled ${await prisma.recurringSettlement.count({ where: { recurringItemId: id } })}`;
+        };
+        const onDay = await plan("On The Day", today);
+        await prisma.$transaction((tx) => rDuplicates.recordUpcomingPayment(tx, onDay.charge.id, onDay.key));
+        await rPost(today);
+        eq("recorded on the due date: posting counts one installment and posts nothing", await state(onDay.item.id), "remaining 5 posted 0 settled 1");
+
+        const late = await plan("Late", yesterday);
+        await prisma.$transaction((tx) => rDuplicates.recordUpcomingPayment(tx, late.charge.id, late.key));
+        await rPost(today);
+        eq("recorded after the due date, before posting ran: still one installment", await state(late.item.id), "remaining 5 posted 0 settled 1");
+
+        // A pairing row that carries no stamp of its own: written with the
+        // clock's createdAt on its due date, as a writer without the old
+        // clamp left it. Counted all the same - only posting marks a claim.
+        const plain = await plan("Plain Row", yesterday);
+        await prisma.recurringSettlement.create({ data: { transactionId: plain.charge.id, occurrenceKey: plain.key, recurringItemId: plain.item.id, kind: "SUBSCRIPTION", dueDate: yesterday, createdAt: new Date(yesterday.getTime() + 12 * 3_600_000) } });
+        await rPost(today);
+        eq("a pairing row created on its due date by any writer: still one installment", await state(plain.item.id), "remaining 5 posted 0 settled 1");
+
+        // Posting twice: the date moved back onto the claimed day, posted again.
+        await rEditSchedule(onDay.item.id, today, today.getUTCDate(), today);
+        await rPost(today);
+        eq("posted twice (date moved back onto it): counted once", await state(onDay.item.id), "remaining 5 posted 0 settled 1");
+        const claimedAt = (await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM "RecurringSettlement" WHERE "occurrenceKey" = $1`, onDay.key))[0];
+        check("posting recorded its claim on the pairing (claimedByPostingAt)", claimedAt?.claimedByPostingAt instanceof Date, claimedAt);
+        const unclaimed = await prisma.$transaction(async (tx) => {
+          const later = await plan("Ahead", addDays(today, 20));
+          await rDuplicates.recordUpcomingPayment(tx, later.charge.id, later.key);
+          return (await tx.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM "RecurringSettlement" WHERE "occurrenceKey" = $1`, later.key))[0];
+        });
+        eq("\"It's that payment\" leaves the claim empty", unclaimed && "claimedByPostingAt" in unclaimed ? unclaimed.claimedByPostingAt : "no column", null);
+        await rWipe();
+      }
+
+      console.log("\n-- an upcoming payment recorded while posting runs on the due date --");
+      {
+        const a = await rAccount("Checking");
+        const results: string[] = [];
+        for (const round of [0, 1, 2]) {
+          const klarna = await rItem({ name: `Klarna ${round}`, amount: 163.71, currency: "EUR", nextDate: oct(28), anchorDay: 28, accountId: a.id, remainingOccurrences: 6 });
+          const charge = await rCharge({ accountId: a.id, date: oct(27), amount: 10914, note: `Klarna ${round}`, source: "MANUAL" });
+          const key = rKey(klarna.id, oct(28));
+          // Round 0: the answer holds its transaction open while posting
+          // runs; round 1: posting first; round 2: both at once.
+          const record = () =>
+            prisma.$transaction(
+              async (tx) => {
+                const outcome = await rDuplicates.recordUpcomingPayment(tx, charge.id, key);
+                if (round === 0) await tx.$queryRaw`SELECT pg_sleep(1)::text`;
+                return outcome;
+              },
+              { timeout: 20000 },
+            );
+          let recorded: unknown;
+          if (round === 0) {
+            const pending = record();
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            await rPost(oct(28));
+            recorded = await pending;
+            await rPost(oct(28));
+          } else if (round === 1) {
+            await rPost(oct(28));
+            recorded = await record();
+          } else {
+            [recorded] = await Promise.all([record(), rPost(oct(28))]);
+            await rPost(oct(28));
+          }
+          const posted = (await rRecurringRows(klarna.id)).length;
+          const settled = await prisma.recurringSettlement.count({ where: { occurrenceKey: key } });
+          const item = await prisma.recurringItem.findUniqueOrThrow({ where: { id: klarna.id } });
+          results.push(`${round}: posted ${posted} settled ${settled} remaining ${item.remainingOccurrences} answer ${typeof recorded === "object" ? "kept" : String(recorded)}`);
+          eq(`upcoming race round ${round}: the Oct 28 installment is in the ledger exactly once`, posted + settled, 1);
+          eq(`upcoming race round ${round}: and spends one installment`, item.remainingOccurrences, 5);
+        }
+        eq("upcoming race: answer held open -> settled; posting first -> refused", results.slice(0, 2).map((r) => r.replace(/^\d: /, "")).join(" | "), "posted 0 settled 1 remaining 5 answer kept | posted 1 settled 0 remaining 5 answer match_gone");
+        await rWipe();
+      }
+    } finally {
+      await rWipe();
+      await restoreReviewRates();
+      await prisma.account.updateMany({ where: { id: { in: archivedForReview } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForReview } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForReview } }, data: { active: true } });
+    }
   }
 
   console.log("\n== cleanup ==");

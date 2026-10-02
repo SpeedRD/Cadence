@@ -27,7 +27,7 @@ import {
   semiMonthlyEditCollides,
   setRecurringItemActive,
   setRecurringItemAccount,
-  updateRecurringItem,
+  updateRecurringItemDetailed,
   type RecurringReferenceProblem,
 } from "@/lib/data/recurring";
 import {
@@ -77,13 +77,30 @@ export async function saveRecurringAction(
     // would write the stale value back over it. The updatedAt the form was
     // rendered with is the guard: no rows match once the item has moved on, and
     // the user is told to reopen rather than silently undoing the other change.
-    const written = await updateRecurringItem(id, updatedAt, values, today());
-    if (written === 0) {
+    const edited = await updateRecurringItemDetailed(id, updatedAt, values, today(), (await getAppContext()).rates);
+    if (edited.written === 0) {
       const stillThere = await prisma.recurringItem.findUnique({
         where: { id },
         select: { id: true },
       });
       return fail(stillThere ? t.itemChangedElsewhere : t.itemNoLongerExists);
+    }
+    // A schedule edit moves the payments already recorded for the item, or
+    // lets one go (updateRecurringItemDetailed); the toast says which.
+    const { rekeyed, released } = edited.settlements;
+    if (rekeyed.length > 0 || released.length > 0) {
+      revalidateApp();
+      return done(
+        [
+          `${t.itemUpdated}.`,
+          rekeyed.length > 0
+            ? t.paymentsMoved(rekeyed.map((move) => t.paymentMove(formatDayMonth(move.from, locale), formatDayMonth(move.to, locale))).join(", "))
+            : null,
+          released.length > 0 ? t.paymentsReleased(released.map((release) => formatDayMonth(release.dueDate, locale)).join(", ")) : null,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
     }
   } else {
     const created = await createRecurringItem(values);

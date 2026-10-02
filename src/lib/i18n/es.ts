@@ -373,6 +373,10 @@ export const es = {
     deleteTransferDescription: "Ambos lados de la transferencia se eliminan juntos.",
     deleteTransactionTitle: "¿Eliminar esta transacción?",
     deleteTransactionDescription: "Esto no se puede deshacer.",
+    deleteSettlesDropped: (name: string, date: string) =>
+      `Este cargo pagó el pago de ${name} del ${date}. Si lo eliminas, ese pago no se publicará otra vez.`,
+    deleteSettlesPosts: (name: string, date: string) =>
+      `Este cargo está guardado como el pago de ${name} del ${date}. Si lo eliminas, ese pago se publicará en su fecha.`,
     editTransaction: "Editar transacción",
     newTransaction: "Nueva transacción",
     manualDescription: "Registrado manualmente: la fuente queda como Manual.",
@@ -558,6 +562,9 @@ export const es = {
     postedMatchPossible: "Posible coincidencia",
     postedMatchUpdates: (from: string, to: string) => `Como cargo registrado, cambia de ${from} a ${to}`,
     postedMatchStaysAsIs: "Como cargo registrado, se queda como está",
+    postedMatchOtherAccount: (posted: string, entry: string) => `El cargo registrado está en ${posted}; este está en ${entry}`,
+    postedMatchMovesAccount: (from: string, to: string, amount: string) =>
+      `Responder "Es el cargo registrado" mueve el cargo registrado de ${from} a ${to}, la cuenta de la que salió el dinero, por ${amount}`,
     postedMatchBothAmounts: (recorded: string, deposit: string) =>
       `Sueldo registrado: ${recorded}. Este depósito: ${deposit}. El sueldo se queda como se registró.`,
     isPostedCharge: "Es el cargo registrado",
@@ -857,6 +864,10 @@ export const es = {
     deleteItemTitle: (name: string) => `¿Eliminar ${name}?`,
     stopsCounting: "Deja de contar como compromiso y ya no se registra ningún cargo suyo. Lo disponible para gastar no cambia. Las transacciones ya registradas se conservan.",
     itemUpdated: "Elemento recurrente actualizado",
+    paymentsMoved: (moves: string) => `El pago ya registrado pasó a la nueva fecha: ${moves}.`,
+    paymentMove: (from: string, to: string) => `del ${from} al ${to}`,
+    paymentsReleased: (dates: string) =>
+      `El cargo registrado para el ${dates} ya no corresponde a la nueva fecha, así que ese pago se publicará cuando venza.`,
     itemAdded: "Elemento recurrente agregado",
     itemDeleted: "Elemento recurrente eliminado",
     itemNoLongerExists: "Ese elemento ya no existe",

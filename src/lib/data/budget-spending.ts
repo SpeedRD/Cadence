@@ -16,11 +16,14 @@ import { num, type DecimalLike } from "@/lib/money";
 import { periodInfo, type PeriodRef } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 
+import { loadPairedCharges } from "@/lib/data/recurring-settlement";
+
 import type { AppContext } from "@/lib/data/context";
 import type { RecurringKind } from "@/generated/prisma/enums";
 
 /** The Transaction fields a SpendingRow is built from. */
 export const SPENDING_ROW_SELECT = {
+  id: true,
   date: true,
   amount: true,
   currency: true,
@@ -32,7 +35,14 @@ export const SPENDING_ROW_SELECT = {
   recurringSettlement: { select: { kind: true } },
 } as const;
 
-export function spendingRowFrom(transaction: {
+/**
+ * A SpendingRow from a Transaction. `paired` is the settlement plan's
+ * pairings not yet recorded (loadPairedCharges): a charge the plan pairs with
+ * an occurrence stands for it as one with a RecurringSettlement does.
+ */
+export function spendingRowFrom(
+  transaction: {
+  id: string;
   amount: DecimalLike;
   currency: string;
   categoryId: string | null;
@@ -41,7 +51,9 @@ export function spendingRowFrom(transaction: {
   isExtraordinary: boolean;
   yourShare: DecimalLike | null;
   recurringSettlement: { kind: RecurringKind } | null;
-}): SpendingRow {
+  },
+  paired: ReadonlyMap<string, { kind: RecurringKind }> = new Map(),
+): SpendingRow {
   return {
     amount: num(transaction.amount),
     currency: transaction.currency,
@@ -50,7 +62,7 @@ export function spendingRowFrom(transaction: {
     externalId: transaction.externalId,
     isExtraordinary: transaction.isExtraordinary,
     yourShare: transaction.yourShare === null ? null : num(transaction.yourShare),
-    settlementKind: transaction.recurringSettlement?.kind ?? null,
+    settlementKind: transaction.recurringSettlement?.kind ?? paired.get(transaction.id)?.kind ?? null,
   };
 }
 
@@ -70,19 +82,21 @@ export async function loadBudgetSpent(
   const infos = periods.map(periodInfo);
   const result = new Map<string, BudgetSpent>();
   if (infos.length === 0) return result;
-  const [transactions, categoryById] = await Promise.all([
+  const lastEnd = infos.reduce((latest, period) => (period.end.getTime() > latest.getTime() ? period.end : latest), infos[0].end);
+  const [transactions, categoryById, paired] = await Promise.all([
     prisma.transaction.findMany({
       where: { type: "EXPENSE", OR: infos.map((period) => ({ date: { gte: period.start, lte: period.end } })) },
       select: SPENDING_ROW_SELECT,
     }),
     loadSpendingCategories(),
+    loadPairedCharges(lastEnd),
   ]);
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
   for (const period of infos) {
     const rows = transactions
       .filter((row) => row.date.getTime() >= period.start.getTime() && row.date.getTime() <= period.end.getTime())
-      .map(spendingRowFrom);
+      .map((row) => spendingRowFrom(row, paired));
     result.set(period.key, budgetSpentFrom(rows, categoryById, toDisplay));
   }
   return result;

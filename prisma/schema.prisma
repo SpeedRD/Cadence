@@ -417,6 +417,13 @@ model RecurringSettlement {
   kind            RecurringKind
   dueDate         DateTime      @db.Date
   createdAt       DateTime      @default(now())
+  /// When postDueRecurringItems claimed the occurrence: rolled the item past
+  /// it and counted it against an installment plan. Null for a pairing the
+  /// user recorded before posting reached it ("It's that payment",
+  /// recordUpcomingPayment) - posting claims that one once, counting its
+  /// installment, and sets this; a claimed occurrence that a nextDate moved
+  /// back walks again is rolled past without counting.
+  claimedByPostingAt DateTime?
 
   transaction   Transaction    @relation(fields: [transactionId], references: [id], onDelete: Cascade)
   recurringItem RecurringItem? @relation(fields: [recurringItemId], references: [id], onDelete: SetNull)

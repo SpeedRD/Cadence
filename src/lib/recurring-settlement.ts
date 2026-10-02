@@ -23,10 +23,13 @@
  *     on a given day, or posting and the check-in would disagree about it.
  *   - Candidates: every account, and only charges no RecurringSettlement row
  *     has already paired. RECURRING rows are posting's own output, never a
- *     candidate.
+ *     candidate. Only items posting will post: one it skips (skipReasonFor)
+ *     takes no charge, or its look-alike would post the same money.
  *   - Window: the occurrence's pay period, reaching back SETTLEMENT_LEAD_DAYS
- *     before the due date when that falls before the period starts - see
- *     settlementWindow.
+ *     before the due date when that falls before the period starts, and
+ *     reaching PROXIMITY_DAYS past the due date when that falls after the
+ *     period ends - but past the end only on days nearer this occurrence
+ *     than the item's next one - see settlementWindow.
  *   - One charge, one occurrence: occurrences take charges in due-date order
  *     (item id breaking ties), each the earliest eligible charge still free.
  *     Because an occurrence's choice depends only on the ones due before it,
@@ -147,6 +150,44 @@ export function chargeMatchesItem(item: MatchableItem, charge: MatchableCharge, 
   return chargeIdentifiesItem(item, charge, categoryIsAmbiguous);
 }
 
+/**
+ * How many days from its due date a bank's row for an occurrence may land:
+ * the occurrence sits on the due date, the bank's row carries the day the
+ * card network posted the charge, one or two business days after the
+ * merchant billed, so a charge made on a Friday before a Monday holiday lands
+ * on Tuesday - four days later - and a merchant billing a day or two early
+ * lands that far before. Two rules read it:
+ *
+ *   - settlementWindow reaches this many days past the due date when that
+ *     is past its period's end, so a bill due on the 13th-15th or the
+ *     28th-31st whose card posts in the next period's first days is still
+ *     its own occurrence's charge;
+ *   - planPostedDuplicates takes a charge of exactly a posted RECURRING row's
+ *     amount, in its currency, on its account, this close to it for that row
+ *     without naming the item. Bank text often does not repeat the user's
+ *     name for an item ("Aplazame iPhone 17 Pro Max" bills as "Compra Visa
+ *     Int Aplazame Es"), so this is what ties most real charges to their row.
+ *
+ * It stays under SETTLEMENT_LEAD_DAYS and well under a week, so the same
+ * amount from another merchant further into the period is only a possible
+ * match.
+ */
+export const PROXIMITY_DAYS = 4;
+
+/**
+ * Whether posting has claimed the occurrence a RecurringSettlement row pairs
+ * - rolled the item past it and counted it against an installment plan - as
+ * opposed to a pairing the user recorded before posting reached it ("It's
+ * that payment", recordUpcomingPayment), which posting claims once, counting
+ * its installment, whenever the user recorded it. Posting sets
+ * claimedByPostingAt when it claims; nothing else does. A claimed occurrence
+ * is never claimed again: a nextDate moved back onto it rolls past it
+ * without counting, as onto a posted one.
+ */
+export function settlementClaimed(row: { claimedByPostingAt: Date | null }): boolean {
+  return row.claimedByPostingAt !== null;
+}
+
 /** "<itemId>:<YYYY-MM-DD>": one occurrence's key - the RECURRING row's externalId, the settlement's occurrenceKey. */
 export function recurringExternalId(itemId: string, due: Date): string {
   return `${itemId}:${toISODate(due)}`;
@@ -161,12 +202,27 @@ export function itemIdFromOccurrenceKey(key: string): string | null {
 /**
  * The days a charge may fall on to settle the occurrence due on `due`: its
  * pay period, starting SETTLEMENT_LEAD_DAYS before `due` when that is earlier
- * than the period's first day. Rent due on the 1st and paid on the 30th is in
- * its window; rent due on the 10th and paid on the 30th is not.
+ * than the period's first day, and ending PROXIMITY_DAYS after `due` when
+ * that is later than the period's last day. Rent due on the 1st and paid on
+ * the 30th is in its window; rent due on the 10th and paid on the 30th is
+ * not; an internet bill due on the 15th that the bank dates the 16th is; a
+ * phone bill due on the 5th is not paid by a charge on the 18th.
+ *
+ * Past the period's end the window holds only the days nearer `due` than
+ * `nextDue`, the item's next occurrence, when it is given: a weekly item due
+ * Tuesday the 13th keeps the 16th, while a charge on the 19th, a day before
+ * the next Tuesday, is that occurrence's. Inside the period nothing changes -
+ * occurrences there take charges in due-date order, as they always did.
  */
-export function settlementWindow(due: Date): { start: Date; end: Date } {
+export function settlementWindow(due: Date, nextDue: Date | null = null): { start: Date; end: Date } {
   const period = periodForDate(due);
-  return { start: minDate(period.start, addDays(due, -SETTLEMENT_LEAD_DAYS)), end: period.end };
+  let end = maxDate(period.end, addDays(due, PROXIMITY_DAYS));
+  if (nextDue) {
+    // The last day strictly nearer `due` than `nextDue`.
+    const nearer = addDays(due, Math.ceil(daysBetween(due, nextDue) / 2) - 1);
+    end = maxDate(period.end, minDate(end, nearer));
+  }
+  return { start: minDate(period.start, addDays(due, -SETTLEMENT_LEAD_DAYS)), end };
 }
 
 export interface SettlementItem extends MatchableItem {
@@ -188,6 +244,8 @@ export interface SettlementCharge extends MatchableCharge {
 export interface SettlementOccurrence {
   itemId: string;
   due: Date;
+  /** The item's occurrence after this one, which bounds this one's window past its period (settlementWindow). */
+  nextDue?: Date | null;
 }
 
 /**
@@ -216,7 +274,7 @@ export function planSettlements(input: {
   for (const occurrence of ordered) {
     const item = itemById.get(occurrence.itemId);
     if (!item) continue;
-    const window = settlementWindow(occurrence.due);
+    const window = settlementWindow(occurrence.due, occurrence.nextDue ?? null);
     const match = charges.find((charge) => {
       if (taken.has(charge.id)) return false;
       if (charge.date.getTime() < window.start.getTime() || charge.date.getTime() > window.end.getTime()) return false;
@@ -233,10 +291,10 @@ export function planSettlements(input: {
 }
 
 /** The earliest and latest day any of these occurrences' windows reach, or null for none. */
-export function settlementSpan(dues: readonly Date[]): { start: Date; end: Date } | null {
+export function settlementSpan(occurrences: readonly Pick<SettlementOccurrence, "due" | "nextDue">[]): { start: Date; end: Date } | null {
   let span: { start: Date; end: Date } | null = null;
-  for (const due of dues) {
-    const window = settlementWindow(due);
+  for (const occurrence of occurrences) {
+    const window = settlementWindow(occurrence.due, occurrence.nextDue ?? null);
     span = span ? { start: minDate(span.start, window.start), end: maxDate(span.end, window.end) } : window;
   }
   return span;
@@ -266,21 +324,6 @@ export function settlementSpan(dues: readonly Date[]): { start: Date; end: Date 
  * still decide - a cross-currency match is only ever a warning.
  */
 export const CROSS_CURRENCY_MATCH_TOLERANCE = 0.03;
-
-/**
- * How many days from a posted RECURRING row's date a charge of exactly its
- * amount, in its currency, may land and still be taken for it without naming
- * the item. The posted row sits on the due date; the bank's row carries the
- * day the card network posted the charge, one or two business days after
- * the merchant billed, so a charge made on a Friday before a Monday holiday
- * lands on Tuesday - four days later - and a merchant billing a day or two
- * early lands that far before. Bank text often does not repeat the user's
- * name for an item ("Aplazame iPhone 17 Pro Max" bills as "Compra Visa Int
- * Aplazame Es"), so this is what ties most real charges to their row. It
- * stays under SETTLEMENT_LEAD_DAYS and well under a week, so the same amount
- * from another merchant further into the period is only a possible match.
- */
-export const PROXIMITY_DAYS = 4;
 
 /** A row being brought in, before it is written (or just after, for a manual entry). */
 export interface IncomingEntry {
@@ -385,6 +428,13 @@ function seriesOf(entry: PostedEntry): string {
  * paycheck, a row whose item is gone, a named item or a same-amount charge
  * within PROXIMITY_DAYS is a strong match.
  *
+ * An expense on another account is a candidate for a RECURRING row too, as
+ * a charge on any account settles an occurrence before posting: a bill paid
+ * from another card. Only when no candidate on its own account agrees
+ * exactly, only on the exact rule (never through a conversion), and it is a
+ * strong match only when it names the item - on another account, nearness
+ * alone ties nothing.
+ *
  * Several candidates from different items go through the look-alike guard:
  * only the items the incoming row names survive (chargeIdentifiesItem, with
  * the category not counting for items whose category cannot tell them apart,
@@ -418,15 +468,25 @@ export function planPostedDuplicates(input: {
   // The pick today's rules make for `entry` among the posted rows still free,
   // and whether it is strong.
   const choose = (entry: IncomingEntry) => {
-    const eligible = input.posted.filter(
+    const inWindow = input.posted.filter(
       (posted) =>
         !taken.has(posted.id) &&
-        posted.accountId === entry.accountId &&
         posted.type === entry.type &&
         entry.date.getTime() >= posted.window.start.getTime() &&
         entry.date.getTime() <= posted.window.end.getTime(),
     );
+    const eligible = inWindow.filter((posted) => posted.accountId === entry.accountId);
     let pool = eligible.filter((posted) => sameMoneyExactly(posted, entry, AMOUNT_MATCH_TOLERANCE));
+    // Another account's posted charge, on the exact rule only.
+    const otherAccount = pool.length === 0;
+    if (otherAccount) {
+      pool = inWindow.filter(
+        (posted) =>
+          posted.kind === "recurring" &&
+          posted.accountId !== entry.accountId &&
+          sameMoneyExactly(posted, entry, AMOUNT_MATCH_TOLERANCE),
+      );
+    }
     const converted = pool.length === 0;
     if (converted) {
       pool = eligible.filter((posted) => {
@@ -463,11 +523,12 @@ export function planPostedDuplicates(input: {
     // Beyond PROXIMITY_DAYS, only the amount ties a row that does not name
     // the item to its posted charge: another merchant's charge of the same
     // amount looks exactly like it.
+    const named = primary.item !== null && chargeIdentifiesItem(primary.item, entry, ambiguousCategory.has(primary.item.id));
     const strong =
       !converted &&
-      (primary.item === null ||
-        chargeIdentifiesItem(primary.item, entry, ambiguousCategory.has(primary.item.id)) ||
-        Math.abs(daysBetween(primary.date, entry.date)) <= PROXIMITY_DAYS);
+      (named ||
+        (primary.accountId === entry.accountId &&
+          (primary.item === null || Math.abs(daysBetween(primary.date, entry.date)) <= PROXIMITY_DAYS)));
     return { primary, nearestPerSeries, strong };
   };
 

@@ -1,7 +1,9 @@
 /**
  * Loads what planCommitments (src/lib/period-commitments.ts) needs and runs
- * it: the active items and their schedules, what posting already consumed in
- * the periods' date range (RECURRING rows and RecurringSettlement rows), and
+ * it: the active items and their schedules, what posting already consumed
+ * for occurrences due in the periods' date range (RECURRING rows and
+ * RecurringSettlement rows - each by its occurrence's due date, never by the
+ * date a row was later edited to), and
  * posting's own settlement plan (loadSettlementPlan) for the occurrences
  * still ahead - planned through the last period's end, the same call the
  * payday check-in has always made for its plan period - and the deposits
@@ -9,7 +11,7 @@
  * which lower what each asks. Nothing here decides whether a charge paid an
  * occurrence; posting's matcher does.
  */
-import { num } from "@/lib/money";
+import { num, type DecimalLike } from "@/lib/money";
 import {
   applyEarmarks,
   planCommitments,
@@ -22,7 +24,7 @@ import {
 import { type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { itemIdFromOccurrenceKey } from "@/lib/recurring-settlement";
-import { fromISODate } from "@/lib/date";
+import { fromISODate, toISODate } from "@/lib/date";
 
 import { loadOccurrenceEarmarks } from "@/lib/data/earmarks";
 import { loadSettlementPlan } from "@/lib/data/recurring-settlement";
@@ -74,10 +76,13 @@ export async function loadCommitments(
           },
         })
       : [],
-    prisma.transaction.findMany({
-      where: { source: "RECURRING", type: "EXPENSE", date: { gte: start, lte: end }, externalId: { not: null } },
-      select: { externalId: true, date: true, amount: true, currency: true, accountId: true, note: true },
-    }),
+    // By the due date in the occurrence's key, as the settlements below are
+    // read by theirs: a posted row whose date was edited into another period
+    // still stands for the occurrence it was posted for, in that one's period.
+    prisma.$queryRaw<{ externalId: string; date: Date; amount: DecimalLike; currency: string; accountId: string; note: string | null }[]>`
+      SELECT "externalId", "date", "amount", "currency", "accountId", "note" FROM "Transaction"
+      WHERE "source" = 'RECURRING' AND "type" = 'EXPENSE' AND "externalId" IS NOT NULL
+        AND right("externalId", 10) BETWEEN ${toISODate(start)} AND ${toISODate(end)}`,
     prisma.recurringSettlement.findMany({
       where: { dueDate: { gte: start, lte: end } },
       select: {
@@ -187,7 +192,7 @@ export async function loadCommitments(
     items,
     facts,
     ledgerItems,
-    settlement: { posted: settlementPlan?.posted ?? new Set(), settledBy },
+    settlement: { posted: settlementPlan?.posted ?? new Set(), claimed: settlementPlan?.claimed ?? new Set(), settledBy },
     accountCurrency: new Map(accounts.map((account) => [account.id, account.currency])),
     rates: context.rates,
     excludeItemId: options.excludeItemId,
