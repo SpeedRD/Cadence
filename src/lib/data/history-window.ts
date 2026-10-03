@@ -3,13 +3,14 @@
  * first recorded spending and Settings' "count history from" date.
  */
 import { prisma } from "@/lib/prisma";
+import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } from "@/lib/transactions";
 
 import type { HistoryBounds } from "@/lib/history-window";
 import type { AppContext } from "@/lib/data/context";
 
 /**
  * The earliest date Cadence has any recorded *spending* for: the first
- * expense, or the first goal contribution if that is earlier.
+ * expense that is not a goal contribution's ledger twin.
  *
  * Only spending counts, because the date feeds the partial-first-period rule
  * of the spending averages (firstUsablePeriod) and the monthly windows. An
@@ -21,18 +22,50 @@ import type { AppContext } from "@/lib/data/context";
  * period scored zero lifestyle spending while still collecting each recurring
  * item's scheduled amount, which both deflated the lifestyle average and
  * inflated the committed one.
+ *
+ * A goal contribution is saving, not spending, for the same reason - so
+ * neither the GoalContribution row nor the expense that carries its money (its
+ * twin) opens a period. The twin is the hand-logged contribution's MANUAL row
+ * (externalId "goal-contribution:<id>"), the RECURRING row posting wrote for a
+ * contribution occurrence, or the charge the user entered that settled one:
+ * the last two are told from a subscription's rows, which share their key
+ * shape, only by a GoalContribution carrying the key (the rule monthly.ts
+ * reads them by). A subscription's posted charge is spending.
  */
 export async function getFirstActivityDate(): Promise<Date | null> {
-  const [txMin, goalMin] = await Promise.all([
-    prisma.transaction.aggregate({
-      _min: { date: true },
-      where: { type: "EXPENSE" },
-    }),
-    prisma.goalContribution.aggregate({ _min: { date: true } }),
-  ]);
-  const dates = [txMin._min.date, goalMin._min.date].filter((d): d is Date => Boolean(d));
-  if (dates.length === 0) return null;
-  return dates.reduce((earliest, date) => (date.getTime() < earliest.getTime() ? date : earliest));
+  const contributionKeys = (
+    await prisma.goalContribution.findMany({
+      where: { recurringExternalId: { not: null } },
+      select: { recurringExternalId: true },
+    })
+  ).map((row) => row.recurringExternalId as string);
+  // Each clause says "is not that kind of twin" positively (a null externalId
+  // or no settlement passes): a NOT over a nullable column would drop the
+  // rows where it is NULL, plain expenses first among them.
+  const first = await prisma.transaction.findFirst({
+    where: {
+      type: "EXPENSE",
+      AND: [
+        {
+          OR: [
+            { source: { not: "MANUAL" } },
+            { externalId: null },
+            { externalId: { not: { startsWith: MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } } },
+          ],
+        },
+        { OR: [{ source: { not: "RECURRING" } }, { externalId: null }, { externalId: { notIn: contributionKeys } }] },
+        {
+          OR: [
+            { recurringSettlement: { is: null } },
+            { recurringSettlement: { isNot: { occurrenceKey: { in: contributionKeys } } } },
+          ],
+        },
+      ],
+    },
+    orderBy: { date: "asc" },
+    select: { date: true },
+  });
+  return first?.date ?? null;
 }
 
 /** Both bounds of the history window for the request's context. */

@@ -15860,6 +15860,71 @@ async function main() {
       }
     }
 
+    console.log("-- R27: a goal contribution twin dated before the first real expense does not set the boundary --");
+    {
+      const strayBefore2025 =
+        (await prisma.transaction.count({ where: { date: { lt: civilDate(2025, 1, 1) }, type: { in: ["EXPENSE", "INCOME"] } } })) +
+        (await prisma.goalContribution.count({ where: { date: { lt: civilDate(2025, 1, 1) } } }));
+      eq("R27 twin fixture isolation: nothing in the database predates 2025", strayBefore2025, 0);
+      const account = await prisma.account.create({ data: { name: "Verify R27 Twin Account", currency: "DOP", type: "CHECKING" } });
+      const goal = await prisma.goal.create({ data: { name: "Verify R27 Twin Goal", targetAmount: 1000000, currency: "DOP" } });
+      const item = await prisma.recurringItem.create({
+        data: { name: "Verify R27 Twin Item", amount: 1000, currency: "DOP", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: civilDate(2031, 1, 1), accountId: account.id, goalId: goal.id, active: false },
+      });
+      const sub = await prisma.recurringItem.create({
+        data: { name: "Verify R27 Twin Subscription", amount: 400, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2031, 1, 1), accountId: account.id, active: false },
+      });
+      const first = async () => {
+        const date = await rMonthly.getFirstActivityDate();
+        return date ? toISODate(date) : "none";
+      };
+      try {
+        // Whatever earlier sections left behind (nothing before 2025): the twins below must not move it.
+        const untouched = await first();
+        const expense = (date: Date, extra: Record<string, unknown> = {}) =>
+          prisma.transaction.create({ data: { date, amount: 1000, currency: "DOP", type: "EXPENSE", accountId: account.id, source: "MANUAL", ...extra } as never });
+        // A hand-logged contribution (Jun 3) and its ledger twin.
+        const manual = await prisma.goalContribution.create({ data: { goalId: goal.id, accountId: account.id, amount: 1000, currency: "DOP", date: civilDate(2024, 6, 3) } });
+        await expense(civilDate(2024, 6, 3), { externalId: `goal-contribution:${manual.id}`, note: "Verify R27 Twin manual" });
+        // A contribution posting wrote (Jul 5) and its RECURRING row.
+        const postedKey = `${item.id}:2024-07-05`;
+        await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 1000, currency: "DOP", date: civilDate(2024, 7, 5), recurringItemId: item.id, recurringExternalId: postedKey } });
+        await expense(civilDate(2024, 7, 5), { source: "RECURRING", externalId: postedKey });
+        // A contribution whose occurrence a charge the user entered settled (Jul 20).
+        const settledKey = `${item.id}:2024-07-20`;
+        await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 1000, currency: "DOP", date: civilDate(2024, 7, 20), recurringItemId: item.id, recurringExternalId: settledKey } });
+        const settledCharge = await expense(civilDate(2024, 7, 20), { note: "Verify R27 Twin settled charge" });
+        await prisma.recurringSettlement.create({ data: { transactionId: settledCharge.id, occurrenceKey: settledKey, recurringItemId: item.id, kind: "CONTRIBUTION", dueDate: civilDate(2024, 7, 20) } });
+        // A contribution with no account, so no ledger row at all (May 1).
+        await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 1000, currency: "DOP", date: civilDate(2024, 5, 1) } });
+
+        eq("contribution twins of every kind, and a contribution with no ledger row, leave the first activity where it was (it read May 1)", await first(), untouched);
+
+        await expense(civilDate(2024, 9, 1), { note: "Verify R27 Twin groceries" });
+        eq("the first real expense (Sep 1) sets the boundary, not the earlier twins (it read May 1)", await first(), "2024-09-01");
+        const oct5 = rContext(civilDate(2024, 10, 5));
+        eq(
+          "the monthly windows start at September, not May (they were May to Sep)",
+          (await rMonthly.getCompletedMonthWindows(oct5 as Parameters<typeof rMonthly.getCompletedMonthWindows>[0])).map((window) => window.key).join(","),
+          "2024-09",
+        );
+
+        await expense(civilDate(2024, 8, 10), { source: "RECURRING", externalId: `${sub.id}:2024-08-10`, note: "Verify R27 Twin subscription row" });
+        eq("a posted subscription charge is a real expense: it sets the boundary (Aug 10), though it has the same key shape as a twin", await first(), "2024-08-10");
+
+        await expense(civilDate(2024, 8, 1), { source: "CSV", externalId: "verify-r27-twin-csv-fingerprint" });
+        await expense(civilDate(2024, 7, 25));
+        eq("an imported row and a plain row with no externalId count too: the earliest is Jul 25", await first(), "2024-07-25");
+      } finally {
+        await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: account.id } } });
+        await prisma.transaction.deleteMany({ where: { accountId: account.id } });
+        await prisma.goalContribution.deleteMany({ where: { goalId: goal.id } });
+        await prisma.recurringItem.deleteMany({ where: { id: { in: [item.id, sub.id] } } });
+        await prisma.goal.delete({ where: { id: goal.id } });
+        await prisma.account.delete({ where: { id: account.id } });
+      }
+    }
+
     console.log("-- R14: the suggestions loader leaves out a charge the settlement plan pairs with an item --");
     {
       const paused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((item) => item.id);
