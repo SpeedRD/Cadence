@@ -7,16 +7,7 @@
 import { accountAmount, moneyRow } from "@/lib/account-money";
 import { convert } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
-import {
-  fundedPeriodFor,
-  incomeWindow,
-  nextPeriod as nextPeriodRef,
-  paydayDateFor,
-  periodInfo,
-  periodKey,
-  type PayLanded,
-  type PeriodRef,
-} from "@/lib/period";
+import { incomeWindow, periodInfo, type PeriodRef } from "@/lib/period";
 import {
   incomePeriodFor,
   rowCountsAsIncome,
@@ -26,7 +17,8 @@ import {
   type IncomeBasis,
 } from "@/lib/period-income";
 import { prisma } from "@/lib/prisma";
-import { reimbursedExpenseIdFromTransaction } from "@/lib/transactions";
+
+import { loadDepositCover } from "@/lib/data/period-commitments";
 
 import type { AppContext } from "@/lib/data/context";
 import type { Prisma } from "@/generated/prisma/client";
@@ -47,7 +39,7 @@ export interface PeriodIncomeFigures {
 export async function loadPeriodIncome(
   periods: readonly PeriodRef[],
   basis: IncomeBasis,
-  context: Pick<AppContext, "displayCurrency" | "rates">,
+  context: Pick<AppContext, "displayCurrency" | "rates" | "today">,
 ): Promise<Map<string, PeriodIncomeFigures>> {
   const infos = periods.map(periodInfo);
   const result = new Map<string, PeriodIncomeFigures>(
@@ -72,7 +64,8 @@ export async function loadPeriodIncome(
         type: true,
         isOneOffIncome: true,
         reimbursesTransactionId: true,
-        earmarks: { select: { amount: true, currency: true } },
+        id: true,
+        _count: { select: { earmarks: true } },
       },
     }),
     prisma.paydayCheckin.findMany({
@@ -102,15 +95,19 @@ export async function loadPeriodIncome(
     figures.total += convert(amount, currency, context.displayCurrency, context.rates);
   };
 
+  // As an estimate a deposit leaves out what of it is earmarked for a
+  // payment - only the part that still covers an occurrence's cost (K2's
+  // effective earmark): an occurrence lowered or no longer due hands the
+  // rest back.
+  const earmarkedRows = basis === "estimate" ? rows.filter((row) => row._count.earmarks > 0) : [];
+  const currencyOfRow = new Map(earmarkedRows.map((row) => [row.id, row.currency]));
+  const cover = await loadDepositCover(
+    earmarkedRows.map((row) => row.id),
+    (id) => currencyOfRow.get(id) as string,
+    context,
+  );
   for (const row of rows) {
-    const income = {
-      ...row,
-      amount: num(row.amount),
-      earmarked: row.earmarks.reduce(
-        (sum, earmark) => sum + convert(num(earmark.amount), earmark.currency, row.currency, context.rates),
-        0,
-      ),
-    };
+    const income = { ...row, amount: num(row.amount), earmarked: cover.get(row.id) ?? 0 };
     if (!rowCountsAsIncome(income, basis)) continue;
     add(incomePeriodFor(row).key, row.accountId, rowIncome(income, basis), row.currency);
   }
@@ -137,7 +134,7 @@ export async function loadPeriodIncome(
 export async function periodIncome(
   period: PeriodRef,
   basis: IncomeBasis,
-  context: Pick<AppContext, "displayCurrency" | "rates">,
+  context: Pick<AppContext, "displayCurrency" | "rates" | "today">,
 ): Promise<Map<string, number>> {
   const figures = await loadPeriodIncome([period], basis, context);
   return figures.get(periodInfo(period).key)?.byAccount ?? new Map();
@@ -164,8 +161,8 @@ export interface LedgerDeposits {
   byAccount: Map<string, LedgerDeposit[]>;
   /**
    * How many deposits in the window are, in whole or in part, not pay: marked
-   * one-off, or with a part earmarked for a recurring payment. Step 2 says
-   * so in one line.
+   * one-off, or with a part earmarked for a recurring payment that still
+   * covers it. Step 2 says so in one line.
    */
   setAside: Map<string, number>;
 }
@@ -178,11 +175,14 @@ export interface LedgerDeposits {
  * already counts in it. A check-in for `ref` lists them in Step 2 and adopts
  * them on confirm (PaydayAccountSnapshot.adoptedIncome) rather than
  * recording that money a second time - each less its earmarked part, and
- * one earmarked in full is not listed.
+ * one earmarked in full is not listed. The earmarked part is what still
+ * covers a payment (loadDepositCover, K2's applied earmark) - the same part
+ * the income estimate leaves out - so an earmark whose payment was lowered
+ * or paused hands the rest back to pay here as it does there.
  */
 export async function loadLedgerDeposits(
   ref: PeriodRef,
-  context: Pick<AppContext, "rates">,
+  context: Pick<AppContext, "rates" | "today">,
   options: { client?: Prisma.TransactionClient } = {},
 ): Promise<LedgerDeposits> {
   const client = options.client ?? prisma;
@@ -207,19 +207,23 @@ export async function loadLedgerDeposits(
       rate: true,
       isOneOffIncome: true,
       account: { select: { currency: true } },
-      earmarks: { select: { amount: true, currency: true } },
+      _count: { select: { earmarks: true } },
     },
   });
+  const earmarkedRows = rows.filter((row) => row._count.earmarks > 0);
+  const currencyOfRow = new Map(earmarkedRows.map((row) => [row.id, row.currency]));
+  const cover = await loadDepositCover(
+    earmarkedRows.map((row) => row.id),
+    (id) => currencyOfRow.get(id) as string,
+    context,
+  );
   const result = new Map<string, LedgerDeposit[]>();
   const setAside = new Map<string, number>();
   for (const row of rows) {
-    if (row.isOneOffIncome || row.earmarks.length > 0) setAside.set(row.accountId, (setAside.get(row.accountId) ?? 0) + 1);
-    if (row.isOneOffIncome) continue;
     const whole = round2(accountAmount(moneyRow(row), row.account.currency, context.rates));
-    const earmarked = Math.min(
-      whole,
-      round2(row.earmarks.reduce((sum, earmark) => sum + convert(num(earmark.amount), earmark.currency, row.account.currency, context.rates), 0)),
-    );
+    const earmarked = Math.min(whole, round2(convert(cover.get(row.id) ?? 0, row.currency, row.account.currency, context.rates)));
+    if (row.isOneOffIncome || earmarked > 0) setAside.set(row.accountId, (setAside.get(row.accountId) ?? 0) + 1);
+    if (row.isOneOffIncome) continue;
     if (whole - earmarked <= 0) continue;
     const list = result.get(row.accountId) ?? [];
     list.push({ transactionId: row.id, date: row.date, amount: round2(whole - earmarked), earmarked, note: row.note });
@@ -249,109 +253,5 @@ export function ledgerDepositsTotal(deposits: readonly LedgerDeposit[] | undefin
   return round2((deposits ?? []).reduce((sum, deposit) => sum + deposit.amount, 0));
 }
 
-/**
- * A deposit is pay - it opens its period's goal money (fundingWindow) and
- * Step 1's reconciliation date - only when it is at least this share of the
- * account's most recent confirmed paycheck (R4): a refund, interest or a
- * small transfer landing in the lead days is not.
- */
-export const PAY_SHARE_OF_PAYCHECK = 0.5;
-
-/**
- * The day each period's pay was recorded as landing, for fundingWindow (src/lib/period.ts):
- * the earliest of its confirmed check-in's paycheck transaction and the
- * ordinary deposits its income window attributes to it (one-off income and
- * paybacks are not pay) that are at least PAY_SHARE_OF_PAYCHECK of their
- * account's most recent confirmed paycheck - the incomeEntered of the latest
- * confirmed check-in before that period recording income on it - counting
- * only one dated from PAYCHECK_LEAD_DAYS before its first day through its
- * payday. An account with no confirmed paycheck before the period has no
- * deposit that opens it. A period with none has no entry and its window
- * opens on its payday. Returned as the PayLanded lookup fundingWindow takes,
- * covering `periods` and the period after each.
- */
-export async function loadPayLanded(
-  periods: readonly PeriodRef[],
-  context: Pick<AppContext, "rates">,
-): Promise<PayLanded> {
-  const refs = new Map<string, PeriodRef>();
-  for (const period of periods) {
-    const info = periodInfo(period);
-    refs.set(info.key, info);
-    const next = periodInfo(nextPeriodRef(info));
-    refs.set(next.key, next);
-  }
-  const landed = new Map<string, Date>();
-  const lookup: PayLanded = (ref) => landed.get(periodKey(ref)) ?? null;
-  if (refs.size === 0) return lookup;
-  const all = [...refs.values()];
-  const from = new Date(Math.min(...all.map((ref) => incomeWindow(ref).from.getTime())));
-  const through = new Date(Math.max(...all.map((ref) => paydayDateFor(ref).getTime())));
-  const lastKey = all.map((ref) => periodKey(ref)).sort().at(-1) as string;
-  const [rows, checkins, paychecks] = await Promise.all([
-    prisma.transaction.findMany({
-      where: { type: "INCOME", date: { gte: from, lte: through } },
-      select: {
-        id: true,
-        date: true,
-        source: true,
-        type: true,
-        isOneOffIncome: true,
-        reimbursesTransactionId: true,
-        accountId: true,
-        amount: true,
-        currency: true,
-        originalAmount: true,
-        originalCurrency: true,
-        rate: true,
-      },
-    }),
-    prisma.paydayCheckin.findMany({
-      where: { status: "CONFIRMED", OR: all.map((ref) => ({ year: ref.year, month: ref.month, period: ref.period })) },
-      select: { year: true, month: true, period: true, snapshots: { select: { incomeTransactionId: true } } },
-    }),
-    // Every confirmed paycheck up to the last period asked about, newest
-    // first: the reference a deposit is measured against.
-    prisma.paydayAccountSnapshot.findMany({
-      where: { incomeEntered: { gt: 0 }, checkin: { status: "CONFIRMED" } },
-      select: { accountId: true, incomeEntered: true, currency: true, checkin: { select: { year: true, month: true, period: true } } },
-    }),
-  ]);
-  const paycheckHistory = paychecks
-    .map((snapshot) => ({
-      accountId: snapshot.accountId,
-      key: periodKey(snapshot.checkin),
-      amount: num(snapshot.incomeEntered),
-      currency: snapshot.currency,
-    }))
-    .filter((paycheck) => paycheck.key <= lastKey)
-    .sort((a, b) => b.key.localeCompare(a.key));
-  // The account's most recent confirmed paycheck before the period `key`.
-  const paycheckBefore = (accountId: string, key: string) =>
-    paycheckHistory.find((paycheck) => paycheck.accountId === accountId && paycheck.key < key) ?? null;
-  // A check-in's paycheck row belongs to the period its check-in planned.
-  const paycheckPeriod = new Map<string, string>();
-  for (const checkin of checkins) {
-    for (const snapshot of checkin.snapshots) {
-      if (snapshot.incomeTransactionId) paycheckPeriod.set(snapshot.incomeTransactionId, periodInfo(checkin).key);
-    }
-  }
-  for (const row of rows) {
-    let key: string | undefined;
-    if (row.source === "PAYDAY_CHECKIN") key = paycheckPeriod.get(row.id);
-    else if (!row.isOneOffIncome && reimbursedExpenseIdFromTransaction(row) === null) {
-      const funded = fundedPeriodFor(row.date).key;
-      const paycheck = paycheckBefore(row.accountId, funded);
-      // Pay, not a refund or interest: at least half the account's last paycheck.
-      const amount = paycheck ? accountAmount(moneyRow(row), paycheck.currency, context.rates) : 0;
-      if (paycheck && amount + 0.005 >= paycheck.amount * PAY_SHARE_OF_PAYCHECK) key = funded;
-    }
-    const ref = key ? refs.get(key) : undefined;
-    if (!key || !ref) continue;
-    // Only pay landing from the lead through the payday opens the window.
-    if (row.date.getTime() < incomeWindow(ref).from.getTime() || row.date.getTime() > paydayDateFor(ref).getTime()) continue;
-    const current = landed.get(key);
-    if (!current || row.date.getTime() < current.getTime()) landed.set(key, row.date);
-  }
-  return lookup;
-}
+/** Moved to src/lib/data/pay-landed.ts, which the period commitments read too; re-exported for existing readers. */
+export { loadPayLanded, PAY_SHARE_OF_PAYCHECK } from "@/lib/data/pay-landed";

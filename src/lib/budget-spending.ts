@@ -4,16 +4,21 @@
  * the Budgets page's category rows, the numerator of a category suggestion,
  * the carryover - and the rows the monthly pace calls lifestyle.
  *
- * It is every expense the plan did not already reserve. Left out:
+ * It is every expense the plan did not already reserve. Left out, because
+ * another figure already counts it:
  *
  *   - a row that stands for a recurring occurrence: the RECURRING row posting
- *     wrote, or a charge the user entered that posting settled an occurrence
- *     with (RecurringSettlement), a subscription's or a contribution's - the
- *     plan counted the occurrence among its commitments (K2);
+ *     wrote, or a charge the user entered that pays an occurrence (a
+ *     RecurringSettlement, or a pairing the settlement plan makes before
+ *     posting records it), a subscription's or a contribution's - the plan
+ *     counted the occurrence among its commitments (K2);
  *   - a hand-logged contribution's own expense (externalId
- *     "goal-contribution:<id>"): its GoalContribution counts it as savings;
- *   - anything in a subscription or savings category: the check-in never
- *     budgets those categories, so nothing is measured against them.
+ *     "goal-contribution:<id>"): its GoalContribution counts it as savings.
+ *
+ * Nothing is left out for its category: an expense filed under a
+ * subscription or savings category with no recurring item or contribution
+ * behind it is in no commitment and no goal, so it is spending in its
+ * category like any other - otherwise it would be in no figure at all.
  *
  * A shared expense counts at the user's own share (Transaction.yourShare, see
  * src/lib/shared-expense.ts): the budget is planned at what things cost the
@@ -75,7 +80,12 @@ export function isContributionTwin(row: Pick<SpendingRow, "source" | "externalId
   return manualContributionIdFromTransaction(row) !== null || row.settlementKind === "CONTRIBUTION";
 }
 
-/** The row is filed under a category the check-in never budgets: a subscription or savings one. */
+/**
+ * The row is filed under a category the check-in never budgets: a
+ * subscription or savings one. Not a budget-spending rule (an expense there
+ * that nothing else covers is spending); the total view and the monthly pace
+ * read it.
+ */
 export function inUnbudgetedCategory(
   row: Pick<SpendingRow, "categoryId">,
   categoryById: ReadonlyMap<string, Pick<SpendingCategory, "isSubscriptionDefault" | "isSavingsDefault">>,
@@ -84,9 +94,9 @@ export function inUnbudgetedCategory(
   return Boolean(category && (category.isSubscriptionDefault || category.isSavingsDefault));
 }
 
-/** Whether a row is budget spending (the population above). */
-export function isBudgetSpending(row: SpendingRow, categoryById: ReadonlyMap<string, SpendingCategory>): boolean {
-  return !standsForOccurrence(row) && !isContributionTwin(row) && !inUnbudgetedCategory(row, categoryById);
+/** Whether a row is budget spending (the population above): whatever no commitment or goal already counts. */
+export function isBudgetSpending(row: SpendingRow): boolean {
+  return !standsForOccurrence(row) && !isContributionTwin(row);
 }
 
 /**
@@ -116,7 +126,7 @@ export function budgetSpentFrom(
   let total = 0;
   const byCategory = new Map<string | null, BudgetCategorySpent>();
   for (const row of rows) {
-    if (!isBudgetSpending(row, categoryById)) continue;
+    if (!isBudgetSpending(row)) continue;
     const amount = toDisplay(ownCost(row), row.currency);
     total += amount;
     const key = spendingLineKey(row, categoryById);

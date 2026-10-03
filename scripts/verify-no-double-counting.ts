@@ -31,6 +31,9 @@
  *           src/lib/period-commitments.ts) plus its GOAL rows, with no
  *           estimate on top, and an unconfirmed period's into commitments
  *           plus estimate, with nothing leaking in from a DRAFT check-in.
+ *           A recurring contribution is reserved in exactly one period -
+ *           the same loaded alone or with others - and, once its money has
+ *           moved, in the period whose goal window counts it as contributed.
  *   pair 4  a row Cadence wrote itself - an occurrence's RECURRING row, or
  *           the paycheck a payday check-in recorded - versus a charge or
  *           deposit brought in for the same money (a CSV row, an approved
@@ -50,10 +53,14 @@
  *           (RecurringEarmark, src/lib/earmarks.ts) and the occurrence it
  *           covers: the earmarked part lowers what the occurrence asks of the
  *           plan (wholeAmount in src/lib/period-commitments.ts), so it must
- *           not also count as estimated income (src/lib/period-income.ts),
+ *           not also count as estimated income (src/lib/period-income.ts) -
+ *           and only that part: an earmark whose occurrence shrank or went
+ *           away hands the rest back to the estimate,
  *           must not be a check-in's paycheck (already the plan's income),
  *           and no occurrence may be covered beyond its cost nor any deposit
- *           beyond its amount.
+ *           beyond its amount. What the check-in lists and adopts as a
+ *           deposit's pay plus what it lowers its payments by is the whole
+ *           deposit: no part counted in neither place, or in both.
  *
  *   DATABASE_URL="postgres://.../any_db" npx tsx scripts/verify-no-double-counting.ts
  *
@@ -105,6 +112,7 @@ import { planGoalFunding } from "../src/lib/payday";
 import {
   nextPeriod,
   payDayOfMonth,
+  previousPeriod,
   periodForDate,
   periodInfo,
   periodRange,
@@ -431,10 +439,6 @@ async function main(): Promise<number> {
     select: { id: true, name: true, isSavingsDefault: true, isSubscriptionDefault: true },
   });
   const categoryById = new Map(categories.map((category) => [category.id, category]));
-  const outsideBudget = (categoryId: string | null) => {
-    const category = categoryId ? categoryById.get(categoryId) : undefined;
-    return Boolean(category && (category.isSavingsDefault || category.isSubscriptionDefault));
-  };
   const categoryName = (categoryId: string | null) =>
     categoryId ? (categoryById.get(categoryId)?.name ?? "(deleted category)") : "(no category)";
 
@@ -610,7 +614,10 @@ async function main(): Promise<number> {
       let spentWithoutTwins = 0;
       const twinsInsideByRule: { id: string; amount: number }[] = [];
       for (const tx of expenses) {
-        if (tx.source === "RECURRING" || settledSubscriptionCharges.has(tx.id) || outsideBudget(tx.categoryId)) continue;
+        // Nothing is left out for its category (R18): an expense under a
+        // subscription or savings category that nothing else covers is
+        // budget spending like any other.
+        if (tx.source === "RECURRING" || settledSubscriptionCharges.has(tx.id)) continue;
         // A shared expense is budget spending at the user's own share (the
         // user's decision on D22), what left the account less other people's
         // part.
@@ -628,7 +635,7 @@ async function main(): Promise<number> {
           flag(1, "DOUBLE", `getPeriodSummary(${key}).spent counts goal "${pair.contribution.goal.name}"'s contribution twin as budget spending`, [
             `saving side:   GoalContribution ${pair.contribution.id} (${toISODate(pair.contribution.date)}) ${money(num(pair.contribution.amount), pair.contribution.currency)} - the plan set this aside as goal funding`,
             `spending side: Transaction ${pair.twin.id} (${toISODate(pair.twin.date)}) ${money(num(pair.twin.amount), pair.twin.currency)}, category ${categoryName(pair.twin.categoryId)} -> counted in spent (${money(inside.amount, displayCurrency)})`,
-            `the period budget excludes a twin only through its category (isSavingsDefault / isSubscriptionDefault); this twin's category is neither`,
+            `the period budget leaves a twin out by its own key or its settlement (isContributionTwin in src/lib/budget-spending.ts), whatever its category`,
             `reader check: spent ${money(summary.spent, displayCurrency)} = ${money(spentWithoutTwins, displayCurrency)} without twins + ${money(leaked, displayCurrency)} of twins`,
           ]);
         }
@@ -1128,6 +1135,110 @@ async function main(): Promise<number> {
         info(`note: the "no estimate on a confirmed period" check is vacuous here - it needs at least one dated goal still being saved for and one confirmed check-in in the horizon`);
       }
     }
+
+    // --- scheduled contributions: one period each, the one their money counts in ---
+    // A recurring contribution is filed in exactly one period by the period
+    // commitments - the same one whether a reader loads that period alone
+    // (period summary, check-in) or with others (Afford, goal plans) - and,
+    // once its money has moved, in the period whose goal window counts that
+    // GoalContribution as contributed (contributionWindow in
+    // src/lib/goal-plan.ts, over loadPayLanded). Counted in two periods, the
+    // room is reserved twice; in neither, or in another period than its
+    // money, a goal's scheduled and contributed figures disagree (R3). The
+    // app's own readers are compared with each other here, not re-derived.
+    {
+      const { contributionWindow } = await import("../src/lib/goal-plan");
+      const { loadPayLanded } = await import("../src/lib/data/period-income");
+      const span: PeriodInfo[] = [];
+      let back: PeriodInfo = context.currentPeriod;
+      for (let i = 0; i < 6; i += 1) back = periodInfo(previousPeriod(back));
+      for (let cursor = back; span.length < 7 + horizonPeriods; cursor = periodInfo(nextPeriod(cursor))) span.push(cursor);
+      const spanKeys = new Set(span.map((period) => period.key));
+      const holders = new Map<string, string[]>();
+      const alone = new Map<string, { period: string; status: string; due: Date; name: string }>();
+      for (const period of span) {
+        for (const occurrence of (await loadCommitments([period], context)).get(period.key) ?? []) {
+          if (occurrence.kind !== "CONTRIBUTION") continue;
+          holders.set(occurrence.key, [...(holders.get(occurrence.key) ?? []), period.key]);
+          alone.set(occurrence.key, { period: period.key, status: occurrence.status, due: occurrence.dueDate, name: occurrence.name });
+        }
+      }
+      const together = new Map<string, string>();
+      for (const [key, occurrences] of await loadCommitments(span, context)) {
+        for (const occurrence of occurrences) if (occurrence.kind === "CONTRIBUTION") together.set(occurrence.key, key);
+      }
+      for (const [key, periods] of holders) {
+        const seen = alone.get(key)!;
+        if (periods.length > 1) {
+          flag(3, "DOUBLE", `contribution "${seen.name}" due ${toISODate(seen.due)} is scheduled in ${periods.length} periods: ${periods.join(", ")}`, [
+            `each period's commitments reserve it, so the room is lowered twice for one contribution`,
+          ]);
+        } else if (together.get(key) !== periods[0]) {
+          flag(3, "MISMATCH", `contribution "${seen.name}" due ${toISODate(seen.due)} is in ${periods[0]} when its period is loaded alone, in ${together.get(key) ?? "no period"} when loaded with the others`, [
+            `a single-period reader (period summary, check-in) and a multi-period one (Afford, the goal plans) disagree on where it is reserved`,
+          ]);
+        }
+      }
+      for (const key of together.keys()) {
+        if (!holders.has(key)) {
+          flag(3, "DROP", `contribution ${key} is scheduled in ${together.get(key)} only when the periods are loaded together`, [
+            `a single-period reader leaves it out of every period`,
+          ]);
+        }
+      }
+
+      // Each contribution's money moved on a day; the period whose goal
+      // window holds that day must be the one that reserved it.
+      const payLanded = await loadPayLanded(span, context);
+      const windowOf = (day: Date) =>
+        span.find((period) => {
+          const window = contributionWindow(period, payLanded);
+          return day.getTime() >= window.from.getTime() && day.getTime() < window.until.getTime();
+        }) ?? null;
+      const contributed = await prisma.goalContribution.findMany({
+        where: { recurringExternalId: { not: null } },
+        select: { recurringExternalId: true, date: true, amount: true, currency: true, goal: { select: { name: true } } },
+      });
+      let contributedChecked = 0;
+      for (const row of contributed) {
+        const key = row.recurringExternalId as string;
+        const expected = windowOf(row.date);
+        if (!expected) continue;
+        contributedChecked += 1;
+        const periods = holders.get(key) ?? [];
+        if (periods.length === 0) {
+          flag(3, "DROP", `goal "${row.goal.name}"'s automatic contribution ${key} (${money(num(row.amount), row.currency)}, dated ${toISODate(row.date)}) is in no period's commitments`, [
+            `contributed side: counted in ${expected.key} (its goal window holds ${toISODate(row.date)})`,
+            `scheduled side:   no period's commitments hold the occurrence it posted for`,
+          ]);
+        } else if (periods.length === 1 && periods[0] !== expected.key) {
+          flag(3, "MISMATCH", `goal "${row.goal.name}"'s automatic contribution ${key} is scheduled in ${periods[0]} but contributed in ${expected.key}`, [
+            `contributed side: GoalContribution dated ${toISODate(row.date)} -> ${expected.key}'s goal window`,
+            `scheduled side:   the period commitments file the occurrence in ${periods[0]} - one period then reads a follow-through shortfall and the other an inflated contribution`,
+          ]);
+        }
+      }
+
+      // Every date an active, postable contribution item still owes inside
+      // the span is reserved somewhere.
+      let owedChecked = 0;
+      const spanEnd = span[span.length - 1].end;
+      for (const item of allItems) {
+        if (item.kind !== "CONTRIBUTION" || !item.active || skipReasonFor(item) !== null) continue;
+        for (const due of owedOccurrences(item, today, spanEnd)) {
+          const key = `${item.id}:${toISODate(due)}`;
+          const home = due.getTime() < today.getTime() ? context.currentPeriod : windowOf(due);
+          if (!home || !spanKeys.has(home.key) || home.key === span[span.length - 1].key) continue;
+          owedChecked += 1;
+          if (!holders.has(key)) {
+            flag(3, "DROP", `contribution "${item.name}" due ${toISODate(due)} is in no period's commitments`, [
+              `its schedule still owes it (owedOccurrences), and its goal window is ${home.key}'s`,
+            ]);
+          }
+        }
+      }
+      info(`scheduled contributions: ${holders.size} occurrence${holders.size === 1 ? "" : "s"} across ${span.length} periods (${span[0].key} to ${span[span.length - 1].key}) each loaded alone and together; ${contributedChecked} posted or settled one${contributedChecked === 1 ? "" : "s"} checked against the goal window of their money, ${owedChecked} still owed checked for a home`);
+    }
     sectionResult(3);
   }
 
@@ -1497,13 +1608,17 @@ async function main(): Promise<number> {
       }
     }
 
-    // Income: what an earmarked deposit covers is not estimated income. For
-    // every period and account an earmarked INCOME row counts in, the fact
-    // must exceed the estimate by at least the earmarked parts of the rows
-    // the estimate would otherwise read (one-off income and paybacks are
-    // out of it already).
+    // Income: what an earmarked deposit covers is not estimated income - and
+    // only that (R23): the part that still lowers an occurrence, as the
+    // period commitments just applied it, not what was stored when the
+    // occurrence cost more or was still due. For every period and account an
+    // earmarked INCOME row counts in, the fact must exceed the estimate by
+    // at least the applied parts of the rows the estimate would otherwise
+    // read (one-off income and paybacks are out of it already), and - where
+    // nothing else separates the two figures - by no more.
     const incomeRows = [...deposits.values()].filter((deposit) => deposit.type === "INCOME" && deposit.source !== "PAYDAY_CHECKIN");
     const required = new Map<string, number>();
+    const storedPart = new Map<string, number>();
     const incomePeriods = new Map<string, PeriodInfo>();
     for (const row of incomeRows) {
       if (row.isOneOffIncome || row.reimbursesTransactionId !== null) continue;
@@ -1513,9 +1628,10 @@ async function main(): Promise<number> {
         .filter((earmark) => earmark.transactionId === row.id)
         .reduce((sum, earmark) => sum + storedIn(earmark, row.currency), 0);
       const account = await prisma.account.findUnique({ where: { id: row.accountId }, select: { currency: true } });
-      const part = convert(Math.min(num(row.amount), earmarked), row.currency, account?.currency ?? row.currency, rates);
+      const inAccount = (amount: number) => convert(amount, row.currency, account?.currency ?? row.currency, rates);
       const key = `${period.key}|${row.accountId}`;
-      required.set(key, (required.get(key) ?? 0) + part);
+      required.set(key, (required.get(key) ?? 0) + inAccount(Math.min(num(row.amount), appliedByDeposit.get(row.id) ?? 0)));
+      storedPart.set(key, (storedPart.get(key) ?? 0) + inAccount(Math.min(num(row.amount), earmarked)));
     }
     if (required.size > 0) {
       const [fact, estimate] = await Promise.all([
@@ -1532,11 +1648,66 @@ async function main(): Promise<number> {
             `earmarked parts that lower their occurrences: ${round2(part).toFixed(2)} - the estimate must leave at least that out`,
           ]);
         }
+        // The other way: an earmark whose occurrence shrank or went away
+        // still kept out of the estimate. Judged only where earmarks are all
+        // that separate fact from estimate - no one-off or payback row, no
+        // check-in paycheck with a one-off part.
+        const stored = storedPart.get(key) ?? 0;
+        if (stored > part + 0.01) {
+          const period = incomePeriods.get(periodKey)!;
+          const [otherRows, oneOffSnapshots] = await Promise.all([
+            prisma.transaction.count({
+              where: {
+                accountId,
+                type: "INCOME",
+                OR: [{ isOneOffIncome: true }, { reimbursesTransactionId: { not: null } }],
+                date: { gte: addDays(period.start, -16), lte: period.end },
+              },
+            }),
+            prisma.paydayAccountSnapshot.count({
+              where: { accountId, oneOffIncome: { gt: 0 }, checkin: { status: "CONFIRMED", year: period.year, month: period.month, period: period.period } },
+            }),
+          ]);
+          if (otherRows === 0 && oneOffSnapshots === 0 && factAmount - estimateAmount > part + 0.01) {
+            flag(5, "DROP", `the estimate in ${periodKey} on account ${accountId} leaves out earmarked money no occurrence takes any more`, [
+              `income fact ${round2(factAmount).toFixed(2)}, estimate ${round2(estimateAmount).toFixed(2)} (account currency)`,
+              `earmarked as stored ${round2(stored).toFixed(2)}, still covering an occurrence ${round2(part).toFixed(2)} - the rest is income again`,
+            ]);
+          }
+        }
       }
+    }
+    // The check-in's side: Step 2 lists each ordinary deposit in its income
+    // window as pay, less what of it lowers a payment, and confirm adopts
+    // that (loadLedgerDeposits). What it lists plus what the commitments
+    // apply must be the whole deposit: less, and part of it is counted in
+    // neither place - not lowering any payment, not the plan's pay (an
+    // earmark whose payment shrank or was paused, still subtracted as
+    // stored); more, and part is counted in both.
+    const { loadLedgerDeposits } = await import("../src/lib/data/period-income");
+    const listedByPeriod = new Map<string, Awaited<ReturnType<typeof loadLedgerDeposits>>>();
+    let depositsChecked = 0;
+    for (const row of incomeRows) {
+      if (row.isOneOffIncome || row.reimbursesTransactionId !== null) continue;
+      const period = incomePeriodFor(row);
+      if (!listedByPeriod.has(period.key)) listedByPeriod.set(period.key, await loadLedgerDeposits(period, context));
+      const account = await prisma.account.findUnique({ where: { id: row.accountId }, select: { currency: true } });
+      const accountCurrency = account?.currency ?? row.currency;
+      const whole = convert(num(row.amount), row.currency, accountCurrency, rates);
+      const applied = Math.min(whole, convert(appliedByDeposit.get(row.id) ?? 0, row.currency, accountCurrency, rates));
+      const listed = listedByPeriod.get(period.key)?.byAccount.get(row.accountId)?.find((deposit) => deposit.transactionId === row.id)?.amount ?? 0;
+      depositsChecked += 1;
+      const gap = round2(whole - applied - listed);
+      if (Math.abs(gap) <= 0.01) continue;
+      flag(5, gap > 0 ? "DROP" : "DOUBLE", `deposit ${row.id} is ${gap > 0 ? "counted in neither place" : "counted twice"} for ${round2(Math.abs(gap)).toFixed(2)} ${accountCurrency}`, [
+        `deposit:  ${describe(row)}`,
+        `lowers its payments by ${round2(applied).toFixed(2)} (the period commitments); listed as ${period.key}'s pay ${round2(listed).toFixed(2)} (Step 2, what confirm adopts)`,
+        gap > 0 ? "the rest lowers no payment and is not the plan's pay" : "part of it both lowers a payment and is the plan's pay",
+      ]);
     }
     const unapplied = [...new Set(earmarks.map((earmark) => earmark.occurrenceKey))].filter((key) => !appliedKeys.has(key));
     info(
-      `earmarks: ${earmarks.length} on ${deposits.size} deposit${deposits.size === 1 ? "" : "s"}; ${covered} occurrence${covered === 1 ? "" : "s"} covered in the period commitments${unapplied.length ? `; ${unapplied.length} not applied (posting skips the item, or the item is gone): ${unapplied.join(", ")}` : ""}; ${required.size} period/account income figure${required.size === 1 ? "" : "s"} checked`,
+      `earmarks: ${earmarks.length} on ${deposits.size} deposit${deposits.size === 1 ? "" : "s"}; ${covered} occurrence${covered === 1 ? "" : "s"} covered in the period commitments${unapplied.length ? `; ${unapplied.length} not applied (posting skips the item, or the item is gone): ${unapplied.join(", ")}` : ""}; ${required.size} period/account income figure${required.size === 1 ? "" : "s"} checked; ${depositsChecked} deposit${depositsChecked === 1 ? "" : "s"} checked against what Step 2 lists`,
     );
     sectionResult(5);
   }

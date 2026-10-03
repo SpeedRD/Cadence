@@ -23,7 +23,7 @@
 import { num } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { advanceDate, skipReasonFor } from "@/lib/recurring";
-import { addDays } from "@/lib/date";
+import { addDays, fromISODate } from "@/lib/date";
 import {
   SETTLEMENT_LEAD_DAYS,
   itemIdFromOccurrenceKey,
@@ -83,7 +83,26 @@ export function rolledPast(plan: Pick<SettlementPlan, "posted" | "claimed">, key
   return plan.posted.has(key) || plan.claimed.has(key);
 }
 
-export async function loadSettlementPlan(through: Date): Promise<SettlementPlan> {
+/**
+ * A charge not written yet, planned as if it were (the contribution dialog's
+ * notice, contributionWouldSettle): it joins the candidates after every
+ * stored charge of its day, as a row written now would.
+ */
+export interface HypotheticalCharge extends SettlementCharge {
+  accountId: string;
+}
+
+/** The id a hypothetical charge plans under: after every stored id of its day. */
+const HYPOTHETICAL_CHARGE_ID = "~unsaved";
+
+export async function loadSettlementPlan(
+  through: Date,
+  options: {
+    hypothetical?: Omit<HypotheticalCharge, "id">;
+    /** A stored charge the hypothetical one stands in for (the expense of the contribution being edited): left out of the candidates. */
+    replacing?: string;
+  } = {},
+): Promise<SettlementPlan> {
   const plan: SettlementPlan = { posted: new Set(), claimed: new Set(), settledBy: new Map(), byCharge: new Map() };
 
   const found = await prisma.recurringItem.findMany({
@@ -198,6 +217,7 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
       source: { not: "RECURRING" },
       recurringSettlement: { is: null },
       date: { gte: span.start, lte: span.end },
+      ...(options.replacing ? { id: { not: options.replacing } } : {}),
     },
     select: {
       id: true,
@@ -260,6 +280,21 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
     });
   }
 
+  if (options.hypothetical) {
+    const { accountId, ...charge } = options.hypothetical;
+    charges.push({ ...charge, id: HYPOTHETICAL_CHARGE_ID });
+    plannedById.set(HYPOTHETICAL_CHARGE_ID, {
+      id: HYPOTHETICAL_CHARGE_ID,
+      date: charge.date,
+      amount: charge.amount,
+      currency: charge.currency,
+      originalAmount: charge.originalAmount ?? null,
+      originalCurrency: charge.originalCurrency ?? null,
+      accountId,
+      isContributionTwin: charge.contributionGoalId !== null,
+    });
+  }
+
   for (const [key, chargeId] of planSettlements({ items, occurrences, charges })) {
     plan.settledBy.set(key, plannedById.get(chargeId) as PlannedCharge);
     const kind = kindById.get(itemIdFromOccurrenceKey(key) ?? "");
@@ -281,4 +316,37 @@ export async function loadSettlementPlan(through: Date): Promise<SettlementPlan>
  */
 export async function loadPairedCharges(through: Date): Promise<Map<string, { key: string; kind: RecurringKind }>> {
   return (await loadSettlementPlan(addDays(through, SETTLEMENT_LEAD_DAYS))).byCharge;
+}
+
+/**
+ * The automatic contribution a hand-logged one would pay, if the settlement
+ * plan pairs it: the occurrence's due date and its item's name, else null.
+ * `twin` is the contribution's own expense as logManualContribution would
+ * write it (in the account's currency, the goal's figure kept beside it).
+ * The pairing itself is posting's (B16): a hand-logged contribution of the
+ * automatic one's amount, to its goal, inside its window, counts as it.
+ * `replacing` is the stored expense of a contribution being edited, which
+ * the edited one is judged in place of.
+ */
+export async function contributionWouldSettle(
+  twin: Omit<HypotheticalCharge, "id">,
+  options: { replacing?: string } = {},
+): Promise<{ dueDate: Date; itemName: string } | null> {
+  const plan = await loadSettlementPlan(addDays(twin.date, SETTLEMENT_LEAD_DAYS), { hypothetical: twin, replacing: options.replacing });
+  return settledOccurrence(plan.byCharge.get(HYPOTHETICAL_CHARGE_ID)?.key);
+}
+
+/** The automatic contribution the stored charge `transactionId` (dated `date`) pays, as contributionWouldSettle reports it. */
+export async function contributionSettles(transactionId: string, date: Date): Promise<{ dueDate: Date; itemName: string } | null> {
+  const paired = (await loadPairedCharges(date)).get(transactionId);
+  return paired?.kind === "CONTRIBUTION" ? settledOccurrence(paired.key) : null;
+}
+
+async function settledOccurrence(key: string | undefined): Promise<{ dueDate: Date; itemName: string } | null> {
+  if (!key) return null;
+  const itemId = itemIdFromOccurrenceKey(key);
+  const dueDate = fromISODate(key.slice(key.lastIndexOf(":") + 1));
+  if (!itemId || !dueDate) return null;
+  const item = await prisma.recurringItem.findUnique({ where: { id: itemId }, select: { name: true } });
+  return { dueDate, itemName: item?.name ?? "" };
 }

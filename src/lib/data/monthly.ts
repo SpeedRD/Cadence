@@ -12,9 +12,9 @@
  *
  * Classification rules (see AGENTS.md for the full spec):
  *   lifestyle          = budget spending (K6, src/lib/budget-spending.ts): EXPENSE
- *                        transactions that stand for no recurring occurrence,
- *                        are no contribution's own expense and are not filed
- *                        under a subscription or savings category.
+ *                        transactions that stand for no recurring occurrence
+ *                        and are no contribution's own expense, whatever
+ *                        their category.
  *                        For a completed month, also not a one-off the user
  *                        confirmed extraordinary (Transaction.isExtraordinary),
  *                        and a shared expense counts only the user's own part
@@ -32,9 +32,7 @@
  *                        (see committedStillDueThisMonth).
  *   savings/investing  = GoalContribution rows with no Transaction standing in
  *                        for them + CONTRIBUTION charges (same actual-or-
- *                        scheduled rule as committed) + EXPENSE transactions
- *                        categorized Savings/Investment that nothing else
- *                        already accounted for. A hand-logged contribution's
+ *                        scheduled rule as committed). A hand-logged contribution's
  *                        own Transaction (source MANUAL, externalId
  *                        "goal-contribution:<id>") is never read as spending:
  *                        its GoalContribution already counts the money.
@@ -51,12 +49,13 @@
  *      once, whether or not the item behind them still exists. A charge the
  *      user entered that posting settled an occurrence with (RecurringSettlement)
  *      carries the same key through its settlement and is read the same way.
- *   2. A charge filed under a subscription or savings category - outside
- *      budget spending - is matched by heuristic, because Cadence has no link
- *      between an item and a charge it did not write itself: same currency,
- *      amount within one cent, and either the item's category or its name in
- *      the note. See matchRecurringToTransactions for what that deliberately
- *      refuses to match. A charge the budget counts is never taken by it.
+ *   2. A charge filed under a subscription or savings category is matched by
+ *      heuristic, because Cadence has no link between an item and a charge it
+ *      did not write itself: same currency, amount within one cent, and either
+ *      the item's category or its name in the note. See
+ *      matchRecurringToTransactions for what that deliberately refuses to
+ *      match. A match only tells a completed month not to add the item's
+ *      scheduled amount: the charge itself is budget spending, so lifestyle.
  *
  * A real charge logged under a different category with no matching note text,
  * or an item whose configured amount has drifted from the real charge, will not
@@ -369,7 +368,6 @@ interface MonthActuals {
   lifestyleByCategory: SpendingLine[];
   committedActual: number;
   contributionActual: number;
-  savingsFromCategory: number;
   goalContributionTotal: number;
   /** Items with at least one real charge in the window, so no scheduled amount may stand in for them. */
   actualSubscriptionItemIds: Set<string>;
@@ -519,34 +517,25 @@ async function computeMonthActuals(
     postedTransactionIds.add(tx.id);
   }
 
-  // Whatever posting did not already account for falls to the heuristic, which
-  // is all that is available for a charge Cadence did not write itself - but
-  // only among the rows budget spending leaves out (K6, src/lib/budget-
-  // spending.ts), so the pace and the budget agree on what is lifestyle
-  // spending. These rows already stand for no occurrence and are no
-  // contribution twin, so what is left outside the budget is a charge filed
-  // under a subscription or savings category: the heuristic tells which item
-  // it is (and so that the month needs no scheduled amount for it). A charge
-  // the budget counts stays lifestyle here, whatever item it looks like;
-  // when it really paid an occurrence, posting's settlement says so.
+  // What is left - no occurrence's row, no contribution twin - is budget
+  // spending (K6, src/lib/budget-spending.ts), and so lifestyle here, whatever
+  // its category: when a charge really paid an occurrence, posting's
+  // settlement says so and it is accounted for above. Among charges filed
+  // under a subscription or savings category the heuristic still tells which
+  // item one looks like, only so that a completed month does not add that
+  // item's scheduled amount on top of the charge already counted.
   const categoryById = new Map(categories.map((category) => [category.id, category]));
   const unposted = matchable.filter(
     (tx) => !postedTransactionIds.has(tx.id) && !manualContributionTwinIds.has(tx.id),
   );
-  const outsideBudget = unposted.filter((tx) => inUnbudgetedCategory(tx, categoryById));
+  const inItemCategories = unposted.filter((tx) => inUnbudgetedCategory(tx, categoryById));
   const subscriptionItems = recurringItems.filter((item) => item.kind === "SUBSCRIPTION");
   const contributionItems = recurringItems.filter((item) => item.kind === "CONTRIBUTION");
 
-  const subscriptionMatch = matchRecurringToTransactions(subscriptionItems, outsideBudget);
-  const remaining = outsideBudget.filter((tx) => !subscriptionMatch.matchedTransactionIds.has(tx.id));
+  const subscriptionMatch = matchRecurringToTransactions(subscriptionItems, inItemCategories);
+  const remaining = inItemCategories.filter((tx) => !subscriptionMatch.matchedTransactionIds.has(tx.id));
   const contributionMatch = matchRecurringToTransactions(contributionItems, remaining);
 
-  // A matched charge counts at what it stored - what its account moved (K7) -
-  // however it was matched to its item.
-  for (const tx of unposted) {
-    if (subscriptionMatch.matchedTransactionIds.has(tx.id)) committedActual += toDisplay(tx.amount, tx.currency);
-    else if (contributionMatch.matchedTransactionIds.has(tx.id)) contributionActual += toDisplay(tx.amount, tx.currency);
-  }
   for (const item of subscriptionItems) {
     if (subscriptionMatch.actualNativeByItemId.has(item.id)) actualSubscriptionItemIds.add(item.id);
   }
@@ -554,16 +543,10 @@ async function computeMonthActuals(
     if (contributionMatch.actualNativeByItemId.has(item.id)) actualContributionItemIds.add(item.id);
   }
 
-  const accountedForIds = new Set([
-    ...postedTransactionIds,
-    ...manualContributionTwinIds,
-    ...subscriptionMatch.matchedTransactionIds,
-    ...contributionMatch.matchedTransactionIds,
-  ]);
+  const accountedForIds = new Set([...postedTransactionIds, ...manualContributionTwinIds]);
 
   let lifestyle = 0;
   let typicalLifestyle = 0;
-  let savingsFromCategory = 0;
   const lifestyleByCategoryMap = new Map<string | null, { name: string; color: string; total: number }>();
 
   for (const tx of matchable) {
@@ -580,18 +563,6 @@ async function computeMonthActuals(
     const fullAmount = toDisplay(tx.amount, tx.currency);
     const ownCost = toDisplay(ownShare(tx), tx.currency);
     const amount = typicalOnly ? ownCost : fullAmount;
-    if (category?.isSavingsDefault) {
-      savingsFromCategory += amount;
-      continue;
-    }
-    // A charge filed under a subscription category that no item accounted
-    // for is committed spending, not lifestyle: the same category budget
-    // spending leaves out (K6, src/lib/budget-spending.ts), so a one-time
-    // purchase filed there is outside the budget and outside the pace alike.
-    if (category?.isSubscriptionDefault) {
-      committedActual += amount;
-      continue;
-    }
     lifestyle += amount;
     if (!tx.isExtraordinary) typicalLifestyle += ownCost;
     const key = tx.categoryId;
@@ -643,7 +614,6 @@ async function computeMonthActuals(
     lifestyleByCategory,
     committedActual,
     contributionActual,
-    savingsFromCategory,
     goalContributionTotal,
     actualSubscriptionItemIds,
     actualContributionItemIds,
@@ -701,7 +671,7 @@ export async function classifyCompletedMonth(
     committed += toDisplay(monthlyEquivalent(item.amount, item.frequency), item.currency);
   }
 
-  let savingsInvesting = actuals.contributionActual + actuals.savingsFromCategory + actuals.goalContributionTotal;
+  let savingsInvesting = actuals.contributionActual + actuals.goalContributionTotal;
   for (const item of recurringItems) {
     if (item.kind !== "CONTRIBUTION") continue;
     if (actuals.actualContributionItemIds.has(item.id)) continue;
@@ -866,7 +836,7 @@ export async function getCurrentMonthPace(context: AppContext): Promise<MonthlyP
 
   const committedSpentSoFar = round2(actuals.committedActual);
   const savingsInvestingSoFar = round2(
-    actuals.contributionActual + actuals.savingsFromCategory + actuals.goalContributionTotal,
+    actuals.contributionActual + actuals.goalContributionTotal,
   );
 
   return {

@@ -9,25 +9,40 @@
  * payday check-in has always made for its plan period - and the deposits
  * the user earmarked for the occurrences planned (src/lib/data/earmarks.ts),
  * which lower what each asks. Nothing here decides whether a charge paid an
- * occurrence; posting's matcher does.
+ * occurrence; posting's matcher does. For the contributions it also reads when
+ * each period's pay landed (loadPayLanded), which files them by funding
+ * window, and their goals' contributions, which cap them at what each goal
+ * still needs.
  */
+import { addDays, fromISODate, toISODate } from "@/lib/date";
 import { num, type DecimalLike } from "@/lib/money";
 import {
   applyEarmarks,
   planCommitments,
+  type CommitmentGoal,
   type CommitmentItem,
   type CommitmentOccurrence,
   type LedgerFact,
   type LedgerItemInfo,
   type OccurrenceCharge,
 } from "@/lib/period-commitments";
-import { type PeriodInfo } from "@/lib/period";
+import { convert } from "@/lib/currency";
+import { nextPeriod, periodForDate, periodInfo, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { itemIdFromOccurrenceKey } from "@/lib/recurring-settlement";
-import { fromISODate, toISODate } from "@/lib/date";
+import { itemIdFromOccurrenceKey, SETTLEMENT_LEAD_DAYS } from "@/lib/recurring-settlement";
 
 import { loadOccurrenceEarmarks } from "@/lib/data/earmarks";
+import { loadPayLanded } from "@/lib/data/pay-landed";
 import { loadSettlementPlan } from "@/lib/data/recurring-settlement";
+
+/**
+ * How far past the periods' own days the ledger is read: a contribution is
+ * filed by the funding window of the day its money moved, which opens up to
+ * a week before its period's first day, and a charge may pay an occurrence
+ * due anywhere in its own period or a few days around it. Anything read that
+ * belongs to no period asked about is simply not filed.
+ */
+const LEDGER_MARGIN_DAYS = 21;
 
 import type { AppContext } from "@/lib/data/context";
 
@@ -53,11 +68,22 @@ export async function loadCommitments(
   // occurrences are a backlog of the current period, not its own. With no
   // period still running or ahead there is no schedule to walk.
   const scheduleNeeded = end.getTime() >= context.today.getTime();
+  // The schedule is walked a few days past the last period: a contribution
+  // due then that a charge inside the last period already paid is filed there.
+  const walkEnd = addDays(end, SETTLEMENT_LEAD_DAYS);
+  const ledgerStart = addDays(start, -LEDGER_MARGIN_DAYS);
+  const ledgerEnd = addDays(end, LEDGER_MARGIN_DAYS);
+  // When pay landed, for every period a filed day can fall in or open the
+  // window of.
+  const fundingPeriods: PeriodInfo[] = [];
+  for (let cursor = periodForDate(ledgerStart); cursor.start.getTime() <= ledgerEnd.getTime(); cursor = periodInfo(nextPeriod(cursor))) {
+    fundingPeriods.push(cursor);
+  }
 
-  const [itemRows, postedRows, settlementRows, accounts, settlementPlan] = await Promise.all([
+  const [itemRows, postedRows, settlementRows, accounts, settlementPlan, payLanded] = await Promise.all([
     scheduleNeeded
       ? prisma.recurringItem.findMany({
-          where: { active: true, nextDate: { lte: end } },
+          where: { active: true, nextDate: { lte: walkEnd } },
           select: {
             id: true,
             name: true,
@@ -82,9 +108,9 @@ export async function loadCommitments(
     prisma.$queryRaw<{ externalId: string; date: Date; amount: DecimalLike; currency: string; accountId: string; note: string | null }[]>`
       SELECT "externalId", "date", "amount", "currency", "accountId", "note" FROM "Transaction"
       WHERE "source" = 'RECURRING' AND "type" = 'EXPENSE' AND "externalId" IS NOT NULL
-        AND right("externalId", 10) BETWEEN ${toISODate(start)} AND ${toISODate(end)}`,
+        AND right("externalId", 10) BETWEEN ${toISODate(ledgerStart)} AND ${toISODate(ledgerEnd)}`,
     prisma.recurringSettlement.findMany({
-      where: { dueDate: { gte: start, lte: end } },
+      where: { dueDate: { gte: ledgerStart, lte: ledgerEnd } },
       select: {
         occurrenceKey: true,
         recurringItemId: true,
@@ -94,7 +120,8 @@ export async function loadCommitments(
       },
     }),
     prisma.account.findMany({ select: { id: true, currency: true } }),
-    scheduleNeeded ? loadSettlementPlan(end) : null,
+    scheduleNeeded ? loadSettlementPlan(walkEnd) : null,
+    loadPayLanded(fundingPeriods, context),
   ]);
 
   const facts: LedgerFact[] = [];
@@ -183,8 +210,28 @@ export async function loadCommitments(
       amount: charge.amount,
       currency: charge.currency,
       accountId: charge.accountId,
+      contributionTwin: charge.isContributionTwin,
     });
   }
+  // The goals the contributions pay into, as posting judges whether each
+  // still needs one.
+  const goalIds = [...new Set(items.filter((item) => item.kind === "CONTRIBUTION" && item.goalId).map((item) => item.goalId as string))];
+  const goals = new Map<string, CommitmentGoal>(
+    (goalIds.length > 0
+      ? await prisma.goal.findMany({
+          where: { id: { in: goalIds } },
+          select: { id: true, targetAmount: true, currency: true, contributions: { select: { amount: true, currency: true, date: true } } },
+        })
+      : []
+    ).map((goal) => [
+      goal.id,
+      {
+        target: num(goal.targetAmount),
+        currency: goal.currency,
+        contributions: goal.contributions.map((row) => ({ amount: num(row.amount), currency: row.currency, date: row.date })),
+      },
+    ]),
+  );
 
   const planned = planCommitments({
     periods,
@@ -196,6 +243,8 @@ export async function loadCommitments(
     accountCurrency: new Map(accounts.map((account) => [account.id, account.currency])),
     rates: context.rates,
     excludeItemId: options.excludeItemId,
+    payLanded,
+    goals,
   });
   // The occurrences are known only once planned; what covers them is read
   // for exactly their keys.
@@ -210,4 +259,45 @@ export async function periodCommitments(
   context: Pick<AppContext, "today" | "rates">,
 ): Promise<CommitmentOccurrence[]> {
   return (await loadCommitments([period], context)).get(period.key) ?? [];
+}
+
+/**
+ * What of each deposit's earmarks still covers an occurrence's cost, by
+ * deposit id, in `currencyOf(depositId)`: the effective earmark K2 applies -
+ * each earmark bounded by its deposit and by what its occurrence costs now
+ * (applyEarmarks) - summed per deposit. An earmark whose occurrence shrank
+ * covers only what it still costs; one whose occurrence no longer exists
+ * (the item paused or deleted before it fell due) or will not post covers
+ * nothing. The income estimate leaves out only this part (K5).
+ */
+export async function loadDepositCover(
+  depositIds: readonly string[],
+  currencyOf: (depositId: string) => string,
+  context: Pick<AppContext, "today" | "rates">,
+): Promise<Map<string, number>> {
+  const cover = new Map<string, number>();
+  if (depositIds.length === 0) return cover;
+  const wanted = new Set(depositIds);
+  const rows = await prisma.recurringEarmark.findMany({
+    where: { transactionId: { in: [...wanted] } },
+    select: { dueDate: true },
+  });
+  if (rows.length === 0) return cover;
+  // Each occurrence's own period, and the current one, which holds an
+  // unpaid occurrence due before today.
+  const periods = new Map<string, PeriodInfo>();
+  for (const day of [context.today, ...rows.map((row) => row.dueDate)]) {
+    const period = periodForDate(day);
+    periods.set(period.key, period);
+  }
+  for (const occurrences of (await loadCommitments([...periods.values()], context)).values()) {
+    for (const occurrence of occurrences) {
+      for (const earmark of occurrence.earmarks) {
+        if (!wanted.has(earmark.transactionId)) continue;
+        const amount = convert(earmark.amount, occurrence.currency, currencyOf(earmark.transactionId), context.rates);
+        cover.set(earmark.transactionId, (cover.get(earmark.transactionId) ?? 0) + amount);
+      }
+    }
+  }
+  return cover;
 }

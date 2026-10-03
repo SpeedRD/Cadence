@@ -1163,6 +1163,9 @@ export const en = {
     goalDeleted: "Goal deleted",
     goalNoLongerExists: "That goal no longer exists",
     contributionLogged: "Contribution logged",
+    /** A hand-logged contribution the settlement plan pairs with an automatic one (B16, R24): shown before saving. */
+    contributionCountsAsAutomatic: (date: string) => `This will count as the automatic contribution due ${date}.`,
+    contributionLoggedCountsAsAutomatic: (date: string) => `Contribution logged. This will count as the automatic contribution due ${date}.`,
     planVersusContributed: (period: string, planned: string, contributed: string) =>
       `${period}: ${planned} planned · ${contributed} contributed`,
     contributedInPeriod: (period: string, contributed: string) => `${period}: ${contributed} contributed`,

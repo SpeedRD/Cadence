@@ -173,13 +173,18 @@ export async function saveTransactionAction(
       ...depositFacts,
       createdAt: existing.createdAt,
     };
+    // Only what the form changed: a stored earmark it does not name as
+    // removed is kept, whatever period its payment now falls in.
+    const earmarkChanges = earmarks.offered
+      ? { removed: earmarks.removed, accountChanged: existing.accountId !== values.accountId }
+      : {};
     if (earmarks.offered) {
-      const check = await checkEarmarks(deposit, earmarks.requests, await getAppContext());
+      const check = await checkEarmarks(deposit, earmarks.requests, await getAppContext(), earmarkChanges);
       if (!check.ok) return fail(earmarkMessage(check.issue));
     }
     await prisma.transaction.update({ where: { id }, data: stored });
     if (earmarks.offered) {
-      const saved = await saveEarmarks(deposit, earmarks.requests, await getAppContext());
+      const saved = await saveEarmarks(deposit, earmarks.requests, await getAppContext(), earmarkChanges);
       if (!saved.ok) return fail(earmarkMessage(saved.issue));
     } else if (!canBeEarmarked(deposit)) {
       // No longer a deposit (its type or direction changed): nothing of it
