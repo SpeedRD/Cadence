@@ -16527,14 +16527,18 @@ async function main() {
 
       console.log("-- R20: no fallback rate is ever frozen into a row --");
       {
-        // Flipped deliberately: this check used to read "either source" -
-        // a fresh bank rate made the whole table fit. Fitness is per currency.
+        // Fitness is per currency: USD always; DOP only with the bank's rate;
+        // EUR with the bank's EUR rate or a fresh open.er-api one.
         const fitPair = hCurrency.ratesFitForWriting as ((table: RateTable, from: string, to: string) => boolean) | undefined;
         const bankOnly: RateTable = { rates: { USD: 1, DOP: 60.95, EUR: 0.86 }, fetchedAt: new Date(Date.now() - 2 * 86_400_000), stale: true, source: "bpd", asOf: new Date() };
         const openOnly: RateTable = { rates: { USD: 1, DOP: 59.56, EUR: 0.887 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
         const pairs = (table: RateTable) =>
           fitPair ? (["USD>DOP", "EUR>DOP", "USD>EUR", "DOP>DOP"] as const).map((pair) => fitPair(table, pair.slice(0, 3), pair.slice(4))).join(",") : "missing";
-        eq("bank rate fresh, open.er-api 2 days old after a failed fetch: USD->DOP fit, EUR->DOP and USD->EUR not (a fresh bank rate does not make a stale EUR rate fit)", pairs(bankOnly), "true,false,false,true");
+        // Flipped deliberately (was "true,false,false,true": a fresh bank rate
+        // did not make EUR fit): the table's EUR is then the bank's own.
+        eq("bank rate fresh, open.er-api 2 days old after a failed fetch: every conversion fit, EUR at the bank's own rate", pairs(bankOnly), "true,true,true,true");
+        const neither: RateTable = { rates: { USD: 1, DOP: 59.56, EUR: 0.887 }, fetchedAt: new Date(Date.now() - 2 * 86_400_000), stale: true, source: "open-er-api", asOf: null };
+        eq("bank rate past its window and open.er-api stale: no conversion fit", pairs(neither), "false,false,false,true");
         eq("open.er-api fresh, no bank rate in its window: USD->EUR fit, anything with DOP not", pairs(openOnly), "false,false,true,true");
         eq("both fresh: every conversion fit", pairs(hTable(60, 0.9)), "true,true,true,true");
         eq("the hard-coded fallback: no conversion fit", pairs(hFallback), "false,false,false,true");
@@ -16585,42 +16589,75 @@ async function main() {
         eq("... and waits for nothing", (again as { waitingForRates?: unknown[] }).waitingForRates?.length ?? "missing", 0);
       }
 
-      console.log("-- R20 per currency: a fresh bank rate does not make a stale EUR rate fit --");
+      console.log("-- R20 per currency: the bank's DOP and EUR, open.er-api's for the rest --");
       {
         const dop = await prisma.account.create({ data: { name: "Verify Harden PerCurrency DOP", currency: "DOP", type: "CHECKING" } });
+        const usd = await prisma.account.create({ data: { name: "Verify Harden PerCurrency USD", currency: "USD", type: "CHECKING" } });
         const due = civilDate(2026, 10, 2);
-        const whoop = await prisma.recurringItem.create({
-          data: { name: "Verify Harden Whoop", amount: 30, currency: "EUR", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: due, anchorDay: 2, accountId: dop.id },
-        });
-        const sports = await prisma.recurringItem.create({
-          data: { name: "Verify Harden Sports", amount: 37.9, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: due, anchorDay: 2, accountId: dop.id },
-        });
-        // open.er-api.com fetched 2 days ago, the live fetch failing; the bank's rate published today.
+        const item = (name: string, amount: number, currency: string, accountId: string) =>
+          prisma.recurringItem.create({ data: { name, amount, currency, frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: due, anchorDay: 2, accountId } });
         const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000);
-        await prisma.exchangeRate.deleteMany();
-        await prisma.exchangeRate.createMany({
-          data: [
-            ...[["USD", 1], ["DOP", 59.56], ["EUR", 0.887]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "open-er-api", rate: rate as number, fetchedAt: twoDaysAgo })),
-            ...[["DOP", 60.95], ["EUR", 0.8608757062]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "bpd", rate: rate as number, fetchedAt: new Date(), asOf: new Date() })),
-          ],
-        });
-        globalThis.fetch = (async () => {
-          throw new Error("rate services unreachable (verify-domain)");
-        }) as typeof fetch;
-        const table = await getRateTable();
-        eq("the table: open.er-api stale after the failed fetch, the bank's DOP 60.95 preferred", `${table.stale}:${table.source}:${table.rates.DOP}`, "true:bpd:60.95");
-        const run = await hPost(due);
-        const rows = async () =>
-          (await prisma.transaction.findMany({ where: { accountId: dop.id, source: "RECURRING" }, orderBy: { note: "asc" } })).map((r) => `${r.note}:${num(r.amount)} ${r.currency}`).join("|");
-        eq("the USD item posts at the bank's rate (37.90 USD = 2,310.01 DOP); the EUR item does not", await rows(), "Verify Harden Sports:2310.01 DOP");
-        eq("... the EUR item waits for rates, its due date unchanged", `${(run as { waitingForRates?: { id: string }[] }).waitingForRates?.map((item) => item.id).join(",") ?? "missing"}:${toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: whoop.id } })).nextDate)}`, `${whoop.id}:2026-10-02`);
-        eq("... while the USD item moved on", toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: sports.id } })).nextDate), "2026-11-02");
-        // open.er-api.com fresh again: the EUR item posts.
+        const nineDaysAgo = new Date(Date.now() - 9 * 86_400_000);
+        // Stored rates: open.er-api.com fetched at `openFetchedAt`, the bank's published at `bankAsOf`; every live fetch fails.
+        const storeRates = async (openFetchedAt: Date, bankAsOf: Date) => {
+          await prisma.exchangeRate.deleteMany();
+          await prisma.exchangeRate.createMany({
+            data: [
+              ...[["USD", 1], ["DOP", 59.56], ["EUR", 0.887]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "open-er-api", rate: rate as number, fetchedAt: openFetchedAt })),
+              ...[["DOP", 60.95], ["EUR", 0.8608757062]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "bpd", rate: rate as number, fetchedAt: bankAsOf, asOf: bankAsOf })),
+            ],
+          });
+          globalThis.fetch = (async () => {
+            throw new Error("rate services unreachable (verify-domain)");
+          }) as typeof fetch;
+          resetBpdFailureBackoffForTests();
+        };
+        const posted = async (ids: string[]) =>
+          (await prisma.transaction.findMany({ where: { source: "RECURRING", note: { in: (await prisma.recurringItem.findMany({ where: { id: { in: ids } } })).map((i) => i.name) } }, orderBy: { note: "asc" } }))
+            .map((r) => `${r.note}:${num(r.amount)} ${r.currency}`)
+            .join("|");
+        const waiting = (run: unknown) => ((run as { waitingForRates?: { id: string }[] }).waitingForRates?.map((w) => w.id).sort().join(",") ?? "missing");
+        const nextDates = async (ids: string[]) => (await prisma.recurringItem.findMany({ where: { id: { in: ids } } })).map((i) => toISODate(i.nextDate)).sort().join(",");
+
+        // (a) open.er-api 2 days old, its live fetch failing; the bank's rate published today.
+        const aSports = await item("Verify Harden A Sports", 37.9, "USD", dop.id);
+        const aWhoop = await item("Verify Harden A Whoop", 30, "EUR", dop.id);
+        await storeRates(twoDaysAgo, new Date());
+        const aTable = await getRateTable();
+        eq("(a) the table: open.er-api stale after the failed fetch, the bank's DOP 60.95 and EUR preferred", `${aTable.stale}:${aTable.source}:${aTable.rates.DOP}:${aTable.rates.EUR}`, "true:bpd:60.95:0.8608757062");
+        const aRun = await hPost(due);
+        // Flipped deliberately: under the previous rule the EUR item waited here.
+        eq(
+          "(a) both items post to the DOP account at the bank's rates: 37.90 USD = 2,310.01 DOP (60.95), 30 EUR = 2,124.00 DOP (70.80)",
+          await posted([aSports.id, aWhoop.id]),
+          "Verify Harden A Sports:2310.01 DOP|Verify Harden A Whoop:2124 DOP",
+        );
+        eq("(a) ... nothing waits, and both moved on", `${waiting(aRun)}|${await nextDates([aSports.id, aWhoop.id])}`, "|2026-11-02,2026-11-02");
+        await prisma.recurringItem.updateMany({ where: { id: { in: [aSports.id, aWhoop.id] } }, data: { active: false } });
+
+        // (b) the bank's rate past its window (9 days) and open.er-api stale.
+        const bSports = await item("Verify Harden B Sports", 37.9, "USD", dop.id);
+        const bWhoop = await item("Verify Harden B Whoop", 30, "EUR", dop.id);
+        const bAbroad = await item("Verify Harden B Abroad", 12, "EUR", usd.id);
+        const bIds = [bSports.id, bWhoop.id, bAbroad.id];
+        await storeRates(twoDaysAgo, nineDaysAgo);
+        const bTable = await getRateTable();
+        eq("(b) the table: open.er-api stale, no bank rate in its window", `${bTable.stale}:${bTable.source}`, "true:open-er-api");
+        const bRun = await hPost(due);
+        eq("(b) USD->DOP, EUR->DOP and EUR->USD-account items all wait; nothing is posted", `${await posted(bIds)}|${waiting(bRun)}`, `|${[...bIds].sort().join(",")}`);
+        eq("(b) ... their due dates unchanged", await nextDates(bIds), "2026-10-02,2026-10-02,2026-10-02");
+        check("(b) ... and the Dashboard line reads the three of them", typeof hEn.dashboard.waitingForRates === "function" && hEn.dashboard.waitingForRates(((bRun as { waitingForRates?: unknown[] }).waitingForRates ?? []).length).startsWith("3 recurring payments in another currency are waiting for exchange rates"));
+
+        // (c) the bank's rate past its window and open.er-api fresh.
+        await storeRates(new Date(), nineDaysAgo);
+        const cTable = await getRateTable();
+        eq("(c) the table: open.er-api fresh, no bank rate in its window", `${cTable.stale}:${cTable.source}`, "false:open-er-api");
+        const cRun = await hPost(due);
+        eq("(c) the EUR item to the USD account posts at open.er-api's rate (12 EUR = 13.53 USD); nothing involving DOP does", await posted(bIds), "Verify Harden B Abroad:13.53 USD");
+        eq("(c) ... the USD->DOP and EUR->DOP items wait, due dates unchanged", `${waiting(cRun)}|${(await prisma.recurringItem.findMany({ where: { id: { in: [bSports.id, bWhoop.id] } } })).map((i) => toISODate(i.nextDate)).join(",")}`, `${[bSports.id, bWhoop.id].sort().join(",")}|2026-10-02,2026-10-02`);
+        await prisma.recurringItem.updateMany({ where: { id: { in: bIds } }, data: { active: false } });
         globalThis.fetch = realFetch;
         await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.9 });
-        const later = await hPost(due);
-        eq("with open.er-api fresh the EUR item posts (30 EUR = 2,000.00 DOP at 66.6667)", await rows(), "Verify Harden Sports:2310.01 DOP|Verify Harden Whoop:2000 DOP");
-        eq("... and nothing waits", (later as { waitingForRates?: unknown[] }).waitingForRates?.length ?? "missing", 0);
       }
 
       console.log("-- R25: re-saving an automatic contribution unchanged keeps its stored conversion --");

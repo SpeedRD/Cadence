@@ -53,17 +53,24 @@ export interface RateTable {
  *
  *   - USD is the base and needs none;
  *   - DOP needs Banco Popular's sell rate, inside its 7-day window - the
- *     table carries it (source "bpd") only while it is (preferBpdRates);
- *   - any other currency (EUR) needs open.er-api.com's rate fetched within
- *     the last day: getRateTable tries a live fetch once the stored rates
- *     are older than that, and the table is `stale` when it failed.
+ *     table carries it (source "bpd", asOf set) only while it is
+ *     (preferBpdRates in src/lib/rates.ts);
+ *   - EUR is fit with the bank's own EUR rate, which preferBpdRates puts in
+ *     the table beside its DOP rate - the rate the user's charges follow -
+ *     or else with open.er-api.com's fetched within the last day;
+ *   - any other currency needs open.er-api.com's rate fetched within the
+ *     last day: getRateTable tries a live fetch once the stored rates are
+ *     older than that, and the table is `stale` when it failed.
  *
- * So a fresh bank rate does not make a stale EUR rate fit, and a stale
- * table still estimates a total on screen but is never written down.
+ * With neither the bank's rate in its window nor a fresh open.er-api.com
+ * rate - the fallback included - nothing foreign is fit: a stale table still
+ * estimates a total on screen but is never written down.
  */
 export function rateFitForWriting(code: string, table: RateTable): boolean {
   if (code === BASE_CURRENCY) return true;
-  if (code === "DOP") return table.source === "bpd" && table.asOf !== null;
+  const bank = table.source === "bpd" && table.asOf !== null;
+  if (code === "DOP") return bank;
+  if (code === "EUR") return bank || !table.stale;
   return !table.stale;
 }
 
