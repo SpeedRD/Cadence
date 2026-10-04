@@ -132,6 +132,13 @@ export default async function DashboardPage() {
       {context.recurringPosting ? (
         <NotPostingAlert posting={context.recurringPosting} locale={context.language} t={t} />
       ) : null}
+      {/* Posting left these for a run with current exchange rates (R20): a
+          muted line, since they post by themselves once rates are back. */}
+      {context.recurringPosting && context.recurringPosting.waitingForRates.length > 0 ? (
+        <p className="text-sm text-muted-foreground" data-waiting-for-rates>
+          {t.waitingForRates(context.recurringPosting.waitingForRates.length)}
+        </p>
+      ) : null}
       <AffordViabilityAlert tracked={affordRechecks} locale={context.language} t={t} />
       {checkinLeads ? checkinCard : null}
       <PeriodHero summary={summary} elapsed={elapsed} recommended={recommended} locale={context.language} t={t} />

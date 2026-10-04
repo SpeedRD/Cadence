@@ -19,7 +19,7 @@ import { findRecurringSuggestions } from "@/lib/data/recurring-suggestions";
 
 import type { PostedMatch } from "@/lib/data/posted-duplicates";
 
-import { done, fail, revalidateApp, type ActionState } from "./utils";
+import { done, fail, refusedWriteMessage, revalidateApp, type ActionState } from "./utils";
 
 const MAX_ROWS = 2000;
 
@@ -265,7 +265,16 @@ export async function importTransactionsAction(
   const parsed = importPayloadSchema.safeParse(payload);
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
-  const result = await importCsvTransactions(parsed.data, (await getAppContext()).rates);
+  let result;
+  try {
+    result = await importCsvTransactions(parsed.data, (await getAppContext()).rates);
+  } catch (error) {
+    // Rows in another currency with no current rate to convert them: nothing
+    // was imported (R20).
+    const message = refusedWriteMessage(error, locale);
+    if (message) return fail(message);
+    throw error;
+  }
   if (!result.ok) {
     if (result.reason === "account_missing") return fail(t.accountNoLongerExists);
     if (result.reason === "account_not_active") return fail(t.accountNoLongerActive);

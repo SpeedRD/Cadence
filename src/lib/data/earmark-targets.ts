@@ -29,7 +29,7 @@ import {
   type EarmarkOption,
   type EarmarkRequest,
 } from "@/lib/earmarks";
-import { num, round2 } from "@/lib/money";
+import { exceedsCents, num, round2, withinCents } from "@/lib/money";
 import { isAdoptedDeposit } from "@/lib/period-income";
 import { nextPeriod, periodForDate, periodInfo, type PeriodInfo } from "@/lib/period";
 import { wholeAmount, type CommitmentOccurrence } from "@/lib/period-commitments";
@@ -180,7 +180,7 @@ export async function checkEarmarks(
   const asStored = (request: EarmarkRequest) => {
     const row = stored.get(request.occurrenceKey);
     return Boolean(
-      !changes.accountChanged && row && row.currency === accountCurrency && Math.abs(row.amount - request.amount) <= EARMARK_TOLERANCE,
+      !changes.accountChanged && row && row.currency === accountCurrency && withinCents(row.amount, request.amount, EARMARK_TOLERANCE),
     );
   };
   const kept = changes.accountChanged
@@ -192,7 +192,7 @@ export async function checkEarmarks(
       );
   if (requests.every(asStored)) {
     const total = requests.reduce((sum, request) => sum + request.amount, 0);
-    return total + kept > deposit.amount + EARMARK_TOLERANCE ? { ok: false, issue: "over_deposit" } : { ok: true, options: [] };
+    return exceedsCents(total + kept, deposit.amount, EARMARK_TOLERANCE) ? { ok: false, issue: "over_deposit" } : { ok: true, options: [] };
   }
   if (!canBeEarmarked(deposit)) return { ok: false, issue: "not_depositable" };
   // Part of a confirmed check-in's paycheck: already the plan's income, so
@@ -261,17 +261,29 @@ export async function saveEarmarks(
     }
     return { ok: true, options: [] };
   }
-  const check = await checkEarmarks(deposit, requests, context, { removed, accountChanged: changes.accountChanged });
-  if (!check.ok) return check;
+  const first = await checkEarmarks(deposit, requests, context, { removed, accountChanged: changes.accountChanged });
+  if (!first.ok) return first;
   const account = await prisma.account.findUniqueOrThrow({ where: { id: deposit.accountId }, select: { currency: true } });
-  const optionByKey = new Map(check.options.map((option) => [option.occurrenceKey, option]));
   const itemIds = [...new Set(requests.map((request) => itemIdFromOccurrenceKey(request.occurrenceKey)))].filter(
     (id): id is string => id !== null,
   );
   const existingItems = new Set(
     (await prisma.recurringItem.findMany({ where: { id: { in: itemIds } }, select: { id: true } })).map((item) => item.id),
   );
-  await prisma.$transaction(async (tx) => {
+  // One writer per occurrence, and per deposit, at a time: two saves for one
+  // occurrence (two deposits, or the same form submitted twice) each checked
+  // before the other wrote, and together could cover more than it costs. The
+  // locks are taken in one order, and the bounds checked again once they are
+  // held - after any save that held them first has committed, so its
+  // earmarks are counted (the check reads through the shared client, which
+  // sees what has committed; this transaction has written nothing yet).
+  // Released at commit or rollback.
+  const lockKeys = [`earmark-deposit:${deposit.id}`, ...[...requestedKeys].sort().map((key) => `earmark-occurrence:${key}`)];
+  const check = await prisma.$transaction(async (tx) => {
+    for (const key of lockKeys) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+    const held = await checkEarmarks(deposit, requests, context, { removed, accountChanged: changes.accountChanged });
+    if (!held.ok) return held;
+    const optionByKey = new Map(held.options.map((option) => [option.occurrenceKey, option]));
     if (removed.length > 0) {
       await tx.recurringEarmark.deleteMany({ where: { transactionId: deposit.id, occurrenceKey: { in: removed } } });
     }
@@ -293,6 +305,7 @@ export async function saveEarmarks(
         update: data,
       });
     }
-  });
+    return held;
+  }, { maxWait: 10_000, timeout: 30_000 });
   return check;
 }

@@ -86,8 +86,8 @@
  * occurrence's settlement under it, so an answer recorded while the run was
  * planning is the pairing the claim keeps, never a second row beside it.
  */
-import { exactAmountIn, inAccountCurrency } from "@/lib/account-money";
-import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
+import { exactAmountIn, inAccountCurrency, RatesUnavailableError } from "@/lib/account-money";
+import { IDENTITY_RATES, convert, ratesFitForWriting, type RateTable } from "@/lib/currency";
 import { startOfDay, toISODate } from "@/lib/date";
 import { contributionsOnOrBefore, markGoalsReachedByDate, recomputeGoalSaved, savedFromContributions } from "@/lib/goals";
 import { num, round2 } from "@/lib/money";
@@ -120,6 +120,14 @@ export interface FailedRecurringItem {
   error: string;
 }
 
+/** An item left for the next run because posting it needs a rate and none may be written down (R20). */
+export interface WaitingForRatesItem {
+  id: string;
+  name: string;
+  /** The still-unposted due date, "YYYY-MM-DD". */
+  nextDate: string;
+}
+
 export interface RecurringPostingSummary {
   /** The reference day the run used, "YYYY-MM-DD". */
   today: string;
@@ -142,6 +150,15 @@ export interface RecurringPostingSummary {
   failed: FailedRecurringItem[];
   /** Finite items that claimed their last occurrence this run and deactivated themselves. */
   itemsCompleted: number;
+  /**
+   * Items in another currency than their account's or their goal's, left
+   * unclaimed because the run had no rate fit to store (ratesFitForWriting):
+   * the rate service is unreachable and the stored rates are over a day old,
+   * or none were ever stored. Nothing of theirs is written or advanced; the
+   * next run with current rates posts them. Never a fallback rate frozen
+   * into a row (R20).
+   */
+  waitingForRates: WaitingForRatesItem[];
 }
 
 async function loadDueItems(today: Date) {
@@ -337,7 +354,7 @@ async function postOccurrence(
         await tx.goalContribution.create({
           data: {
             goalId,
-            amount: exactAmountIn(settles, goalCurrency) ?? round2(convert(settles.amount, settles.currency, goalCurrency, rates)),
+            amount: exactAmountIn(settles, goalCurrency) ?? convertedForGoal(settles.amount, settles.currency, goalCurrency, rates),
             currency: goalCurrency,
             date: settles.date,
             note: item.name,
@@ -382,7 +399,7 @@ async function postOccurrence(
           ? num(item.amount)
           : goalCurrency === charged.currency
             ? charged.amount
-            : round2(convert(num(item.amount), item.currency, goalCurrency, rates));
+            : convertedForGoal(num(item.amount), item.currency, goalCurrency, rates);
       // recurringExternalId is the same key as the Transaction's externalId
       // above, and unlike recurringItemId it is not nulled when the item is
       // deleted - that is what lets the monthly savings/investing calculation
@@ -413,6 +430,12 @@ async function postOccurrence(
   }
 }
 
+/** A contribution's amount converted into its goal's currency - only at a rate fit to be stored (R20). */
+function convertedForGoal(amount: number, from: string, goalCurrency: string, rates: RateTable): number {
+  if (!ratesFitForWriting(rates, from, goalCurrency)) throw new RatesUnavailableError(from, goalCurrency);
+  return round2(convert(amount, from, goalCurrency, rates));
+}
+
 /**
  * Post everything due on or before `reference` (a calendar day; the time part
  * is ignored). Safe to call as often as you like - a caught-up database is a
@@ -441,6 +464,7 @@ export async function postDueRecurringItems(
     itemsFailed: 0,
     failed: [],
     itemsCompleted: 0,
+    waitingForRates: [],
   };
 
   // Items that can post at all this run. With none - a caught-up database, or
@@ -457,22 +481,38 @@ export async function postDueRecurringItems(
       .filter((item) => item.kind === "CONTRIBUTION" && item.goalId !== null && item.goal !== null)
       .map((item) => [item.goalId as string, item.goal!.currency]),
   );
-  const foreignContributions =
-    contributionGoals.size > 0 &&
-    (
-      await prisma.goalContribution.groupBy({
-        by: ["goalId", "currency"],
-        where: { goalId: { in: [...contributionGoals.keys()] } },
-      })
-    ).some((group) => group.currency !== contributionGoals.get(group.goalId));
-  const needsRates =
-    foreignContributions ||
-    postable.some(
-      (item) =>
-        (item.account !== null && item.account.currency !== item.currency) ||
-        (item.kind === "CONTRIBUTION" && item.goal !== null && item.goal.currency !== item.currency),
-    );
+  // A goal's contributions in other currencies than its own, by goal.
+  const foreignContributions = new Map<string, string[]>();
+  if (contributionGoals.size > 0) {
+    const groups = await prisma.goalContribution.groupBy({
+      by: ["goalId", "currency"],
+      where: { goalId: { in: [...contributionGoals.keys()] } },
+    });
+    for (const group of groups) {
+      if (group.currency === contributionGoals.get(group.goalId)) continue;
+      foreignContributions.set(group.goalId, [...(foreignContributions.get(group.goalId) ?? []), group.currency]);
+    }
+  }
+  // Every conversion posting an item may make: its charge into the
+  // account's currency, its contribution into the goal's, and the goal's
+  // contributions in other currencies when its saved total is checked.
+  const conversionsFor = (item: DueItem): [string, string][] => {
+    const pairs: [string, string][] = [];
+    if (item.account !== null && item.account.currency !== item.currency) pairs.push([item.currency, item.account.currency]);
+    if (item.kind === "CONTRIBUTION" && item.goal !== null) {
+      if (item.goal.currency !== item.currency) pairs.push([item.currency, item.goal.currency]);
+      for (const currency of (item.goalId && foreignContributions.get(item.goalId)) || []) pairs.push([currency, item.goal.currency]);
+    }
+    return pairs;
+  };
+  const needsRates = postable.some((item) => conversionsFor(item).length > 0);
   const rates = needsRates ? await getRateTable() : IDENTITY_RATES;
+  // A rate nobody published recently - the bank's DOP rate past its window,
+  // open.er-api.com's over a day old with the service unreachable, or the
+  // hard-coded fallback - is never frozen into a posted row or a
+  // contribution: an item with a conversion that needs one waits for a run
+  // that has it (R20), judged per currency (ratesFitForWriting).
+  const waitsForRates = (item: DueItem) => conversionsFor(item).some(([from, to]) => !ratesFitForWriting(rates, from, to));
 
   // Which due occurrences a charge the user entered already paid, decided
   // once for the whole run, over every item together (see
@@ -491,6 +531,11 @@ export async function postDueRecurringItems(
         nextDate: toISODate(item.nextDate),
         reason: reason ?? "missing_account",
       });
+      continue;
+    }
+
+    if (waitsForRates(item)) {
+      summary.waitingForRates.push({ id: item.id, name: item.name, nextDate: toISODate(item.nextDate) });
       continue;
     }
 
@@ -566,13 +611,20 @@ export async function postDueRecurringItems(
         occurrence = advanceDate(occurrence, item.frequency, item.anchorDay, item.secondAnchorDay);
       }
     } catch (error) {
-      summary.itemsFailed += 1;
-      summary.failed.push({
-        id: item.id,
-        name: item.name,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      console.error(`[recurring] posting "${item.name}" (${item.id}) failed`, error);
+      // A conversion the item did not foresee (a charge settling it in a
+      // third currency) with no current rate: rolled back, and it waits like
+      // any other item that needs a rate (R20).
+      if (error instanceof RatesUnavailableError) {
+        summary.waitingForRates.push({ id: item.id, name: item.name, nextDate: toISODate(occurrence) });
+      } else {
+        summary.itemsFailed += 1;
+        summary.failed.push({
+          id: item.id,
+          name: item.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        console.error(`[recurring] posting "${item.name}" (${item.id}) failed`, error);
+      }
     }
 
     if (posted > 0) summary.itemsPosted += 1;
@@ -624,6 +676,10 @@ export function describeRecurringPosting(summary: RecurringPostingSummary): stri
   }
   if (summary.itemsCapped > 0) {
     parts.push(`${plural(summary.itemsCapped, "item")} still catching up (capped at ${MAX_OCCURRENCES_PER_ITEM} per run)`);
+  }
+  if (summary.waitingForRates.length > 0) {
+    const names = summary.waitingForRates.map((item) => item.name).join(", ");
+    parts.push(`${plural(summary.waitingForRates.length, "item")} waiting for current exchange rates: ${names}`);
   }
   if (summary.itemsFailed > 0) {
     const details = summary.failed.map((item) => `${item.name}: ${item.error}`).join(", ");

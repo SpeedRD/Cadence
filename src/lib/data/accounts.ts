@@ -281,6 +281,34 @@ export async function correctStartingBalance(
   return { ok: true, transactionId: created.id };
 }
 
+export type UpdateAccountResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" }
+  /** The account holds transactions: its currency stays (R19). */
+  | { ok: false; reason: "currency_locked" };
+
+/**
+ * Renames an account or changes its type - and its currency only while it
+ * holds no transaction (R19). Every row is stored in its account's currency
+ * (K7); relabelling the account would leave each one read as foreign money,
+ * converted at whatever today's rate is, so its balance and history would
+ * drift daily and the typed figures would be lost. Money in another
+ * currency belongs in a new account. The condition is part of the update
+ * itself, so a row saved meanwhile is seen.
+ */
+export async function updateAccount(
+  id: string,
+  values: { name: string; currency: string; type: AccountType },
+): Promise<UpdateAccountResult> {
+  const updated = await prisma.account.updateMany({
+    where: { id, OR: [{ currency: values.currency }, { transactions: { none: {} } }] },
+    data: values,
+  });
+  if (updated.count === 1) return { ok: true };
+  const exists = await prisma.account.findUnique({ where: { id }, select: { id: true } });
+  return exists ? { ok: false, reason: "currency_locked" } : { ok: false, reason: "not_found" };
+}
+
 export async function archiveAccount(accountId: string): Promise<void> {
   await prisma.account.update({
     where: { id: accountId },

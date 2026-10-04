@@ -34,9 +34,9 @@
  * share it with the loaders in src/lib/data/earmarks.ts.
  */
 import { convert, type RateTable } from "@/lib/currency";
-import { round2 } from "@/lib/money";
+import { exceedsCents, round2 } from "@/lib/money";
 
-/** Amounts within this much of a bound are inside it (a cent, as the matchers use). */
+/** Amounts within this much of a bound are inside it: the same cent, compared in whole cents (R28). */
 export const EARMARK_TOLERANCE = 0.005;
 
 /** The rows a deposit can be: what came in from somewhere else, not a paycheck a check-in planned or a row Cadence wrote. */
@@ -102,7 +102,7 @@ export function boundByDeposit(facts: readonly EarmarkFact[], rates: RateTable):
       left = round2(left - taken);
       if (taken <= 0) continue;
       const amount =
-        taken >= inDeposit - EARMARK_TOLERANCE ? fact.amount : round2(convert(taken, fact.deposit.currency, fact.currency, rates));
+        !exceedsCents(inDeposit, taken, EARMARK_TOLERANCE) ? fact.amount : round2(convert(taken, fact.deposit.currency, fact.currency, rates));
       if (amount <= 0) continue;
       const entry: OccurrenceEarmark = {
         transactionId: fact.transactionId,
@@ -225,10 +225,10 @@ export function earmarkIssue(
     seen.add(request.occurrenceKey);
     const target = byKey.get(request.occurrenceKey);
     if (!target) return "target";
-    if (request.amount > target.stillAsked + EARMARK_TOLERANCE) return "over_occurrence";
+    if (exceedsCents(request.amount, target.stillAsked, EARMARK_TOLERANCE)) return "over_occurrence";
     total += request.amount;
   }
-  if (total + kept > deposit + EARMARK_TOLERANCE) return "over_deposit";
+  if (exceedsCents(total + kept, deposit, EARMARK_TOLERANCE)) return "over_deposit";
   return null;
 }
 

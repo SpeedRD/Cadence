@@ -14,7 +14,7 @@ import {
 import { getAppContext } from "@/lib/data/context";
 import { approveStagedTransaction } from "@/lib/data/staged-approval";
 
-import { done, fail, revalidateApp, type ActionState } from "./utils";
+import { done, fail, refusedWriteMessage, revalidateApp, type ActionState } from "./utils";
 
 /** Saves inline edits to a still-pending staged row without approving it. */
 export async function updateStagedAction(
@@ -77,10 +77,18 @@ export async function approveStagedAction(
   const resolution =
     rawResolution === "posted" || rawResolution === "different" || rawResolution === "upcoming" ? rawResolution : null;
 
-  const result = await approveStagedTransaction(
-    { id, date, amount, currency, rawDescription, accountId, categoryId, resolution },
-    (await getAppContext()).rates,
-  );
+  let result;
+  try {
+    result = await approveStagedTransaction(
+      { id, date, amount, currency, rawDescription, accountId, categoryId, resolution },
+      (await getAppContext()).rates,
+    );
+  } catch (error) {
+    // In another currency with no current rate to convert it: not approved (R20).
+    const message = refusedWriteMessage(error, locale);
+    if (message) return fail(message);
+    throw error;
+  }
   if (!result.ok) {
     if (result.reason === "not_found") return fail(t.itemNoLongerExists);
     if (result.reason === "already_reviewed") return fail(t.alreadyReviewed);

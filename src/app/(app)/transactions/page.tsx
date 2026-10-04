@@ -9,7 +9,7 @@ import { TransactionTable } from "@/components/transactions/transaction-table";
 import { TransferDialog } from "@/components/transactions/transfer-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatMoney } from "@/lib/currency";
+import { currenciesFitForWriting, formatMoney } from "@/lib/currency";
 import { getAppContext } from "@/lib/data/context";
 import { listEarmarkOptions } from "@/lib/data/earmark-targets";
 import { loadAdoptedWindows } from "@/lib/data/period-income";
@@ -145,6 +145,7 @@ export default async function TransactionsPage({
                 adoptedWindows={adoptedWindows}
                 values={{ date: today, currency: context.displayCurrency }}
                 rates={context.rates.rates}
+                writableCurrencies={currenciesFitForWriting(context.rates)}
                 locale={context.language}
                 trigger={
                   <Button size="sm" className="max-sm:hidden">
@@ -166,6 +167,7 @@ export default async function TransactionsPage({
               adoptedWindows={adoptedWindows}
               values={{ date: today, currency: context.displayCurrency }}
               rates={context.rates.rates}
+              writableCurrencies={currenciesFitForWriting(context.rates)}
               locale={context.language}
               trigger={
                 <Button size="sm">
@@ -236,6 +238,7 @@ export default async function TransactionsPage({
               depositEarmarks={Object.fromEntries(depositEarmarks)}
               displayCurrency={context.displayCurrency}
               rates={context.rates.rates}
+              writableCurrencies={currenciesFitForWriting(context.rates)}
               locale={context.language}
             />
           </CardContent>

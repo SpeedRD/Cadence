@@ -15,13 +15,21 @@
  * otherwise nothing is written. It refuses to run until the migration that
  * adds Transaction.originalAmount / originalCurrency / rate is applied.
  *
+ * A row that holds its account's currency exactly - entered in it and
+ * converted, as on an account whose currency was changed after the row was
+ * saved (R19) - gets that figure back as typed. Every other row is converted
+ * from what it was entered as: its original when it has one, never its
+ * converted figure converted again.
+ *
  * The rate is the one table the app would use today, read from the stored
  * ExchangeRate rows (open.er-api.com, with Banco Popular's DOP and EUR sell
  * rates preferred while up to 7 days old, as getRateTable does) - never
  * fetched, so the dry run and the apply use the same figures. The rate of the
- * day each row was entered is not recoverable; each row is frozen at this one.
- * Each account's balance, which the app computes at today's rate, reads the
- * same to the cent before and after (planBackfill in src/lib/account-money.ts).
+ * day each row was entered is not recoverable; each converted row is frozen at
+ * this one. Each account's balance, with every row at what it holds, reads the
+ * same to the cent before and after (planBackfill in src/lib/account-money.ts);
+ * where a row holding the account's currency had drifted with the rate, the
+ * report also prints the balance the app reads today.
  *
  * Idempotent: a row stored in its account's currency is never selected, so a
  * second run finds nothing to change. Nothing but Transaction rows is written:
@@ -256,8 +264,9 @@ async function main(): Promise<number> {
       const account = accountById.get(balance.accountId)!;
       const same = Math.round(balance.before * 100) === Math.round(balance.after * 100);
       held &&= same;
+      const drifted = Math.round(balance.appReads * 100) !== Math.round(balance.before * 100);
       console.log(
-        `  ${account.name} (${account.currency}): before ${formatMoney(balance.before, balance.currency)} | after ${formatMoney(balance.after, balance.currency)} | ${same ? "same" : "DIFFERENT"}`,
+        `  ${account.name} (${account.currency}): before ${formatMoney(balance.before, balance.currency)} | after ${formatMoney(balance.after, balance.currency)} | ${same ? "same" : "DIFFERENT"}${drifted ? ` | the app reads ${formatMoney(balance.appReads, balance.currency)} today, with typed figures drifted at today's rate` : ""}`,
       );
     }
     if (!held) {

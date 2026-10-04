@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 
-import { inAccountCurrency } from "@/lib/account-money";
+import { inAccountCurrency, RatesUnavailableError } from "@/lib/account-money";
 import { getSettings, requireAuth } from "@/lib/auth";
 import { formatDate } from "@/lib/date-format";
 import {
@@ -30,7 +30,7 @@ import {
 import { getAppContext } from "@/lib/data/context";
 import { contributionSettles, contributionWouldSettle } from "@/lib/data/recurring-settlement";
 
-import { done, fail, revalidateApp, type ActionState } from "./utils";
+import { done, fail, refusedWriteMessage, revalidateApp, type ActionState } from "./utils";
 
 export async function saveGoalAction(
   _previous: ActionState,
@@ -92,7 +92,14 @@ export async function updateRecurringContributionAction(
   const parsed = recurringContributionEditSchema.safeParse(formObject(formData));
   if (!parsed.success) return fail(firstError(parsed.error, locale));
 
-  const result = await updateRecurringContributionAmount(parsed.data.id, parsed.data.amount);
+  let result;
+  try {
+    result = await updateRecurringContributionAmount(parsed.data.id, parsed.data.amount);
+  } catch (error) {
+    const message = refusedWriteMessage(error, locale);
+    if (message) return fail(message);
+    throw error;
+  }
   if (!result.ok) {
     return fail(
       result.reason === "not_found" ? t.contributionNoLongerExists : t.contributionNotRecurring,
@@ -135,13 +142,22 @@ export async function addContributionAction(
   );
   if (referenceError) return fail(referenceError);
 
-  const logged = await logManualContribution({
-    goalId: goal.id,
-    accountId: parsed.data.accountId,
-    amount: parsed.data.amount,
-    date: parsed.data.date,
-    note: parsed.data.note,
-  });
+  let logged;
+  try {
+    logged = await logManualContribution({
+      goalId: goal.id,
+      accountId: parsed.data.accountId,
+      amount: parsed.data.amount,
+      date: parsed.data.date,
+      note: parsed.data.note,
+    });
+  } catch (error) {
+    // No current rate to convert it, 0.00 in the account's currency, or the
+    // same contribution submitted again: nothing was written.
+    const message = refusedWriteMessage(error, locale);
+    if (message) return fail(message);
+    throw error;
+  }
   const { justAchieved } = await rebuildGoalSaved(goal.id);
   // A contribution of the automatic one's amount, to the same goal, near its
   // due date counts as it (B16): the toast says so, as the dialog did.
@@ -184,8 +200,15 @@ export async function previewContributionSettlesAction(payload: unknown): Promis
   ]);
   if (!goal || !account) return { ok: false };
   const context = await getAppContext();
-  // The expense logManualContribution would write for it.
-  const twin = inAccountCurrency({ amount: parsed.data.amount, currency: goal.currency }, account.currency, context.rates);
+  // The expense logManualContribution would write for it - none without a
+  // current rate to convert it, which the save itself refuses (R20).
+  let twin;
+  try {
+    twin = inAccountCurrency({ amount: parsed.data.amount, currency: goal.currency }, account.currency, context.rates);
+  } catch (error) {
+    if (error instanceof RatesUnavailableError) return { ok: false };
+    throw error;
+  }
   const settles = await contributionWouldSettle({
     date: parsed.data.date,
     amount: twin.amount,
@@ -227,11 +250,18 @@ export async function updateContributionAction(
   );
   if (referenceError) return fail(referenceError);
 
-  const result = await updateManualContribution(parsed.data.id, {
-    amount: parsed.data.amount,
-    date: parsed.data.date,
-    accountId: parsed.data.accountId,
-  });
+  let result;
+  try {
+    result = await updateManualContribution(parsed.data.id, {
+      amount: parsed.data.amount,
+      date: parsed.data.date,
+      accountId: parsed.data.accountId,
+    });
+  } catch (error) {
+    const message = refusedWriteMessage(error, locale);
+    if (message) return fail(message);
+    throw error;
+  }
   if (!result.ok) {
     return fail(
       result.reason === "not_found" ? t.contributionNoLongerExists : t.contributionNotManual,

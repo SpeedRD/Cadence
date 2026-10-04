@@ -14,15 +14,40 @@
  * Pure and database-free, so the transaction form can show exactly the figure
  * the server will store, and scripts/verify-domain.ts can check it directly.
  */
-import { convert, type RateTable } from "@/lib/currency";
-import { num, round2, type DecimalLike } from "@/lib/money";
+import { convert, ratesFitForWriting, type RateTable } from "@/lib/currency";
+import { num, round2, toCents, withinCents, type DecimalLike } from "@/lib/money";
 import { balanceSign, transferLegs } from "@/lib/transactions";
 
 /** Transaction.rate's scale (Decimal(20, 10)). */
 export const RATE_DECIMALS = 10;
 
-/** Amounts within a cent of each other are the same money. */
-const CENT = 0.005;
+/**
+ * Thrown instead of converting with rates that may not be written down
+ * (ratesFitForWriting, R20): the caller asks for the amount in the
+ * account's currency, or tries again once rates are back - a foreign row is
+ * never stored at a fallback or stale rate.
+ */
+export class RatesUnavailableError extends Error {
+  constructor(
+    readonly from: string,
+    readonly to: string,
+  ) {
+    super(`no current exchange rate to convert ${from} into ${to}`);
+    this.name = "RatesUnavailableError";
+  }
+}
+
+/**
+ * Thrown when an amount entered in another currency comes to 0.00 in the
+ * account's (0.25 DOP into a USD account, R29): a zero-amount row records
+ * nothing, so the entry is refused rather than stored as 0.
+ */
+export class RoundsToZeroError extends Error {
+  constructor(readonly entered: EnteredMoney, readonly accountCurrency: string) {
+    super(`${entered.amount} ${entered.currency} is 0.00 in ${accountCurrency}`);
+    this.name = "RoundsToZeroError";
+  }
+}
 
 /** Money as the user entered it: the form's amount and currency. */
 export interface EnteredMoney {
@@ -87,10 +112,13 @@ function plain(amount: number, currency: string): StoredMoney {
 /**
  * K7 at entry: `entered` as the account in `accountCurrency` stores it. In the
  * account's own currency it is stored as typed; in another it is converted at
- * `table`'s rate, which is kept with the entered figure.
+ * `table`'s rate, which is kept with the entered figure - only when both
+ * currencies have a rate fit to be written down (ratesFitForWriting);
+ * otherwise RatesUnavailableError.
  */
 export function inAccountCurrency(entered: EnteredMoney, accountCurrency: string, table: RateTable): StoredMoney {
   if (entered.currency === accountCurrency) return plain(entered.amount, accountCurrency);
+  if (!ratesFitForWriting(table, entered.currency, accountCurrency)) throw new RatesUnavailableError(entered.currency, accountCurrency);
   const rate = rateBetween(entered.currency, accountCurrency, table);
   return {
     amount: atRate(entered.amount, rate),
@@ -138,7 +166,7 @@ export function toAccountMoney(
   if (entered.currency === accountCurrency) return plain(entered.amount, accountCurrency);
   const kept = previous && previous.accountCurrency === accountCurrency ? storedMoney(previous.row) : null;
   if (kept && kept.currency === accountCurrency && kept.originalCurrency === entered.currency && kept.rate !== null) {
-    if (kept.originalAmount !== null && Math.abs(kept.originalAmount - entered.amount) < CENT) return kept;
+    if (kept.originalAmount !== null && withinCents(kept.originalAmount, entered.amount)) return kept;
     return {
       amount: atRate(entered.amount, kept.rate),
       currency: accountCurrency,
@@ -168,6 +196,15 @@ export function chargedInAccount(entered: EnteredMoney, accountCurrency: string,
   };
 }
 
+/**
+ * Refuses money entered above zero that is stored as 0.00 in the account's
+ * currency (R29), returning `stored` otherwise.
+ */
+export function refuseZeroAmount(entered: EnteredMoney, stored: StoredMoney): StoredMoney {
+  if (entered.amount > 0 && toCents(stored.amount) === 0) throw new RoundsToZeroError(entered, stored.currency);
+  return stored;
+}
+
 /** Whether storing `entered` on an account in `accountCurrency` needs a rate table at all. */
 export function needsConversion(enteredCurrency: string, accountCurrency: string): boolean {
   return enteredCurrency !== accountCurrency;
@@ -191,8 +228,8 @@ export function shareInAccountCurrency(
     previousRow &&
     previousRow.yourShare !== null &&
     previousRow.rate === stored.rate &&
-    previousRow.amount === stored.amount &&
-    Math.abs((enteredShare(previousRow) ?? Number.NaN) - enteredShareAmount) < CENT
+    withinCents(previousRow.amount, stored.amount) &&
+    withinCents(enteredShare(previousRow) ?? Number.NaN, enteredShareAmount)
   ) {
     return previousRow.yourShare;
   }
@@ -228,7 +265,8 @@ export function exactAmountIn(row: MoneyRow, currency: string): number | null {
 
 /**
  * Whether two rows are the same money exactly: some currency both hold
- * exactly (stored or original) agrees to within `tolerance`. Neither side is
+ * exactly (stored or original) agrees to within `tolerance`, compared in
+ * whole cents (R28). Neither side is
  * converted at a rate here, so a charge in the account's currency only agrees
  * with a foreign row through the figure that row stores in that currency.
  */
@@ -238,7 +276,7 @@ export function sameMoneyExactly(a: MoneyRow, b: MoneyRow, tolerance = 0.01): bo
     if (!currency) continue;
     const left = exactAmountIn(a, currency);
     const right = exactAmountIn(b, currency);
-    if (left !== null && right !== null && Math.abs(left - right) <= tolerance) return true;
+    if (left !== null && right !== null && withinCents(left, right, tolerance)) return true;
   }
   return false;
 }
@@ -318,24 +356,38 @@ export interface BackfillChange {
   yourShare: { from: number; to: number } | null;
 }
 
-/** One account's balance, every row, in its own currency, as the app reads it before and after. */
+/**
+ * One account's balance, every row, in its own currency: `before` with each
+ * row at what it holds (its figure in the account's currency where it holds
+ * one exactly, the rest converted at the backfill's rates), `after` as the
+ * planned rows store it - the two agree to the cent - and `appReads` as the
+ * app reads it today (accountAmount: every foreign row at today's rate),
+ * which differs from them only where a row holding the account's currency
+ * exactly had drifted.
+ */
 export interface BackfillBalance {
   accountId: string;
   currency: string;
   before: number;
   after: number;
+  appReads: number;
 }
 
 /**
  * Plans the backfill: every row whose currency differs from its account's is
- * stored in the account's currency at `table`, keeping what it was entered as
- * (its original, when it already has one) and the rate. Each stored amount is
- * the exact conversion rounded down or up to the cent - chosen per account,
- * largest remainder first, so that the account's balance at `table` reads
- * the same to the cent before and after (a row-by-row rounding could move it
- * by a few cents). A share (yourShare) is converted at the same rate, never
- * above its amount. Rows already in their account's currency are untouched,
- * so planning again after the backfill changes nothing.
+ * stored in the account's currency, keeping what it was entered as and the
+ * rate. A row that holds the account's currency exactly (exactAmountIn: it
+ * was entered in that currency and converted, as on an account whose
+ * currency was changed afterwards - R19) gets that figure back as typed,
+ * with no conversion. Any other row is converted at `table` from what it was
+ * entered as - its original when it has one, never the converted figure
+ * converted again. The converted amounts are the exact conversion rounded
+ * down or up to the cent - chosen per account, largest remainder first, so
+ * that the account's balance reads the same to the cent before and after (a
+ * row-by-row rounding could move it by a few cents). A share (yourShare) is
+ * carried at the same rate from the share as entered, never above its
+ * amount. Rows already in their account's currency are untouched, so
+ * planning again after the backfill changes nothing.
  */
 export function planBackfill(
   accounts: readonly { id: string; currency: string }[],
@@ -346,26 +398,34 @@ export function planBackfill(
   const balances: BackfillBalance[] = [];
   for (const account of accounts) {
     const own = rows.filter((row) => row.accountId === account.id);
-    const foreign = own
-      .filter((row) => row.currency !== account.currency)
-      .sort((a, b) => a.id.localeCompare(b.id));
+    const foreign = own.filter((row) => row.currency !== account.currency).sort((a, b) => a.id.localeCompare(b.id));
     if (foreign.length === 0) continue;
     const signOf = (row: BackfillRow) => balanceSign(row.type, row.transferDirection);
-    const fixedCents = own
-      .filter((row) => row.currency === account.currency)
-      .reduce((total, row) => total + Math.round(signOf(row) * row.amount * 100), 0);
-    const exact = foreign.map((row) => signOf(row) * convert(row.amount, row.currency, account.currency, table));
+    const appReads = round2(own.reduce((total, row) => total + signOf(row) * accountAmount(row, account.currency, table), 0));
+    // Rows holding the account's currency exactly take that figure back; the
+    // rest are converted from what they were entered as.
+    const exactRows = foreign.filter((row) => exactAmountIn(row, account.currency) !== null);
+    const converted = foreign.filter((row) => exactAmountIn(row, account.currency) === null);
+    const fixedCents =
+      own
+        .filter((row) => row.currency === account.currency)
+        .reduce((total, row) => total + Math.round(signOf(row) * row.amount * 100), 0) +
+      exactRows.reduce((total, row) => total + signOf(row) * toCents(exactAmountIn(row, account.currency) as number), 0);
+    const exact = converted.map((row) => {
+      const entered = enteredMoney(row);
+      return signOf(row) * convert(entered.amount, entered.currency, account.currency, table);
+    });
     const before = round2(fixedCents / 100 + exact.reduce((total, value) => total + value, 0));
     // The cents the converted rows must add up to for the balance to stay put.
     const targetCents = Math.round(before * 100) - fixedCents;
     // A stored amount is never 0: a conversion under half a cent keeps one.
-    const cents = exact.map((value, index) => Math.round(value * 100) || signOf(foreign[index]));
+    const cents = exact.map((value, index) => Math.round(value * 100) || signOf(converted[index]));
     let gap = targetCents - cents.reduce((total, value) => total + value, 0);
     const residual = exact.map((value, index) => value * 100 - cents[index]);
     const order = exact.map((_, index) => index);
     // Round up where the exact value was rounded down the most (or down where
     // it was rounded up the most), one cent each, until the gap is closed.
-    order.sort((a, b) => (gap > 0 ? residual[b] - residual[a] : residual[a] - residual[b]) || foreign[a].id.localeCompare(foreign[b].id));
+    order.sort((a, b) => (gap > 0 ? residual[b] - residual[a] : residual[a] - residual[b]) || converted[a].id.localeCompare(converted[b].id));
     for (const index of order) {
       if (gap === 0) break;
       const step = gap > 0 ? 1 : -1;
@@ -374,14 +434,25 @@ export function planBackfill(
       gap -= step;
     }
     let afterCents = fixedCents;
-    foreign.forEach((row, index) => {
+    const shareFrom = (row: BackfillRow) => (row.yourShare === null ? null : enteredShare({ ...row, yourShare: row.yourShare }));
+    for (const row of exactRows) {
+      const amount = exactAmountIn(row, account.currency) as number;
+      const share = shareFrom(row);
+      changes.push({
+        id: row.id,
+        accountId: account.id,
+        from: { amount: row.amount, currency: row.currency },
+        to: { amount, currency: account.currency, originalAmount: null, originalCurrency: null, rate: null },
+        yourShare: row.yourShare === null || share === null ? null : { from: row.yourShare, to: Math.min(amount, share) },
+      });
+    }
+    converted.forEach((row, index) => {
       const sign = signOf(row);
       const amount = sign === 0 ? round2(Math.abs(exact[index])) : Math.abs(cents[index]) / 100;
       afterCents += sign * Math.round(amount * 100);
-      const step = convert(1, row.currency, account.currency, table);
       const entered = enteredMoney(row);
-      const rate =
-        row.originalCurrency != null && row.rate != null ? roundRate(row.rate * step) : rateBetween(row.currency, account.currency, table);
+      const rate = rateBetween(entered.currency, account.currency, table);
+      const share = shareFrom(row);
       changes.push({
         id: row.id,
         accountId: account.id,
@@ -389,15 +460,17 @@ export function planBackfill(
         to: {
           amount,
           currency: account.currency,
-          originalAmount: entered.currency === account.currency ? null : round2(entered.amount),
-          originalCurrency: entered.currency === account.currency ? null : entered.currency,
-          rate: entered.currency === account.currency ? null : rate,
+          originalAmount: round2(entered.amount),
+          originalCurrency: entered.currency,
+          rate,
         },
         yourShare:
-          row.yourShare === null ? null : { from: row.yourShare, to: Math.min(amount, round2(row.yourShare * step)) },
+          row.yourShare === null || share === null
+            ? null
+            : { from: row.yourShare, to: Math.min(amount, round2(share * convert(1, entered.currency, account.currency, table))) },
       });
     });
-    balances.push({ accountId: account.id, currency: account.currency, before, after: afterCents / 100 });
+    balances.push({ accountId: account.id, currency: account.currency, before, after: afterCents / 100, appReads });
   }
   return { changes, balances };
 }

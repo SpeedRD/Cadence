@@ -525,8 +525,8 @@ async function main() {
     rates: { USD: 1, DOP: 60, EUR: 0.5 },
     fetchedAt: new Date(),
     stale: false,
-    source: "open-er-api",
-    asOf: null,
+    source: "bpd",
+    asOf: new Date(),
   };
   eq("USD to DOP", convert(100, "USD", "DOP", rates), 6000);
   eq("DOP to USD", convert(6000, "DOP", "USD", rates), 100);
@@ -1639,8 +1639,8 @@ async function main() {
       rates: { USD: 1, DOP: 60 },
       fetchedAt: new Date(),
       stale: false,
-      source: "open-er-api",
-      asOf: null,
+      source: "bpd",
+      asOf: new Date(),
     };
     const draft = {
       displayCurrency: "DOP",
@@ -9810,6 +9810,7 @@ async function main() {
       occurrencesAlreadyLogged: 0, occurrencesAlreadyPosted: 0, itemsCapped: 0, itemsFailed: 1,
       failed: [{ id: "item_fund", name: "Fund", error: "boom" }],
       itemsCompleted: 0,
+      waitingForRates: [],
     };
     const notPosting = insights.detectNotPosting({ ...emptyContext, recurringPosting: posting });
     eq("one insight per skipped or failed item, keyed by the item's id and why it is not posting (B32)", notPosting.map((i) => i.id).join(","), "not_posting:item_gym:missing_account,not_posting:item_fund:failed");
@@ -11186,7 +11187,7 @@ async function main() {
     const { logManualContribution: kLog, rebuildGoalSaved: kRebuild } = await import("../src/lib/goals");
     const { summarizePaydayDraft: kSummarize, draftAccountBuffers: kBuffers } = await import("../src/lib/payday");
     type KDraft = Awaited<ReturnType<typeof kDraft>>;
-    const kRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+    const kRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() };
     const kContext = (today: Date) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -11612,7 +11613,7 @@ async function main() {
     const { getPeriodSummary: dSummary } = await import("../src/lib/data/period-summary");
     const { getPaydayCheckinDraft: dDraft, confirmPaydayCheckin: dConfirm } = await import("../src/lib/data/payday");
     const { postDueRecurringItems: dPost } = await import("../src/lib/recurring-posting");
-    const dRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+    const dRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() };
     const dContext = (today: Date) => ({ displayCurrency: "DOP" as const, language: "en" as const, rates: dRates, today, currentPeriod: periodForDate(today), bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP" });
     const octA = periodInfo({ year: 2026, month: 10, period: "A" });
     const categoryId = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
@@ -11782,7 +11783,7 @@ async function main() {
     const { postDueRecurringItems: gPost } = await import("../src/lib/recurring-posting");
     const { getDictionary: gDictionary } = await import("../src/lib/i18n");
     const goalPlanLib = (await import("../src/lib/goal-plan").catch(() => null)) as null | typeof import("../src/lib/goal-plan");
-    const gRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+    const gRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() };
     const gContext = (today: Date) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -12265,7 +12266,7 @@ async function main() {
     const kFunded = ((await import("../src/lib/period")) as Record<string, unknown>).fundedPeriodFor ?? (kIncome as Record<string, unknown> | null)?.fundedPeriodFor;
     const kFundedPeriodFor = kFunded as ((date: Date) => { key: string }) | undefined;
     const kSpending = await import("../src/lib/budget-spending").catch(() => null);
-    const kRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+    const kRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() };
     const kContext = (today: Date) => ({ displayCurrency: "DOP" as const, language: "en" as const, rates: kRates, today, currentPeriod: periodForDate(today), bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP", incomeHistoryStartDate: null });
     const kRef = (year: number, month: number, period: "A" | "B") => ({ year, month, period });
     const budgetRow = (line: { spent: number } | undefined) =>
@@ -12580,7 +12581,7 @@ async function main() {
     const { listGoals: wGoals } = await import("../src/lib/data/goals");
     const { loadPeriodIncome: wIncome } = await import("../src/lib/data/period-income");
     const { findPostedDuplicates: wDuplicates } = await import("../src/lib/data/posted-duplicates");
-    const wRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+    const wRates: RateTable = { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() };
     const wContext = (today: Date) => ({ displayCurrency: "DOP" as const, language: "en" as const, rates: wRates, today, currentPeriod: periodForDate(today), recurringPosting: null, bufferPercent: 10, bufferFloorAmount: 2000, bufferFloorCurrency: "DOP" });
     const wRef = (year: number, month: number, period: "A" | "B") => ({ year, month, period });
     const wWipe = async () => {
@@ -12793,7 +12794,7 @@ async function main() {
     const qRoomData = await import("../src/lib/data/flexible-room").catch(() => null);
     const qRoomPure = await import("../src/lib/flexible-room").catch(() => null);
     type QDraft = Awaited<ReturnType<typeof qPayday.getPaydayCheckinDraft>>;
-    const qRates = (dop: number): RateTable => ({ rates: { USD: 1, DOP: dop, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const qRates = (dop: number): RateTable => ({ rates: { USD: 1, DOP: dop, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const qContext = (today: Date, dop = 60, bufferPercent = 10, bufferFloorAmount = 2000) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -13291,7 +13292,7 @@ async function main() {
     type KContext = Parameters<typeof kAccounts.getAccountBalances>[0] &
       Parameters<typeof kPayday.getPaydayCheckinDraft>[0] &
       Parameters<typeof kPayday.confirmPaydayCheckin>[1];
-    const kRates = (dop: number, eur = 0.9): RateTable => ({ rates: { USD: 1, DOP: dop, EUR: eur }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const kRates = (dop: number, eur = 0.9): RateTable => ({ rates: { USD: 1, DOP: dop, EUR: eur }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const kContext = (today: Date, dop = 60, eur = 0.9) =>
       ({
         displayCurrency: "DOP" as const,
@@ -13796,7 +13797,7 @@ async function main() {
     const { getDictionary: eDictionary } = await import("../src/lib/i18n");
     // 163.71 EUR is 11,493 DOP: USD 1 = DOP 60 = EUR 0.85465...
     const EUR = (163.71 * 60) / 11493;
-    const eRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const eRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const eContext = (today: Date) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -14159,7 +14160,7 @@ async function main() {
     const kValidation = (await import("../src/lib/validation")) as Record<string, unknown>;
     const { transactionSchema: kTxSchema, recurringSchema: kRecurringSchema } = await import("../src/lib/validation");
     const { getDictionary: kDictionary } = await import("../src/lib/i18n");
-    const kRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const kRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const kContext = (today: Date, extra: { incomeHistoryStartDate?: Date | null } = {}) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -14569,7 +14570,7 @@ async function main() {
     const clGoalData = await import("../src/lib/data/goals");
     const clPost = (await import("../src/lib/recurring-posting")).postDueRecurringItems;
     const clToday = civilDate(2026, 10, 1);
-    const clRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const clRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
 
     const pausedForCl = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
     const parkedGoalsForCl = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
@@ -14748,7 +14749,7 @@ async function main() {
     const rManual = await import("../src/lib/data/manual-transaction");
     const { transactionSchema: rSchema } = await import("../src/lib/validation");
     const { getDictionary: rDictionary } = await import("../src/lib/i18n");
-    const rRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const rRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const rContext = (today: Date) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -15226,7 +15227,7 @@ async function main() {
     const { formatMoney: pMoney } = await import("../src/lib/currency");
     const { formatPeriodLong: pPeriodLong } = await import("../src/lib/date-format");
     const { getDictionary: pDictionary } = await import("../src/lib/i18n");
-    const pRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const pRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const pContext = (today: Date) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -15768,7 +15769,7 @@ async function main() {
     const gSettle = (await import("../src/lib/data/recurring-settlement")) as Record<string, unknown>;
     const { earmarkLinesFrom: gLines } = await import("../src/lib/validation");
     const { getDictionary: gDictionary } = await import("../src/lib/i18n");
-    const gRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const gRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const gContext = (today: Date) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -16194,7 +16195,7 @@ async function main() {
     const { storeBpdRates: rStoreBpd } = await import("../src/lib/bpd-rates");
     const { postDueRecurringItems: rPost } = await import("../src/lib/recurring-posting");
     const { advanceDate: rAdvance } = await import("../src/lib/recurring");
-    const rRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const rRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const rContext = (today: Date) => ({
       displayCurrency: "DOP" as const,
       language: "en" as const,
@@ -16427,6 +16428,304 @@ async function main() {
         await restoreRates();
         await prisma.recurringItem.updateMany({ where: { id: { in: paused } }, data: { active: true } });
       }
+    }
+  }
+
+  console.log("\n== conversion and hardening: the review's R19 R20 R25 R28 R29 R30 and concurrent earmarks ==");
+  {
+    // Public APIs only, read loosely (a missing export is undefined, not a
+    // crash), so the section can be spliced into an older tree's harness and
+    // fail there rather than stop it.
+    const hMoney = await import("../src/lib/account-money");
+    const hCurrency = (await import("../src/lib/currency")) as Record<string, unknown>;
+    const hAccounts = (await import("../src/lib/data/accounts")) as Record<string, unknown>;
+    const { createManualTransaction: hCreate } = await import("../src/lib/data/manual-transaction");
+    const { logManualContribution: hLog, updateRecurringContributionAmount: hResave } = await import("../src/lib/goals");
+    const { postDueRecurringItems: hPost } = await import("../src/lib/recurring-posting");
+    const { saveEarmarks: hSaveEarmarks } = await import("../src/lib/data/earmark-targets");
+    const { chargeMatchesItem: hMatches } = await import("../src/lib/recurring-settlement");
+    const { en: hEn } = await import("../src/lib/i18n/en");
+    const { es: hEs } = await import("../src/lib/i18n/es");
+    // A fresh table carries every rate fit to store: open.er-api.com's within the day and the bank's DOP rate.
+    const hTable = (DOP: number, EUR: number, stale = false): RateTable =>
+      stale
+        ? { rates: { USD: 1, DOP, EUR }, fetchedAt: new Date(), stale, source: "open-er-api", asOf: null }
+        : { rates: { USD: 1, DOP, EUR }, fetchedAt: new Date(), stale, source: "bpd", asOf: new Date() };
+    const hFallback = hTable(60, 0.92, true);
+    const errorName = async (run: () => Promise<unknown>) => {
+      try {
+        await run();
+        return "saved";
+      } catch (error) {
+        return error instanceof Error ? error.name : String(error);
+      }
+    };
+    const noContext = async () => {
+      throw new Error("no context needed for an uncategorized entry");
+    };
+    const noLookup = { lookup: (async () => new Map()) as never, timeoutMs: 1 };
+    const entry = (accountId: string, amount: number, currency: string, note: string) =>
+      ({ date: civilDate(2026, 10, 3), amount, currency, type: "EXPENSE", accountId, categoryId: null, note, transferDirection: null, isOneOffIncome: false, reimbursesTransactionId: null, yourShare: null }) as Parameters<typeof hCreate>[0];
+    // Posting judges every active item; the section's own items are the only ones it may post.
+    const hPaused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((item) => item.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: hPaused } }, data: { active: false } });
+    const restoreRates = await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.9 });
+    const realFetch = globalThis.fetch;
+    const wipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Harden" } }, select: { id: true } })).map((a) => a.id);
+      await prisma.recurringEarmark.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Harden" } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Harden" } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Harden" } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    try {
+      console.log("-- R19: an account with transactions keeps its currency; the backfill reads the typed figure --");
+      {
+        const usd = await prisma.account.create({ data: { name: "Verify Harden Switch", currency: "USD", type: "CHECKING" } });
+        await prisma.transaction.create({
+          data: { accountId: usd.id, date: civilDate(2026, 10, 1), type: "EXPENSE", source: "MANUAL", amount: 16.67, currency: "USD", originalAmount: 1000, originalCurrency: "DOP", rate: 0.0166666667, note: "Verify Harden 1000 DOP" },
+        });
+        // Without updateAccount (an older tree) the account form wrote the change straight through.
+        const update = (hAccounts.updateAccount as ((id: string, v: object) => Promise<{ ok: boolean; reason?: string }>) | undefined) ??
+          (async (id: string, values: object) => {
+            await prisma.account.update({ where: { id }, data: values });
+            return { ok: true } as { ok: boolean; reason?: string };
+          });
+        const switched = await update(usd.id, { name: "Verify Harden Switch", currency: "DOP", type: "CHECKING" });
+        eq("a USD account holding 16.67 USD (1,000 DOP as typed): switching it to DOP is refused as currency_locked", `${switched.ok}:${switched.reason ?? ""}`, "false:currency_locked");
+        eq("... and the account is still USD", (await prisma.account.findUniqueOrThrow({ where: { id: usd.id } })).currency, "USD");
+        const renamed = await update(usd.id, { name: "Verify Harden Switch Renamed", currency: "USD", type: "SAVINGS" });
+        eq("renaming it and changing its type, currency unchanged, still saves", `${renamed.ok}:${(await prisma.account.findUniqueOrThrow({ where: { id: usd.id } })).name}`, "true:Verify Harden Switch Renamed");
+        const empty = await prisma.account.create({ data: { name: "Verify Harden Empty", currency: "USD", type: "CHECKING" } });
+        const emptySwitched = await update(empty.id, { name: "Verify Harden Empty", currency: "EUR", type: "CHECKING" });
+        eq("an account with no transaction can still change currency", `${emptySwitched.ok}:${(await prisma.account.findUniqueOrThrow({ where: { id: empty.id } })).currency}`, "true:EUR");
+        check("the refusal reads in English and Spanish", typeof hEn.accounts.currencyLocked === "string" && /new account/.test(hEn.accounts.currencyLocked) && typeof hEs.accounts.currencyLocked === "string" && /cuenta nueva/.test(hEs.accounts.currencyLocked));
+
+        const row = { amount: 16.67, currency: "USD", originalAmount: 1000, originalCurrency: "DOP", rate: 0.0166666667 };
+        eq("the review's row on an account already switched to DOP: accountAmount drifts to 1,050.21 at 63", hMoney.accountAmount(row, "DOP", hTable(63, 0.9)), 1050.21);
+        const backfill = hMoney.planBackfill(
+          [{ id: "a", currency: "DOP" }],
+          [{ ...row, id: "t1", accountId: "a", type: "EXPENSE", transferDirection: null, yourShare: null }],
+          hTable(63, 0.9),
+        );
+        eq("the backfill stores it as the 1,000 DOP typed, not 1,050.21 (exactAmountIn), with no original left", JSON.stringify(backfill.changes[0]?.to), JSON.stringify({ amount: 1000, currency: "DOP", originalAmount: null, originalCurrency: null, rate: null }));
+        eq("... the balance it plans reads 1,000 before and after", `${backfill.balances[0]?.before}:${backfill.balances[0]?.after}`, "-1000:-1000");
+        const third = hMoney.planBackfill(
+          [{ id: "a", currency: "DOP" }],
+          [{ id: "t2", accountId: "a", type: "EXPENSE", transferDirection: null, yourShare: null, amount: 16.67, currency: "USD", originalAmount: 15.5, originalCurrency: "EUR", rate: 1.0754838710 }],
+          hTable(63, 0.9),
+        );
+        eq(
+          "a row stored 16.67 USD from 15.50 EUR on a DOP account is converted from the 15.50 EUR typed (1,085.00 DOP at 70), not from 16.67 USD (1,050.21)",
+          JSON.stringify(third.changes[0]?.to),
+          JSON.stringify({ amount: 1085, currency: "DOP", originalAmount: 15.5, originalCurrency: "EUR", rate: 70 }),
+        );
+      }
+
+      console.log("-- R20: no fallback rate is ever frozen into a row --");
+      {
+        // Flipped deliberately: this check used to read "either source" -
+        // a fresh bank rate made the whole table fit. Fitness is per currency.
+        const fitPair = hCurrency.ratesFitForWriting as ((table: RateTable, from: string, to: string) => boolean) | undefined;
+        const bankOnly: RateTable = { rates: { USD: 1, DOP: 60.95, EUR: 0.86 }, fetchedAt: new Date(Date.now() - 2 * 86_400_000), stale: true, source: "bpd", asOf: new Date() };
+        const openOnly: RateTable = { rates: { USD: 1, DOP: 59.56, EUR: 0.887 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
+        const pairs = (table: RateTable) =>
+          fitPair ? (["USD>DOP", "EUR>DOP", "USD>EUR", "DOP>DOP"] as const).map((pair) => fitPair(table, pair.slice(0, 3), pair.slice(4))).join(",") : "missing";
+        eq("bank rate fresh, open.er-api 2 days old after a failed fetch: USD->DOP fit, EUR->DOP and USD->EUR not (a fresh bank rate does not make a stale EUR rate fit)", pairs(bankOnly), "true,false,false,true");
+        eq("open.er-api fresh, no bank rate in its window: USD->EUR fit, anything with DOP not", pairs(openOnly), "false,false,true,true");
+        eq("both fresh: every conversion fit", pairs(hTable(60, 0.9)), "true,true,true,true");
+        eq("the hard-coded fallback: no conversion fit", pairs(hFallback), "false,false,false,true");
+        eq("inAccountCurrency(12.99 EUR -> DOP) with the fallback table refuses (RatesUnavailableError) instead of 847.17", await errorName(async () => hMoney.inAccountCurrency({ amount: 12.99, currency: "EUR" }, "DOP", hFallback)), "RatesUnavailableError");
+        eq("... the same money in the account's own currency needs no rate and is stored as typed", hMoney.inAccountCurrency({ amount: 12.99, currency: "DOP" }, "DOP", hFallback).amount, 12.99);
+
+        const dop = await prisma.account.create({ data: { name: "Verify Harden Rates DOP", currency: "DOP", type: "CHECKING" } });
+        const due = civilDate(2026, 10, 2);
+        const spotify = await prisma.recurringItem.create({
+          data: { name: "Verify Harden Spotify", amount: 12.99, currency: "EUR", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: due, anchorDay: 2, accountId: dop.id },
+        });
+        const local = await prisma.recurringItem.create({
+          data: { name: "Verify Harden Claro", amount: 1500, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: due, anchorDay: 2, accountId: dop.id },
+        });
+        const goal = await prisma.goal.create({ data: { name: "Verify Harden Rates Goal", currency: "USD", targetAmount: 5000 } });
+        // The review's state: nothing stored, and every rate service unreachable.
+        await prisma.exchangeRate.deleteMany();
+        globalThis.fetch = (async () => {
+          throw new Error("rate services unreachable (verify-domain)");
+        }) as typeof fetch;
+        resetBpdFailureBackoffForTests();
+        const stale = await getRateTable();
+        eq("with nothing stored and the services down, getRateTable is the fallback (DOP 60, EUR 0.92, stale)", `${stale.rates.DOP}:${stale.rates.EUR}:${stale.stale}`, "60:0.92:true");
+        const run = await hPost(due);
+        const posted = await prisma.transaction.findMany({ where: { accountId: dop.id, source: "RECURRING" }, select: { amount: true, currency: true, note: true } });
+        eq("posting writes the DOP item but not the EUR 12.99 one (no 847.17 DOP @65.217)", posted.map((r) => `${r.note}:${num(r.amount)} ${r.currency}`).join("|"), "Verify Harden Claro:1500 DOP");
+        eq("... it reports the EUR item as waiting for rates", (run as { waitingForRates?: { id: string }[] }).waitingForRates?.map((item) => item.id).join(",") ?? "missing", spotify.id);
+        eq("... and leaves its due date where it was, for the next run", toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: spotify.id } })).nextDate), "2026-10-02");
+        eq("... while the DOP item moved on", toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: local.id } })).nextDate), "2026-11-02");
+        eq("a 100 USD contribution from the DOP account is refused (no 6,000 DOP @60 twin)", await errorName(() => hLog({ goalId: goal.id, accountId: dop.id, amount: 100, date: due, note: null })), "RatesUnavailableError");
+        eq("... nothing of it was written", `${await prisma.goalContribution.count({ where: { goalId: goal.id } })}:${await prisma.transaction.count({ where: { accountId: dop.id, source: "MANUAL" } })}`, "0:0");
+        eq(
+          "a manual 4.50 EUR expense on the DOP account is refused, asking for the DOP amount, when the rates are the fallback",
+          await errorName(() => hCreate(entry(dop.id, 4.5, "EUR", "Verify Harden coffee in Madrid"), { getContext: noContext, getRates: async () => hFallback, ...noLookup })),
+          "RatesUnavailableError",
+        );
+        const typed = await hCreate(entry(dop.id, 4.5, "EUR", "Verify Harden coffee in Madrid"), { getContext: noContext, getRates: async () => hFallback, chargedAmount: 300, ...noLookup });
+        const typedRow = await prisma.transaction.findUniqueOrThrow({ where: { id: typed.id } });
+        eq("... with the amount in DOP typed it saves that figure, the 4.50 EUR kept", `${num(typedRow.amount)} ${typedRow.currency} orig ${num(typedRow.originalAmount)} ${typedRow.originalCurrency}`, "300 DOP orig 4.5 EUR");
+        check("the Dashboard line and the form's request read in English and Spanish", typeof hEn.dashboard.waitingForRates === "function" && /waiting for exchange rates/.test(hEn.dashboard.waitingForRates(1)) && typeof hEs.dashboard.waitingForRates === "function" && /esperando las tasas/.test(hEs.dashboard.waitingForRates(2)) && typeof hEn.transactions.ratesUnavailableEnterInAccount === "function" && typeof hEs.transactions.ratesUnavailableEnterInAccount === "function");
+
+        // Rates back: the waiting item posts at the current rate, once.
+        globalThis.fetch = realFetch;
+        await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.9 });
+        const again = await hPost(due);
+        const spotifyRows = await prisma.transaction.findMany({ where: { accountId: dop.id, source: "RECURRING", note: "Verify Harden Spotify" } });
+        eq("once rates are current the next run posts it: 12.99 EUR as 866.00 DOP at 66.6667", spotifyRows.map((r) => `${num(r.amount)} ${r.currency} @${num(r.rate)}`).join("|"), "866 DOP @66.6666666667");
+        eq("... and waits for nothing", (again as { waitingForRates?: unknown[] }).waitingForRates?.length ?? "missing", 0);
+      }
+
+      console.log("-- R20 per currency: a fresh bank rate does not make a stale EUR rate fit --");
+      {
+        const dop = await prisma.account.create({ data: { name: "Verify Harden PerCurrency DOP", currency: "DOP", type: "CHECKING" } });
+        const due = civilDate(2026, 10, 2);
+        const whoop = await prisma.recurringItem.create({
+          data: { name: "Verify Harden Whoop", amount: 30, currency: "EUR", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: due, anchorDay: 2, accountId: dop.id },
+        });
+        const sports = await prisma.recurringItem.create({
+          data: { name: "Verify Harden Sports", amount: 37.9, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: due, anchorDay: 2, accountId: dop.id },
+        });
+        // open.er-api.com fetched 2 days ago, the live fetch failing; the bank's rate published today.
+        const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000);
+        await prisma.exchangeRate.deleteMany();
+        await prisma.exchangeRate.createMany({
+          data: [
+            ...[["USD", 1], ["DOP", 59.56], ["EUR", 0.887]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "open-er-api", rate: rate as number, fetchedAt: twoDaysAgo })),
+            ...[["DOP", 60.95], ["EUR", 0.8608757062]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "bpd", rate: rate as number, fetchedAt: new Date(), asOf: new Date() })),
+          ],
+        });
+        globalThis.fetch = (async () => {
+          throw new Error("rate services unreachable (verify-domain)");
+        }) as typeof fetch;
+        const table = await getRateTable();
+        eq("the table: open.er-api stale after the failed fetch, the bank's DOP 60.95 preferred", `${table.stale}:${table.source}:${table.rates.DOP}`, "true:bpd:60.95");
+        const run = await hPost(due);
+        const rows = async () =>
+          (await prisma.transaction.findMany({ where: { accountId: dop.id, source: "RECURRING" }, orderBy: { note: "asc" } })).map((r) => `${r.note}:${num(r.amount)} ${r.currency}`).join("|");
+        eq("the USD item posts at the bank's rate (37.90 USD = 2,310.01 DOP); the EUR item does not", await rows(), "Verify Harden Sports:2310.01 DOP");
+        eq("... the EUR item waits for rates, its due date unchanged", `${(run as { waitingForRates?: { id: string }[] }).waitingForRates?.map((item) => item.id).join(",") ?? "missing"}:${toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: whoop.id } })).nextDate)}`, `${whoop.id}:2026-10-02`);
+        eq("... while the USD item moved on", toISODate((await prisma.recurringItem.findUniqueOrThrow({ where: { id: sports.id } })).nextDate), "2026-11-02");
+        // open.er-api.com fresh again: the EUR item posts.
+        globalThis.fetch = realFetch;
+        await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.9 });
+        const later = await hPost(due);
+        eq("with open.er-api fresh the EUR item posts (30 EUR = 2,000.00 DOP at 66.6667)", await rows(), "Verify Harden Sports:2310.01 DOP|Verify Harden Whoop:2000 DOP");
+        eq("... and nothing waits", (later as { waitingForRates?: unknown[] }).waitingForRates?.length ?? "missing", 0);
+      }
+
+      console.log("-- R25: re-saving an automatic contribution unchanged keeps its stored conversion --");
+      {
+        const dop = await prisma.account.create({ data: { name: "Verify Harden R25 DOP", currency: "DOP", type: "CHECKING" } });
+        const goal = await prisma.goal.create({ data: { name: "Verify Harden R25 Goal", currency: "EUR", targetAmount: 5000 } });
+        const due = civilDate(2026, 10, 1);
+        const item = await prisma.recurringItem.create({
+          data: { name: "Verify Harden R25 Auto", amount: 100, currency: "USD", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: due, anchorDay: 1, accountId: dop.id, goalId: goal.id },
+        });
+        await hPost(due);
+        await prisma.recurringItem.update({ where: { id: item.id }, data: { active: false } });
+        const twin = async () => {
+          const row = await prisma.transaction.findFirstOrThrow({ where: { accountId: dop.id, source: "RECURRING" } });
+          return `${num(row.amount)} ${row.currency} orig ${num(row.originalAmount)} ${row.originalCurrency} @${num(row.rate)}`;
+        };
+        const contribution = await prisma.goalContribution.findFirstOrThrow({ where: { goalId: goal.id } });
+        eq("item 100 USD, account DOP, goal EUR posts 6,000 DOP (100 USD @60) and 90 EUR", `${await twin()} | ${num(contribution.amount)} ${contribution.currency}`, "6000 DOP orig 100 USD @60 | 90 EUR");
+        const resaved = await hResave(contribution.id, 90, hTable(63, 0.86));
+        eq("re-saving the same 90 EUR at rates 63 / 0.86 keeps 6,000 DOP (was re-converted to 6,593.02)", await twin(), "6000 DOP orig 100 USD @60");
+        eq("... and reports the stored figure", resaved.ok ? resaved.transactionAmount : "not ok", 6000);
+        await hResave(contribution.id, 80, hTable(63, 0.86));
+        eq("a new amount, 80 EUR, is still converted as the correction it is (5,860.47 DOP at today's rate)", await twin(), "5860.47 DOP orig 80 EUR @73.2558139535");
+      }
+
+      console.log("-- R28: money compared in whole cents --");
+      {
+        const pairs: [number, number][] = [[0.03, 0.04], [0.09, 0.1], [0.12, 0.13], [10.07, 10.08], [599.39, 599.4]];
+        eq(
+          "sameMoneyExactly within a cent: 0.03/0.04, 0.09/0.10, 0.12/0.13, 10.07/10.08, 599.39/599.40 all match (were false, false, false, true, true)",
+          pairs.map(([a, b]) => hMoney.sameMoneyExactly({ amount: a, currency: "DOP" }, { amount: b, currency: "DOP" })).join(","),
+          "true,true,true,true,true",
+        );
+        eq("... two cents apart is still not the same money", hMoney.sameMoneyExactly({ amount: 0.03, currency: "DOP" }, { amount: 0.05, currency: "DOP" }), false);
+        const item = { id: "i", name: "Tip jar", amount: 0.04, currency: "DOP", categoryId: null };
+        eq("the settlement matcher: a 0.03 charge named for a 0.04 item matches within the cent (was false)", hMatches(item, { id: "c", amount: 0.03, currency: "DOP", categoryId: null, note: "Tip jar" }, false), true);
+        eq("... and a 0.02 one does not", hMatches(item, { id: "c", amount: 0.02, currency: "DOP", categoryId: null, note: "Tip jar" }, false), false);
+      }
+
+      console.log("-- R29: an entry that comes to 0.00 in the account's currency is refused --");
+      {
+        const usd = await prisma.account.create({ data: { name: "Verify Harden Zero USD", currency: "USD", type: "CHECKING" } });
+        eq("inAccountCurrency(0.25 DOP -> USD @60) is 0.00", hMoney.inAccountCurrency({ amount: 0.25, currency: "DOP" }, "USD", hTable(60, 0.9)).amount, 0);
+        eq("saving 0.25 DOP on the USD account is refused (RoundsToZeroError)", await errorName(() => hCreate(entry(usd.id, 0.25, "DOP", "Verify Harden tip"), { getContext: noContext, getRates: async () => hTable(60, 0.9), ...noLookup })), "RoundsToZeroError");
+        eq("... and writes no zero-amount row", await prisma.transaction.count({ where: { accountId: usd.id } }), 0);
+        const smallest = await hCreate(entry(usd.id, 0.3, "DOP", "Verify Harden tip"), { getContext: noContext, getRates: async () => hTable(60, 0.9), ...noLookup });
+        eq("0.30 DOP comes to 0.01 USD and saves", smallest.storedAmount, 0.01);
+        check("the refusal reads in English and Spanish", typeof hEn.common.roundsToZero === "function" && /0\.00 in USD/.test(hEn.common.roundsToZero("0.25 DOP", "USD")) && typeof hEs.common.roundsToZero === "function" && /0\.00 en USD/.test(hEs.common.roundsToZero("0.25 DOP", "USD")));
+      }
+
+      console.log("-- R30: the same entry submitted twice within seconds is saved once --");
+      {
+        const dop = await prisma.account.create({ data: { name: "Verify Harden Twice", currency: "DOP", type: "CHECKING" } });
+        const lunch = entry(dop.id, 1500, "DOP", "Verify Harden lunch");
+        const together = await Promise.all([1, 2].map(() => errorName(() => hCreate(lunch, { getContext: noContext, ...noLookup }))));
+        eq("two identical manual entries at once: one saves, the other is refused (RecentDuplicateError)", together.sort().join(","), "RecentDuplicateError,saved");
+        eq("... a third a moment later is refused too", await errorName(() => hCreate(lunch, { getContext: noContext, ...noLookup })), "RecentDuplicateError");
+        eq("... one row in all", await prisma.transaction.count({ where: { accountId: dop.id } }), 1);
+        eq("a different note is a different entry and saves", await errorName(() => hCreate({ ...lunch, note: "Verify Harden lunch 2" }, { getContext: noContext, ...noLookup })), "saved");
+        await prisma.transaction.updateMany({ where: { accountId: dop.id, note: "Verify Harden lunch" }, data: { createdAt: new Date(Date.now() - 11_000) } });
+        eq("the same entry 11 seconds after the first saves (a second lunch)", await errorName(() => hCreate(lunch, { getContext: noContext, ...noLookup })), "saved");
+
+        const goal = await prisma.goal.create({ data: { name: "Verify Harden Twice Goal", currency: "DOP", targetAmount: 50000 } });
+        const contribution = { goalId: goal.id, accountId: dop.id, amount: 2000, date: civilDate(2026, 10, 3), note: null };
+        const logged = await Promise.all([1, 2].map(() => errorName(() => hLog(contribution))));
+        eq("two identical contributions at once: one is logged, the other refused", logged.sort().join(","), "RecentDuplicateError,saved");
+        eq("... one contribution and one ledger twin", `${await prisma.goalContribution.count({ where: { goalId: goal.id } })}:${await prisma.transaction.count({ where: { accountId: dop.id, note: goal.name } })}`, "1:1");
+        check("the refusal reads \"This looks like the entry you just saved\" and in Spanish", hEn.common.duplicateEntry === "This looks like the entry you just saved" && typeof hEs.common.duplicateEntry === "string" && hEs.common.duplicateEntry.length > 0);
+      }
+
+      console.log("-- earmarks: concurrent saves for one occurrence never cover more than it costs --");
+      {
+        const today = civilDate(2026, 10, 4);
+        const context = { today, rates: hTable(60, 0.9), currentPeriod: periodForDate(today) };
+        const dop = await prisma.account.create({ data: { name: "Verify Harden Earmark", currency: "DOP", type: "CHECKING" } });
+        const klarna = await prisma.recurringItem.create({
+          data: { name: "Verify Harden Klarna", amount: 10000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 28), anchorDay: 28, accountId: dop.id },
+        });
+        const key = `${klarna.id}:2026-10-28`;
+        const deposits = await Promise.all(
+          [1, 2].map((n) => prisma.transaction.create({ data: { accountId: dop.id, date: civilDate(2026, 10, 3), type: "INCOME", source: "MANUAL", amount: 8000, currency: "DOP", note: `Verify Harden family ${n}` } })),
+        );
+        const asDeposit = (id: string) => ({ id, accountId: dop.id, amount: 8000, type: "INCOME", source: "MANUAL", transferDirection: null });
+        let over = 0;
+        let bothRefused = 0;
+        for (let i = 0; i < 5; i += 1) {
+          await prisma.recurringEarmark.deleteMany({ where: { occurrenceKey: key } });
+          const results = await Promise.all(deposits.map((d) => hSaveEarmarks(asDeposit(d.id), [{ occurrenceKey: key, amount: 8000 }], context)));
+          const total = (await prisma.recurringEarmark.findMany({ where: { occurrenceKey: key } })).reduce((sum, row) => sum + num(row.amount), 0);
+          if (total > 10000) over += 1;
+          if (results.every((r) => !r.ok)) bothRefused += 1;
+        }
+        eq("two deposits of 8,000 each earmarking 8,000 at once for a 10,000 installment, five times: never over 10,000 (was 16,000)", over, 0);
+        eq("... and never both refused: the first is saved, the second judged against it", bothRefused, 0);
+        await prisma.recurringEarmark.deleteMany({ where: { occurrenceKey: key } });
+        const twice = await Promise.all([1, 2].map(() => hSaveEarmarks(asDeposit(deposits[0].id), [{ occurrenceKey: key, amount: 6000 }], context)));
+        eq("the same earmark saved twice at once: both succeed and one row of 6,000 is stored", `${twice.map((r) => r.ok).join(",")}:${(await prisma.recurringEarmark.findMany({ where: { occurrenceKey: key } })).map((r) => num(r.amount)).join(",")}`, "true,true:6000");
+        const second = await hSaveEarmarks(asDeposit(deposits[1].id), [{ occurrenceKey: key, amount: 4000 }], context);
+        eq("... the other deposit can then take the 4,000 left, exactly", `${second.ok}:${(await prisma.recurringEarmark.findMany({ where: { occurrenceKey: key } })).reduce((s, r) => s + num(r.amount), 0)}`, "true:10000");
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+      await wipe();
+      await restoreRates();
+      await prisma.recurringItem.updateMany({ where: { id: { in: hPaused } }, data: { active: true } });
     }
   }
 

@@ -1,5 +1,10 @@
 import { revalidatePath } from "next/cache";
 
+import { RatesUnavailableError, RoundsToZeroError } from "@/lib/account-money";
+import { formatMoney } from "@/lib/currency";
+import { RecentDuplicateError } from "@/lib/data/recent-duplicate";
+import { getDictionary, type Locale } from "@/lib/i18n";
+
 import type { PostedMatch } from "@/lib/data/posted-duplicates";
 
 export type ActionState = {
@@ -82,6 +87,24 @@ export function done(
   },
 ): ActionState {
   return { ok: true, message, at: Date.now(), ...extra };
+}
+
+/**
+ * The message for a money write the writer refused and left unwritten - no
+ * current rate to convert it (R20), an amount that comes to 0.00 in the
+ * account's currency (R29), the same entry submitted again (R30) - or null
+ * for any other error, which the caller rethrows. `ratesMessage` replaces
+ * the generic rates message where the form can take the amount in the
+ * account's currency instead.
+ */
+export function refusedWriteMessage(error: unknown, locale: Locale, ratesMessage?: (currency: string) => string): string | null {
+  const common = getDictionary(locale).common;
+  if (error instanceof RecentDuplicateError) return common.duplicateEntry;
+  if (error instanceof RoundsToZeroError) {
+    return common.roundsToZero(formatMoney(error.entered.amount, error.entered.currency), error.accountCurrency);
+  }
+  if (error instanceof RatesUnavailableError) return ratesMessage ? ratesMessage(error.to) : common.ratesUnavailable;
+  return null;
 }
 
 /**

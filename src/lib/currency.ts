@@ -46,6 +46,37 @@ export interface RateTable {
   asOf: Date | null;
 }
 
+/**
+ * Whether `table` holds a rate for `code` that may be frozen into a stored
+ * row (R20). A stored row keeps its conversion for good, so only a rate
+ * someone actually published recently may go into one, judged per currency:
+ *
+ *   - USD is the base and needs none;
+ *   - DOP needs Banco Popular's sell rate, inside its 7-day window - the
+ *     table carries it (source "bpd") only while it is (preferBpdRates);
+ *   - any other currency (EUR) needs open.er-api.com's rate fetched within
+ *     the last day: getRateTable tries a live fetch once the stored rates
+ *     are older than that, and the table is `stale` when it failed.
+ *
+ * So a fresh bank rate does not make a stale EUR rate fit, and a stale
+ * table still estimates a total on screen but is never written down.
+ */
+export function rateFitForWriting(code: string, table: RateTable): boolean {
+  if (code === BASE_CURRENCY) return true;
+  if (code === "DOP") return table.source === "bpd" && table.asOf !== null;
+  return !table.stale;
+}
+
+/** Whether converting `from` into `to` with `table` may be stored: every currency in it has a fit rate (rateFitForWriting). */
+export function ratesFitForWriting(table: RateTable, from: string, to: string): boolean {
+  return from === to || (rateFitForWriting(from, table) && rateFitForWriting(to, table));
+}
+
+/** The currencies `table` holds a rate fit to be stored for (rateFitForWriting), for a form deciding before the server does. */
+export function currenciesFitForWriting(table: RateTable): string[] {
+  return CURRENCIES.filter((code) => rateFitForWriting(code, table));
+}
+
 export const IDENTITY_RATES: RateTable = {
   rates: Object.fromEntries(CURRENCIES.map((code) => [code, 1])),
   fetchedAt: null,

@@ -1,6 +1,7 @@
 import {
   inAccountCurrency,
   moneyRow,
+  refuseZeroAmount,
   roundRate,
   toAccountMoney,
   type MoneyRow,
@@ -8,9 +9,10 @@ import {
 } from "@/lib/account-money";
 import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
 import { today as todayInAppZone } from "@/lib/date";
-import { num, round2, type DecimalLike } from "@/lib/money";
+import { num, round2, withinCents, type DecimalLike } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
+import { refuseRecentDuplicate } from "@/lib/data/recent-duplicate";
 import { skipMissedOccurrences } from "@/lib/data/recurring";
 import { manualContributionExternalId } from "@/lib/transactions";
 
@@ -56,10 +58,24 @@ export async function logManualContribution(
   const table =
     rates ?? (goal.currency === account.currency ? IDENTITY_RATES : await getRateTable());
   // The twin is stored in the account's currency with the contribution's own
-  // figure and the rate kept beside it (K7), like any other row.
-  const twin = inAccountCurrency({ amount: input.amount, currency: goal.currency }, account.currency, table);
+  // figure and the rate kept beside it (K7), like any other row - never at a
+  // fallback rate (RatesUnavailableError, R20), never as 0.00 (R29).
+  const entered = { amount: input.amount, currency: goal.currency };
+  const twin = refuseZeroAmount(entered, inAccountCurrency(entered, account.currency, table));
 
   return prisma.$transaction(async (tx) => {
+    // The same contribution logged a moment ago (a second submit) is refused
+    // and nothing is written (R30), judged on its ledger twin.
+    await refuseRecentDuplicate(tx, {
+      accountId: account.id,
+      date: input.date,
+      amount: twin.amount,
+      currency: twin.currency,
+      type: "EXPENSE",
+      categoryId: savingsCategory?.id ?? null,
+      note: goal.name,
+      source: "MANUAL",
+    });
     const contribution = await tx.goalContribution.create({
       data: {
         goalId: goal.id,
@@ -186,16 +202,21 @@ export async function updateRecurringContributionAmount(
   if (!contribution.recurringExternalId) return { ok: false, reason: "not_recurring" };
 
   const twin = await recurringContributionTwin(contribution.recurringExternalId);
+  // Re-saved with the same amount: the expense keeps its stored conversion
+  // as it is - also when it was converted from the item's currency, neither
+  // the goal's nor the account's, which toAccountMoney would otherwise
+  // convert afresh at today's rate (R25).
+  const unchanged = withinCents(amount, num(contribution.amount));
   const table =
     rates ??
-    (!twin || twin.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
-  const stored = twin
+    (!twin || unchanged || twin.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
+  const stored = twin && !unchanged
     ? toAccountMoney({ amount, currency: contribution.currency }, twin.currency, table, {
         row: twinAsStored(twin, contribution),
         accountCurrency: twin.currency,
       })
     : null;
-  const transactionAmount = stored ? stored.amount : null;
+  const transactionAmount = stored ? stored.amount : twin ? num(twin.amount) : null;
 
   await prisma.$transaction(async (tx) => {
     await tx.goalContribution.update({

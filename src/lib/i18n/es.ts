@@ -19,6 +19,12 @@ function dayOfMonthEs(day: number): string {
 
 export const es = {
   common: {
+    // Escrituras de dinero rechazadas (R20, R29, R30): no se guardó nada.
+    duplicateEntry: "Esto parece el registro que acabas de guardar",
+    ratesUnavailable:
+      "Las tasas de cambio no están disponibles ahora, así que este monto no se puede convertir. No se guardó nada; inténtalo más tarde.",
+    roundsToZero: (entered: string, currency: string) =>
+      `${entered} equivale a 0.00 en ${currency}, así que no hay nada que guardar. Ingresa un monto mayor.`,
     close: "Cerrar",
     save: "Guardar",
     cancel: "Cancelar",
@@ -247,6 +253,8 @@ export const es = {
     notPostingReasonMissingAccountAndGoal: "sin cuenta ni meta asignadas",
     notPostingReasonAccountArchived: "su cuenta está archivada",
     notPostingReasonGoalAchieved: "su meta ya está completa",
+    waitingForRates: (count: number) =>
+      `${count === 1 ? "1 pago recurrente en otra moneda está esperando" : `${count} pagos recurrentes en otra moneda están esperando`} las tasas de cambio. ${count === 1 ? "Se registrará" : "Se registrarán"} cuando haya tasas actuales disponibles.`,
     notPostingReasonFailed: "la última ejecución falló",
     notPostingLink: "Arreglar en la página de recurrentes",
     postingRunFailedTitle: "La última ejecución de registro de recurrentes falló",
@@ -647,6 +655,8 @@ export const es = {
     chargedAmountLabel: (currency: string) => `Monto cobrado en ${currency}`,
     accountAmountLabel: (currency: string) => `Monto en ${currency}`,
     chargedAmountHint: "Opcional. La cifra de tu estado de cuenta; se guarda tal cual, conservando el monto de arriba.",
+    ratesUnavailableEnterInAccount: (label: string, currency: string) =>
+      `Las tasas de cambio no están disponibles ahora, así que este monto no se puede convertir. Ingrésalo en ${currency} en "${label}", o inténtalo más tarde.`,
     savedAsTodaysRate: (amount: string, rate: string) => `Se guarda en esta cuenta como ${amount} (${rate}, tasa de hoy).`,
     savedAsKeptRate: (amount: string, rate: string) =>
       `Se guarda en esta cuenta como ${amount} (${rate}, la tasa con la que se guardó).`,
@@ -729,6 +739,8 @@ export const es = {
     anotherAccount: "otra cuenta",
     transfer: "Transferencia",
     accountUpdated: "Cuenta actualizada",
+    currencyLocked:
+      "Esta cuenta ya tiene transacciones, así que su moneda no se puede cambiar. Crea una cuenta nueva en la otra moneda.",
     accountAdded: "Cuenta agregada",
     accountDeleted: "Cuenta eliminada",
     accountArchived: "Cuenta archivada",

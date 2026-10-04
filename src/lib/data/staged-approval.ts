@@ -14,6 +14,7 @@
  */
 import { Prisma } from "@/generated/prisma/client";
 import { inAccountCurrency } from "@/lib/account-money";
+import { ratesFitForWriting } from "@/lib/currency";
 import { prisma } from "@/lib/prisma";
 
 import {
@@ -203,6 +204,8 @@ export async function stagedPostedMatches(
     const found = await lookUpPostedDuplicates(
       accountIds.flatMap((accountId) => {
         const accountCurrency = currencyOf.get(accountId);
+        // No stored figure to judge without a current rate (R20): no notice.
+        if (accountCurrency && !ratesFitForWriting(rates, values.currency, accountCurrency)) return [];
         return accountCurrency ? [incomingFor({ ...values, accountId }, accountId, accountCurrency, rates)] : [];
       }),
       rates,

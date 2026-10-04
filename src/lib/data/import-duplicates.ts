@@ -1,4 +1,5 @@
 import { enteredMoney, inAccountCurrency, moneyRow } from "@/lib/account-money";
+import { ratesFitForWriting } from "@/lib/currency";
 import { resolveImportCategoryId } from "@/lib/categorization";
 import {
   csvFingerprint,
@@ -131,6 +132,9 @@ export async function findCsvPostedDuplicates(input: {
   const knownCategoryIds = new Set(categories.map((category) => category.id));
   const categoryIdByName = new Map(categories.map((category) => [category.name.toLowerCase(), category.id]));
   const accountCurrency = account?.currency ?? input.currency;
+  // With no current rate the import itself is refused (R20), so there is no
+  // stored figure to judge: the check fails open, as on any other failure.
+  if (!ratesFitForWriting(input.rates, input.currency, accountCurrency)) return null;
 
   const incoming = input.rows.flatMap((row, index) => {
     if (input.skip.has(index) || row.type === "EXTERNAL_TRANSFER") return [];

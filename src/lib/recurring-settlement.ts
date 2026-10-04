@@ -50,6 +50,7 @@
 import { exactAmountIn, sameMoneyExactly, wasConverted } from "@/lib/account-money";
 import { convert, type RateTable } from "@/lib/currency";
 import { addDays, daysBetween, maxDate, minDate, toISODate } from "@/lib/date";
+import { withinCents } from "@/lib/money";
 import { incomeWindow, periodForDate, type PeriodRef } from "@/lib/period";
 
 import type { RecurringKind } from "@/generated/prisma/enums";
@@ -137,7 +138,7 @@ export function chargeIdentifiesItem(
  */
 function holdsItemAmount(item: MatchableItem, charge: MatchableCharge): boolean {
   const amount = exactAmountIn(charge, item.currency);
-  return amount !== null && Math.abs(amount - item.amount) <= AMOUNT_MATCH_TOLERANCE;
+  return amount !== null && withinCents(amount, item.amount, AMOUNT_MATCH_TOLERANCE);
 }
 
 /**

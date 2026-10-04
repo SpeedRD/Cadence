@@ -4,7 +4,11 @@
  * saveTransactionAction does; the action parses, checks the session and turns
  * the outcome into a toast and the form's follow-up questions.
  *
- * The row is always written. Two hints may come back with it, and neither can
+ * The row is written unless it cannot be stored truthfully or was just
+ * saved: an amount in another currency with no current rate to convert it
+ * (RatesUnavailableError), one that comes to 0.00 in the account's currency
+ * (RoundsToZeroError), or the same entry submitted again within seconds
+ * (RecentDuplicateError). Two hints may come back with it, and neither can
  * stop it: an unusually large expense (src/lib/extraordinary.ts), and money
  * the ledger may already hold as a row Cadence wrote itself - a posted
  * recurring charge or a check-in's paycheck - or that posting will write, an
@@ -14,6 +18,7 @@
 import {
   chargedInAccount,
   needsConversion,
+  refuseZeroAmount,
   shareInAccountCurrency,
   toAccountMoney,
   type MoneyRow,
@@ -26,6 +31,7 @@ import { num } from "@/lib/money";
 import { getRateTable } from "@/lib/rates";
 
 import { findExtraordinaryCandidates, type ExtraordinaryHit } from "@/lib/data/extraordinary";
+import { refuseRecentDuplicate } from "@/lib/data/recent-duplicate";
 import {
   entryDigest,
   lookUpPostedDuplicates,
@@ -53,7 +59,10 @@ export type StoredTransactionValues = Omit<ManualTransactionValues, "currency"> 
  * `chargedAmount` is the bank's own figure in the account's currency, when
  * the form has one: it is stored as typed, with the entered amount kept and
  * the rate the two imply (chargedInAccount). Rates are asked for only when a
- * conversion is needed.
+ * conversion is needed, and only rates fit to be written down are used: with
+ * none, the conversion throws RatesUnavailableError and the form asks for the
+ * amount in the account's currency instead (R20). An entry that comes to
+ * 0.00 in the account's currency throws RoundsToZeroError (R29).
  */
 export async function storedTransactionValues(
   values: ManualTransactionValues,
@@ -65,7 +74,8 @@ export async function storedTransactionValues(
   const entered = { amount: values.amount, currency: values.currency };
   // The bank's own figure, when the form has one, is the stored amount as
   // typed; otherwise the entry is converted (or keeps its stored conversion).
-  const stored =
+  const stored = refuseZeroAmount(
+    entered,
     chargedAmount != null && needsConversion(values.currency, account.currency)
       ? chargedInAccount(entered, account.currency, chargedAmount)
       : toAccountMoney(
@@ -73,7 +83,8 @@ export async function storedTransactionValues(
           account.currency,
           needsConversion(values.currency, account.currency) ? await getRates() : IDENTITY_RATES,
           previous,
-        );
+        ),
+  );
   return {
     ...values,
     amount: stored.amount,
@@ -136,7 +147,22 @@ export async function createManualTransaction(
     null,
     options.chargedAmount ?? null,
   );
-  const created = await prisma.transaction.create({ data: { ...stored, source: "MANUAL" } });
+  // The same entry saved a moment ago (a second submit) is refused and
+  // nothing is written (refuseRecentDuplicate, R30).
+  const created = await prisma.$transaction(async (tx) => {
+    await refuseRecentDuplicate(tx, {
+      accountId: stored.accountId,
+      date: stored.date,
+      amount: stored.amount,
+      currency: stored.currency,
+      type: stored.type,
+      transferDirection: stored.transferDirection,
+      categoryId: stored.categoryId,
+      note: stored.note,
+      source: "MANUAL",
+    });
+    return tx.transaction.create({ data: { ...stored, source: "MANUAL" } });
+  });
 
   const found =
     created.type === "EXPENSE" || created.type === "INCOME"

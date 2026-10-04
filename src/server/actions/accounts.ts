@@ -6,6 +6,7 @@ import {
   deleteAccountIfSafe,
   restoreAccount,
   setOpeningBalance,
+  updateAccount,
 } from "@/lib/data/accounts";
 import { getSettings, requireAuth } from "@/lib/auth";
 import { getDictionary, isLocale } from "@/lib/i18n";
@@ -27,7 +28,9 @@ export async function saveAccountAction(
 
   const { id, ...values } = parsed.data;
   if (id) {
-    await prisma.account.update({ where: { id }, data: values });
+    // An account with transactions keeps its currency (updateAccount, R19).
+    const updated = await updateAccount(id, values);
+    if (!updated.ok) return fail(updated.reason === "currency_locked" ? t.currencyLocked : t.accountNoLongerExists);
   } else {
     await prisma.account.create({ data: values });
   }

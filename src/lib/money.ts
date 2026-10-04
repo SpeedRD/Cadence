@@ -11,6 +11,34 @@ export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Money as whole cents. Comparing money for equality or within a tolerance
+ * goes through cents, never through a float difference: 0.04 - 0.03 is
+ * 0.010000000000000002, which is not within a cent (R28).
+ */
+export function toCents(value: number): number {
+  return Math.round((value + Math.sign(value) * Number.EPSILON) * 100);
+}
+
+/**
+ * A money tolerance as whole cents: 0.01 is one cent, 0.03 three, and a
+ * half-cent tolerance (0.005) none - amounts within half a cent are the same
+ * cent once rounded.
+ */
+function toleranceInCents(tolerance: number): number {
+  return Math.floor(tolerance * 100 + 1e-9);
+}
+
+/** Whether `a` and `b` are within `tolerance` (a money amount, e.g. 0.01) of each other, compared in whole cents. */
+export function withinCents(a: number, b: number, tolerance = 0): boolean {
+  return Math.abs(toCents(a) - toCents(b)) <= toleranceInCents(tolerance);
+}
+
+/** Whether `a` is above `b` by more than `tolerance` (a money amount), compared in whole cents. */
+export function exceedsCents(a: number, b: number, tolerance = 0): boolean {
+  return toCents(a) - toCents(b) > toleranceInCents(tolerance);
+}
+
 export function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }

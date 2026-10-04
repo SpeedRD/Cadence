@@ -39,6 +39,7 @@ import { keepEntryAsUpcoming, keepPostedInsteadOfEntry } from "@/lib/data/posted
 import {
   done,
   fail,
+  refusedWriteMessage,
   revalidateApp,
   type ActionState,
   type ExtraordinarySuggestion,
@@ -71,6 +72,19 @@ export async function saveTransactionAction(
   // pay cannot be earmarked (checkEarmarks). A new deposit has no createdAt
   // yet: it arrives after every confirmation, so no check-in adopted it.
   const depositFacts = { date: values.date, isOneOffIncome: values.isOneOffIncome, reimbursesTransactionId: values.reimbursesTransactionId };
+  // A write the writer refused, with nothing saved (refusedWriteMessage):
+  // with no current rate, the entry is asked for in the account's currency,
+  // in the field the form offers for it.
+  const refused = (error: unknown): ActionState => {
+    const message = refusedWriteMessage(error, locale, (currency) =>
+      t.ratesUnavailableEnterInAccount(
+        values.type === "EXPENSE" ? t.chargedAmountLabel(currency) : t.accountAmountLabel(currency),
+        currency,
+      ),
+    );
+    if (message) return fail(message);
+    throw error;
+  };
 
   const referenceError = await checkReferences(t, [values.accountId], values.categoryId, !id);
   if (referenceError) return fail(referenceError);
@@ -157,12 +171,17 @@ export async function saveTransactionAction(
     // Stored in the account's currency (K7): the same money re-saved keeps
     // its stored conversion, and a corrected amount keeps the stored rate.
     const previousAccount = await prisma.account.findUnique({ where: { id: existing.accountId }, select: { currency: true } });
-    const stored = await storedTransactionValues(
-      values,
-      async () => (await getAppContext()).rates,
-      { row: previousRow, accountCurrency: previousAccount?.currency ?? existing.currency },
-      charged.amount,
-    );
+    let stored;
+    try {
+      stored = await storedTransactionValues(
+        values,
+        async () => (await getAppContext()).rates,
+        { row: previousRow, accountCurrency: previousAccount?.currency ?? existing.currency },
+        charged.amount,
+      );
+    } catch (error) {
+      return refused(error);
+    }
     const deposit = {
       id,
       accountId: values.accountId,
@@ -194,7 +213,12 @@ export async function saveTransactionAction(
   } else {
     const requests = earmarks.offered ? earmarks.requests : [];
     if (requests.length > 0) {
-      const inAccount = await storedTransactionValues(values, async () => (await getAppContext()).rates, null, charged.amount);
+      let inAccount;
+      try {
+        inAccount = await storedTransactionValues(values, async () => (await getAppContext()).rates, null, charged.amount);
+      } catch (error) {
+        return refused(error);
+      }
       const check = await checkEarmarks(
         { id: null, accountId: values.accountId, amount: inAccount.amount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection, ...depositFacts },
         requests,
@@ -203,7 +227,12 @@ export async function saveTransactionAction(
       if (!check.ok) return fail(earmarkMessage(check.issue));
     }
     // The row is written whatever the hints say; see createManualTransaction.
-    const created = await createManualTransaction(values, { getContext: getAppContext, chargedAmount: charged.amount });
+    let created;
+    try {
+      created = await createManualTransaction(values, { getContext: getAppContext, chargedAmount: charged.amount });
+    } catch (error) {
+      return refused(error);
+    }
     if (requests.length > 0) {
       const saved = await saveEarmarks(
         { id: created.id, accountId: values.accountId, amount: created.storedAmount, type: values.type, source: "MANUAL", transferDirection: values.transferDirection, ...depositFacts },
@@ -486,6 +515,17 @@ export async function saveTransferAction(
   };
   const rates =
     currency !== fromAccount.currency || currency !== toAccount.currency ? (await getAppContext()).rates : IDENTITY_RATES;
+  // A leg that needs converting with no current rate is refused, not stored
+  // at a fallback rate (R20).
+  const legsOrRefused = (previous?: Parameters<typeof transferLegsInAccounts>[2]) => {
+    try {
+      return transferLegsInAccounts(legInput, rates, previous);
+    } catch (error) {
+      const message = refusedWriteMessage(error, locale);
+      if (message) return message;
+      throw error;
+    }
+  };
 
   if (transferId) {
     const existingLegs = await prisma.transaction.findMany({
@@ -497,7 +537,8 @@ export async function saveTransferAction(
       const leg = existingLegs.find((row) => row.transferDirection === direction);
       return leg ? { row: moneyRow(leg), accountCurrency: leg.account.currency } : null;
     };
-    const legs = transferLegsInAccounts(legInput, rates, { out: previousLeg("OUT"), in: previousLeg("IN") });
+    const legs = legsOrRefused({ out: previousLeg("OUT"), in: previousLeg("IN") });
+    if (typeof legs === "string") return fail(legs);
 
     await prisma.$transaction(async (tx) => {
       await tx.transaction.updateMany({
@@ -514,7 +555,8 @@ export async function saveTransferAction(
     return done(t.transferUpdated);
   }
 
-  const legs = transferLegsInAccounts(legInput, rates);
+  const legs = legsOrRefused();
+  if (typeof legs === "string") return fail(legs);
   const newTransferId = randomUUID();
   await prisma.$transaction(async (tx) => {
     await tx.transaction.create({

@@ -90,6 +90,7 @@ export function TransactionDialog({
   adoptedWindows = [],
   values,
   rates,
+  writableCurrencies,
   trigger,
   open: controlledOpen,
   onOpenChange,
@@ -106,6 +107,8 @@ export function TransactionDialog({
   values: TransactionFormValues;
   /** The request's rate table, for the conversion preview (ConversionPreview). */
   rates: RateTable["rates"];
+  /** The currencies those rates may be stored for (currenciesFitForWriting); a conversion outside them asks for the amount in the account's currency. */
+  writableCurrencies?: readonly string[];
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -465,6 +468,14 @@ export function TransactionDialog({
         rates={rates}
         previous={values.stored}
         charged={offersCharged ? chargedText : undefined}
+        chargedLabel={
+          offersCharged && accountCurrency
+            ? type === "EXPENSE"
+              ? t.chargedAmountLabel(accountCurrency)
+              : t.accountAmountLabel(accountCurrency)
+            : undefined
+        }
+        writableCurrencies={writableCurrencies}
         locale={locale}
       />
 

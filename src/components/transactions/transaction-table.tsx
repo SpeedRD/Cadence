@@ -425,6 +425,7 @@ export function TransactionTable({
   depositEarmarks,
   displayCurrency,
   rates,
+  writableCurrencies,
   locale,
 }: {
   rows: TransactionRow[];
@@ -441,6 +442,8 @@ export function TransactionTable({
   displayCurrency: string;
   /** The request's rate table, for the edit dialogs' conversion preview. */
   rates: RateTable["rates"];
+  /** The currencies those rates may be stored for (currenciesFitForWriting) - passed to the edit dialog. */
+  writableCurrencies?: readonly string[];
   locale: Locale;
 }) {
   const dictionary = getDictionary(locale);
@@ -593,6 +596,7 @@ export function TransactionTable({
           open
           onOpenChange={(next) => !next && setEditing(null)}
           rates={rates}
+          writableCurrencies={writableCurrencies}
           values={{
             id: editingPlain.id,
             date: toISODate(editingPlain.date),

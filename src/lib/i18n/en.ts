@@ -25,6 +25,12 @@ function dayOfMonthEn(day: number): string {
 
 export const en = {
   common: {
+    // Refused money writes (R20, R29, R30): nothing was saved.
+    duplicateEntry: "This looks like the entry you just saved",
+    ratesUnavailable:
+      "Exchange rates are unavailable right now, so this amount can't be converted. Nothing was saved; try again later.",
+    roundsToZero: (entered: string, currency: string) =>
+      `${entered} comes to 0.00 in ${currency}, so there is nothing to save. Enter a larger amount.`,
     close: "Close",
     save: "Save",
     cancel: "Cancel",
@@ -258,6 +264,8 @@ export const en = {
     notPostingReasonMissingAccountAndGoal: "no account or goal set",
     notPostingReasonAccountArchived: "its account is archived",
     notPostingReasonGoalAchieved: "its goal is fully funded",
+    waitingForRates: (count: number) =>
+      `${count === 1 ? "1 recurring payment in another currency is" : `${count} recurring payments in another currency are`} waiting for exchange rates. ${count === 1 ? "It posts" : "They post"} once current rates are available.`,
     notPostingReasonFailed: "last run failed",
     notPostingLink: "Fix on the recurring page",
     postingRunFailedTitle: "The last recurring posting run failed",
@@ -659,6 +667,8 @@ export const en = {
     chargedAmountLabel: (currency: string) => `Amount charged in ${currency}`,
     accountAmountLabel: (currency: string) => `Amount in ${currency}`,
     chargedAmountHint: "Optional. The figure on your statement; it is saved as typed, with the amount above kept.",
+    ratesUnavailableEnterInAccount: (label: string, currency: string) =>
+      `Exchange rates are unavailable right now, so this amount can't be converted. Enter it in ${currency} in "${label}", or try again later.`,
     savedAsTodaysRate: (amount: string, rate: string) => `Saved in this account as ${amount} (${rate}, today's rate).`,
     savedAsKeptRate: (amount: string, rate: string) =>
       `Saved in this account as ${amount} (${rate}, the rate it was saved at).`,
@@ -740,6 +750,8 @@ export const en = {
     anotherAccount: "another account",
     transfer: "Transfer",
     accountUpdated: "Account updated",
+    currencyLocked:
+      "This account already has transactions, so its currency can't be changed. Create a new account in the other currency instead.",
     accountAdded: "Account added",
     accountDeleted: "Account deleted",
     accountArchived: "Account archived",
