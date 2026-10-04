@@ -830,13 +830,18 @@ export function chargedAmountFrom(formData: FormData): { amount: number | null }
  * (src/lib/earmarks.ts): `earmarkOffered` says the form showed the section
  * (absent: the row's earmarks are not this form's to change), and each line
  * is an `earmarkKey` with its `earmarkAmount`, in the deposit's account's
- * currency. The switch off sends no lines, which clears them. Whether each
- * line fits the deposit and the occurrence is the writer's to judge
- * (checkEarmarks in src/lib/data/earmark-targets.ts).
+ * currency. Each `earmarkRemovedKey` names a stored earmark the user removed
+ * (a line taken out, its payment changed, the switch turned off): only those
+ * are deleted, and a stored one the form neither sends nor removes is kept.
+ * Whether each line fits the deposit and the occurrence is the writer's to
+ * judge (checkEarmarks in src/lib/data/earmark-targets.ts).
  */
 export function earmarkLinesFrom(
   formData: FormData,
-): { offered: false } | { offered: true; requests: { occurrenceKey: string; amount: number }[] } | { error: string } {
+):
+  | { offered: false }
+  | { offered: true; requests: { occurrenceKey: string; amount: number }[]; removed: string[] }
+  | { error: string } {
   if (formData.get("earmarkOffered") !== "true") return { offered: false };
   const keys = formData.getAll("earmarkKey").map((value) => String(value).trim());
   const amounts = formData.getAll("earmarkAmount").map((value) => String(value));
@@ -848,7 +853,11 @@ export function earmarkLinesFrom(
     if (parsed.amount <= 0) return { error: "Enter an amount greater than 0" };
     requests.push({ occurrenceKey: key, amount: parsed.amount });
   }
-  return { offered: true, requests };
+  const removed = formData
+    .getAll("earmarkRemovedKey")
+    .map((value) => String(value).trim())
+    .filter((key) => key !== "");
+  return { offered: true, requests, removed };
 }
 
 export function formObject(formData: FormData): Record<string, string> {

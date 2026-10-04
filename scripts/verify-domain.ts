@@ -1203,14 +1203,20 @@ async function main() {
   const categoryMeta = await prisma.category.findMany({ select: { id: true, name: true, color: true, isSavingsDefault: true, isSubscriptionDefault: true } });
 
   const julyBreakdown = await classifyCompletedMonth(julyWindow, monthlyContext, recurringForMatch, categoryMeta);
-  eq("lifestyle counts groceries + uncategorized expenses", julyBreakdown.lifestyle, 72);
-  eq("committed dedupes the matched Netflix charge (15) + Spotify's scheduled fallback (10)", julyBreakdown.committed, 25);
+  // Flipped deliberately with the R18 follow-up (the pace's lifestyle is
+  // budget spending, K6): the Jul 7 Netflix charge no settlement pairs (it
+  // predates the item's next date) and the Savings-category expense are budget
+  // spending, so lifestyle; Netflix's match still keeps its scheduled amount
+  // out. Were 72, 25 (Netflix 15 + Spotify 10), 175 and 97; the total is 272
+  // either way.
+  eq("lifestyle counts groceries + uncategorized + the unpaired Netflix charge + the Savings-category expense", julyBreakdown.lifestyle, 112);
+  eq("committed is Spotify's scheduled fallback (10); the matched Netflix charge keeps its scheduled amount out and is lifestyle", julyBreakdown.committed, 10);
   eq(
-    "savings/investing = category expense + goal contribution + unmatched contribution's scheduled fallback",
+    "savings/investing = goal contribution + unmatched contribution's scheduled fallback",
     julyBreakdown.savingsInvesting,
-    175,
+    150,
   );
-  eq("normal spending excludes savings/investing", julyBreakdown.normalSpending, 97);
+  eq("normal spending excludes savings/investing", julyBreakdown.normalSpending, 122);
   eq("total outflow = lifestyle + committed + savings", julyBreakdown.totalOutflow, 272);
   eq(
     "the $500 income and $200 transfer never inflate any bucket",
@@ -1244,16 +1250,18 @@ async function main() {
   const pace = await getCurrentMonthPace(paceContext);
   eq("current month is August (31 days)", pace.window.totalDays, 31);
   eq("day 15 of 31 elapsed", pace.daysElapsed, 15);
-  eq("lifestyle so far excludes the future-dated (Aug 20) transaction", pace.lifestyleSpentSoFar, 30);
-  eq("projected lifestyle = (spent so far / days elapsed) * days in month", pace.projectedLifestyle, 62);
+  // Flipped deliberately with the R18 follow-up: the Aug 2 Savings-category
+  // expense is budget spending, so lifestyle (were 30, 62, 145 and 25).
+  eq("lifestyle so far excludes the future-dated (Aug 20) transaction: 30 + the 5 under Savings", pace.lifestyleSpentSoFar, 35);
+  eq("projected lifestyle = (spent so far / days elapsed) * days in month", pace.projectedLifestyle, 72.33);
   eq("committed so far is the matched Netflix charge only, no scheduled fallback for the current month", pace.committedSpentSoFar, 15);
   eq(
     "still-due keeps an overdue unposted item (HBO 8) but drops the occurrence Netflix's charge settled, and converts EUR/DOP",
     pace.committedStillDueThisMonth,
     68,
   );
-  eq("projected normal spending = projected lifestyle + committed so far + still due", pace.projectedNormalSpending, 145);
-  eq("savings/investing this month is actual only, never projected", pace.savingsInvestingSoFar, 25);
+  eq("projected normal spending = projected lifestyle + committed so far + still due", pace.projectedNormalSpending, 155.33);
+  eq("savings/investing this month is actual only, never projected: the Aug 4 contribution", pace.savingsInvestingSoFar, 20);
 
   await prisma.transaction.deleteMany({ where: { accountId: monthlyAccount.id } });
   await prisma.account.delete({ where: { id: monthlyAccount.id } });
@@ -12353,9 +12361,10 @@ async function main() {
           (amount) => amount,
         );
         eq(
-          "K6: budget spending is 2,000 + the 1,000 share + the 900 one-off; settled charges, a subscription category, a RECURRING row and a contribution twin are out",
-          `${pure?.total}:${pure?.byCategory.get("dining")?.spent}:${pure?.byCategory.get("dining")?.oneOff}:${pure?.byCategory.has("subs")}`,
-          "3900:3900:900:false",
+          // Flipped deliberately with R18: the 4,000 under Subscriptions with no item behind it was left out (3900:3900:900:false).
+          "K6: budget spending is 2,000 + the 1,000 share + the 900 one-off + the 4,000 under Subscriptions that nothing covers (R18); settled charges, a RECURRING row and a contribution twin are out",
+          `${pure?.total}:${pure?.byCategory.get("dining")?.spent}:${pure?.byCategory.get("dining")?.oneOff}:${pure?.byCategory.get("subs")?.spent}`,
+          "7900:3900:900:4000",
         );
       }
 
@@ -12415,8 +12424,9 @@ async function main() {
         await spend(card.id, civilDate(2031, 10, 3), 4000, subscriptionsCategory.id);
         await spend(card.id, civilDate(2031, 10, 4), 700, fun.id);
         const summary = await kSummary(periodInfo(kRef(2031, 10, "A")), kContext(civilDate(2031, 10, 6)));
-        eq("D21: the posted Netflix under Fun is not on its row: 700 of 5,000, the overall spent 700 (the map's 1,000 of 5,000 was already gone with D20)", `${budgetRow(summary.categories.find((line) => line.categoryId === fun.id))}:${summary.spent}`, "700:700");
-        eq("D21: a charge in the Subscriptions category is on no budget row, as it is in no overall spent (its row read 4,000)", budgetRow(summary.categories.find((line) => line.categoryId === subscriptionsCategory.id)) ?? 0, 0);
+        // Flipped deliberately with R18: the 4,000 under Subscriptions was on no row and in no overall spent (700:700, 0).
+        eq("D21: the posted Netflix under Fun is not on its row: 700 of 5,000; the overall spent 4,700 adds the 4,000 under Subscriptions that nothing covers (R18)", `${budgetRow(summary.categories.find((line) => line.categoryId === fun.id))}:${summary.spent}`, "700:4700");
+        eq("D21: a charge in the Subscriptions category that no item covers is spending on its own row, 4,000 (R18; was 0)", budgetRow(summary.categories.find((line) => line.categoryId === subscriptionsCategory.id)) ?? 0, 4000);
         eq("D21: the rows add up to the overall spent (were 4,700 against 700)", round2(summary.categories.reduce((sum, line) => sum + (budgetRow(line) ?? 0), 0)), summary.spent);
         eq("D21: the Reports view keeps every charge: 1,000 + 4,000 + 700", summary.totalSpent, 5700);
         await kWipe();
@@ -12510,7 +12520,7 @@ async function main() {
         await kWipe();
       }
 
-      console.log("-- D31: a one-time purchase under Subscriptions is outside the budget and outside lifestyle --");
+      console.log("-- D31: a one-time purchase under Subscriptions is budget spending (R18) and lifestyle (R18 follow-up) --");
       {
         const oct6 = kContext(civilDate(2031, 10, 6));
         const periodBefore = await kSummary(periodInfo(kRef(2031, 10, "A")), oct6);
@@ -12519,11 +12529,13 @@ async function main() {
         await spend(card.id, civilDate(2031, 10, 3), 4000, subscriptionsCategory.id);
         const periodAfter = await kSummary(periodInfo(kRef(2031, 10, "A")), oct6);
         const paceAfter = await kPace(oct6);
-        eq("D31: period spent +0, total +4,000 (as before)", `${round2(periodAfter.spent - periodBefore.spent)}:${round2(periodAfter.totalSpent - periodBefore.totalSpent)}`, "0:4000");
+        // Flipped deliberately with R18: the purchase was outside the period's spent (0:4000).
+        eq("D31: period spent +4,000 (R18: nothing covers it, so it is spending; was +0), total +4,000", `${round2(periodAfter.spent - periodBefore.spent)}:${round2(periodAfter.totalSpent - periodBefore.totalSpent)}`, "4000:4000");
+        // Flipped deliberately with the R18 follow-up: the pace filed it as committed (0:0:4000).
         eq(
-          "D31: the monthly pace files it as committed: lifestyle +0, projected +0, committed so far +4,000 (were +4,000, +20,666.67 and 0)",
+          "D31: the monthly pace counts it as lifestyle, as budget spending does: lifestyle +4,000, projected +20,666.67, committed so far +0",
           `${round2(paceAfter.lifestyleSpentSoFar - paceBefore.lifestyleSpentSoFar)}:${round2(paceAfter.projectedLifestyle - paceBefore.projectedLifestyle)}:${round2(paceAfter.committedSpentSoFar - paceBefore.committedSpentSoFar)}`,
-          "0:0:4000",
+          "4000:20666.67:0",
         );
         await kWipe();
       }
@@ -14381,9 +14393,11 @@ async function main() {
       await spend(day26(10, 17), 30, subscriptionsCategory.id, "Verify K9 Stream");
       const paceAfterStream = await kMonthly.getCurrentMonthPace(oct20);
       eq(
-        "a charge under Subscriptions is outside the budget, and the pace still files it as the Stream item's committed charge",
+        // Flipped deliberately with R18 (the budget left the charge out: 0|0|30)
+        // and again with the R18 follow-up (the pace filed it as committed: 30|0|30).
+        "a charge under Subscriptions that no settlement pairs (the Stream item has no account, so posting skips it) is budget spending (R18), and the pace's lifestyle too, not committed",
         `${round2((await kSummary.getPeriodSummary(octB26, oct20)).spent - spentAfterGym)}|${round2(paceAfterStream.lifestyleSpentSoFar - paceAfterGym.lifestyleSpentSoFar)}|${round2(paceAfterStream.committedSpentSoFar - paceAfterGym.committedSpentSoFar)}`,
-        "0|0|30",
+        "30|30|0",
       );
       await clearRows();
       await prisma.recurringItem.deleteMany({ where: { name: { in: ["Verify K9 Gym", "Verify K9 Stream"] } } });
@@ -15357,7 +15371,9 @@ async function main() {
         const earmarkedAccount = await pAccount("Popular");
         const salary = await pDeposit(earmarkedAccount.id, sep30, 60000, "NOMINA");
         const installment = await prisma.recurringItem.create({
-          data: { name: "Verify Pay Installment", amount: 10000, currency: "DOP", frequency: "MONTHLY", anchorDay: 10, nextDate: pDay(10, 10), active: false, kind: "SUBSCRIPTION", accountId: earmarkedAccount.id },
+          // Active since R23: the estimate leaves out only an earmark that still
+          // covers an occurrence, and a paused item's covers none.
+          data: { name: "Verify Pay Installment", amount: 10000, currency: "DOP", frequency: "MONTHLY", anchorDay: 10, nextDate: pDay(10, 10), active: true, kind: "SUBSCRIPTION", accountId: earmarkedAccount.id },
         });
         await prisma.recurringEarmark.create({ data: { transactionId: salary.id, occurrenceKey: `${installment.id}:2026-10-10`, recurringItemId: installment.id, dueDate: pDay(10, 10), amount: 10000, currency: "DOP" } });
         const earmarkedDraft = await pDraftAccount(octA, sep30, earmarkedAccount.id);
@@ -15721,6 +15737,446 @@ async function main() {
       await prisma.account.updateMany({ where: { id: { in: archivedForPay } }, data: { status: "ACTIVE" } });
       await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForPay } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pausedForPay } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== adversarial review: goals, earmarks and room (R3 R13 R15 R16 R17 R18 R23 R24), editing a deposit with a past earmark ==");
+  {
+    // Public APIs only; new functions are reached through the module
+    // namespace and new arguments are ones the tree before ignores, so this
+    // block also runs against the code before the fixes and fails there on
+    // each finding. The review's numbers: USD 1 = DOP 60 = EUR 0.9, buffer
+    // 10% with a 2,000 DOP floor, display DOP. Fixtures `Verify Goals ...`;
+    // every other active item is paused, open goal parked and active account
+    // archived meanwhile, all restored in the finally.
+    const gK2 = await import("../src/lib/period-commitments");
+    const gCommitments = await import("../src/lib/data/period-commitments");
+    const gPlans = await import("../src/lib/data/goal-plan");
+    const gGoalRules = await import("../src/lib/goal-plan");
+    const gPayday = await import("../src/lib/data/payday");
+    const gPosting = await import("../src/lib/recurring-posting");
+    const gGoals = await import("../src/lib/goals");
+    const gTargets = await import("../src/lib/data/earmark-targets");
+    const gEarmarkRules = (await import("../src/lib/earmarks")) as Record<string, unknown>;
+    const gIncome = await import("../src/lib/data/period-income");
+    const gSpending = await import("../src/lib/data/budget-spending");
+    const gSummary = await import("../src/lib/data/period-summary");
+    const gRoom = await import("../src/lib/data/subscription-room");
+    const gAfford = await import("../src/lib/data/afford");
+    const gDashboard = await import("../src/lib/data/dashboard");
+    const gGoalList = await import("../src/lib/data/goals");
+    const gSettle = (await import("../src/lib/data/recurring-settlement")) as Record<string, unknown>;
+    const { earmarkLinesFrom: gLines } = await import("../src/lib/validation");
+    const { getDictionary: gDictionary } = await import("../src/lib/i18n");
+    const gRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null });
+    const gContext = (today: Date) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: gRates(),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    });
+    type GContext = ReturnType<typeof gContext>;
+    const gDay = (month: number, day: number) => civilDate(2026, month, day);
+    type GRef = { year: number; month: number; period: "A" | "B" };
+    const sepB: GRef = { year: 2026, month: 9, period: "B" };
+    const octA: GRef = { year: 2026, month: 10, period: "A" };
+    const octB: GRef = { year: 2026, month: 10, period: "B" };
+    const novA: GRef = { year: 2026, month: 11, period: "A" };
+    const novB: GRef = { year: 2026, month: 11, period: "B" };
+    const gWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Goals " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { year: 2026, month: { in: [9, 10, 11] } } });
+      await prisma.budget.deleteMany({ where: { year: 2026, month: 10, period: "A" } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Goals " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Goals " } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Goals " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    const gAccount = (name: string) => prisma.account.create({ data: { name: `Verify Goals ${name}`, currency: "DOP", type: "CHECKING" } });
+    const gRow = (accountId: string, date: Date, amount: number, type: "INCOME" | "EXPENSE", note: string, categoryId: string | null = null) =>
+      prisma.transaction.create({ data: { accountId, date, amount, currency: "DOP", type, source: "CSV", note, categoryId, externalId: `verify-goals:${note}:${toISODate(date)}` } });
+    const gConfirm = (ref: GRef, accountId: string, income: number, today: Date) =>
+      gPayday.confirmPaydayCheckin(
+        { ...ref, accounts: [{ accountId, reportedBalance: 0, incomeEntered: income, oneOffIncome: 0, incomeNote: null }], goals: [], essentialCategories: [], flexibleCategories: [], includedCarryover: 0, acknowledgedDeficit: true, acknowledgedZeroBuffer: true } as Parameters<typeof gPayday.confirmPaydayCheckin>[0],
+        gContext(today),
+      );
+    const gOccurrences = async (ref: GRef, ctx: GContext, itemId: string) =>
+      ((await gCommitments.loadCommitments([periodInfo(ref)], ctx)).get(periodInfo(ref).key) ?? [])
+        .filter((occurrence) => occurrence.itemId === itemId)
+        .map((occurrence) => `${toISODate(occurrence.dueDate)} ${occurrence.status}${occurrence.wontPostReason ? ` ${occurrence.wontPostReason}` : ""} ${occurrence.amount}`)
+        .join(", ");
+    const gPlan = async (refs: GRef[], ctx: GContext, goalId: string) => {
+      const plans = await gPlans.loadGoalPeriodPlans(refs.map(periodInfo), ctx);
+      return refs.map((ref) => plans.get(periodInfo(ref).key)?.find((plan) => plan.goalId === goalId));
+    };
+    const en = gDictionary("en").goals as unknown as Record<string, unknown>;
+    const es = gDictionary("es").goals as unknown as Record<string, unknown>;
+    const savingsCategory = await prisma.category.findFirstOrThrow({ where: { isSavingsDefault: true } });
+    const subscriptionsCategory = await prisma.category.findFirstOrThrow({ where: { isSubscriptionDefault: true } });
+    const gGroceries = await prisma.category.create({ data: { name: "Verify Goals Groceries", kind: "EXPENSE", color: "#888888" } });
+
+    check("goals review: no check-in for Sep-Nov 2026 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: { year: 2026, month: { in: [9, 10, 11] } } })) === 0);
+    const pausedForGoals = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForGoals = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const archivedForGoals = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    const stashedBudgetsForGoals = await prisma.budget.findMany({ where: { year: 2026, month: 10, period: "A" } });
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForGoals } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForGoals } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForGoals } }, data: { status: "ARCHIVED" } });
+    await prisma.budget.deleteMany({ where: { year: 2026, month: 10, period: "A" } });
+    try {
+      // ---------------------------------------------------------------------
+      console.log("\n-- R3: a recurring contribution due on a payday is scheduled where its money counts --");
+      {
+        const popular = await gAccount("Popular");
+        const house = await prisma.goal.create({ data: { name: "Verify Goals House", targetAmount: 200000, currency: "DOP", targetDate: civilDate(2027, 6, 30) } });
+        const auto = await prisma.recurringItem.create({
+          data: { name: "Verify Goals House auto", amount: 5000, currency: "DOP", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: gDay(10, 15), anchorDay: 15, accountId: popular.id, goalId: house.id, categoryId: savingsCategory.id },
+        });
+        check("R3: Oct 1-15 confirmed on its payday with nothing by hand for the goal", (await gConfirm(octA, popular.id, 60000, gDay(9, 30))).ok);
+        const oct10 = gContext(gDay(10, 10));
+        eq(
+          "R3: before it posts, the Oct 15 contribution is reserved in Oct 16-31, whose pay lands that day, not in Oct 1-15 (was Oct 1-15)",
+          `${(await gOccurrences(octA, oct10, auto.id)) || "none"} | ${(await gOccurrences(octB, oct10, auto.id)) || "none"}`,
+          "none | 2026-10-15 outstanding 5000",
+        );
+        const together = (await gCommitments.loadCommitments([periodInfo(octA), periodInfo(octB)], oct10)).get(periodInfo(octB).key) ?? [];
+        eq("R3: and the same when both periods are read together (Afford, the goal plans)", together.filter((o) => o.itemId === auto.id).length, 1);
+        await gPosting.postDueRecurringItems(gDay(10, 15));
+        const oct20 = gContext(gDay(10, 20));
+        const [planA, planB] = await gPlan([octA, octB], oct20, house.id);
+        eq(
+          "R3: on Oct 20, Oct 1-15 schedules 0 and has no follow-through shortfall; Oct 16-31 schedules the 5,000 it contributed (was 5,000 scheduled and a 5,000 shortfall in Oct 1-15, 5,000 contributed in Oct 16-31)",
+          `${planA?.scheduled}:${planA ? gGoalRules.followThroughShortfall(planA) : "?"} | ${planB?.scheduled}:${planB?.contributed}:${planB ? gGoalRules.followThroughShortfall(planB) : "?"}`,
+          "0:0 | 5000:5000:0",
+        );
+        const statuses = await gPayday.getGoalRoadmapStatuses(oct20 as never);
+        eq(
+          "R3: the goal notes and the Inbox raise no 'not contributed' for Oct 1-15 (was a 5,000 shortfall)",
+          statuses.filter((status) => status.goalId === house.id && status.followThroughShortfall > 0).map((status) => `${status.period.key} ${status.followThroughShortfall}`).join(", ") || "none",
+          "none",
+        );
+        const oct15 = gContext(gDay(10, 15));
+        const draft = (await gPayday.getPaydayCheckinDraft(oct15 as never, octB)) as unknown as { contributions: { recurringItemId: string; amount: number }[] };
+        eq("R3: the Oct 16-31 check-in's Step 3 lists the 5,000 among its contributions (was not listed anywhere after Oct 1-15's check-in)", draft.contributions.filter((row) => row.recurringItemId === auto.id).map((row) => row.amount).join(","), "5000");
+        const accounts = [{ id: popular.id, name: popular.name, currency: "DOP" }];
+        for (const [ref, expected] of [[novA, 0], [novB, 5000]] as const) {
+          const [withItem, withoutItem] = await Promise.all([
+            gAfford.projectPeriods([ref], accounts[0], accounts, oct20 as never),
+            gAfford.projectPeriods([ref], accounts[0], accounts, oct20 as never, { excludeItemId: auto.id }),
+          ]);
+          const a = withItem.get(periodInfo(ref).key)!;
+          const b = withoutItem.get(periodInfo(ref).key)!;
+          eq(
+            `R3: Afford reserves ${expected} for the Nov 15 contribution in ${periodInfo(ref).key} (pay for Nov 16-30 lands Fri Nov 13)`,
+            round2(a.account.committed - a.account.estimatedGoalFunding - (b.account.committed - b.account.estimatedGoalFunding)),
+            expected,
+          );
+        }
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R17: a goal filling part-way through a period --");
+      {
+        const card = await gAccount("Card");
+        const tv = await prisma.goal.create({ data: { name: "Verify Goals TV", targetAmount: 10000, currency: "DOP" } });
+        await gGoals.logManualContribution({ goalId: tv.id, accountId: card.id, amount: 9000, date: gDay(9, 20), note: null }, gRates());
+        await gGoals.recomputeGoalSaved(tv.id, gDay(10, 1));
+        const weekly = await prisma.recurringItem.create({
+          data: { name: "Verify Goals TV weekly", amount: 1000, currency: "DOP", frequency: "WEEKLY", kind: "CONTRIBUTION", nextDate: gDay(10, 16), accountId: card.id, goalId: tv.id, categoryId: savingsCategory.id },
+        });
+        const oct1 = gContext(gDay(10, 1));
+        eq(
+          "R17: 9,000 of 10,000 with 1,000 weekly reserves 1,000 in Oct 16-31; Oct 23 will not post, goal reached; Oct 30 is Nov 1-15's (its pay lands Fri Oct 30) (was 1,000 x 3 outstanding)",
+          await gOccurrences(octB, oct1, weekly.id),
+          "2026-10-16 outstanding 1000, 2026-10-23 wont_post goal_achieved 1000",
+        );
+        const octBWhole = gK2.sumOccurrences(gK2.whole((await gCommitments.loadCommitments([periodInfo(octB)], oct1)).get(periodInfo(octB).key) ?? []), "DOP", gRates(), gK2.wholeAmount);
+        eq("R17: Oct 16-31's commitments come to 1,000 (was 3,000)", round2(octBWhole), 1000);
+        eq("R17: every later one will not post either (Nov 13 is Nov 16-30's: its pay lands that Friday)", await gOccurrences(novA, oct1, weekly.id), "2026-10-30 wont_post goal_achieved 1000, 2026-11-06 wont_post goal_achieved 1000");
+        const plan = (await gPlan([octB], oct1, tv.id))[0];
+        eq("R17: the goal plan schedules 1,000 for Oct 16-31 (was 3,000)", plan?.scheduled, 1000);
+        const draft = (await gPayday.getPaydayCheckinDraft(gContext(gDay(10, 15)) as never, octB)) as unknown as {
+          contributions: { recurringItemId: string; amount: number }[];
+          wontPost: { recurringItemId: string; reason: string; occurrenceCount: number }[];
+        };
+        eq(
+          "R17: Step 3 shows the 1,000 contribution, and the one that will not post listed apart with its reason (was 3,000 and nothing listed)",
+          `${draft.contributions.filter((row) => row.recurringItemId === weekly.id).map((row) => row.amount).join(",")} | ${draft.wontPost.filter((row) => row.recurringItemId === weekly.id).map((row) => `${row.reason} x${row.occurrenceCount}`).join(",")}`,
+          "1000 | goal_achieved x1",
+        );
+        const upcoming = (await gDashboard.getDashboardData({ ...gContext(gDay(10, 17)), currentPeriod: periodInfo(octB) } as never)).upcoming.find((item) => item.id === weekly.id);
+        eq("R17: on Oct 17, Next 7 days owes 1,000 for it, not the Oct 23 that will not post (was 2,000)", upcoming?.amount, 1000);
+        const posting = await gPosting.postDueRecurringItems(gDay(10, 31));
+        eq(
+          "R17: posting through Oct 31 does exactly that: posts Oct 16, skips Oct 23 for goal_achieved",
+          `${posting.transactionsCreated} | ${posting.skipped.filter((skip) => skip.id === weekly.id).map((skip) => `${skip.nextDate} ${skip.reason}`).join(",")}`,
+          "1 | 2026-10-23 goal_achieved",
+        );
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R16: a future-dated contribution that completes the goal --");
+      {
+        const card = await gAccount("Card");
+        const car = await prisma.goal.create({ data: { name: "Verify Goals Car", targetAmount: 10000, currency: "DOP", targetDate: civilDate(2026, 12, 31) } });
+        await gGoals.logManualContribution({ goalId: car.id, accountId: card.id, amount: 5000, date: gDay(9, 1), note: null }, gRates());
+        await gGoals.logManualContribution({ goalId: car.id, accountId: card.id, amount: 5000, date: gDay(11, 20), note: "scheduled transfer" }, gRates());
+        await gGoals.recomputeGoalSaved(car.id, gDay(10, 1));
+        const oct1 = gContext(gDay(10, 1));
+        const plan = (await gPlan([octA], oct1, car.id))[0];
+        eq("R16: on Oct 1, 10,000 by Dec 31 with 5,000 Sep 1 and 5,000 dated Nov 20: pace 0 and 0 by hand (was 714.29 and 714.29)", `${plan?.pace}:${plan?.byHand}`, "0:0");
+        const draft = (await gPayday.getPaydayCheckinDraft(oct1 as never, octA)) as unknown as { goals: { goalId: string; recommendedAmount: number }[] };
+        eq("R16: the Oct 1-15 check-in asks nothing more for it (was 714.29)", draft.goals.find((goal) => goal.goalId === car.id)?.recommendedAmount ?? 0, 0);
+        const summary = (await gGoalList.listGoals({ ...oct1, currentPeriod: periodInfo(octA) } as never)).find((goal) => goal.id === car.id);
+        eq("R16: the Goals page still shows 5,000 saved and 5,000 dated ahead apart, with 0 a period by hand (was 714.29)", `${summary?.savedAmount}:${summary?.savedAhead}:${summary?.perPeriod}`, "5000:5000:0");
+        const later = (await gPlan([novB], gContext(gDay(11, 16)), car.id))[0];
+        eq("R16: once Nov 16-30 is the plan period, the Nov 20 money is its contribution, not pace already met", `${later?.contributed}:${later ? gGoalRules.followThroughShortfall(later) : "?"}`, "5000:0");
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R13: editing a deposit with an earmark on a payment in an earlier period --");
+      {
+        const popular = await gAccount("Popular");
+        const phone = await prisma.recurringItem.create({
+          data: { name: "Verify Goals Phone", amount: 6000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: gDay(9, 25), anchorDay: 25, remainingOccurrences: 4, accountId: popular.id, categoryId: gGroceries.id },
+        });
+        const mom = await gRow(popular.id, gDay(9, 20), 3000, "INCOME", "Verify Goals Mom");
+        const other = await gRow(popular.id, gDay(10, 1), 3000, "INCOME", "Verify Goals Aunt");
+        const key = `${phone.id}:2026-09-25`;
+        const deposit = { id: mom.id, accountId: popular.id, amount: 3000, type: "INCOME", source: "CSV", transferDirection: null };
+        check("R13: 3,000 of the Sep 20 deposit set aside for the Sep 25 phone installment", (await gTargets.saveEarmarks(deposit, [{ occurrenceKey: key, amount: 3000 }], gContext(gDay(9, 20)))).ok);
+        await gPosting.postDueRecurringItems(gDay(9, 25));
+        const oct2 = gContext(gDay(10, 2));
+        const sepBCost = async () => round2(((await gCommitments.loadCommitments([periodInfo(sepB)], oct2)).get(periodInfo(sepB).key) ?? []).filter((o) => o.itemId === phone.id).reduce((sum, o) => sum + gK2.wholeAmount(o), 0));
+        const rows = async () => prisma.recurringEarmark.count({ where: { transactionId: mom.id } });
+        eq("R13: Sep 16-30's phone costs 3,000 once posted", await sepBCost(), 3000);
+        const option = (await gTargets.listEarmarkOptions(oct2)).find((o) => o.occurrenceKey === key) as ({ onlyFor?: string[] } & { stillAsked: number }) | undefined;
+        eq("R13: on Oct 2 the form still offers the Sep 25 payment to this deposit, and to it alone (was not offered)", option ? (option.onlyFor ?? ["everyone"]).join(",") : "not offered", mom.id);
+        const offeredTo = gEarmarkRules.offeredTo as ((o: unknown, id: string) => boolean) | undefined;
+        eq("R13: another deposit is not offered it", option && offeredTo ? String(offeredTo(option, other.id)) : "n/a", "false");
+        const resent = await gTargets.saveEarmarks(deposit, [{ occurrenceKey: key, amount: 3000 }], oct2, { removed: [] } as never);
+        eq("R13: a note-only edit sends the line as stored: accepted, the earmark kept (was refused: target)", `${resent.ok ? "ok" : resent.issue} ${await rows()}`, "ok 1");
+        const noLines = await gTargets.saveEarmarks(deposit, [], oct2, { removed: [] } as never);
+        eq("R13: a save that sends no lines and removes none changes nothing (was every earmark deleted)", `${noLines.ok} ${await rows()} ${await sepBCost()}`, "true 1 3000");
+        const newTarget = await gTargets.checkEarmarks({ id: other.id, accountId: popular.id, amount: 3000, type: "INCOME", source: "CSV", transferDirection: null }, [{ occurrenceKey: key, amount: 1000 }], oct2);
+        eq("R13: another deposit cannot be set aside for the past payment", newTarget.ok ? "ok" : newTarget.issue, "target");
+        const lowered = await gTargets.saveEarmarks({ ...deposit, amount: 2000 }, [{ occurrenceKey: key, amount: 3000 }], oct2, { removed: [] } as never);
+        eq("R13: a deposit lowered below what it keeps set aside is refused, as before", lowered.ok ? "ok" : lowered.issue, "over_deposit");
+        const form = new FormData();
+        form.set("earmarkOffered", "true");
+        form.append("earmarkRemovedKey", key);
+        const parsed = gLines(form) as { removed?: string[] };
+        eq("R13: the form names the lines the user removed (earmarkRemovedKey)", (parsed.removed ?? ["absent"]).join(","), key);
+        const moved = await gTargets.saveEarmarks({ ...deposit, accountId: (await gAccount("BSC")).id }, [], oct2, { removed: [], accountChanged: true } as never);
+        eq("R13: moved to another account, the deposit's earmarks on the old one's payments go", `${moved.ok} ${await rows()}`, "true 0");
+        await gTargets.saveEarmarks(deposit, [{ occurrenceKey: key, amount: 3000 }], gContext(gDay(9, 24)));
+        const removed = await gTargets.saveEarmarks(deposit, [], oct2, { removed: [key] } as never);
+        eq("R13: and a line the user removed is deleted, back to 6,000", `${removed.ok} ${await rows()} ${await sepBCost()}`, "true 0 6000");
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R15: the room check for an edited item --");
+      {
+        const salary = await gAccount("Salary");
+        for (const day of [gDay(6, 15), gDay(7, 15), gDay(8, 14), gDay(9, 15)]) await gRow(salary.id, day, 60000, "INCOME", `Verify Goals Pay ${toISODate(day)}`);
+        await prisma.goal.create({ data: { name: "Verify Goals Big", targetAmount: 1000000, currency: "DOP", targetDate: civilDate(2026, 12, 31) } });
+        const insurance = await prisma.recurringItem.create({
+          data: { name: "Verify Goals Insurance", amount: 20000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: gDay(10, 25), anchorDay: 25, accountId: salary.id, categoryId: gGroceries.id },
+        });
+        const ctx = gContext(gDay(10, 1));
+        const input = { amount: 20000, currency: "DOP", frequency: "MONTHLY" as const, nextDate: gDay(10, 25) };
+        const verdict = (room: Awaited<ReturnType<typeof gRoom.checkSubscriptionRoom>>) => (room.large ? room.accounts.map((a) => `${a.headroomAfter}:${a.passes}`).join(",") : "small");
+        const editing = verdict(await gRoom.checkSubscriptionRoom({ ...input, excludeItemId: insurance.id }, ctx));
+        await prisma.recurringItem.delete({ where: { id: insurance.id } });
+        const fresh = verdict(await gRoom.checkSubscriptionRoom(input, ctx));
+        eq("R15: editing the 20,000 insurance and adding it once deleted give the same verdict: 20,000 short (editing said it fit with 0 to spare)", `${editing} | ${fresh}`, "-20000:false | -20000:false");
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R18: an expense under Subscriptions or Savings that nothing covers --");
+      {
+        const card = await gAccount("Card");
+        await prisma.budget.create({ data: { ...octA, categoryId: gGroceries.id, amount: 20000, currency: "DOP" } });
+        await gRow(card.id, gDay(10, 3), 3000, "EXPENSE", "Verify Goals Super", gGroceries.id);
+        await gRow(card.id, gDay(10, 4), 1200, "EXPENSE", "Verify Goals Streaming", subscriptionsCategory.id);
+        await gRow(card.id, gDay(10, 5), 800, "EXPENSE", "Verify Goals Piggy", savingsCategory.id);
+        // What is covered elsewhere stays out: a posted subscription filed
+        // under Subscriptions and a hand-logged contribution's own expense.
+        const stream = await prisma.recurringItem.create({
+          data: { name: "Verify Goals Stream", amount: 500, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: gDay(10, 7), anchorDay: 7, accountId: card.id, categoryId: subscriptionsCategory.id },
+        });
+        await gPosting.postDueRecurringItems(gDay(10, 7));
+        const jar = await prisma.goal.create({ data: { name: "Verify Goals Jar", targetAmount: 50000, currency: "DOP" } });
+        await gGoals.logManualContribution({ goalId: jar.id, accountId: card.id, amount: 700, date: gDay(10, 6), note: null }, gRates());
+        const ctx = gContext(gDay(10, 8));
+        const spent = (await gSpending.loadBudgetSpent([octA], ctx)).get(periodInfo(octA).key)!;
+        eq(
+          "R18: budget spending is 3,000 + 1,200 + 800: the Subscriptions and Savings charges nothing covers count in their categories; the posted 500 and the 700 contribution stay out (was 3,000)",
+          `${spent.total} | ${spent.byCategory.get(subscriptionsCategory.id)?.spent ?? 0} | ${spent.byCategory.get(savingsCategory.id)?.spent ?? 0}`,
+          "5000 | 1200 | 800",
+        );
+        const summary = await gSummary.getPeriodSummary(periodInfo(octA), { ...ctx, currentPeriod: periodInfo(octA) } as never);
+        eq("R18: safe to spend is 20,000 - 5,000 (was 17,000)", `${summary.spent}:${summary.safeToSpend}`, "5000:15000");
+        check("R18: the posted Stream charge is in the commitments, so it is out of spending once", summary.commitments.some((o) => o.itemId === stream.id && o.status === "posted"));
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R23: an earmark whose occurrence shrank or went away --");
+      {
+        const card = await gAccount("Card");
+        const sofa = await prisma.recurringItem.create({
+          data: { name: "Verify Goals Sofa", amount: 10000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: gDay(10, 25), anchorDay: 25, remainingOccurrences: 3, accountId: card.id, categoryId: gGroceries.id },
+        });
+        const brother = await gRow(card.id, gDay(10, 2), 10000, "INCOME", "Verify Goals Brother");
+        await gTargets.saveEarmarks({ id: brother.id, accountId: card.id, amount: 10000, type: "INCOME", source: "CSV", transferDirection: null }, [{ occurrenceKey: `${sofa.id}:2026-10-25`, amount: 10000 }], gContext(gDay(10, 2)));
+        const ctx = gContext(gDay(10, 3));
+        const estimate = async () => (await gIncome.loadPeriodIncome([octA], "estimate", ctx)).get(periodInfo(octA).key)?.total;
+        eq("R23: 10,000 earmarked for a 10,000 installment: the Oct 1-15 estimate leaves all of it out", await estimate(), 0);
+        await prisma.recurringItem.update({ where: { id: sofa.id }, data: { amount: 4000 } });
+        eq("R23: the installment lowered to 4,000: only 4,000 stays out, 6,000 is estimated income again (was 0)", await estimate(), 6000);
+        await prisma.recurringItem.update({ where: { id: sofa.id }, data: { active: false } });
+        eq("R23: the item paused: all 10,000 is estimated income again (was 0)", await estimate(), 10000);
+        eq("R23: the fact was 10,000 throughout", (await gIncome.loadPeriodIncome([octA], "fact", ctx)).get(periodInfo(octA).key)?.total, 10000);
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- R24: a hand-logged contribution that counts as the automatic one --");
+      {
+        const card = await gAccount("Card");
+        const trip = await prisma.goal.create({ data: { name: "Verify Goals Trip", targetAmount: 50000, currency: "DOP" } });
+        await prisma.recurringItem.create({
+          data: { name: "Verify Goals Trip auto", amount: 5000, currency: "DOP", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: gDay(11, 20), anchorDay: 20, accountId: card.id, goalId: trip.id, categoryId: savingsCategory.id },
+        });
+        type Settles = { dueDate: Date; itemName: string } | null;
+        const would = gSettle.contributionWouldSettle as ((twin: unknown) => Promise<Settles>) | undefined;
+        const twin = (date: Date, amount: number) => ({ date, amount, currency: "DOP", originalAmount: null, originalCurrency: null, categoryId: savingsCategory.id, note: trip.name, contributionGoalId: trip.id, accountId: card.id });
+        const preview = async (date: Date, amount: number) => {
+          if (!would) return "no preview";
+          const result = await would(twin(date, amount));
+          return result ? toISODate(result.dueDate) : "none";
+        };
+        eq(
+          "R24: before saving, 5,000 dated Nov 17 counts as the automatic one due Nov 20; 4,000, or 5,000 on Nov 1, counts as none (was no notice)",
+          `${await preview(gDay(11, 17), 5000)} | ${await preview(gDay(11, 17), 4000)} | ${await preview(gDay(11, 1), 5000)}`,
+          "2026-11-20 | none | none",
+        );
+        const logged = await gGoals.logManualContribution({ goalId: trip.id, accountId: card.id, amount: 5000, date: gDay(11, 17), note: "birthday money" }, gRates());
+        await gGoals.recomputeGoalSaved(trip.id, gDay(11, 17));
+        const settles = gSettle.contributionSettles as ((id: string, date: Date) => Promise<Settles>) | undefined;
+        const after = settles ? await settles(logged.transactionId, gDay(11, 17)) : null;
+        eq("R24: after saving, the same pairing is what the toast names (was nothing)", after ? toISODate(after.dueDate) : "none", "2026-11-20");
+        const say = (dictionary: Record<string, unknown>, key: string) =>
+          typeof dictionary[key] === "function" ? (dictionary[key] as (date: string) => string)(key.endsWith("Automatic") ? "Nov 20, 2026" : "20 nov 2026") : "absent";
+        eq("R24: the dialog's notice, in English", say(en, "contributionCountsAsAutomatic"), "This will count as the automatic contribution due Nov 20, 2026.");
+        eq("R24: and the toast", typeof en.contributionLoggedCountsAsAutomatic === "function" ? (en.contributionLoggedCountsAsAutomatic as (d: string) => string)("Nov 20, 2026") : "absent", "Contribution logged. This will count as the automatic contribution due Nov 20, 2026.");
+        eq("R24: in Spanish", typeof es.contributionCountsAsAutomatic === "function" ? (es.contributionCountsAsAutomatic as (d: string) => string)("20 nov 2026") : "absent", "Esto contará como el aporte automático que vence el 20 nov 2026.");
+        eq("R24: and its toast", typeof es.contributionLoggedCountsAsAutomatic === "function" ? (es.contributionLoggedCountsAsAutomatic as (d: string) => string)("20 nov 2026") : "absent", "Aporte registrado. Esto contará como el aporte automático que vence el 20 nov 2026.");
+        const posting = await gPosting.postDueRecurringItems(gDay(11, 20));
+        const saved = num((await prisma.goal.findUniqueOrThrow({ where: { id: trip.id } })).savedAmount);
+        eq("R24: the pairing itself is unchanged: posting counts it as the Nov 20 contribution, posts nothing, the goal holds 5,000", `${posting.transactionsCreated}:${posting.occurrencesAlreadyLogged}:${saved}`, "0:1:5000");
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- follow-up to R23: Step 2 and the confirm adopt a deposit net of the earmark that still covers a payment --");
+      {
+        type GDraft = { accounts: { accountId: string; incomeEntered: number; ledgerDeposits?: { date: Date; amount: number }[]; ledgerDepositsSetAside?: number }[] };
+        const sep30 = gDay(9, 30);
+        const ledgerCase = async (label: string, change: (itemId: string) => Promise<unknown>) => {
+          const account = await gAccount(label);
+          const installment = await prisma.recurringItem.create({
+            data: { name: `Verify Goals ${label} Installment`, amount: 10000, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: gDay(10, 10), anchorDay: 10, accountId: account.id, categoryId: gGroceries.id },
+          });
+          const deposit = await gRow(account.id, sep30, 10000, "INCOME", `Verify Goals ${label} Brother`);
+          await gTargets.saveEarmarks({ id: deposit.id, accountId: account.id, amount: 10000, type: "INCOME", source: "CSV", transferDirection: null }, [{ occurrenceKey: `${installment.id}:2026-10-10`, amount: 10000 }], gContext(sep30));
+          await change(installment.id);
+          const draft = ((await gPayday.getPaydayCheckinDraft(gContext(sep30) as never, octA)) as unknown as GDraft).accounts.find((a) => a.accountId === account.id);
+          const listed = `${(draft?.ledgerDeposits ?? []).map((d) => `${toISODate(d.date)} ${d.amount}`).join(", ") || "none"} | prefill ${draft?.incomeEntered} | set aside ${draft?.ledgerDepositsSetAside ?? "absent"}`;
+          const confirmed = await gConfirm(octA, account.id, draft?.incomeEntered ?? 0, sep30);
+          const snapshot = await prisma.paydayAccountSnapshot.findFirst({ where: { accountId: account.id } });
+          const rows = (await prisma.transaction.findMany({ where: { accountId: account.id, type: "INCOME" }, orderBy: { createdAt: "asc" } })).map((row) => `${num(row.amount)} ${row.source}`).join(", ");
+          const income = async (basis: "fact" | "estimate") => (await gIncome.loadPeriodIncome([octA], basis, gContext(sep30))).get(periodInfo(octA).key)?.byAccount.get(account.id) ?? 0;
+          const result = `${listed} || ${confirmed.ok ? "ok" : "refused"} adopted ${snapshot?.adoptedIncome == null ? "none" : num(snapshot.adoptedIncome)} | ${rows} | fact ${await income("fact")} estimate ${await income("estimate")}`;
+          await gWipe();
+          return result;
+        };
+        eq(
+          "R23 follow-up: 10,000 earmarked for an installment lowered to 4,000: Step 2 lists 6,000 of pay and the confirm adopts it, with no row of its own; the period counts the 10,000 deposit once, 6,000 as estimate (was nothing listed, a 6,000 check-in row beside the deposit, 16,000 / 12,000)",
+          await ledgerCase("Lowered", (id) => prisma.recurringItem.update({ where: { id }, data: { amount: 4000 } })),
+          "2026-09-30 6000 | prefill 6000 | set aside 1 || ok adopted 6000 | 10000 CSV | fact 10000 estimate 6000",
+        );
+        eq(
+          "R23 follow-up: the installment paused: the whole 10,000 is pay, listed, adopted and counted once, and not set aside (was nothing listed, a 10,000 check-in row, 20,000 / 20,000)",
+          await ledgerCase("Paused", (id) => prisma.recurringItem.update({ where: { id }, data: { active: false } })),
+          "2026-09-30 10000 | prefill 10000 | set aside 0 || ok adopted 10000 | 10000 CSV | fact 10000 estimate 10000",
+        );
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- follow-up to R24: editing a hand-logged contribution is judged in place of its own expense --");
+      {
+        const card = await gAccount("Card");
+        const trip = await prisma.goal.create({ data: { name: "Verify Goals Trip", targetAmount: 50000, currency: "DOP" } });
+        await prisma.recurringItem.create({
+          data: { name: "Verify Goals Trip auto", amount: 5000, currency: "DOP", frequency: "MONTHLY", kind: "CONTRIBUTION", nextDate: gDay(11, 20), anchorDay: 20, accountId: card.id, goalId: trip.id, categoryId: savingsCategory.id },
+        });
+        const logged = await gGoals.logManualContribution({ goalId: trip.id, accountId: card.id, amount: 5000, date: gDay(11, 17), note: null }, gRates());
+        type Settles = { dueDate: Date } | null;
+        const would = gSettle.contributionWouldSettle as ((twin: unknown, options?: { replacing?: string }) => Promise<Settles>) | undefined;
+        const edited = async (date: Date, amount: number) => {
+          if (!would) return "no preview";
+          const result = await would(
+            { date, amount, currency: "DOP", originalAmount: null, originalCurrency: null, categoryId: savingsCategory.id, note: trip.name, contributionGoalId: trip.id, accountId: card.id },
+            { replacing: logged.transactionId },
+          );
+          return result ? toISODate(result.dueDate) : "none";
+        };
+        eq(
+          "R24 follow-up: the 5,000 logged Nov 17, moved to Nov 18, still counts as the automatic one due Nov 20; lowered to 4,000 it counts as none (was none for both: its own stored expense held the occurrence)",
+          `${await edited(gDay(11, 18), 5000)} | ${await edited(gDay(11, 18), 4000)}`,
+          "2026-11-20 | none",
+        );
+        await gWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- follow-up to R18: the monthly pace's lifestyle is budget spending (K6) --");
+      {
+        const card = await gAccount("Card");
+        const oct20 = { ...gContext(gDay(10, 20)), currentPeriod: periodInfo(octB) };
+        const paceBefore = await getCurrentMonthPace(oct20 as never);
+        const spentBefore = (await gSummary.getPeriodSummary(periodInfo(octB), oct20 as never)).spent;
+        await gRow(card.id, gDay(10, 17), 1200, "EXPENSE", "Verify Goals Streaming", subscriptionsCategory.id);
+        await gRow(card.id, gDay(10, 18), 800, "EXPENSE", "Verify Goals Piggy", savingsCategory.id);
+        const paceAfter = await getCurrentMonthPace(oct20 as never);
+        const spentAfter = (await gSummary.getPeriodSummary(periodInfo(octB), oct20 as never)).spent;
+        eq(
+          "R18 follow-up: 1,200 under Subscriptions and 800 under Savings that nothing covers: budget spending +2,000, the pace's lifestyle +2,000, committed and savings +0 (were lifestyle +0, committed +1,200, savings +800)",
+          `${round2(spentAfter - spentBefore)} | ${round2(paceAfter.lifestyleSpentSoFar - paceBefore.lifestyleSpentSoFar)} | ${round2(paceAfter.committedSpentSoFar - paceBefore.committedSpentSoFar)} | ${round2(paceAfter.savingsInvestingSoFar - paceBefore.savingsInvestingSoFar)}`,
+          "2000 | 2000 | 0 | 0",
+        );
+        await gWipe();
+      }
+    } finally {
+      await gWipe();
+      await prisma.category.deleteMany({ where: { id: gGroceries.id } });
+      if (stashedBudgetsForGoals.length > 0) await prisma.budget.createMany({ data: stashedBudgetsForGoals });
+      await prisma.account.updateMany({ where: { id: { in: archivedForGoals } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForGoals } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForGoals } }, data: { active: true } });
     }
   }
 

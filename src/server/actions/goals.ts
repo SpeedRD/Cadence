@@ -2,7 +2,9 @@
 
 import { redirect } from "next/navigation";
 
+import { inAccountCurrency } from "@/lib/account-money";
 import { getSettings, requireAuth } from "@/lib/auth";
+import { formatDate } from "@/lib/date-format";
 import {
   deleteGoalDetachingLedger,
   logManualContribution,
@@ -15,6 +17,7 @@ import {
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
 import { checkReferences } from "@/lib/references";
+import { manualContributionExternalId } from "@/lib/transactions";
 import {
   contributionSchema,
   firstError,
@@ -23,6 +26,9 @@ import {
   manualContributionEditSchema,
   recurringContributionEditSchema,
 } from "@/lib/validation";
+
+import { getAppContext } from "@/lib/data/context";
+import { contributionSettles, contributionWouldSettle } from "@/lib/data/recurring-settlement";
 
 import { done, fail, revalidateApp, type ActionState } from "./utils";
 
@@ -129,7 +135,7 @@ export async function addContributionAction(
   );
   if (referenceError) return fail(referenceError);
 
-  await logManualContribution({
+  const logged = await logManualContribution({
     goalId: goal.id,
     accountId: parsed.data.accountId,
     amount: parsed.data.amount,
@@ -137,12 +143,61 @@ export async function addContributionAction(
     note: parsed.data.note,
   });
   const { justAchieved } = await rebuildGoalSaved(goal.id);
+  // A contribution of the automatic one's amount, to the same goal, near its
+  // due date counts as it (B16): the toast says so, as the dialog did.
+  const settles = await contributionSettles(logged.transactionId, parsed.data.date);
 
   revalidateApp();
   return done(
-    t.contributionLogged,
+    settles ? t.contributionLoggedCountsAsAutomatic(formatDate(settles.dueDate, locale)) : t.contributionLogged,
     justAchieved ? { achievedGoalId: goal.id } : undefined,
   );
+}
+
+export type ContributionSettlesResult = { ok: true; dueDate: string | null } | { ok: false };
+
+/**
+ * The contribution dialogs' notice, before saving: the due date (ISO) of
+ * the automatic contribution this one would count as - the pairing posting
+ * makes (contributionWouldSettle) - or null when it pays none. Logging names
+ * the goal; editing names the hand-logged contribution (`contributionId`),
+ * whose goal it is and whose own expense the edited one is judged in place
+ * of. Read only.
+ */
+export async function previewContributionSettlesAction(payload: unknown): Promise<ContributionSettlesResult> {
+  await requireAuth();
+  const input = (payload ?? {}) as Record<string, unknown>;
+  const contributionId = typeof input.contributionId === "string" ? input.contributionId : null;
+  const editing = contributionId
+    ? await prisma.goalContribution.findUnique({ where: { id: contributionId }, select: { goalId: true, recurringExternalId: true } })
+    : null;
+  if (contributionId && (!editing || editing.recurringExternalId)) return { ok: false };
+  const parsed = contributionSchema.safeParse({ ...input, goalId: editing?.goalId ?? input.goalId, note: "" });
+  if (!parsed.success) return { ok: false };
+  const replacing = contributionId
+    ? (await prisma.transaction.findFirst({ where: { source: "MANUAL", externalId: manualContributionExternalId(contributionId) }, select: { id: true } }))?.id
+    : undefined;
+  const [goal, account, savingsCategory] = await Promise.all([
+    prisma.goal.findUnique({ where: { id: parsed.data.goalId }, select: { id: true, name: true, currency: true } }),
+    prisma.account.findUnique({ where: { id: parsed.data.accountId }, select: { id: true, currency: true } }),
+    prisma.category.findFirst({ where: { isSavingsDefault: true }, select: { id: true } }),
+  ]);
+  if (!goal || !account) return { ok: false };
+  const context = await getAppContext();
+  // The expense logManualContribution would write for it.
+  const twin = inAccountCurrency({ amount: parsed.data.amount, currency: goal.currency }, account.currency, context.rates);
+  const settles = await contributionWouldSettle({
+    date: parsed.data.date,
+    amount: twin.amount,
+    currency: twin.currency,
+    originalAmount: twin.originalAmount ?? null,
+    originalCurrency: twin.originalCurrency ?? null,
+    categoryId: savingsCategory?.id ?? null,
+    note: goal.name,
+    contributionGoalId: goal.id,
+    accountId: account.id,
+  }, { replacing });
+  return { ok: true, dueDate: settles ? settles.dueDate.toISOString().slice(0, 10) : null };
 }
 
 /**

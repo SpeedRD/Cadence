@@ -63,7 +63,8 @@ import type { paydayConfirmSchema } from "@/lib/validation";
 import type { z } from "zod";
 
 import { getAccountBalances, ledgerAt } from "@/lib/data/accounts";
-import { ledgerDepositsTotal, loadLedgerDeposits, loadPayLanded, type LedgerDeposit } from "@/lib/data/period-income";
+import { loadPayLanded } from "@/lib/data/pay-landed";
+import { ledgerDepositsTotal, loadLedgerDeposits, type LedgerDeposit } from "@/lib/data/period-income";
 import { goalPeriodPlans, loadGoalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
 import { loadBudgetSpent } from "@/lib/data/budget-spending";
 import { loadHistoryBounds } from "@/lib/data/history-window";

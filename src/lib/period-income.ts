@@ -33,7 +33,9 @@
  *             the subscription-room check, the From Afford tracker and the
  *             goal forecast average it. An earmarked part already lowers what
  *             its occurrence asks of the plan; counted as income as well, the
- *             same money would be counted twice.
+ *             same money would be counted twice. Only the part that still
+ *             lowers one is left out: an occurrence that shrank, or is no
+ *             longer due, hands the rest back to the estimate.
  *
  * The Transactions and account pages read deposits by date instead - a
  * statement of the ledger - and say so on the page.
@@ -56,7 +58,11 @@ export interface IncomeRow {
   type: string;
   isOneOffIncome: boolean;
   reimbursesTransactionId: string | null;
-  /** What of it the user earmarked for recurring payments, in `currency` (0 or absent: none). */
+  /**
+   * What of it the user earmarked for recurring payments that still covers an
+   * occurrence's cost (K2's effective earmark, loadDepositCover), in
+   * `currency` (0 or absent: none).
+   */
   earmarked?: number;
 }
 

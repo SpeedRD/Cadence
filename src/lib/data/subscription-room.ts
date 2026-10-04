@@ -7,10 +7,13 @@
  * schedule to walk, so the one period the form's "Next due" date lands in is
  * projected for every active account with Afford's own projectPeriods() -
  * income averaged from comparable history, the period's commitments (every
- * other item's occurrences posting will charge or already has), the
- * per-account buffer - and this subscription's charge(s) in that period are
- * judged with Afford's evaluateAffordability(), so "room" means exactly what
- * Afford's account check means. A positive headroom says the account's
+ * other item's occurrences posting will charge or already has), the goal
+ * estimate spread over what room is left, the per-account buffer - and this
+ * subscription's charge(s) in that period are judged with Afford's
+ * evaluateAffordability(), so "room" means exactly what Afford's account
+ * check means. An item being edited is left out of that projection
+ * altogether (projectPeriods' excludeItemId), so the edit is judged exactly
+ * as the same subscription would be once the item is gone. A positive headroom says the account's
  * typical margin covers the charge; it is not a promise about every future
  * period, and the form never blocks a save on it.
  *
@@ -29,11 +32,9 @@ import { maxDate, startOfDay } from "@/lib/date";
 import { round2 } from "@/lib/money";
 import { periodForDate, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { sumOccurrences, whole, wholeAmount } from "@/lib/period-commitments";
 import { isLargeSubscription } from "@/lib/subscription-room";
 
 import { projectPeriods, type AffordContext } from "@/lib/data/afford";
-import { periodCommitments } from "@/lib/data/period-commitments";
 
 import type { RecurringFrequency } from "@/generated/prisma/enums";
 
@@ -44,9 +45,11 @@ export interface SubscriptionRoomInput {
   nextDate: Date;
   /**
    * The item being edited, if any. Its current schedule is already among the
-   * period's commitments, so its own occurrences there are taken back out
-   * before the edited amount is judged - otherwise editing a 12,000 item
-   * would count it twice.
+   * period's commitments, so the period is projected without it - its
+   * occurrences, and the room they would take from the goal estimate -
+   * before the edited amount is judged; otherwise editing a 12,000 item
+   * would count it twice. What posting already wrote for it stays, as it
+   * does once the item is deleted.
    */
   excludeItemId?: string | null;
 }
@@ -108,26 +111,17 @@ export async function checkSubscriptionRoom(
   const installments = buildInstallments(dates, input.amount);
   const charge = round2(input.amount * installments.length);
 
-  const ownCommitment = await ownCommitmentInPeriod(input.excludeItemId, period, accounts, context);
-
+  const excludeItemId = input.excludeItemId ?? undefined;
   const projections = await Promise.all(
-    accounts.map((account) => projectPeriods([period], account, accounts, context)),
+    accounts.map((account) => projectPeriods([period], account, accounts, context, { excludeItemId })),
   );
   const rooms: AccountRoom[] = accounts.map((account, index) => {
     const projection = projections[index].get(period.key);
     if (!projection) throw new Error(`No projection for period ${period.key}`);
-    const own = ownCommitment.accountId === account.id ? ownCommitment.amount : 0;
-    const adjusted =
-      own > 0
-        ? {
-            ...projection,
-            account: { ...projection.account, committed: round2(projection.account.committed - own) },
-          }
-        : projection;
     const verdict = evaluateAffordability({
       installments,
       currency: input.currency,
-      projections: new Map([[period.key, adjusted]]),
+      projections: new Map([[period.key, projection]]),
       rates: context.rates,
     });
     const check = verdict.periods[0].account;
@@ -151,40 +145,5 @@ export async function checkSubscriptionRoom(
     accounts: rooms,
     recommendedAccountId: fitting[0]?.accountId ?? null,
     incomePeriods: projections[0]?.get(period.key)?.flexible.incomePeriods ?? 0,
-  };
-}
-
-/**
- * What the item being edited still commits to `period` on its funding
- * account, in that account's currency: its occurrences there from the
- * period's commitments (src/lib/period-commitments.ts) that the schedule
- * still holds - not the ones posting already wrote, which stay in the ledger
- * whatever the edit - so taking it back out leaves the period as if the item
- * did not exist yet. An item posting will skip commits nothing.
- */
-async function ownCommitmentInPeriod(
-  itemId: string | null | undefined,
-  period: PeriodInfo,
-  accounts: { id: string; currency: string }[],
-  context: AffordContext,
-): Promise<{ accountId: string | null; amount: number }> {
-  const none = { accountId: null, amount: 0 };
-  if (!itemId) return none;
-  const own = whole(await periodCommitments(period, context)).filter(
-    (occurrence) => occurrence.itemId === itemId && occurrence.source === "schedule",
-  );
-  const accountId = own[0]?.accountId;
-  const account = accounts.find((candidate) => candidate.id === accountId);
-  if (!account) return none;
-  return {
-    accountId: account.id,
-    amount: round2(
-      sumOccurrences(
-        own.filter((occurrence) => occurrence.accountId === account.id),
-        account.currency,
-        context.rates,
-        wholeAmount,
-      ),
-    ),
   };
 }

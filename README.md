@@ -182,9 +182,11 @@ over-allocation.
 Set an overall budget per period, or let it fall back to the sum of category
 budgets. The budget is net of commitments: safe-to-spend is the period budget minus
 flexible spending so far, divided by the days remaining. Charges posted by recurring
-items, charges you entered that paid a recurring occurrence, goal contributions and
-spending in the subscription and savings categories don't eat into it — the payday
-check-in already set that money aside — and a shared expense counts at your share.
+items, charges you entered that paid a recurring occurrence and goal contributions
+don't eat into it — the payday check-in already set that money aside — and a shared
+expense counts at your share. Anything else counts in its category, a charge filed
+under Subscriptions or Savings that no recurring item or contribution covers
+included, so no charge is left out of every figure.
 The category rows count the same spending, so they add up to the overall figure,
 and the check-in's category suggestions and the carryover are measured on it too. The period switcher steps
 through any past or future period; its plan button reads "Plan this period" for
@@ -274,10 +276,14 @@ payment then asks that much less of the plan everywhere its cost is read - the
 check-in's Step 3 and the account's room, the confirmed plan and
 "Recommended", Afford's checks, the From Afford tracker and the room check -
 whether it has posted yet or not, and the set-aside part of the deposit is left
-out of the income Afford averages, so the money is counted once. The posted
-charge keeps the full bank amount; the Recurring page and Step 3 say what
-covered it ("DOP 5,000.00 covered by ..."). Deleting the deposit removes what it
-covered. A paycheck recorded by a check-in cannot be set aside (it is already
+out of the income Afford averages and of the pay a check-in's Step 2 lists and
+adopts, so the money is counted once - only the part that still covers a payment:
+if the payment is lowered or paused, the rest counts as income and pay again. The posted charge keeps the full bank amount; the Recurring page
+and Step 3 say what covered it ("DOP 5,000.00 covered by ..."). Editing the
+deposit later keeps what it set aside, even for a payment already in an earlier
+period (that payment stays listed for this deposit only); a line goes only when
+you remove it, switch the section off or move the deposit to another account.
+Deleting the deposit removes what it covered. A paycheck recorded by a check-in cannot be set aside (it is already
 the plan's income).
 
 A charge in the account's currency that may be an upcoming payment in another
@@ -317,7 +323,10 @@ stays.
 ![Recurring page: subscriptions and recurring contributions, one item tagged "4 payments left"](screenshots/recurring.png)
 
 Subscriptions (bills going out) and recurring contributions (money you put into a
-goal on a schedule). Both reduce safe-to-spend for the period they fall in, and both
+goal on a schedule). Both reduce safe-to-spend for the period they fall in - a
+subscription the period its due date is in, a contribution the period whose pay
+funds it (one due on a payday belongs to the period that pay starts, where the goal
+also counts it as contributed) - and both
 **post automatically** when they come due: a subscription becomes an expense on its
 account; a contribution becomes the same expense plus a logged contribution to its
 goal, converted once into the goal's currency. A daily Vercel Cron
@@ -327,7 +336,9 @@ day (an item due on the 31st is charged on the 28th in February and back on the 
 in March). An item missing its account or goal, or pointing at an archived account,
 is flagged here and skipped rather than posted; so is a contribution to a goal that
 is already fully funded, which resumes on its own if the goal's target is raised; a
-backlog of contributions stops as soon as the goal is reached. What an item missed
+backlog of contributions stops as soon as the goal is reached, and the plan reserves
+only the contributions up to the one that reaches it (the rest are listed as not
+posting). What an item missed
 while it could not post is never charged afterwards: resuming it, restoring or
 assigning its account, giving it a goal, or raising an achieved goal's target moves
 its next date to the first occurrence on or after today (a payments-left count is
@@ -466,7 +477,12 @@ can be corrected in place, which updates the ledger row they wrote, and removing
 from either side removes both. A goal that reaches its target is marked as achieved.
 A contribution dated after today is not in the goal's saved figure until its day:
 the Goals page, the goal and the Dashboard card show it apart, as an account's
-balance shows rows dated later.
+balance shows rows dated later. It still counts toward the roadmap when it falls
+before the target date, so money already scheduled to the goal is not asked for
+again. A contribution of the same amount as a recurring one, logged by hand near
+its due date, counts as that automatic contribution (it will not post a second
+time); the log dialog says so before you save, and the confirmation repeats it, and
+so does the dialog for correcting a hand-logged contribution.
 Once the period's check-in is confirmed, the goal page shows what it planned for the
 goal beside the live roadmap figure and says by how much the plan is behind; a dated
 goal in that state is also an advisory item in the Inbox. Deleting a goal removes its
@@ -547,9 +563,8 @@ filed under it. Removing a category that transactions, recurring items, or budge
 still use opens a reassignment step first: the rows move to a category you pick, the
 removed category's per-period budgets are cleared, and only then is it deleted, all
 in one database transaction. The two categories whole calculations hang off
-(Subscriptions, which safe-to-spend treats as already set aside, and
-Savings/Investment, where the monthly pace and manual goal contributions file
-saving) can be renamed but never removed.
+(Subscriptions, the default for recurring subscriptions, and Savings/Investment,
+where manual goal contributions file their expense) can be renamed but never removed.
 
 ![Category reassignment dialog mid-flow: a category's transactions and recurring item about to move to another category, its period budget about to be cleared](screenshots/settings-categories-reassign.png)
 

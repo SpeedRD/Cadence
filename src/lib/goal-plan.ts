@@ -9,10 +9,12 @@
  *   pace       what reaching the target asks of each period, fixed where
  *              the funding window of the period it is computed for opens -
  *              the day its pay landed, else its payday (contributionWindow):
- *              (target - saved from contributions dated before that day) /
- *              the periods left from the period (goalPeriodsLeft). A
- *              contribution made from that day on does not move that
- *              period's bar. A period after the plan
+ *              (target - saved from contributions dated before that day -
+ *              for the plan period, money already dated in a later period of
+ *              the goal's window, which is committed to it) / the periods
+ *              left from the period (goalPeriodsLeft). A contribution made
+ *              from that day on does not move that period's bar. A period
+ *              after the plan
  *              period is asked the plan period's pace - it recomputes from its
  *              own payday once it becomes the plan period. Gross: recurring
  *              contributions are part of it. A goal with no target date has no

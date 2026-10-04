@@ -164,6 +164,19 @@ export interface EarmarkOption {
   /** One charge as the item schedules it, in its own currency. */
   itemAmount: number;
   itemCurrency: string;
+  /**
+   * Set on an occurrence outside the periods the form offers (before the
+   * current one, or past the horizon) that deposits are already set aside
+   * for: offered only to those deposits, so editing one keeps its line -
+   * never as a new target for another. Absent: offered to every deposit on
+   * its account.
+   */
+  onlyFor?: string[];
+}
+
+/** Whether `option` is offered to the deposit `depositId` (null: one not written yet). */
+export function offeredTo(option: Pick<EarmarkOption, "onlyFor">, depositId: string | null | undefined): boolean {
+  return !option.onlyFor || (Boolean(depositId) && option.onlyFor.includes(depositId as string));
 }
 
 /** What `option` still asks of one deposit: what is left, plus what that deposit already covers of it. */
@@ -192,14 +205,16 @@ export type EarmarkIssue = "amount" | "duplicate" | "target" | "over_deposit" | 
  * Why a set of earmarks for one deposit cannot be written, or null when it
  * can: every amount above 0, each occurrence once, each one among `targets`
  * (an occurrence of a subscription on the deposit's account, not one posting
- * will skip) and at most what it still asks, and all of them together at
- * most the deposit. `deposit` and every amount are in the deposit's
- * account's currency.
+ * will skip) and at most what it still asks, and all of them together - with
+ * `kept`, what the deposit's other earmarks, left as they are, already set
+ * aside - at most the deposit. `deposit` and every amount are in the
+ * deposit's account's currency.
  */
 export function earmarkIssue(
   deposit: number,
   requests: readonly EarmarkRequest[],
   targets: readonly EarmarkTarget[],
+  kept = 0,
 ): EarmarkIssue | null {
   const byKey = new Map(targets.map((target) => [target.occurrenceKey, target]));
   const seen = new Set<string>();
@@ -213,7 +228,7 @@ export function earmarkIssue(
     if (request.amount > target.stillAsked + EARMARK_TOLERANCE) return "over_occurrence";
     total += request.amount;
   }
-  if (total > deposit + EARMARK_TOLERANCE) return "over_deposit";
+  if (total + kept > deposit + EARMARK_TOLERANCE) return "over_deposit";
   return null;
 }
 

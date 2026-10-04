@@ -7,7 +7,12 @@
  *
  * The rules:
  *
- *   - An occurrence belongs to the period its due date falls in.
+ *   - A subscription's occurrence belongs to the period its due date falls
+ *     in. A contribution's belongs to the period whose funding window
+ *     (fundingPeriodFor in src/lib/period.ts) holds the day its money moves -
+ *     its due date, or the day of the charge that paid it - the attribution
+ *     the goal plan counts contributed money by (K3): one due on a payday is
+ *     the next period's, paid from the pay that landed that day.
  *   - A backlog - an occurrence due before today and not yet paid - is owed
  *     now, so it is filed in the current period. Every backlog occurrence
  *     counts, up to the item's countdown, because posting will charge each
@@ -26,7 +31,11 @@
  *     archived account, a goal already reached) is "wont_post", with its
  *     reason. It is left out of every total and listed where items are
  *     listed, so a charge that will never leave is neither counted nor
- *     hidden.
+ *     hidden. So is a contribution posting will find its goal already
+ *     funded for (goal_achieved): a goal's outstanding contributions are
+ *     taken in due order, each while what the goal holds by its day - its
+ *     contributions dated by then and the earlier ones counted here - is
+ *     still short of the target, as posting judges it.
  *
  * whole() is what the period costs: posted + settled + outstanding. A plan
  * for the period subtracts it from the period's whole income. outstanding()
@@ -39,7 +48,9 @@
  */
 import { convert, type RateTable } from "@/lib/currency";
 import { coverOccurrence, type OccurrenceEarmark } from "@/lib/earmarks";
-import { periodForDate, type PeriodInfo } from "@/lib/period";
+import { addDays } from "@/lib/date";
+import { round2 } from "@/lib/money";
+import { fundingPeriodFor, periodForDate, type PayLanded, type PeriodInfo } from "@/lib/period";
 import {
   advanceDate,
   skipReasonFor,
@@ -47,7 +58,7 @@ import {
   type RecurringSkipReason,
   type ScheduledItem,
 } from "@/lib/recurring";
-import { recurringExternalId } from "@/lib/recurring-settlement";
+import { recurringExternalId, SETTLEMENT_LEAD_DAYS } from "@/lib/recurring-settlement";
 
 import type { RecurringKind } from "@/generated/prisma/enums";
 
@@ -60,6 +71,8 @@ export interface OccurrenceCharge {
   amount: number;
   currency: string;
   accountId: string | null;
+  /** A hand-logged contribution's own expense: its money is already among the goal's contributions. */
+  contributionTwin?: boolean;
 }
 
 export interface CommitmentOccurrence {
@@ -71,7 +84,7 @@ export interface CommitmentOccurrence {
   /** CONTRIBUTION only: the goal it pays into. */
   goalId: string | null;
   dueDate: Date;
-  /** The period it is filed in: its due date's, or the current period for a backlog occurrence. */
+  /** The period it is filed in: its due date's (a contribution's: the funding period of the day its money moves), or the current period for a backlog occurrence. */
   periodKey: string;
   /** Due before today and still unpaid, so filed in the current period. */
   backlog: boolean;
@@ -201,6 +214,33 @@ export interface PlanCommitmentsInput {
   excludeItemId?: string | null;
   /** The deposits earmarked for each occurrence, by occurrence key, already bounded by each deposit (boundByDeposit). */
   earmarks?: ReadonlyMap<string, readonly OccurrenceEarmark[]>;
+  /** When each period's pay landed (loadPayLanded), which opens the funding window a contribution is filed by; absent: every window opens on its payday. */
+  payLanded?: PayLanded;
+  /** The goals the active contributions pay into, by id, for the goal_achieved cap; absent: no cap. */
+  goals?: ReadonlyMap<string, CommitmentGoal>;
+}
+
+/** A goal as posting judges whether it still needs a contribution (postOccurrence): its target and every contribution, in its own currency. */
+export interface CommitmentGoal {
+  target: number;
+  currency: string;
+  contributions: readonly { amount: number; currency: string; date: Date }[];
+}
+
+/** What `goal` holds on `day`: its contributions dated then or before, summed into its currency as rebuildGoalSaved sums them. */
+function goalSavedOn(goal: CommitmentGoal, day: Date, rates: RateTable): number {
+  return round2(
+    goal.contributions.reduce(
+      (total, contribution) =>
+        contribution.date.getTime() > day.getTime()
+          ? total
+          : total +
+            (contribution.currency === goal.currency
+              ? contribution.amount
+              : convert(contribution.amount, contribution.currency, goal.currency, rates)),
+      0,
+    ),
+  );
 }
 
 /**
@@ -215,6 +255,12 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
     input.periods[0].end,
   );
   const currentKey = periodForDate(input.today).key;
+  const payLanded: PayLanded = input.payLanded ?? (() => null);
+  // Where an occurrence is filed when it is not a backlog: a subscription's
+  // by its due date, a contribution's by the funding window of the day its
+  // money moves.
+  const filedKey = (kind: RecurringKind, dueDate: Date, movedOn: Date) =>
+    kind === "CONTRIBUTION" ? fundingPeriodFor(movedOn, payLanded).key : periodForDate(dueDate).key;
   const itemById = new Map(input.items.map((item) => [item.id, item]));
   const inAccountCurrency = (amount: number, currency: string, accountId: string | null) => {
     const accountCurrency = accountId ? input.accountCurrency.get(accountId) : undefined;
@@ -226,21 +272,23 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
   const counted = new Set<string>();
   for (const fact of input.facts) {
     if (counted.has(fact.key)) continue;
-    const bucket = result.get(periodForDate(fact.dueDate).key);
-    if (!bucket) continue;
-    counted.add(fact.key);
     const item = itemById.get(fact.itemId);
     const info = item
       ? { name: item.name, kind: item.kind, goalId: item.goalId, amount: item.amount, currency: item.currency }
       : input.ledgerItems.get(fact.itemId);
+    const kind = info?.kind ?? "SUBSCRIPTION";
+    const periodKey = filedKey(kind, fact.dueDate, fact.settledBy?.date ?? fact.dueDate);
+    const bucket = result.get(periodKey);
+    if (!bucket) continue;
+    counted.add(fact.key);
     bucket.push({
       key: fact.key,
       itemId: fact.itemId,
       name: info?.name ?? "",
-      kind: info?.kind ?? "SUBSCRIPTION",
+      kind,
       goalId: info?.kind === "CONTRIBUTION" ? (info.goalId ?? null) : null,
       dueDate: fact.dueDate,
-      periodKey: periodForDate(fact.dueDate).key,
+      periodKey,
       backlog: false,
       status: fact.status,
       wontPostReason: null,
@@ -257,11 +305,22 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
     });
   }
 
+  // Every date the schedules still owe, through the last period's end - and
+  // a few days past it, since a contribution due then may already have been
+  // paid by a charge dated inside the last period.
+  const entries: {
+    item: CommitmentItem;
+    date: ScheduledDate;
+    key: string;
+    status: OccurrenceStatus;
+    reason: RecurringSkipReason | null;
+    settledBy: OccurrenceCharge | undefined;
+  }[] = [];
   for (const item of input.items) {
     if (item.id === input.excludeItemId) continue;
     const reason = skipReasonFor(item);
     const dates = scheduleDates(item, input.today, {
-      through,
+      through: addDays(through, SETTLEMENT_LEAD_DAYS),
       currentPeriodKey: currentKey,
       alreadyPosted: (due) => {
         const key = recurringExternalId(item.id, due);
@@ -279,39 +338,45 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
           : settledBy
             ? "settled"
             : "outstanding";
-      // Paid is paid: a settled or posted occurrence stays in its own period
-      // whatever today is; only an unpaid one due before today is a backlog.
-      const paid = status === "posted" || status === "settled";
-      const periodKey = paid ? periodForDate(date.dueDate).key : date.periodKey;
-      const bucket = result.get(periodKey);
-      if (!bucket) continue;
-      counted.add(key);
-      const accountId = settledBy ? settledBy.accountId : item.accountId;
-      const sourceAmount = settledBy ? settledBy.amount : item.amount;
-      const sourceCurrency = settledBy ? settledBy.currency : item.currency;
-      bucket.push({
-        key,
-        itemId: item.id,
-        name: item.name,
-        kind: item.kind,
-        goalId: item.kind === "CONTRIBUTION" ? item.goalId : null,
-        dueDate: date.dueDate,
-        periodKey,
-        backlog: !paid && date.backlog,
-        status,
-        wontPostReason: reason,
-        source: "schedule",
-        accountId,
-        ...inAccountCurrency(sourceAmount, sourceCurrency, accountId),
-        sourceAmount,
-        sourceCurrency,
-        itemAmount: item.amount,
-        itemCurrency: item.currency,
-        settledBy: settledBy ?? null,
-        earmarked: 0,
-        earmarks: [],
-      });
+      entries.push({ item, date, key, status, reason, settledBy });
     }
+  }
+  if (input.goals) capContributions(entries, input.goals, input.today, input.rates);
+
+  for (const { item, date, key, status, reason, settledBy } of entries) {
+    // Paid is paid: a settled or posted occurrence stays in its own period
+    // whatever today is; only an unpaid one due before today is a backlog.
+    const paid = status === "posted" || status === "settled";
+    const periodKey =
+      paid || !date.backlog ? filedKey(item.kind, date.dueDate, settledBy?.date ?? date.dueDate) : date.periodKey;
+    const bucket = result.get(periodKey);
+    if (!bucket) continue;
+    counted.add(key);
+    const accountId = settledBy ? settledBy.accountId : item.accountId;
+    const sourceAmount = settledBy ? settledBy.amount : item.amount;
+    const sourceCurrency = settledBy ? settledBy.currency : item.currency;
+    bucket.push({
+      key,
+      itemId: item.id,
+      name: item.name,
+      kind: item.kind,
+      goalId: item.kind === "CONTRIBUTION" ? item.goalId : null,
+      dueDate: date.dueDate,
+      periodKey,
+      backlog: !paid && date.backlog,
+      status,
+      wontPostReason: reason,
+      source: "schedule",
+      accountId,
+      ...inAccountCurrency(sourceAmount, sourceCurrency, accountId),
+      sourceAmount,
+      sourceCurrency,
+      itemAmount: item.amount,
+      itemCurrency: item.currency,
+      settledBy: settledBy ?? null,
+      earmarked: 0,
+      earmarks: [],
+    });
   }
 
   if (input.earmarks) applyEarmarks(result, input.earmarks, input.rates);
@@ -320,6 +385,45 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
     bucket.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime() || a.itemId.localeCompare(b.itemId));
   }
   return result;
+}
+
+/**
+ * Marks the contributions posting will skip because their goal is funded by
+ * then (goal_achieved), the way postOccurrence decides it: each goal's
+ * outstanding occurrences in due order, every one posting while what the goal
+ * holds on its day - the contributions dated by then (by today for one
+ * already overdue), plus the earlier ones counted here and the ones a
+ * charge other than a hand-logged contribution pays - is short of the
+ * target. A contribution is posted whole, so the one that reaches the target
+ * counts in full; every one after it is skipped.
+ */
+function capContributions(
+  entries: { item: CommitmentItem; date: ScheduledDate; status: OccurrenceStatus; reason: RecurringSkipReason | null; settledBy: OccurrenceCharge | undefined }[],
+  goals: ReadonlyMap<string, CommitmentGoal>,
+  today: Date,
+  rates: RateTable,
+): void {
+  const ordered = entries
+    .filter((entry) => entry.item.kind === "CONTRIBUTION" && entry.item.goalId && goals.has(entry.item.goalId))
+    .sort((a, b) => a.date.dueDate.getTime() - b.date.dueDate.getTime() || a.item.id.localeCompare(b.item.id));
+  const added = new Map<string, number>();
+  for (const entry of ordered) {
+    const goalId = entry.item.goalId as string;
+    const goal = goals.get(goalId) as CommitmentGoal;
+    const amount = convert(entry.item.amount, entry.item.currency, goal.currency, rates);
+    if (entry.status === "settled") {
+      if (!entry.settledBy?.contributionTwin) added.set(goalId, (added.get(goalId) ?? 0) + amount);
+      continue;
+    }
+    if (entry.status !== "outstanding" || goal.target <= 0) continue;
+    const day = entry.date.dueDate.getTime() < today.getTime() ? today : entry.date.dueDate;
+    if (round2(goalSavedOn(goal, day, rates) + (added.get(goalId) ?? 0)) >= goal.target) {
+      entry.status = "wont_post";
+      entry.reason = "goal_achieved";
+      continue;
+    }
+    added.set(goalId, (added.get(goalId) ?? 0) + amount);
+  }
 }
 
 /**

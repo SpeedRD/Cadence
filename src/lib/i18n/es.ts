@@ -1149,6 +1149,8 @@ export const es = {
     goalDeleted: "Meta eliminada",
     goalNoLongerExists: "Esa meta ya no existe",
     contributionLogged: "Aporte registrado",
+    contributionCountsAsAutomatic: (date: string) => `Esto contará como el aporte automático que vence el ${date}.`,
+    contributionLoggedCountsAsAutomatic: (date: string) => `Aporte registrado. Esto contará como el aporte automático que vence el ${date}.`,
     planVersusContributed: (period: string, planned: string, contributed: string) =>
       `${period}: ${planned} planificado · ${contributed} aportado`,
     contributedInPeriod: (period: string, contributed: string) => `${period}: ${contributed} aportado`,

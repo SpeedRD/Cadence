@@ -7,6 +7,7 @@ import { ConfirmDelete } from "@/components/form/confirm-delete";
 import { Field } from "@/components/form/field";
 import { FormDialog } from "@/components/form/form-dialog";
 import { AccountSelect, type Option } from "@/components/form/selects";
+import { AutomaticContributionNotice, useAutomaticContributionNotice } from "@/components/goals/contribution-dialog";
 import { GoalDialog } from "@/components/goals/goal-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -213,6 +214,22 @@ export function ManualContributionEditButton({
 }) {
   const t = getDictionary(locale).goals;
   const common = getDictionary(locale).common;
+  // The fields as edited, for the automatic-contribution notice; each opening
+  // starts from the stored values, as the fields themselves do.
+  const [amountText, setAmountText] = useState(String(amount));
+  const [dateText, setDateText] = useState(date);
+  const [accountText, setAccountText] = useState<string | undefined>(accountId);
+  const [open, setOpen] = useState(false);
+  const settles = useAutomaticContributionNotice({ contributionId: id }, { open, amount: amountText, accountId: accountText, date: dateText });
+  const changeOpen = (next: boolean) => {
+    if (next) {
+      setAmountText(String(amount));
+      setDateText(date);
+      setAccountText(accountId);
+      settles.reset();
+    }
+    setOpen(next);
+  };
 
   return (
     <FormDialog
@@ -222,6 +239,8 @@ export function ManualContributionEditButton({
       submitLabel={common.save}
       cancelLabel={common.cancel}
       savedMessage={t.contributionUpdated}
+      open={open}
+      onOpenChange={changeOpen}
       trigger={
         <Button variant="ghost" size="icon-xs" aria-label={t.editContributionAria}>
           <Pencil className="size-3.5" />
@@ -237,6 +256,7 @@ export function ManualContributionEditButton({
             inputMode="decimal"
             className="font-mono"
             defaultValue={amount}
+            onChange={(event) => setAmountText(event.target.value)}
             required
           />
         </Field>
@@ -246,6 +266,7 @@ export function ManualContributionEditButton({
             type="date"
             name="date"
             defaultValue={date}
+            onChange={(event) => setDateText(event.target.value)}
             required
           />
         </Field>
@@ -261,8 +282,10 @@ export function ManualContributionEditButton({
           accounts={accounts}
           defaultValue={accountId}
           common={common}
+          onValueChange={setAccountText}
         />
       </Field>
+      <AutomaticContributionNotice dueDate={settles.dueDate} locale={locale} />
     </FormDialog>
   );
 }

@@ -17,7 +17,15 @@ import {
 } from "@/lib/goal-plan";
 import { savedFromContributions } from "@/lib/goals";
 import { num, round2 } from "@/lib/money";
-import { periodClock, periodsRemaining, type PayLanded, type PeriodClock, type PeriodInfo } from "@/lib/period";
+import {
+  fundingPeriodFor,
+  goalWindow,
+  periodClock,
+  periodsRemaining,
+  type PayLanded,
+  type PeriodClock,
+  type PeriodInfo,
+} from "@/lib/period";
 import {
   outstanding,
   outstandingAmount,
@@ -29,9 +37,14 @@ import {
 import { prisma } from "@/lib/prisma";
 
 import { loadCommitments } from "@/lib/data/period-commitments";
-import { loadPayLanded } from "@/lib/data/period-income";
+import { loadPayLanded } from "@/lib/data/pay-landed";
 
 import type { AppContext } from "@/lib/data/context";
+
+/** The keys of the periods a dated goal's pace is spread over from `paceStart` (goalWindow). */
+function goalWindowKeys(paceStart: Date, targetDate: Date): Set<string> {
+  return new Set(goalWindow(paceStart, targetDate).map((period) => period.key));
+}
 
 /** One goal's plan for one period. Figures are in the display currency unless named native. */
 export interface GoalPeriodPlan extends GoalPeriodFigures {
@@ -148,7 +161,8 @@ export function goalPeriodPlan(
   const toDisplay = (amount: number, currency: string) => convert(amount, currency, context.displayCurrency, context.rates);
   const target = num(goal.targetAmount);
   const pacePeriod = pacePeriodFor(period, clock.plan);
-  const paceFrom = contributionWindow(pacePeriod, payLanded).from;
+  const paceWindow = contributionWindow(pacePeriod, payLanded);
+  const paceFrom = paceWindow.from;
   const window = contributionWindow(period, payLanded);
   // Saved as every page shows it (Goal.savedAmount, the cached sum of the
   // contributions), less what is dated in or after the pace period's funding
@@ -161,6 +175,24 @@ export function goalPeriodPlan(
         context.rates,
       ),
   );
+  // Money already dated ahead inside the goal's window - in a period after
+  // the one being paced, up to the last one its pace is spread over - is
+  // committed to the goal: the pace asks only for what it leaves. Read for
+  // the plan period's pace (which later periods are asked too); an earlier
+  // period's pace stays what it was on its own payday. It shows apart in
+  // `saved` until its day comes, as before.
+  const committedAhead =
+    pacePeriod.key === clock.plan.key
+      ? savedFromContributions(
+          goal.contributions.filter((contribution) => {
+            if (contribution.date.getTime() < paceWindow.until.getTime()) return false;
+            if (!goal.targetDate) return true;
+            return goalWindowKeys(pacePeriod.start, goal.targetDate).has(fundingPeriodFor(contribution.date, payLanded).key);
+          }),
+          goal.currency,
+          context.rates,
+        )
+      : 0;
   const savedToDate = round2(
     num(goal.savedAmount) -
       savedFromContributions(
@@ -180,11 +212,12 @@ export function goalPeriodPlan(
   // One path for both currencies: the pace is the goal's remainder on the
   // pace period's payday, converted before it is divided, so the display
   // figure is never a rounded native figure converted again.
+  const counted = round2(savedBefore + committedAhead);
   const pace = goalRoadmapAmount(
-    { target: toDisplay(target, goal.currency), savedBefore: toDisplay(savedBefore, goal.currency), targetDate: goal.targetDate },
+    { target: toDisplay(target, goal.currency), savedBefore: toDisplay(counted, goal.currency), targetDate: goal.targetDate },
     pacePeriod.start,
   );
-  const nativePace = goalRoadmapAmount({ target, savedBefore, targetDate: goal.targetDate }, pacePeriod.start);
+  const nativePace = goalRoadmapAmount({ target, savedBefore: counted, targetDate: goal.targetDate }, pacePeriod.start);
 
   const mine = occurrences.filter((occurrence) => occurrence.kind === "CONTRIBUTION" && occurrence.goalId === goal.id);
   const scheduled = round2(sumOccurrences(whole(mine), context.displayCurrency, context.rates, wholeAmount));

@@ -30,7 +30,7 @@ import type { MoneyRow } from "@/lib/account-money";
 import { fromISODate, toISODate } from "@/lib/date";
 import { isAdoptedDeposit, type AdoptedWindow } from "@/lib/period-income";
 import { formatDayMonth } from "@/lib/date-format";
-import { canBeEarmarked, defaultEarmarkAmount, stillAskedOf, type EarmarkOption } from "@/lib/earmarks";
+import { canBeEarmarked, defaultEarmarkAmount, offeredTo, stillAskedOf, type EarmarkOption } from "@/lib/earmarks";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { parseAmountInput, round2 } from "@/lib/money";
 import { canBeOneOffIncome, canBeSharedExpense } from "@/lib/transactions";
@@ -216,7 +216,10 @@ export function TransactionDialog({
   const accountCurrency = accounts.find((account) => account.id === accountId)?.currency;
   const currency = editing || currencyTouched ? chosenCurrency : (accountCurrency ?? chosenCurrency);
   const offersCharged = Boolean(accountCurrency) && currency !== accountCurrency;
-  const accountOptions = earmarkOptions.filter(
+  // A payment already due in an earlier period is offered only to the
+  // deposits set aside for it (offeredTo), so editing one keeps its line.
+  const depositOptions = earmarkOptions.filter((option) => offeredTo(option, values.id));
+  const accountOptions = depositOptions.filter(
     (option) =>
       option.accountId === accountId &&
       (stillAskedOf(option, values.id) > 0 || earmarkLines.some((line) => line.key === option.occurrenceKey)),
@@ -225,6 +228,15 @@ export function TransactionDialog({
   // Lines for payments on another account (the account was changed) are not
   // this deposit's to keep.
   const shownLines = earmarkLines.filter((line) => line.key === "" || optionByKey.has(line.key));
+  // What was set aside and is no longer sent: a line taken out or switched to
+  // another payment, the switch turned off, the deposit moved to another
+  // account. Only these are removed; one whose payment is offered nowhere
+  // (it was never shown) is kept as stored.
+  const offeredKeys = new Set(depositOptions.map((option) => option.occurrenceKey));
+  const sentKeys = new Set(earmarkOn ? shownLines.map((line) => line.key) : []);
+  const removedKeys = (values.earmarks ?? [])
+    .map((earmark) => earmark.occurrenceKey)
+    .filter((key) => !sentKeys.has(key) && (!earmarkOn || offeredKeys.has(key)));
   const parsedDeposit = parseAmountInput(amountText);
   const depositInAccount =
     parsedDeposit.ok && parsedDeposit.amount > 0 && accountCurrency
@@ -596,9 +608,13 @@ export function TransactionDialog({
       {/* Money for an upcoming payment (src/lib/earmarks.ts). Offered on a
           deposit whose account has a payment to set it aside for, or that is
           already set aside; the hidden earmarkOffered says this form showed
-          it, so the switch off clears what was set aside. A row that is not a
-          deposit sends nothing, and the server drops its earmarks. */}
+          it, and each earmarkRemovedKey names a line the user removed - the
+          only ones the server deletes. A row that is not a deposit sends
+          nothing, and the server drops its earmarks. */}
       {canEarmark ? <input type="hidden" name="earmarkOffered" value="true" /> : null}
+      {canEarmark
+        ? removedKeys.map((key) => <input key={key} type="hidden" name="earmarkRemovedKey" value={key} />)
+        : null}
       {canEarmark && (accountOptions.length > 0 || shownLines.length > 0) ? (
         <div className="grid gap-3">
           <div className="grid gap-1.5">

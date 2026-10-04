@@ -196,6 +196,20 @@ export function fundingWindow(ref: PeriodRef, payLanded: PayLanded): { from: Dat
   return { from: fundingWindowStart(ref, payLanded(ref)), until: fundingWindowStart(next, payLanded(next)) };
 }
 
+/**
+ * The period whose funding window (fundingWindow) holds `date`: the period
+ * money moved that day is counted for - the one a goal contribution dated
+ * then counts in (K3), and the one a recurring contribution due then is
+ * filed in (src/lib/period-commitments.ts). A window opens before its
+ * period's first day and never before the previous period's, so it is the
+ * date's own period or, once the next period's window has opened, the next.
+ */
+export function fundingPeriodFor(date: Date, payLanded: PayLanded): PeriodInfo {
+  const own = periodForDate(date);
+  const next = periodInfo(nextPeriod(own));
+  return startOfDay(date).getTime() >= fundingWindow(next, payLanded).from.getTime() ? next : own;
+}
+
 /** Which pay period a date falls into, with that month's real start/end dates. */
 export function periodForDate(date: Date): PeriodInfo {
   const day = startOfDay(date);

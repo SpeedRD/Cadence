@@ -67,8 +67,10 @@ export async function getDashboardData(
   const upcoming: UpcomingItem[] = byItem(due).map((all) => {
     const first = all[0];
     // What is owed is every occurrence in the window; an item that will not
-    // post owes nothing, so it shows the one charge it is listed for.
-    const group = first.wontPostReason ? [first] : all;
+    // post owes nothing, so it shows the one charge it is listed for. A
+    // contribution whose goal fills part-way through the window owes only
+    // the occurrences before that.
+    const group = first.wontPostReason ? [first] : all.filter((occurrence) => occurrence.status !== "wont_post");
     return {
       id: first.itemId,
       name: first.name,
