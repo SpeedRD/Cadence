@@ -28,8 +28,11 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   occurrence it lowers). Read-only at the database
   level (`default_transaction_read_only=on` on its connection), so it is safe
   against real data. Exit 1 is a finding to investigate, never something to
-  fix inside the script; it verifies the mechanisms and must not re-implement
-  them.
+  fix inside the script. It computes each side of every pair from the raw
+  rows and compares it with what the app's readers report; pairs 4 and 5
+  use the script's own matching (SQL and plain code) rather than the app's
+  matcher on purpose, so a gap in the matcher is found rather than
+  inherited - keep them independent.
 - Migrations: `npm run db:migrate` (`prisma migrate deploy`) connects through
   `DIRECT_URL` (`prisma7.config.ts`), which must be session-capable. Local dev
   has only `DATABASE_URL` and falls back to it.
@@ -46,7 +49,9 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   (written only by `recordUpcomingPayment()` in
   `src/lib/data/posted-duplicates.ts`), which records it before the
   occurrence falls due; `loadSettlementPlan()` then treats that occurrence as
-  settled by its row. Reuse it rather than matching charges to items a
+  settled by its row. A schedule edit or a skip of missed occurrences may
+  later re-key or claim an existing row (`src/lib/data/recurring.ts`), never
+  create one. Reuse it rather than matching charges to items a
   second way.
 - Every average over past periods reads them through the one history window,
   `comparableHistory()` and its helpers in `src/lib/history-window.ts`:

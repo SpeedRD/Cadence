@@ -334,10 +334,12 @@ model RecurringItem {
   /// How many more occurrences to post before the item switches itself off.
   /// Null means unbounded - every ordinary subscription or contribution, and
   /// every row that existed before this column. A number counts down by one
-  /// per occurrence postDueRecurringItems claims, and the write that reaches
-  /// 0 also sets `active` to false in the same statement, so the item drops
+  /// per occurrence claimed (by postDueRecurringItems, or by a skip or
+  /// schedule edit past a recorded payment), and the write that reaches 0
+  /// also sets `active` to false in the same statement, so the item drops
   /// out of every "active items" read at once. Written by the Afford
-  /// calculator for an installment plan; the recurring form never touches it.
+  /// calculator for an installment plan and by the recurring form's
+  /// "Payments left" field.
   remainingOccurrences Int?
   /// True only for a plan the Afford calculator recorded ("I bought this" -
   /// confirmAffordPurchase in src/lib/data/afford.ts). The recurring form
@@ -394,10 +396,14 @@ model RecurringSuggestionDismissal {
 /// One charge Cadence did not write itself (a manual entry, a CSV row, an
 /// approved receipt) standing for one occurrence of a recurring item, so
 /// posting rolled that occurrence forward instead of writing a second row for
-/// the same money. Written only by postDueRecurringItems, in the same database
-/// transaction as the occurrence's claim; which charge settles which
-/// occurrence is decided by planSettlements (src/lib/recurring-settlement.ts),
-/// the matcher the payday check-in reads too.
+/// the same money. Created by postDueRecurringItems, in the same database
+/// transaction as the occurrence's claim, and by recordUpcomingPayment
+/// (src/lib/data/posted-duplicates.ts) when the user answers "It's that
+/// payment" before the occurrence falls due; a schedule edit re-keys or
+/// claims it and a skip of missed occurrences claims it (src/lib/data/
+/// recurring.ts). Which charge settles which occurrence is decided by
+/// planSettlements (src/lib/recurring-settlement.ts), the matcher the payday
+/// check-in reads too.
 ///
 /// Both keys are unique, and that is the rule: a charge settles at most one
 /// occurrence of at most one item, for good, and an occurrence is settled at
@@ -417,12 +423,14 @@ model RecurringSettlement {
   kind            RecurringKind
   dueDate         DateTime      @db.Date
   createdAt       DateTime      @default(now())
-  /// When postDueRecurringItems claimed the occurrence: rolled the item past
-  /// it and counted it against an installment plan. Null for a pairing the
-  /// user recorded before posting reached it ("It's that payment",
-  /// recordUpcomingPayment) - posting claims that one once, counting its
-  /// installment, and sets this; a claimed occurrence that a nextDate moved
-  /// back walks again is rolled past without counting.
+  /// When the occurrence was claimed: the item rolled past it and it counted
+  /// against an installment plan - by postDueRecurringItems, or by a skip or
+  /// schedule edit that moved nextDate past it (claimPassedPairings in
+  /// src/lib/data/recurring.ts). Null for a pairing the user recorded before
+  /// posting reached it ("It's that payment", recordUpcomingPayment) - the
+  /// first of those to reach it claims it once, counting its installment,
+  /// and sets this; a claimed occurrence that a nextDate moved back walks
+  /// again is rolled past without counting.
   claimedByPostingAt DateTime?
 
   transaction   Transaction    @relation(fields: [transactionId], references: [id], onDelete: Cascade)
