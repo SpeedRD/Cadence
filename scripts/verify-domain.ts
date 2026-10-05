@@ -18360,6 +18360,33 @@ async function main() {
     }
   }
 
+  console.log("\n== stale-rates notice only when the rates are unfit for the currencies in use (overnight part 3c) ==");
+  {
+    // The shell showed "Converted figures may be out of date" whenever the
+    // open.er-api.com refresh failed (table.stale), even with the bank's rate
+    // covering every currency in use and writes going through. On the code
+    // before, the fallback is that old rule, so each changed case fails there.
+    const bCurrency = (await import("../src/lib/currency")) as unknown as Record<string, unknown>;
+    const bOutOfDate =
+      typeof bCurrency.ratesOutOfDateFor === "function"
+        ? (bCurrency.ratesOutOfDateFor as (table: RateTable, currencies: string[]) => boolean)
+        : (table: RateTable) => table.stale;
+    const bTable = (stale: boolean, bank: boolean): RateTable => ({
+      rates: { USD: 1, DOP: 60.5, EUR: 0.86 },
+      fetchedAt: new Date(Date.UTC(2026, 9, 1, 12)),
+      stale,
+      source: bank ? "bpd" : "open-er-api",
+      asOf: bank ? new Date(Date.UTC(2026, 9, 2)) : null,
+    });
+    eq("3c: refresh failed, the bank's rate in use, USD display with DOP and EUR accounts: no notice (was shown)", bOutOfDate(bTable(true, true), ["USD", "DOP", "EUR"]), false);
+    eq("3c: refresh failed and no bank rate, USD display with a DOP account: the notice shows", bOutOfDate(bTable(true, false), ["USD", "DOP"]), true);
+    eq("3c: refresh failed and no bank rate, USD display with a EUR account: the notice shows", bOutOfDate(bTable(true, false), ["USD", "EUR"]), true);
+    eq("3c: refresh failed, everything in USD: nothing to convert, no notice (was shown)", bOutOfDate(bTable(true, false), ["USD", "USD"]), false);
+    eq("3c: refresh failed, everything in DOP, display DOP included: no notice (was shown)", bOutOfDate(bTable(true, false), ["DOP", "DOP"]), false);
+    eq("3c: rates refreshed: no notice, as before", bOutOfDate(bTable(false, false), ["USD", "DOP", "EUR"]), false);
+    check("3c: the layout judges the notice by the currencies in use", typeof (await import("../src/lib/data/accounts") as unknown as Record<string, unknown>).getCurrenciesInUse === "function");
+  }
+
   console.log("\n== phone form errors clear the sticky footer (overnight part 1) ==");
   {
     // FormDialog scrolls its error line by this delta on a phone. The

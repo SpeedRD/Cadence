@@ -34,6 +34,20 @@ export interface AccountBalance {
   openingBalance: { id: string; amount: number; date: Date } | null;
 }
 
+/**
+ * The currencies the user's money is actually in: every active account's,
+ * active recurring item's and open goal's. The shell judges its stale-rates
+ * notice by them (ratesFitForCurrencies in src/lib/currency.ts).
+ */
+export async function getCurrenciesInUse(): Promise<string[]> {
+  const [accounts, items, goals] = await Promise.all([
+    prisma.account.findMany({ where: { status: "ACTIVE" }, select: { currency: true }, distinct: ["currency"] }),
+    prisma.recurringItem.findMany({ where: { active: true }, select: { currency: true }, distinct: ["currency"] }),
+    prisma.goal.findMany({ where: { achievedAt: null }, select: { currency: true }, distinct: ["currency"] }),
+  ]);
+  return [...new Set([...accounts, ...items, ...goals].map((row) => row.currency))].sort();
+}
+
 export type AccountStatusFilter = "ACTIVE" | "ARCHIVED" | "ALL";
 
 /**

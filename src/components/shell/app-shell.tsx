@@ -20,11 +20,14 @@ import { daysElapsedInPeriod, daysRemainingInPeriod } from "@/lib/period";
 export function AppShell({
   context,
   navBadges,
+  ratesOutOfDate,
   children,
 }: {
   context: AppContext;
   /** Per-link counts for the nav, computed by the layout (see AppLayout). */
   navBadges?: NavBadges;
+  /** The rates could not be refreshed and are not fit for the currencies in use (ratesOutOfDateFor), judged by the layout. */
+  ratesOutOfDate: boolean;
   children: React.ReactNode;
 }) {
   const { currentPeriod, rates } = context;
@@ -33,8 +36,9 @@ export function AppShell({
   const elapsed = daysElapsedInPeriod(context.today, currentPeriod);
   // Every page in this group renders converted totals, so the one notice that
   // they are running on rates that could not be refreshed belongs here rather
-  // than on each card. Same wall clock the Settings page shows.
-  const staleRatesNote = rates.stale
+  // than on each card - shown only when what is left is not fit for the
+  // currencies in use. Same wall clock the Settings page shows.
+  const staleRatesNote = ratesOutOfDate
     ? rates.fetchedAt
       ? t.shell.staleRatesSince(formatDateTimeInAppZone(rates.fetchedAt))
       : t.shell.staleRatesNeverFetched

@@ -79,6 +79,22 @@ export function ratesFitForWriting(table: RateTable, from: string, to: string): 
   return from === to || (rateFitForWriting(from, table) && rateFitForWriting(to, table));
 }
 
+/** Whether every conversion between `currencies` may be stored with `table` (ratesFitForWriting for each pair). One currency, or none, needs no rate. */
+export function ratesFitForCurrencies(table: RateTable, currencies: readonly string[]): boolean {
+  const used = [...new Set(currencies)];
+  return used.every((from) => used.every((to) => ratesFitForWriting(table, from, to)));
+}
+
+/**
+ * Whether the shell says "converted figures may be out of date": the rates
+ * could not be refreshed (`stale`) and what is left is not fit for the
+ * currencies the user actually holds. A failed open.er-api.com fetch says
+ * nothing while the bank's rate covers them - writes go through then.
+ */
+export function ratesOutOfDateFor(table: RateTable, currencies: readonly string[]): boolean {
+  return table.stale && !ratesFitForCurrencies(table, currencies);
+}
+
 /** The currencies `table` holds a rate fit to be stored for (rateFitForWriting), for a form deciding before the server does. */
 export function currenciesFitForWriting(table: RateTable): string[] {
   return CURRENCIES.filter((code) => rateFitForWriting(code, table));

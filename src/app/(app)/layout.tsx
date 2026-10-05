@@ -1,6 +1,8 @@
 import { AppShell } from "@/components/shell/app-shell";
 import { LocaleProvider } from "@/components/shell/locale-provider";
 import { requireAuth } from "@/lib/auth";
+import { ratesOutOfDateFor } from "@/lib/currency";
+import { getCurrenciesInUse } from "@/lib/data/accounts";
 import { getAppContext } from "@/lib/data/context";
 import { getInsights } from "@/lib/data/insights";
 
@@ -15,13 +17,15 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   // Inbox page reads the same run rather than detecting again - and the
   // Afford tracker inside it is the same request-cached getAffordRechecks the
   // Dashboard alert and the Recurring page's section read.
-  const [context, insights] = await Promise.all([getAppContext(), getInsights()]);
+  const [context, insights, currencies] = await Promise.all([getAppContext(), getInsights(), getCurrenciesInUse()]);
   const navBadges = { "/inbox": insights.length };
+  // The currencies in use include the display currency every total is in.
+  const ratesOutOfDate = ratesOutOfDateFor(context.rates, [context.displayCurrency, ...currencies]);
   // The provider sits above error.tsx (which wraps this layout's children, not
   // the layout itself), so the error boundary still renders in the user's own
   // language when a page below it throws.
   return (
-    <AppShell context={context} navBadges={navBadges}>
+    <AppShell context={context} navBadges={navBadges} ratesOutOfDate={ratesOutOfDate}>
       <LocaleProvider locale={context.language}>{children}</LocaleProvider>
     </AppShell>
   );
