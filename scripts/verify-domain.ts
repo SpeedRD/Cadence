@@ -18391,6 +18391,8 @@ async function main() {
     try {
       console.log("-- U1: an answer about the posted row shown is never applied to another --");
       {
+        // Created first, so its copy of the receipt is judged before the card's.
+        const other = await uAccount("Other", "DOP");
         const card = await uAccount("Card");
         const gym = await prisma.recurringItem.create({ data: { name: "Verify Unproven Gym", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", anchorDay: 3, nextDate: uDay(10, 3), accountId: card.id, categoryId: await uCategory("Bills") } });
         await prisma.recurringItem.create({ data: { name: "Verify Unproven Streaming", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", anchorDay: 3, nextDate: uDay(10, 3), accountId: card.id, categoryId: await uCategory("Subscriptions") } });
@@ -18400,6 +18402,11 @@ async function main() {
         const shown = (await uStaged.stagedPostedMatches([{ ...staged, amount: 15 } as never], [card.id], rates))[staged.id]?.[card.id];
         const gymRow = await prisma.transaction.findFirst({ where: { source: "RECURRING", externalId: { startsWith: `${gym.id}:` } } });
         eq("U1: filed under Bills, the receipt is shown as Gym's posted charge", shown?.posted.id === gymRow?.id, true);
+        // The review page judges every account the reviewer could pick; the
+        // copy of the receipt on another account must not take Gym's row from
+        // the one on the card (it did: the card's copy was shown Streaming).
+        const onBoth = (await uStaged.stagedPostedMatches([{ ...staged, amount: 15 } as never], [other.id, card.id], rates))[staged.id]?.[card.id];
+        eq("U1: judged with every account the page offers, the card's copy is still shown Gym's posted charge (was: Streaming's)", onBoth?.posted.id === gymRow?.id, true);
         const answer = await uStaged.approveStagedTransaction(
           { id: staged.id, date: staged.date, amount: 15, currency: "USD", rawDescription: staged.rawDescription, accountId: card.id, categoryId: await uCategory("Subscriptions"), resolution: "posted", shownPostedId: shown?.posted.id ?? null } as never,
           rates,
@@ -18477,6 +18484,36 @@ async function main() {
       await uRestore();
       await prisma.recurringItem.updateMany({ where: { id: { in: uPaused } }, data: { active: true } });
     }
+  }
+
+  console.log("\n== the Inbox suggestion carries the May repeat hint (overnight part 5b) ==");
+  {
+    // The Recurring card shows "May repeat <item> (<account>)" under a
+    // suggestion repeatedItem ties to a tracked item; the Inbox row for the
+    // same suggestion carries it as its hint. Pure: a hand-built suggestion.
+    const hInsights = await import("../src/lib/insights");
+    const { getDictionary: hDictionary } = await import("../src/lib/i18n");
+    const suggestion = (mayRepeat: { itemName: string; accountName: string | null } | null) => ({
+      accountId: "acct",
+      merchantKey: "music",
+      name: "Music",
+      amount: 9.99,
+      currency: "USD",
+      cadence: "MONTHLY",
+      anchorDays: [12],
+      occurrences: [{ date: civilDate(2026, 7, 12) }, { date: civilDate(2026, 8, 12) }, { date: civilDate(2026, 9, 12) }],
+      nextDates: [civilDate(2026, 10, 12)],
+      accountName: "Travel Card",
+      categoryName: null,
+      displayAmount: 9.99,
+      mayRepeat,
+    });
+    const hint = (locale: "en" | "es", mayRepeat: { itemName: string; accountName: string | null } | null) =>
+      (hInsights.detectRecurringSuggestions({ dictionary: hDictionary(locale), locale, displayCurrency: "USD", recurringSuggestions: [suggestion(mayRepeat)] } as never)[0] as { hint?: string }).hint ?? "none";
+    eq("5b: an Inbox suggestion that may repeat a tracked item says so, in English (was: no hint)", hint("en", { itemName: "Streaming", accountName: "Everyday Checking" }), "May repeat Streaming (Everyday Checking)");
+    eq("5b: ... and in Spanish", hint("es", { itemName: "Streaming", accountName: "Everyday Checking" }), "Puede repetir Streaming (Everyday Checking)");
+    eq("5b: an item with no account is named alone", hint("en", { itemName: "Streaming", accountName: null }), "May repeat Streaming");
+    eq("5b: a suggestion that repeats nothing has no hint", hint("en", null), "none");
   }
 
   console.log("\n== stale-rates notice only when the rates are unfit for the currencies in use (overnight part 3c) ==");

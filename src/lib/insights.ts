@@ -145,6 +145,8 @@ export interface Insight extends InsightRef {
   /** Where to go to resolve it. */
   actionHref: string;
   dismissible: boolean;
+  /** A line under the evidence, the signal's own surface's hint (a suggestion that may repeat a tracked item). */
+  hint?: string;
 }
 
 export function insightId(ref: InsightRef): string {
@@ -355,6 +357,11 @@ export const detectRecurringSuggestions: InsightDetector = ({ dictionary, locale
       ],
       actionHref: "/recurring",
       dismissible: true,
+      // The card's own hint, from the same check (repeatedItem): the charge
+      // may already be tracked under another name or account.
+      ...(suggestion.mayRepeat
+        ? { hint: dictionary.recurring.suggestionMayRepeat(suggestion.mayRepeat.itemName, suggestion.mayRepeat.accountName) }
+        : {}),
     } satisfies Insight;
   });
 };

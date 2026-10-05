@@ -215,19 +215,21 @@ export async function stagedPostedMatches(
       rawDescription: row.rawDescription,
       categoryId: row.suggestedCategoryId,
     };
-    // One call per row: entries on different accounts never pair with each
-    // other's posted rows, so this is each account judged separately.
-    const found = await lookUpPostedDuplicates(
-      accountIds.flatMap((accountId) => {
-        const accountCurrency = currencyOf.get(accountId);
-        // No stored figure to judge without a current rate (R20): no notice.
-        if (accountCurrency && !ratesFitForWriting(rates, values.currency, accountCurrency)) return [];
-        return accountCurrency ? [incomingFor({ ...values, accountId }, accountId, accountCurrency, rates)] : [];
-      }),
-      rates,
-      { upcoming: true },
-    );
-    if (found && found.size > 0) result[row.id] = Object.fromEntries(found);
+    // One call per row and account, as approval judges it: a charge on one
+    // account can be a candidate for another account's posted row, so judged
+    // together the copies competed for the same rows and the one on the
+    // reviewer's account could be shown a different match than approval
+    // then computes.
+    const matches: [string, PostedMatch][] = [];
+    for (const accountId of accountIds) {
+      const accountCurrency = currencyOf.get(accountId);
+      // No stored figure to judge without a current rate (R20): no notice.
+      if (!accountCurrency || !ratesFitForWriting(rates, values.currency, accountCurrency)) continue;
+      const found = await lookUpPostedDuplicates([incomingFor({ ...values, accountId }, accountId, accountCurrency, rates)], rates, { upcoming: true });
+      const match = found?.get(accountId);
+      if (match) matches.push([accountId, match]);
+    }
+    if (matches.length > 0) result[row.id] = Object.fromEntries(matches);
   }
   return result;
 }

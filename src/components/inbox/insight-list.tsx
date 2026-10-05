@@ -115,6 +115,11 @@ export function InsightList({ insights, locale }: { insights: Insight[]; locale:
                   </div>
                 ))}
               </dl>
+              {insight.hint ? (
+                <p className="text-hint text-muted-foreground" data-insight-hint>
+                  {insight.hint}
+                </p>
+              ) : null}
               <p className="text-hint text-muted-foreground">{SOURCE_LABEL[insight.source](t)}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1 max-sm:flex-wrap">

@@ -13,7 +13,7 @@ item: pending / done / skipped, plus one sentence. No real figures here.
 - 3d. Stale documentation (AGENTS.md audit line, RecurringSettlement comment, others): done - audit line, RecurringSettlement and claimedByPostingAt comments, remainingOccurrences comment, AGENTS.md settlement writers corrected; README lines handled in 3b.
 - 4. Scrub real figures from tracked files: done - listed figures, the goal name and the Part 6 anchor amounts replaced with a consistent fictional mapping in the findings docs and the harness (same check count before and after); none left in the tree.
 - 5a. Unproven items of REVIEW_FINDINGS_2.md: done - four reproduced and fixed (staged approval, off-schedule pairing, bank-rate window, one-off median), one comment corrected, one measured as by design, one reproduced but left as the cleanup list decided; status lines added.
-- 5b. "May repeat" hint in the Inbox suggestion: pending
+- 5b. "May repeat" hint in the Inbox suggestion: done - the Inbox row carries the card's hint (en/es, hint style), checked in Chromium, on the iPhone and iPad Simulators; the review page now judges each account separately (found while checking U1).
 - 6a. Read-only production connection: pending
 - 6b. Local throwaway copy: pending
 - 6c. Checks on the copy (audit, recomputation, anchors, posting rehearsal, check-in rehearsal, data counts): pending
