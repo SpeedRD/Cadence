@@ -1106,7 +1106,7 @@ export const es = {
       `* ${period}: los compromisos incluyen un estimado de ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} y ${goals[goals.length - 1]}, cada una a su ritmo actual` : `${goals[0]} a su ritmo actual`} - todavía no confirmado por un check-in de pago, así que puede cambiar cuando hagas el check-in de ese período.`,
     recordHeading: "Registrarla",
     recordedNote: (amount: string, frequency: string, count: number, date: string, paid: number) =>
-      `Registra una suscripción de ${amount} ${frequency}, ${count} veces a partir del ${date}.${paid > 0 ? (paid === 1 ? " El pago con fecha anterior a hoy cuenta como ya pagado y no se registra ni se contabiliza." : ` Los ${paid} pagos con fecha anterior a hoy cuentan como ya pagados y no se registran ni se contabilizan.`) : ""} Se apaga sola después del último pago y aparece en todo lo que muestra suscripciones: Recurrentes, el check-in de pago, la contabilización y los informes.`,
+      `Registra una suscripción de ${amount} ${frequency}, ${count} ${count === 1 ? "vez" : "veces"} a partir del ${date}.${paid > 0 ? (paid === 1 ? " El pago con fecha anterior a hoy cuenta como ya pagado y no se registra ni se contabiliza." : ` Los ${paid} pagos con fecha anterior a hoy cuentan como ya pagados y no se registran ni se contabilizan.`) : ""} Se apaga sola después del último pago y aparece en todo lo que muestra suscripciones: Recurrentes, el check-in de pago, la contabilización y los informes.`,
     acknowledgeLabel:
       "Entiendo que esta compra deja al menos un período de pago por debajo de su colchón protegido o en déficit, y la registro de todos modos.",
     bought: "La compré",

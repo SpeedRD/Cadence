@@ -18159,6 +18159,17 @@ async function main() {
       }
 
       // ---------------------------------------------------------------------
+      console.log("\n-- Afford's Record it note counts payments in the singular for one --");
+      {
+        const note = (d: Record<string, Record<string, unknown>>, count: number) =>
+          (d.afford.recordedNote as (a: string, f: string, c: number, date: string, p: number) => string)("EUR 74.99", d === cEn ? "every month" : "cada mes", count, "Oct 5, 2026", 0);
+        check("Record it, English: 1 time for one payment (was: 1 times)", note(cEn, 1).includes(", 1 time starting") && !note(cEn, 1).includes("1 times"));
+        check("Record it, English: 6 times for six payments", note(cEn, 6).includes(", 6 times starting"));
+        check("Record it, Spanish: 1 vez for one payment (was: 1 veces)", note(cEs, 1).includes(", 1 vez a partir") && !note(cEs, 1).includes("1 veces"));
+        check("Record it, Spanish: 6 veces for six payments", note(cEs, 6).includes(", 6 veces a partir"));
+      }
+
+      // ---------------------------------------------------------------------
       console.log("\n-- S23: a suggestion that may repeat an item tracked under another name --");
       {
         await cRates([]);

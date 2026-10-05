@@ -1119,7 +1119,7 @@ export const en = {
       `* ${period}: commitments include an estimated ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} and ${goals[goals.length - 1]}, each at its current pace` : `${goals[0]} at its current pace`} - not yet confirmed by a payday check-in, so it may change when you do that period's check-in.`,
     recordHeading: "Record it",
     recordedNote: (amount: string, frequency: string, count: number, date: string, paid: number) =>
-      `Records one subscription of ${amount} ${frequency}, ${count} times starting ${date}.${paid > 0 ? ` The ${paid === 1 ? "payment" : `${paid} payments`} dated before today ${paid === 1 ? "counts" : "count"} as already paid and ${paid === 1 ? "is" : "are"} not recorded or posted.` : ""} It stops on its own after the last payment and shows up everywhere a subscription does - Recurring, the payday check-in, posting, reports.`,
+      `Records one subscription of ${amount} ${frequency}, ${count} ${count === 1 ? "time" : "times"} starting ${date}.${paid > 0 ? ` The ${paid === 1 ? "payment" : `${paid} payments`} dated before today ${paid === 1 ? "counts" : "count"} as already paid and ${paid === 1 ? "is" : "are"} not recorded or posted.` : ""} It stops on its own after the last payment and shows up everywhere a subscription does - Recurring, the payday check-in, posting, reports.`,
     acknowledgeLabel:
       "I understand this purchase leaves at least one pay period below its protected buffer or in deficit, and I'm recording it anyway.",
     bought: "I bought this",
