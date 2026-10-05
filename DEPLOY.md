@@ -143,8 +143,8 @@ captured rate and the endpoint's `stored: true` reply; Settings then shows
 "from Banco Popular (<date>)" as the rate source instead of open.er-api.com.
 A red run means nothing was written - read its log: `feed not ready` /
 `never answered with JSON` is the bank's site not serving the browser,
-`failed validation` is a payload outside the 55-75 DOP band or missing
-fields, `HTTP 401` is a secret mismatch, and `outside the 7-day freshness
+`failed validation` is a dollar sell rate outside the 55-75 DOP band, a euro
+sell rate whose EUR/USD against it is outside 0.8-1.6, or missing fields, `HTTP 401` is a secret mismatch, and `outside the 7-day freshness
 window` means the bank has not published for over a week.
 
 ## Applying a new migration later
@@ -190,4 +190,8 @@ unset DATABASE_URL DIRECT_URL
 Each account's balance reads the same before and after. It refuses `--apply`
 until the migration is applied, and a second `--apply` changes nothing. Open
 the app once first if Settings says the exchange rates are stale: the script
-uses the stored rates and never fetches.
+uses the stored rates and never fetches. It converts only at rates the app
+itself would write down - DOP needs Banco Popular's rate in its 7-day window,
+EUR the bank's rate or an open.er-api.com rate fetched within the last day -
+never at the fallback constants. A row without one is listed as "cannot
+convert: rates not fit", and `--apply` then writes nothing and exits 1.

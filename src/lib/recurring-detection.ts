@@ -83,6 +83,8 @@ export interface TrackedRecurringItem {
   accountId: string | null;
   categoryId: string | null;
   active: boolean;
+  /** RecurringItem.frequency; read only by repeatedItem. */
+  frequency?: string;
 }
 
 /** One RecurringSuggestionDismissal row: never suggest this merchant on this account again. */
@@ -138,6 +140,8 @@ export interface RecurringSuggestion extends RecurringCandidate {
   categoryName: string | null;
   /** `amount` converted to the display currency. */
   displayAmount: number;
+  /** An active item this may already be (repeatedItem): shown as a hint, the suggestion stays. */
+  mayRepeat: { itemName: string; accountName: string | null } | null;
 }
 
 /** Fewer distinct days than this and no cadence is read into a merchant at all. */
@@ -667,6 +671,30 @@ function isTracked(
       item.categoryId === candidate.categoryId;
     return shapeMatches;
   });
+}
+
+/**
+ * An active item that may already track `candidate` under another name or on
+ * another account (S23): the same currency and cadence, and an amount within
+ * the tolerance detection groups a bill's own charges by. Not proof - two
+ * subscriptions can cost the same - so the suggestion is still offered, with
+ * the item named beside it. isTracked has already dropped the candidates an
+ * item matches by name, note or account and category.
+ */
+export function repeatedItem<T extends TrackedRecurringItem>(
+  candidate: Pick<RecurringCandidate, "amount" | "currency" | "cadence">,
+  items: readonly T[],
+): T | null {
+  const tolerance = amountTolerance(candidate.amount);
+  return (
+    items.find(
+      (item) =>
+        item.active &&
+        item.frequency === candidate.cadence &&
+        item.currency === candidate.currency &&
+        Math.abs(item.amount - candidate.amount) <= tolerance,
+    ) ?? null
+  );
 }
 
 /** The most common value, ties to the one on the most recent row (rows are oldest first). */

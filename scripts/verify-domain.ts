@@ -9867,7 +9867,7 @@ async function main() {
       accountId: "acc_1", merchantKey: "NETFLIX COM", name: "Netflix Com", amount: 15.99, currency: "USD", cadence: "MONTHLY", anchorDays: [12],
       nextDates: [civilDate(2026, 10, 12)], categoryId: null, detectedFrom: "CSV", sampleNote: "NETFLIX.COM",
       occurrences: [7, 8, 9].map((m) => ({ id: `t${m}`, date: civilDate(2026, m, 12), amount: 15.99, note: "NETFLIX.COM" })),
-      accountName: "Main Checking", categoryName: null, displayAmount: 15.99,
+      accountName: "Main Checking", categoryName: null, displayAmount: 15.99, mayRepeat: null,
     };
     const suggested = insights.detectRecurringSuggestions({ ...emptyContext, recurringSuggestions: [suggestion] });
     eq("keyed by account + merchant, the same identity the Recurring page's Dismiss uses", suggested[0].id, "recurring_suggestion:acc_1:NETFLIX COM");
@@ -14811,9 +14811,9 @@ async function main() {
       note,
     });
     const rRecurringRows = (itemId: string) => prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${itemId}:` } }, orderBy: { date: "asc" } });
-    const rDetailedUpdate = rRecurring.updateRecurringItemDetailed as
+    const rDetailedUpdate = rRecurring.updateRecurringItemDetailed as unknown as
       | undefined
-      | ((id: string, updatedAt: Date | null, values: Record<string, unknown>, today: Date, rates?: RateTable) => Promise<{ written: number; settlements: { rekeyed: { from: Date; to: Date; itemName: string }[]; released: { dueDate: Date; itemName: string }[] } }>);
+      | ((id: string, updatedAt: Date | null, values: Record<string, unknown>, today: Date, rates?: RateTable) => Promise<{ written: number; settlements: { rekeyed: { from: Date; to: Date; itemName: string }[]; released?: { dueDate: Date; itemName: string }[] } }>);
     const rEditSchedule = async (id: string, nextDate: Date, anchorDay: number, today: Date) => {
       const values = { nextDate, frequency: "MONTHLY" as const, anchorDay };
       if (rDetailedUpdate) return rDetailedUpdate(id, null, values, today, rRates());
@@ -14909,16 +14909,19 @@ async function main() {
         const away = await rEditSchedule(music.id, oct(20), 20, oct(3));
         const kept = await prisma.recurringSettlement.findFirst({ where: { transactionId: musicCharge.id } });
         eq("R5 (S1): moved to Oct 20, past the Oct 5 occurrence the Oct 3 charge paid: the pairing stays on Oct 5, claimed", kept ? `${toISODate(kept.dueDate)} ${kept.claimedByPostingAt ? "claimed" : "unclaimed"}` : "released", "2026-10-05 claimed");
-        eq("R5 (S1): the save moves and releases nothing", away.settlements.released.length + away.settlements.rekeyed.length, 0);
+        eq("R5 (S1): the save moves and releases nothing", (away.settlements.released ?? []).length + away.settlements.rekeyed.length, 0);
         const later = (await rCommitments.loadCommitments([oct10A, periodInfo({ year: 2026, month: 10, period: "B" })], rContext(oct(4))));
         eq("R5: Oct 20 is outstanding again, at the item's charge", (later.get("2026-10-B") ?? []).filter((o) => o.itemId === music.id).map((o) => `${toISODate(o.dueDate)} ${o.status}`).join(","), "2026-10-20 outstanding");
         eq("R5 (S1): and Oct 1-15 keeps the Oct 5 occurrence, settled by the charge", (later.get("2026-10-A") ?? []).filter((o) => o.itemId === music.id).map((o) => `${toISODate(o.dueDate)} ${o.status}`).join(","), "2026-10-05 settled");
         const unchanged = await rEditSchedule(cloud.id, rDay(11, 6), 6, oct(7));
-        eq("R5: an edit that leaves the schedule alone moves nothing", unchanged.settlements.rekeyed.length + unchanged.settlements.released.length, 0);
+        eq("R5: an edit that leaves the schedule alone moves nothing", unchanged.settlements.rekeyed.length + (unchanged.settlements.released ?? []).length, 0);
 
         const en = rDictionary("en").recurring as Record<string, unknown>;
         const es = rDictionary("es").recurring as Record<string, unknown>;
-        check("R5: the toast strings exist in English and Spanish", ["paymentsMoved", "paymentMove", "paymentsReleased"].every((k) => typeof en[k] === "function" && typeof es[k] === "function"));
+        // Flipped deliberately with S17 (round 2): an edit no longer lets a
+        // recorded payment go, so the "released" toast (paymentsReleased) is
+        // gone; the refusal that replaced it is checked instead.
+        check("R5: the toast strings exist in English and Spanish", ["paymentsMoved", "paymentMove", "recordedPaymentBlocksEdit"].every((k) => typeof en[k] === "function" && typeof es[k] === "function"));
         if (typeof en.paymentsMoved === "function" && typeof es.paymentsMoved === "function") {
           eq("R5: the English toast", `${en.itemUpdated}. ${(en.paymentsMoved as (m: string) => string)((en.paymentMove as (a: string, b: string) => string)("Oct 5", "Oct 6"))}`, "Recurring item updated. The payment already recorded moved to the new date: Oct 5 to Oct 6.");
           eq("R5: the Spanish toast", `${es.itemUpdated}. ${(es.paymentsMoved as (m: string) => string)((es.paymentMove as (a: string, b: string) => string)("5 oct", "6 oct"))}`, "Elemento recurrente actualizado. El pago ya registrado pasó a la nueva fecha: del 5 oct al 6 oct.");
@@ -16646,7 +16649,11 @@ async function main() {
         const aWhoop = await item("Verify Harden A Whoop", 30, "EUR", dop.id);
         await storeRates(twoDaysAgo, new Date());
         const aTable = await getRateTable();
-        eq("(a) the table: open.er-api stale after the failed fetch, the bank's DOP 60.95 and EUR preferred", `${aTable.stale}:${aTable.source}:${aTable.rates.DOP}:${aTable.rates.EUR}`, "true:bpd:60.95:0.8608757062");
+        // Flipped deliberately with S20 (round 2): the table's EUR is the
+        // bank's quote (70.80) recovered from the stored cross-rate, 60.95 /
+        // 70.8 unrounded, no longer the ten-decimal cross-rate as stored
+        // (0.8608757062), which converted EUR to DOP a hair off the quote.
+        eq("(a) the table: open.er-api stale after the failed fetch, the bank's DOP 60.95 and EUR preferred", `${aTable.stale}:${aTable.source}:${aTable.rates.DOP}:${aTable.rates.EUR}`, `true:bpd:60.95:${60.95 / 70.8}`);
         const aRun = await hPost(due);
         // Flipped deliberately: under the previous rule the EUR item waited here.
         eq(
@@ -17477,7 +17484,7 @@ async function main() {
         await pRecorded(editedCharge.id, pKey(edited.id, pDay(10, 20)));
         await pRecurring.setRecurringItemActive(edited.id, false, pDay(10, 19));
         const resumed = await pRecurring.updateRecurringItemDetailed(edited.id, null, { nextDate: pDay(10, 20), frequency: "MONTHLY", anchorDay: 20, active: true, accountId: card.id, kind: "SUBSCRIPTION" }, pDay(10, 25), pRates());
-        eq("S1 edit form: resuming on Oct 25 releases nothing (was: released Oct 20)", resumed.settlements.released.map((m) => toISODate(m.dueDate)).join(",") || "none", "none");
+        eq("S1 edit form: resuming on Oct 25 releases nothing (was: released Oct 20)", ((resumed.settlements as { released?: { dueDate: Date }[] }).released ?? []).map((m) => toISODate(m.dueDate)).join(",") || "none", "none");
         await pPostThrough(after);
         const editPaid = await pPayments(edited.id, [editedCharge.id]);
         eq("S1 edit form: the plan makes 3 payments, as created (was 4)", `${editPaid.total} | ${editPaid.posted} | ${editPaid.pairings} | ${editPaid.state}`, "3 | 2026-11-20,2026-12-20 | 2026-10-20 claimed | remaining 0 active false next 2027-01-20");
@@ -17710,6 +17717,498 @@ async function main() {
       await prisma.account.updateMany({ where: { id: { in: pArchived } }, data: { status: "ACTIVE" } });
       await prisma.goal.updateMany({ where: { id: { in: pParked } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: pPaused } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== second adversarial review: conversions, refusals and hints (S3 S12 S13 S17 S19 S20 S21 S23) ==");
+  {
+    // Public APIs only, every new export reached through `?.` or a fallback
+    // to what the code before the fixes did, so this block also runs against
+    // that code and fails there on each finding (S21 is a comment). The
+    // review's numbers throughout. Fixtures `Verify Rev2C ...`; every other
+    // active item is paused and every ExchangeRate row restored in the
+    // finally.
+    const cPosting = await import("../src/lib/recurring-posting");
+    const cRecurring = await import("../src/lib/data/recurring");
+    const cDuplicates = await import("../src/lib/data/posted-duplicates");
+    const cGoals = await import("../src/lib/goals") as typeof import("../src/lib/goals") & Record<string, unknown>;
+    const cMoney = await import("../src/lib/account-money");
+    const cPayload = await import("../src/lib/bpd-rate-payload") as typeof import("../src/lib/bpd-rate-payload") & Record<string, unknown>;
+    const cBpd = await import("../src/lib/bpd-rates");
+    const cImport = await import("../src/lib/data/import");
+    const cApproval = await import("../src/lib/data/staged-approval");
+    const cSuggestions = await import("../src/lib/data/recurring-suggestions");
+    const { POST: cIngest } = await import("../src/app/api/cron/bpd-rate/ingest/route");
+    const { NextRequest: CNextRequest } = await import("next/server");
+    const { getDictionary: cDictionary } = await import("../src/lib/i18n");
+    const { spawnSync: cSpawn } = await import("node:child_process");
+    const { readFileSync: cRead } = await import("node:fs");
+    const cEn = cDictionary("en") as unknown as Record<string, Record<string, unknown>>;
+    const cEs = cDictionary("es") as unknown as Record<string, Record<string, unknown>>;
+    const cDay = (month: number, day: number, year = 2026) => civilDate(year, month, day);
+    const cKey = (itemId: string, due: Date) => `${itemId}:${toISODate(due)}`;
+    const cBank = (dollar: number, euro: number): RateTable => ({
+      rates: { USD: 1, DOP: dollar, EUR: dollar / euro },
+      fetchedAt: new Date(),
+      stale: false,
+      source: "bpd",
+      asOf: new Date(),
+    });
+    const cWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Rev2C " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Rev2C " } } } });
+      await prisma.stagedTransaction.deleteMany({ where: { rawDescription: { startsWith: "Verify Rev2C " } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Rev2C " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Rev2C " } } });
+      await prisma.recurringSuggestionDismissal.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+      await prisma.category.deleteMany({ where: { name: { startsWith: "Verify Rev2C " } } });
+    };
+    const cAccount = (name: string, currency = "DOP") =>
+      prisma.account.create({ data: { name: `Verify Rev2C ${name}`, currency, type: "CHECKING" } });
+    const cRates = async (rows: { target: string; source: string; rate: number; fetchedAt: Date; asOf?: Date | null }[]) => {
+      await prisma.exchangeRate.deleteMany();
+      if (rows.length > 0) {
+        await prisma.exchangeRate.createMany({
+          data: rows.map((row) => ({ baseCurrency: "USD", targetCurrency: row.target, source: row.source, rate: row.rate, fetchedAt: row.fetchedAt, asOf: row.asOf ?? null })),
+        });
+      }
+    };
+    const cStoredBank = async (dollar: number, euro: number) => {
+      const result = await cBpd.storeBpdRates({ dollarSellRate: dollar, euroSellRate: euro, asOf: new Date() });
+      return result;
+    };
+
+    const cPaused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: cPaused } }, data: { active: false } });
+    const cRatesBefore = await prisma.exchangeRate.findMany();
+    try {
+      // ---------------------------------------------------------------------
+      console.log("\n-- S12: a euro sell rate above 75 DOP is judged against the dollar --");
+      {
+        const payload = (dollar: number, euro: number) =>
+          cPayload.parseBpdPayload({ d: { results: [{ DollarSellRate: dollar, EuroSellRate: euro, BuySellRatesAsOf: new Date().toISOString() }] } });
+        eq(
+          "S12: dollar 63.10 with euro 75.40 (EUR/USD 1.195) parses (was refused); 110 (1.74) and 40 (0.63) are refused",
+          [75.4, 110, 40].map((euro) => (payload(63.1, euro) ? "kept" : "refused")).join(","),
+          "kept,refused,refused",
+        );
+        eq("S12: euro 74.90 at dollar 63.10 still parses, as before", payload(63.1, 74.9) ? "kept" : "refused", "kept");
+        await cRates([]);
+        eq("S12: storeBpdRates stores dollar 63.10 with euro 75.40 (was out_of_range)", JSON.stringify(await cStoredBank(63.1, 75.4)), JSON.stringify({ ok: true }));
+        const table = await getRateTable();
+        eq(
+          "S12: ... so the table carries the bank's rate and DOP may be written down (was false: every EUR->DOP item waited)",
+          `${table.source}:${(await import("../src/lib/currency")).rateFitForWriting("DOP", table)}:${round2(convert(1, "EUR", "DOP", table))}`,
+          "bpd:true:75.4",
+        );
+        eq(
+          "S12: euro 110 and 40 at dollar 63.10 are refused as out_of_range, the stored 75.40 kept",
+          `${JSON.stringify(await cStoredBank(63.1, 110))}|${JSON.stringify(await cStoredBank(63.1, 40))}|${round2(convert(1, "EUR", "DOP", await getRateTable()))}`,
+          `${JSON.stringify({ ok: false, reason: "out_of_range" })}|${JSON.stringify({ ok: false, reason: "out_of_range" })}|75.4`,
+        );
+        const previousSecret = process.env.BPD_SCRAPE_INGEST_SECRET;
+        process.env.BPD_SCRAPE_INGEST_SECRET = "verify-rev2c-secret";
+        try {
+          const ingest = async (euro: number) => {
+            const response = await cIngest(
+              new CNextRequest("http://localhost/api/cron/bpd-rate/ingest", {
+                method: "POST",
+                headers: { "content-type": "application/json", authorization: "Bearer verify-rev2c-secret" },
+                body: JSON.stringify({ dollarSellRate: 63.1, euroSellRate: euro, asOf: new Date().toISOString() }),
+              }),
+            );
+            const json = (await response.json()) as { stored?: boolean; kept?: string; reason?: string };
+            return `${response.status}:${json.reason ?? (json.stored || json.kept ? "stored" : "?")}`;
+          };
+          eq("S12: the scraper's ingest route takes 75.40 (was 400 out_of_range) and refuses 110 and 40", `${await ingest(75.4)}|${await ingest(110)}|${await ingest(40)}`, "200:stored|400:out_of_range|400:out_of_range");
+        } finally {
+          if (previousSecret === undefined) delete process.env.BPD_SCRAPE_INGEST_SECRET;
+          else process.env.BPD_SCRAPE_INGEST_SECRET = previousSecret;
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S20: EUR<->DOP at the bank's euro quote, exact to the cent --");
+      {
+        await cRates([]);
+        await cStoredBank(58, 68.5);
+        const table = await getRateTable();
+        const stored = cMoney.inAccountCurrency({ amount: 163.71, currency: "EUR" }, "DOP", table);
+        eq(
+          "S20: 163.71 EUR at euro sell 68.50 (dollar 58.00) stores 11,214.14 DOP at rate 68.5 (was 11,214.13 at 68.4999999973)",
+          `${stored.amount}:${stored.rate}`,
+          "11214.14:68.5",
+        );
+        // The review's sweep, through the stored row the way the app reads it
+        // (ten decimals), against the bank's own decimal arithmetic.
+        const fromStored = (cPayload.bpdRatesFromStored as
+          | ((rows: { targetCurrency: string; rate: number; asOf: Date | null }[], now: Date) => { dollarSellRate: number; euroSellRate: number; asOf: Date } | null)
+          | undefined) ?? ((rows: { targetCurrency: string; rate: number; asOf: Date | null }[]) => {
+          // The code before the fix: the euro rebuilt as dollar / stored cross-rate.
+          const dop = rows.find((row) => row.targetCurrency === "DOP")!;
+          const eur = rows.find((row) => row.targetCurrency === "EUR")!;
+          return { dollarSellRate: dop.rate, euroSellRate: dop.rate / eur.rate, asOf: dop.asOf! };
+        });
+        const amounts = [163.71, 43.66, 9.99, 12.5, 1.83, 650, 1333.33, 5571.32, 3660, 100.01, 0.37];
+        let combos = 0;
+        let offInto = 0;
+        let offBack = 0;
+        const first: string[] = [];
+        for (let dollarCents = 5500; dollarCents <= 7500; dollarCents += 83) {
+          for (let euroCents = 6000; euroCents <= 8800; euroCents += 47) {
+            const now = new Date();
+            const bank = { dollarSellRate: dollarCents / 100, euroSellRate: euroCents / 100, asOf: now };
+            const entries = cPayload.toRateTableEntries(bank);
+            const read = fromStored(
+              [
+                { targetCurrency: "DOP", rate: entries.DOP, asOf: now },
+                { targetCurrency: "EUR", rate: Number(entries.EUR.toFixed(10)), asOf: now },
+              ],
+              now,
+            )!;
+            const readEntries = cPayload.toRateTableEntries(read);
+            const rateTable: RateTable = { rates: { USD: 1, DOP: readEntries.DOP, EUR: readEntries.EUR }, fetchedAt: now, stale: false, source: "bpd", asOf: now };
+            for (const amount of amounts) {
+              combos += 1;
+              const cents = Math.round(amount * 100);
+              const into = Math.floor((cents * euroCents + 50) / 100) / 100;
+              const back = Math.floor((200 * cents + euroCents) / (2 * euroCents)) / 100;
+              const gotInto = cMoney.inAccountCurrency({ amount, currency: "EUR" }, "DOP", rateTable).amount;
+              const gotBack = cMoney.inAccountCurrency({ amount, currency: "DOP" }, "EUR", rateTable).amount;
+              if (gotInto !== into) {
+                offInto += 1;
+                if (first.length < 2) first.push(`${amount} EUR @ ${euroCents / 100}: ${gotInto} vs ${into}`);
+              }
+              if (gotBack !== back) offBack += 1;
+            }
+          }
+        }
+        eq(
+          `S20: over ${combos} rate/amount combinations every EUR->DOP and DOP->EUR conversion is the bank's figure to the cent (was: some a cent off)`,
+          `${offInto}|${offBack}${first.length > 0 ? ` (${first.join("; ")})` : ""}`,
+          "0|0",
+        );
+        const usd = cMoney.inAccountCurrency({ amount: 12.5, currency: "USD" }, "DOP", cBank(65.07, 70));
+        eq("S20: every other conversion is as it was: 12.50 USD at 65.07 still stores 813.37 (atRate)", usd.amount, 813.37);
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S3: the backfill script converts only at rates fit to be written down --");
+      {
+        const card = await cAccount("Backfill Card");
+        const legacy = await prisma.transaction.create({
+          data: { date: cDay(9, 20), amount: 163.71, currency: "EUR", type: "EXPENSE", accountId: card.id, note: "Verify Rev2C Klarna", source: "MANUAL" },
+        });
+        const backfill = (args: string[]) =>
+          cSpawn("npx", ["tsx", "scripts/backfill-account-currency.ts", ...args], { encoding: "utf8", env: { ...process.env } });
+        const legacyNow = async () => {
+          const row = await prisma.transaction.findUniqueOrThrow({ where: { id: legacy.id } });
+          return `${num(row.amount)} ${row.currency}`;
+        };
+        // No EUR rate stored, DOP a 10-day-old 58.0, no bank rate.
+        await cRates([{ target: "DOP", source: "open-er-api", rate: 58, fetchedAt: addDays(new Date(), -10) }]);
+        const dry = backfill([]);
+        check(
+          "S3: the dry run lists the 163.71 EUR row as \"cannot convert: rates not fit\" (was: 10,320.85 DOP at the fallback EUR 0.92)",
+          dry.stdout.includes(legacy.id) && /cannot convert: rates not fit/.test(dry.stdout.split("\n").find((line) => line.includes(legacy.id)) ?? ""),
+          dry.stdout + dry.stderr,
+        );
+        const applied = backfill(["--apply"]);
+        eq(
+          "S3: --apply writes nothing and exits 1 (was: exit 0, 10,320.85 DOP frozen at rate 63.0434782609)",
+          `${applied.status}|${await legacyNow()}`,
+          "1|163.71 EUR",
+        );
+        // With the bank's EUR sell rate of 70.25 the row converts at it.
+        await cRates([]);
+        await cStoredBank(63.1, 70.25);
+        const fit = backfill(["--apply"]);
+        eq("S3: with the bank's euro sell 70.25 in its window, --apply stores 11,500.63 DOP", `${fit.status}|${await legacyNow()}`, "0|11500.63 DOP");
+        const again = backfill(["--apply"]);
+        eq("S3: a second --apply finds nothing to change", `${again.status}|${/Nothing to change/.test(again.stdout)}`, "0|true");
+        await cWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S13: a goal that holds contributions keeps its currency --");
+      {
+        await cRates([]);
+        const restore61 = await seedStoredRates({ USD: 1, DOP: 61, EUR: 61 / 70.8 });
+        try {
+          const bank = await cAccount("Goal Bank");
+          const debt = await prisma.goal.create({ data: { name: "Verify Rev2C Card debt", targetAmount: 5571.32, currency: "DOP", isDebt: true } });
+          await cGoals.logManualContribution({ goalId: debt.id, accountId: bank.id, amount: 5571.32, date: cDay(9, 30), note: "Verify Rev2C payoff" }, await getRateTable());
+          await cGoals.recomputeGoalSaved(debt.id, cDay(10, 4));
+          const paid = await prisma.goal.findUniqueOrThrow({ where: { id: debt.id } });
+          eq("S13: the 5,571.32 DOP debt is paid in full and achieved", `${num(paid.savedAmount)} ${paid.achievedAt ? "achieved" : "open"}`, "5571.32 achieved");
+          const monthly = await prisma.recurringItem.create({
+            data: { name: "Verify Rev2C debt payment", amount: 1000, currency: "DOP", kind: "CONTRIBUTION", frequency: "MONTHLY", anchorDay: 20, nextDate: cDay(10, 20), active: true, accountId: bank.id, goalId: debt.id },
+          });
+          const values = { name: "Verify Rev2C Card debt", targetAmount: 92.09, currency: "USD", targetDate: null, isDebt: true };
+          // The goal form's save: updateGoal, or (before it) a plain update and a rebuild.
+          const save = (cGoals.updateGoal as ((id: string, v: typeof values) => Promise<{ ok: boolean; reason?: string }>) | undefined) ??
+            (async (id: string, v: typeof values) => {
+              await prisma.goal.update({ where: { id }, data: v });
+              return { ok: true } as { ok: boolean; reason?: string };
+            });
+          const switched = await save(debt.id, values);
+          await cGoals.recomputeGoalSaved(debt.id, cDay(10, 4));
+          const after = await prisma.goal.findUniqueOrThrow({ where: { id: debt.id } });
+          eq(
+            "S13: switching it to USD with a target of 92.09 is refused as currency_locked (was: saved, and at DOP 61.0 saved 91.33 and achievedAt cleared)",
+            `${switched.ok}:${switched.reason ?? ""}|${after.currency} ${num(after.savedAmount)} ${after.achievedAt ? "achieved" : "open"}`,
+            "false:currency_locked|DOP 5571.32 achieved",
+          );
+          const run = await cPosting.postDueRecurringItems(cDay(10, 20));
+          eq(
+            "S13: on Oct 20 the 1,000 DOP payment into the paid debt stays skipped (was: posted)",
+            `${run.skipped.filter((s) => s.id === monthly.id).map((s) => s.reason).join(",") || "none"}|${await prisma.goalContribution.count({ where: { goalId: debt.id } })}`,
+            "goal_achieved|1",
+          );
+          const renamed = await save(debt.id, { ...values, name: "Verify Rev2C Card debt paid", currency: "DOP", targetAmount: 5571.32 });
+          eq("S13: renaming it, currency unchanged, still saves", `${renamed.ok}:${(await prisma.goal.findUniqueOrThrow({ where: { id: debt.id } })).name}`, "true:Verify Rev2C Card debt paid");
+          const fresh = await prisma.goal.create({ data: { name: "Verify Rev2C Empty goal", targetAmount: 100, currency: "DOP" } });
+          const freshSwitched = await save(fresh.id, { name: "Verify Rev2C Empty goal", targetAmount: 100, currency: "USD", targetDate: null, isDebt: false });
+          eq("S13: a goal with no contribution can still change currency", `${freshSwitched.ok}:${(await prisma.goal.findUniqueOrThrow({ where: { id: fresh.id } })).currency}`, "true:USD");
+          const en = cEn.goals?.currencyLocked;
+          const es = cEs.goals?.currencyLocked;
+          check("S13: the refusal reads in English and Spanish and says to create a new goal", typeof en === "string" && /new goal/.test(en) && typeof es === "string" && /meta nueva/.test(es), `${en} | ${es}`);
+
+          // A goal already switched before the lock (a USD goal holding the
+          // DOP contribution) rebuilt with no rate fit to write DOP down:
+          // fresh open.er-api rates, no bank rate, DOP 60.
+          const legacy = await prisma.goal.create({ data: { name: "Verify Rev2C Legacy debt", targetAmount: 92.09, currency: "USD", isDebt: true, savedAmount: 91.33 } });
+          await prisma.goalContribution.create({ data: { goalId: legacy.id, amount: 5571.32, currency: "DOP", date: cDay(9, 30), note: "Verify Rev2C legacy" } });
+          await cRates(["USD", "DOP", "EUR"].map((target) => ({ target, source: "open-er-api", rate: { USD: 1, DOP: 60, EUR: 0.92 }[target] as number, fetchedAt: new Date() })));
+          await cGoals.recomputeGoalSaved(legacy.id, cDay(10, 4));
+          const legacyAfter = await prisma.goal.findUniqueOrThrow({ where: { id: legacy.id } });
+          eq(
+            "S13: rebuilt with no fit DOP rate, its saved total and achievedAt stay as they were (was: 92.86 at DOP 60, and achieved)",
+            `${num(legacyAfter.savedAmount)} ${legacyAfter.achievedAt ? "achieved" : "open"}`,
+            "91.33 open",
+          );
+        } finally {
+          await restore61();
+          await cWipe();
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S17: a schedule edit that would let \"It's that payment\" go is refused --");
+      {
+        await cRates([]);
+        const restore = await seedStoredRates({ USD: 1, DOP: 63.1, EUR: 63.1 / 73.2 });
+        try {
+          const setup = async (label: string) => {
+            const bank = await cAccount(`Gym Bank ${label}`);
+            const item = await prisma.recurringItem.create({
+              data: { name: `Verify Rev2C Gym ${label}`, amount: 1333.33, currency: "DOP", kind: "SUBSCRIPTION", frequency: "MONTHLY", anchorDay: 30, nextDate: cDay(10, 30), active: true, accountId: bank.id },
+            });
+            const charge = await prisma.transaction.create({ data: { accountId: bank.id, date: cDay(10, 29), amount: 1333.33, currency: "DOP", type: "EXPENSE", source: "MANUAL", note: `Verify Rev2C Gym ${label}` } });
+            await prisma.$transaction((tx) => cDuplicates.recordUpcomingPayment(tx, charge.id, cKey(item.id, cDay(10, 30))));
+            return { item, charge };
+          };
+          // One scenario at a time: the look-alike guard reads every active item.
+          const done = (itemId: string) => prisma.recurringItem.updateMany({ where: { id: itemId }, data: { active: false } });
+          const edit = (id: string, due: Date) =>
+            (cRecurring.updateRecurringItemDetailed as unknown as (id: string, u: Date | null, v: Record<string, unknown>, today: Date) => Promise<{ written: number; refused?: { dueDate: Date; chargeDate: Date; amount: number } | null; settlements: { rekeyed: { from: Date; to: Date }[]; released?: { dueDate: Date }[] } }>)(
+              id,
+              null,
+              { nextDate: due, frequency: "MONTHLY", anchorDay: due.getUTCDate() },
+              cDay(10, 29),
+            );
+          const rows = async (itemId: string) =>
+            (await prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${itemId}:` } }, orderBy: { date: "asc" } }))
+              .map((row) => `${toISODate(row.date)} ${num(row.amount)}`)
+              .join(",") || "none";
+
+          // Gym, 1,333.33 DOP due Oct 30; the Oct 29 charge recorded as that
+          // payment; the date moved back to Oct 10, where the charge pays no
+          // occurrence and the one it paid is still ahead.
+          const back = await setup("back");
+          const refused = await edit(back.item.id, cDay(10, 10));
+          const backItem = await prisma.recurringItem.findUniqueOrThrow({ where: { id: back.item.id } });
+          const backPairing = await prisma.recurringSettlement.findFirst({ where: { transactionId: back.charge.id } });
+          eq(
+            "S17: moving it to Oct 10 is refused and writes nothing - the date stays Oct 30, the pairing on Oct 30 (was: saved, the pairing released)",
+            `${refused.written} ${refused.refused ? `refused ${toISODate(refused.refused.dueDate)} by ${toISODate(refused.refused.chargeDate)} ${refused.refused.amount}` : "saved"}|${toISODate(backItem.nextDate)}|${backPairing ? toISODate(backPairing.dueDate) : "released"}`,
+            "0 refused 2026-10-30 by 2026-10-29 1333.33|2026-10-30|2026-10-30",
+          );
+          await cPosting.postDueRecurringItems(cDay(10, 31));
+          eq("S17: posting through Oct 31 charges nothing more: the Oct 29 charge pays Oct 30 (was: Oct 10 posted 1,333.33, paid twice)", await rows(back.item.id), "none");
+          await done(back.item.id);
+
+          // Kept as they were: a move the charge still pays rekeys, and one
+          // past the paid occurrence claims it (S1).
+          const near = await setup("near");
+          const rekeyed = await edit(near.item.id, cDay(11, 3));
+          eq("S17: moving it to Nov 3 still rekeys the payment to Nov 3", `${rekeyed.written} ${rekeyed.settlements.rekeyed.map((m) => `${toISODate(m.from)}>${toISODate(m.to)}`).join(",")}`, "1 2026-10-30>2026-11-03");
+          await done(near.item.id);
+          const past = await setup("past");
+          const claimed = await edit(past.item.id, cDay(11, 4));
+          const pastPairing = await prisma.recurringSettlement.findFirst({ where: { transactionId: past.charge.id } });
+          eq(
+            "S17: moving it to Nov 4 (the review's case) saves as S1 made it: the payment claimed on Oct 30, not refused",
+            `${claimed.written} ${claimed.refused ? "refused" : "saved"}|${pastPairing ? `${toISODate(pastPairing.dueDate)} ${pastPairing.claimedByPostingAt ? "claimed" : "unclaimed"}` : "released"}`,
+            "1 saved|2026-10-30 claimed",
+          );
+          const en = cEn.recurring?.recordedPaymentBlocksEdit;
+          const es = cEs.recurring?.recordedPaymentBlocksEdit;
+          const enText = typeof en === "function" ? (en as (p: string, c: string, d: string) => string)("Gym (RD$1,333.33)", "Oct 29", "Oct 30") : "";
+          const esText = typeof es === "function" ? (es as (p: string, c: string, d: string) => string)("Gym (RD$1,333.33)", "29 oct", "30 oct") : "";
+          check(
+            "S17: the refusal names the payment and its date, and says to change or delete that charge first, in English and Spanish",
+            enText.includes("Gym (RD$1,333.33)") && enText.includes("Oct 29") && /Change or delete that charge first/.test(enText) &&
+              esText.includes("Gym (RD$1,333.33)") && esText.includes("29 oct") && /Cambia o elimina ese cargo primero/.test(esText),
+            `${enText} | ${esText}`,
+          );
+        } finally {
+          await restore();
+          await cWipe();
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S19: an amount that comes to 0.00 in the receiving account's currency --");
+      {
+        await cRates([]);
+        const restore = await seedStoredRates({ USD: 1, DOP: 63.1, EUR: 63.1 / 73.2 });
+        try {
+          const table = await getRateTable();
+          const pesos = await cAccount("Zero Pesos");
+          const dollars = await cAccount("Zero Dollars", "USD");
+          const attempt = <T,>(run: () => T | Promise<T>) =>
+            Promise.resolve()
+              .then(run)
+              .then(
+                (value) => ({ refused: null as string | null, value }),
+                (error: Error) => ({ refused: error.name, value: null }),
+              );
+          const transfer = await attempt(() =>
+            cMoney.transferLegsInAccounts({ amount: 0.25, currency: "DOP", receivedAmount: null, fromCurrency: "DOP", toCurrency: "USD" }, table),
+          );
+          eq(
+            "S19: a 0.25 DOP transfer into a USD account is refused as RoundsToZeroError (was: the receiving leg stored 0.00 USD)",
+            transfer.refused ?? `stored ${transfer.value?.in.amount} ${transfer.value?.in.currency}`,
+            "RoundsToZeroError",
+          );
+          const csv = await attempt(() =>
+            cImport.importCsvTransactions(
+              {
+                accountId: dollars.id,
+                currency: "DOP",
+                rows: [{ date: "2026-10-02", amount: 0.25, type: "EXPENSE", transferDirection: null, note: "Verify Rev2C coin", categoryId: null, importAnyway: false, isExtraordinary: false, yourShare: null, reimburses: null }],
+              } as never,
+              table,
+            ),
+          );
+          eq(
+            "S19: a CSV in DOP with a 0.25 row into a USD account is refused whole, nothing imported (was: a 0.00 USD row)",
+            `${csv.refused ?? "imported"}|${await prisma.transaction.count({ where: { accountId: dollars.id } })}`,
+            "RoundsToZeroError|0",
+          );
+          const staged = await prisma.stagedTransaction.create({
+            data: { date: cDay(10, 2), amount: 0.25, currency: "DOP", rawDescription: "Verify Rev2C receipt coin", source: "GMAIL", externalId: "verify-rev2c-receipt", accountId: dollars.id },
+          });
+          const approved = await attempt(() =>
+            cApproval.approveStagedTransaction(
+              { id: staged.id, date: cDay(10, 2), amount: 0.25, currency: "DOP", rawDescription: staged.rawDescription, accountId: dollars.id, categoryId: null, resolution: null },
+              table,
+            ),
+          );
+          eq(
+            "S19: approving a 0.25 DOP receipt onto a USD account is refused and the receipt stays pending (was: approved as 0.00 USD)",
+            `${approved.refused ?? "approved"}|${(await prisma.stagedTransaction.findUniqueOrThrow({ where: { id: staged.id } })).status}|${await prisma.transaction.count({ where: { accountId: dollars.id } })}`,
+            "RoundsToZeroError|PENDING|0",
+          );
+          const tip = await prisma.recurringItem.create({
+            data: { name: "Verify Rev2C coin tip", amount: 0.25, currency: "DOP", kind: "SUBSCRIPTION", frequency: "MONTHLY", anchorDay: 5, nextDate: cDay(10, 5), active: true, accountId: dollars.id },
+          });
+          const run = await cPosting.postDueRecurringItems(cDay(10, 5));
+          const tipAfter = await prisma.recurringItem.findUniqueOrThrow({ where: { id: tip.id } });
+          eq(
+            "S19: posting skips the 0.25 DOP item on a USD account as rounds_to_zero and leaves it due on Oct 5 (was: posted 0.00 USD and moved on)",
+            `${run.skipped.filter((s) => s.id === tip.id).map((s) => `${s.reason} ${s.nextDate}`).join(",") || "none"}|${toISODate(tipAfter.nextDate)}|${await prisma.transaction.count({ where: { accountId: dollars.id } })}`,
+            "rounds_to_zero 2026-10-05|2026-10-05|0",
+          );
+          const kept = cMoney.transferLegsInAccounts({ amount: 1, currency: "DOP", receivedAmount: null, fromCurrency: "DOP", toCurrency: "USD" }, table);
+          eq("S19: 1 DOP into the USD account still converts (0.02 USD)", `${kept.in.amount} ${kept.in.currency}`, "0.02 USD");
+          const common = cEn.common?.roundsToZero;
+          const comun = cEs.common?.roundsToZero;
+          check("S19: the refusal is the existing message, in English and Spanish", typeof common === "function" && typeof comun === "function");
+          const reasons = cEn.dashboard?.notPostingReasonRoundsToZero;
+          check("S19: the Dashboard and Inbox say why it is not posting, in English and Spanish", typeof reasons === "string" && typeof cEs.dashboard?.notPostingReasonRoundsToZero === "string");
+          void pesos;
+        } finally {
+          await restore();
+          await cWipe();
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S21: the posting header says which rate a posted row keeps --");
+      {
+        const header = cRead("src/lib/recurring-posting.ts", "utf8").split("*/")[0];
+        check("S21: the header no longer promises \"at the day's rate\" and says the run's rate table", !header.includes("at the day's rate") && /rate table of the run that posts/.test(header));
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S23: a suggestion that may repeat an item tracked under another name --");
+      {
+        await cRates([]);
+        const restore = await seedStoredRates({ USD: 1, DOP: 63.1, EUR: 63.1 / 73.2 });
+        try {
+          const bank = await cAccount("Music Bank");
+          const card = await cAccount("Music Card");
+          const subscriptions = await prisma.category.create({ data: { name: "Verify Rev2C Subscriptions", kind: "EXPENSE" } as never });
+          await prisma.recurringItem.create({
+            data: { name: "Verify Rev2C Music", amount: 650, currency: "DOP", kind: "SUBSCRIPTION", frequency: "MONTHLY", anchorDay: 12, nextDate: cDay(10, 12), active: true, accountId: bank.id, categoryId: subscriptions.id },
+          });
+          for (const month of [7, 8, 9]) {
+            await prisma.transaction.create({ data: { accountId: card.id, date: cDay(month, 12), amount: 650, currency: "DOP", type: "EXPENSE", source: "CSV", note: "VERIFY SPOTIFY P1234", externalId: `verify-rev2c-spotify-${month}` } });
+          }
+          const context = {
+            displayCurrency: "DOP" as const,
+            language: "en" as const,
+            rates: await getRateTable(),
+            today: cDay(10, 4),
+            currentPeriod: periodForDate(cDay(10, 4)),
+            bufferPercent: 10,
+            bufferFloorAmount: 0,
+            bufferFloorCurrency: "DOP",
+          };
+          const found = (await cSuggestions.findRecurringSuggestions(context as never)).filter((s) => s.accountId === card.id) as (Awaited<ReturnType<typeof cSuggestions.findRecurringSuggestions>>[number] & { mayRepeat?: { itemName: string; accountName: string | null } | null })[];
+          eq(
+            "S23: the monthly 650 DOP SPOTIFY charges on Card are still suggested, next Oct 12, now with the hint May repeat Music (Bank) (was: no hint)",
+            found.map((s) => `${s.cadence} ${s.amount} ${toISODate(s.nextDates[0])} ${s.mayRepeat ? `${s.mayRepeat.itemName} (${s.mayRepeat.accountName})` : "no hint"}`).join(","),
+            "MONTHLY 650 2026-10-12 Verify Rev2C Music (Verify Rev2C Music Bank)",
+          );
+          await prisma.recurringItem.updateMany({ where: { name: "Verify Rev2C Music" }, data: { frequency: "WEEKLY" } });
+          const weekly = (await cSuggestions.findRecurringSuggestions(context as never)).filter((s) => s.accountId === card.id) as { mayRepeat?: unknown }[];
+          eq("S23: an item of another cadence gives no hint", weekly.map((s) => (s.mayRepeat ? "hint" : "no hint")).join(","), "no hint");
+          await prisma.recurringItem.updateMany({ where: { name: "Verify Rev2C Music" }, data: { frequency: "MONTHLY", amount: 800 } });
+          const dearer = (await cSuggestions.findRecurringSuggestions(context as never)).filter((s) => s.accountId === card.id) as { mayRepeat?: unknown }[];
+          eq("S23: nor one at 800 DOP, outside the tolerance (65)", dearer.map((s) => (s.mayRepeat ? "hint" : "no hint")).join(","), "no hint");
+          const en = cEn.recurring?.suggestionMayRepeat;
+          const es = cEs.recurring?.suggestionMayRepeat;
+          eq(
+            "S23: the hint reads in English and Spanish",
+            `${typeof en === "function" ? (en as (i: string, a: string | null) => string)("Music", "Bank") : "missing"}|${typeof es === "function" ? (es as (i: string, a: string | null) => string)("Music", "Bank") : "missing"}`,
+            "May repeat Music (Bank)|Puede repetir Music (Bank)",
+          );
+        } finally {
+          await restore();
+          await cWipe();
+        }
+      }
+    } finally {
+      await cWipe();
+      await prisma.exchangeRate.deleteMany();
+      if (cRatesBefore.length > 0) await prisma.exchangeRate.createMany({ data: cRatesBefore });
+      await prisma.recurringItem.updateMany({ where: { id: { in: cPaused } }, data: { active: true } });
     }
   }
 

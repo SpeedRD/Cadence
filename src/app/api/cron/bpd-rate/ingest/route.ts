@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { isPlausibleDopRate } from "@/lib/bpd-rate-payload";
+import { isPlausibleBpdRates } from "@/lib/bpd-rate-payload";
 import { storeBpdRates } from "@/lib/bpd-rates";
 
 /**
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
   // scraper is a separate deployable that could drift or be replaced, so the
   // server never trusts its check alone.
   const { dollarSellRate, euroSellRate } = parsed.data;
-  if (!isPlausibleDopRate(dollarSellRate) || !isPlausibleDopRate(euroSellRate)) {
+  if (!isPlausibleBpdRates(dollarSellRate, euroSellRate)) {
     return NextResponse.json({ stored: false, reason: "out_of_range" }, { status: 400 });
   }
   const asOf = new Date(parsed.data.asOf);

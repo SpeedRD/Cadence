@@ -39,7 +39,7 @@ import { formatDate, formatPeriodShort } from "@/lib/date-format";
 import { summarizeGoalForecast, type GoalForecast } from "@/lib/goal-forecast";
 import type { Dictionary, Locale } from "@/lib/i18n";
 import type { RecurringSuggestion } from "@/lib/recurring-detection";
-import type { RecurringPostingSummary, RecurringSkipReason } from "@/lib/recurring-posting";
+import type { PostingSkipReason, RecurringPostingSummary } from "@/lib/recurring-posting";
 
 import type { RecurringPostingFailure } from "@/lib/data/context";
 import type { GoalRoadmapStatus } from "@/lib/data/payday";
@@ -188,12 +188,13 @@ export const detectNotPosting: InsightDetector = ({ dictionary, recurringPosting
   if (!recurringPosting) return [];
   const t = dictionary.inbox;
   const reasons = dictionary.dashboard;
-  const reasonText: Record<RecurringSkipReason, string> = {
+  const reasonText: Record<PostingSkipReason, string> = {
     missing_account: reasons.notPostingReasonMissingAccount,
     missing_goal: reasons.notPostingReasonMissingGoal,
     missing_account_and_goal: reasons.notPostingReasonMissingAccountAndGoal,
     account_archived: reasons.notPostingReasonAccountArchived,
     goal_achieved: reasons.notPostingReasonGoalAchieved,
+    rounds_to_zero: reasons.notPostingReasonRoundsToZero,
   };
   // Keyed by the item and why it is not posting, so a dismissed skip does not
   // hide the item's later failure (or a different skip). A failure's key says

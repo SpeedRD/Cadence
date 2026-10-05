@@ -31,26 +31,30 @@
  * where a row holding the account's currency had drifted with the rate, the
  * report also prints the balance the app reads today.
  *
+ * A row is converted only at rates the app itself would write down
+ * (ratesFitForWriting, R20): DOP with Banco Popular's rate in its window, EUR
+ * with the bank's rate or an open.er-api.com rate fetched within the last
+ * day, never the app's fallback constants or a stale rate (S3). A row whose
+ * conversion has no fit rate is listed as "cannot convert: rates not fit";
+ * --apply then writes nothing and exits 1. Opening the app refreshes the
+ * open.er-api.com rates; the bank's come from its scraper.
+ *
  * Idempotent: a row stored in its account's currency is never selected, so a
  * second run finds nothing to change. Nothing but Transaction rows is written:
  * goal contributions, budgets and snapshots are already in their own
  * currencies.
  *
  * Exit code 0 when it ran (or had nothing to do), 1 when the plan did not
- * hold (nothing written), 2 when it could not run.
+ * hold or a row has no fit rate under --apply (nothing written), 2 when it
+ * could not run.
  */
 import "dotenv/config";
 
 import { Pool, types, type PoolClient } from "pg";
 
 import { planBackfill, rateLine, type BackfillRow } from "../src/lib/account-money";
-import {
-  BPD_SOURCE,
-  isPlausibleDopRate,
-  isWithinFreshnessWindow,
-  toRateTableEntries,
-} from "../src/lib/bpd-rate-payload";
-import { CURRENCIES, formatMoney, type RateTable } from "../src/lib/currency";
+import { BPD_SOURCE, bpdRatesFromStored, toRateTableEntries } from "../src/lib/bpd-rate-payload";
+import { BASE_CURRENCY, CURRENCIES, formatMoney, rateFitForWriting, type RateTable } from "../src/lib/currency";
 import { toISODate } from "../src/lib/date";
 import { balanceSign } from "../src/lib/transactions";
 
@@ -60,8 +64,6 @@ const MIGRATION = "20260930200000_add_transaction_original_amount";
 // days; node-postgres would read both in this machine's time zone.
 types.setTypeParser(1114, (value: string) => new Date(`${value.replace(" ", "T")}Z`));
 types.setTypeParser(1082, (value: string) => value);
-/** getRateTable's constants when nothing is stored (src/lib/rates.ts). */
-const FALLBACK_RATES: Record<string, number> = { USD: 1, DOP: 60, EUR: 0.92 };
 /** open.er-api.com rates older than this are refreshed by the app on its next request. */
 const OPEN_ER_API_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -93,45 +95,58 @@ async function migrationApplied(client: PoolClient): Promise<boolean> {
   return recorded.rows[0].n === 1;
 }
 
-/** The rate table the app uses today, from stored rows only (see the header). */
+/**
+ * The rate table the app uses today, from stored rows only (see the header).
+ * A currency with no usable stored rate is left out rather than given the
+ * app's fallback constant, and the open.er-api.com rates count as current
+ * (not `stale`) only when every currency has one fetched within the last day,
+ * as getRateTable judges them - so rateFitForWriting says what may be written.
+ */
 async function loadRates(client: PoolClient): Promise<{ table: RateTable; notes: string[] }> {
   const notes: string[] = [];
   const stored = await client.query<{ targetCurrency: string; rate: string; fetchedAt: Date; asOf: Date | null; source: string }>(
     `SELECT "targetCurrency", rate::text AS rate, "fetchedAt", "asOf", source FROM "ExchangeRate" WHERE "baseCurrency" = 'USD'`,
   );
-  const rates: Record<string, number> = {};
+  const rates: Record<string, number> = { [BASE_CURRENCY]: 1 };
   let newest: Date | null = null;
+  let current = true;
+  const now = new Date();
   for (const code of CURRENCIES) {
     const row = stored.rows.find((candidate) => candidate.source === "open-er-api" && candidate.targetCurrency === code);
     const rate = row ? Number(row.rate) : Number.NaN;
-    if (Number.isFinite(rate) && rate > 0) {
-      rates[code] = rate;
-      if (!newest || row!.fetchedAt > newest) newest = row!.fetchedAt;
-    } else {
-      rates[code] = FALLBACK_RATES[code] ?? 1;
-      notes.push(`no stored open.er-api.com rate for ${code}: using the app's fallback ${rates[code]}`);
+    if (!row || !(Number.isFinite(rate) && rate > 0)) {
+      current = false;
+      if (code !== BASE_CURRENCY) notes.push(`no stored open.er-api.com rate for ${code}`);
+      continue;
     }
+    if (code !== BASE_CURRENCY) rates[code] = rate;
+    if (!newest || row.fetchedAt > newest) newest = row.fetchedAt;
+    if (now.getTime() - row.fetchedAt.getTime() >= OPEN_ER_API_TTL_MS) current = false;
   }
-  if (newest && Date.now() - newest.getTime() > OPEN_ER_API_TTL_MS) {
-    notes.push(`open.er-api.com rates were fetched ${newest.toISOString()} (over 24h ago): opening the app refreshes them`);
+  if (newest && !current) {
+    notes.push(`open.er-api.com rates are not current (newest fetched ${newest.toISOString()}): opening the app refreshes them`);
   }
   let source: RateTable["source"] = "open-er-api";
   let asOf: Date | null = null;
-  const dop = stored.rows.find((row) => row.source === BPD_SOURCE && row.targetCurrency === "DOP");
-  const eur = stored.rows.find((row) => row.source === BPD_SOURCE && row.targetCurrency === "EUR");
-  const now = new Date();
-  if (dop?.asOf && eur?.asOf && isWithinFreshnessWindow(dop.asOf, now) && isWithinFreshnessWindow(eur.asOf, now)) {
-    const dollarSellRate = Number(dop.rate);
-    const euroCrossRate = Number(eur.rate);
-    if (isPlausibleDopRate(dollarSellRate) && euroCrossRate > 0) {
-      const entries = toRateTableEntries({ dollarSellRate, euroSellRate: dollarSellRate / euroCrossRate, asOf: dop.asOf });
-      rates.DOP = entries.DOP;
-      rates.EUR = entries.EUR;
-      source = "bpd";
-      asOf = dop.asOf;
-    }
+  const bank = bpdRatesFromStored(
+    stored.rows
+      .filter((row) => row.source === BPD_SOURCE)
+      .map((row) => ({ targetCurrency: row.targetCurrency, rate: Number(row.rate), asOf: row.asOf })),
+    now,
+  );
+  if (bank) {
+    const entries = toRateTableEntries(bank);
+    rates.DOP = entries.DOP;
+    rates.EUR = entries.EUR;
+    source = "bpd";
+    asOf = bank.asOf;
+  } else {
+    notes.push("no Banco Popular rate in its 7-day window: nothing converts into or out of DOP");
   }
-  return { table: { rates, fetchedAt: newest, stale: true, source, asOf }, notes };
+  const table: RateTable = { rates, fetchedAt: newest, stale: !current, source, asOf };
+  const unfit = CURRENCIES.filter((code) => !rateFitForWriting(code, table));
+  if (unfit.length > 0) notes.push(`no rate fit to write down for ${unfit.join(", ")}`);
+  return { table, notes };
 }
 
 interface LoadedRow extends BackfillRow {
@@ -223,7 +238,7 @@ async function main(): Promise<number> {
 
     const { table, notes } = await loadRates(client);
     console.log(
-      `rates:    ${CURRENCIES.map((code) => `${code}=${table.rates[code]}`).join(" ")} per USD (${table.source === "bpd" ? `Banco Popular as of ${toISODate(table.asOf as Date)}, open.er-api.com for the rest` : "open.er-api.com"})`,
+      `rates:    ${CURRENCIES.map((code) => `${code}=${table.rates[code] ?? "none"}`).join(" ")} per USD (${table.source === "bpd" ? `Banco Popular as of ${toISODate(table.asOf as Date)}, open.er-api.com for the rest` : "open.er-api.com"})`,
     );
     for (const note of notes) console.log(`          ${note}`);
 
@@ -232,8 +247,23 @@ async function main(): Promise<number> {
     const accountById = new Map(accounts.map((account) => [account.id, account]));
     const rowById = new Map(rows.map((row) => [row.id, row]));
 
-    console.log(`\n${plan.changes.length} transaction${plan.changes.length === 1 ? "" : "s"} in another currency than ${plan.changes.length === 1 ? "its" : "their"} account's`);
-    if (plan.changes.length === 0) {
+    const total = plan.changes.length + plan.unfit.length;
+    console.log(`\n${total} transaction${total === 1 ? "" : "s"} in another currency than ${total === 1 ? "its" : "their"} account's`);
+    for (const row of plan.unfit) {
+      const account = accountById.get(row.accountId)!;
+      const loaded = rowById.get(row.id) as LoadedRow;
+      console.log(
+        [
+          `  ${row.id}`,
+          loaded.date,
+          `${account.name} (${account.currency})`,
+          JSON.stringify(loaded.note ?? ""),
+          `${formatMoney(loaded.amount, loaded.currency)}`,
+          `cannot convert: rates not fit (${row.from} -> ${row.to})`,
+        ].join(" | "),
+      );
+    }
+    if (plan.changes.length === 0 && plan.unfit.length === 0) {
       console.log("Nothing to change.");
       await client.query(apply ? "COMMIT" : "ROLLBACK");
       return 0;
@@ -264,9 +294,9 @@ async function main(): Promise<number> {
       const account = accountById.get(balance.accountId)!;
       const same = Math.round(balance.before * 100) === Math.round(balance.after * 100);
       held &&= same;
-      const drifted = Math.round(balance.appReads * 100) !== Math.round(balance.before * 100);
+      const drifted = balance.appReads !== null && Math.round(balance.appReads * 100) !== Math.round(balance.before * 100);
       console.log(
-        `  ${account.name} (${account.currency}): before ${formatMoney(balance.before, balance.currency)} | after ${formatMoney(balance.after, balance.currency)} | ${same ? "same" : "DIFFERENT"}${drifted ? ` | the app reads ${formatMoney(balance.appReads, balance.currency)} today, with typed figures drifted at today's rate` : ""}`,
+        `  ${account.name} (${account.currency}): before ${formatMoney(balance.before, balance.currency)} | after ${formatMoney(balance.after, balance.currency)} | ${same ? "same" : "DIFFERENT"}${drifted ? ` | the app reads ${formatMoney(balance.appReads as number, balance.currency)} today, with typed figures drifted at today's rate` : ""}${balance.appReads === null ? " | rows that cannot convert left out" : ""}`,
       );
     }
     if (!held) {
@@ -278,7 +308,17 @@ async function main(): Promise<number> {
     if (!apply) {
       await client.query("ROLLBACK");
       console.log("\nDry run: nothing was written. Run again with --apply to write these rows.");
+      if (plan.unfit.length > 0) {
+        console.log(`${plan.unfit.length} row${plan.unfit.length === 1 ? "" : "s"} cannot convert until rates are fit; --apply will write nothing while any does.`);
+      }
       return 0;
+    }
+    if (plan.unfit.length > 0) {
+      console.error(
+        `\n${plan.unfit.length} row${plan.unfit.length === 1 ? "" : "s"} cannot convert: rates not fit. Nothing was written. Open the app (or wait for the bank's rate) and run again.`,
+      );
+      await client.query("ROLLBACK");
+      return 1;
     }
 
     for (const change of plan.changes) {

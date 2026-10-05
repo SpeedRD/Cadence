@@ -6,7 +6,7 @@
  * session and turns each outcome into a toast.
  */
 import { Prisma } from "@/generated/prisma/client";
-import { inAccountCurrency, shareInAccountCurrency } from "@/lib/account-money";
+import { inAccountCurrency, refuseZeroAmount, shareInAccountCurrency } from "@/lib/account-money";
 import { resolveImportCategoryId } from "@/lib/categorization";
 import { csvExternalId } from "@/lib/csv-fingerprint";
 import { fromISODate, toISODate } from "@/lib/date";
@@ -197,7 +197,10 @@ export async function importCsvTransactions(
     // converted once, at the rate the review step used, and each row keeps
     // the file's own figure. The fingerprint stays the file's figure, so the
     // same statement imported again is still recognised.
-    const stored = inAccountCurrency({ amount: row.amount, currency: input.currency }, account.currency, rates);
+    // A row that comes to 0.00 in the account's currency refuses the whole
+    // import (RoundsToZeroError, R29/S19), as it would refuse a manual entry.
+    const entered = { amount: row.amount, currency: input.currency };
+    const stored = refuseZeroAmount(entered, inAccountCurrency(entered, account.currency, rates));
     return [{
       rowIndex: index,
       date: fromISODate(row.date) as Date,

@@ -100,6 +100,11 @@ export function RecurringSuggestions({
                   )}
                   {` · ${t.nextLabel} ${suggestion.nextDates.map((date) => formatDate(date, locale)).join(", ")}`}
                 </p>
+                {suggestion.mayRepeat ? (
+                  <p className="text-hint text-muted-foreground" data-may-repeat>
+                    {t.suggestionMayRepeat(suggestion.mayRepeat.itemName, suggestion.mayRepeat.accountName)}
+                  </p>
+                ) : null}
               </div>
               <div className="text-right">
                 <p className="figure text-sm">{formatMoney(suggestion.displayAmount, displayCurrency)}</p>

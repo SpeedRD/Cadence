@@ -413,16 +413,36 @@ export interface SettlementMove {
   to: Date;
 }
 
-/** A recorded payment an edit of its item's schedule let go: the charge no longer pays any occurrence. */
-export interface SettlementRelease {
+/**
+ * A payment the user recorded as an occurrence's ("It's that payment") that
+ * an edit of the item's schedule would let go: no occurrence of the new
+ * schedule is one the charge pays, and the one it paid is still ahead. The
+ * edit is refused for it (S17).
+ */
+export interface RecordedPaymentBlock {
   itemName: string;
+  /** The occurrence it is recorded for. */
   dueDate: Date;
+  /** The charge: its date, amount (in its account's currency) and note. */
+  chargeDate: Date;
+  amount: number;
+  currency: string;
+  note: string | null;
 }
 
 export interface RecurringEditResult {
-  /** Rows written: 0 when the item moved on since the form was read, or is gone. */
+  /** Rows written: 0 when the item moved on since the form was read, is gone, or the edit was refused. */
   written: number;
-  settlements: { rekeyed: SettlementMove[]; released: SettlementRelease[] };
+  settlements: { rekeyed: SettlementMove[] };
+  /** Set when the edit was refused, nothing written, because it would let this recorded payment go. */
+  refused: RecordedPaymentBlock | null;
+}
+
+/** Thrown inside the edit's transaction to roll it back: the edit would let a recorded payment go. */
+class RecordedPaymentWouldBeReleased extends Error {
+  constructor(readonly block: RecordedPaymentBlock) {
+    super("the edit would release a recorded payment");
+  }
 }
 
 /**
@@ -460,7 +480,11 @@ export async function updateRecurringItem(
  * has while the occurrence that replaced it posts the same money
  * (reconcileSettlements), and claims one whose occurrence the new nextDate
  * went past (claimPassedPairings) rather than dropping it. The write, and
- * that, happen under the item's row lock, the one posting's claim takes.
+ * that, happen under the item's row lock, the one posting's claim takes. An
+ * edit that would let a payment the user recorded go - no occurrence of the
+ * new schedule it pays, and the one it paid still ahead - is refused whole
+ * and writes nothing (`refused`, S17): the occurrence would post again
+ * beside the charge that already paid it.
  */
 export async function updateRecurringItemDetailed(
   id: string,
@@ -469,75 +493,82 @@ export async function updateRecurringItemDetailed(
   today: Date = todayInAppZone(),
   rates?: RateTable,
 ): Promise<RecurringEditResult> {
-  const none: RecurringEditResult = { written: 0, settlements: { rekeyed: [], released: [] } };
+  const none: RecurringEditResult = { written: 0, settlements: { rekeyed: [] }, refused: null };
   const goalsToRebuild = new Set<string>();
-  const result = await prisma.$transaction(
-    async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${id} FOR UPDATE`;
-      const before = await tx.recurringItem.findUnique({
-        where: { id },
-        include: { account: { select: { status: true } }, goal: { select: { achievedAt: true } } },
-      });
-      if (!before) return none;
+  let result: RecurringEditResult;
+  try {
+    result = await prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${id} FOR UPDATE`;
+        const before = await tx.recurringItem.findUnique({
+          where: { id },
+          include: { account: { select: { status: true } }, goal: { select: { achievedAt: true } } },
+        });
+        if (!before) return none;
 
-      let nextDate = values.nextDate;
-      if (isBlocked(before) && before.nextDate.getTime() === values.nextDate.getTime() && values.nextDate.getTime() < today.getTime()) {
-        const [account, goal] = await Promise.all([
-          typeof values.accountId === "string"
-            ? tx.account.findUnique({ where: { id: values.accountId }, select: { status: true } })
-            : null,
-          typeof values.goalId === "string"
-            ? tx.goal.findUnique({ where: { id: values.goalId }, select: { achievedAt: true } })
-            : null,
-        ]);
-        const after = {
-          kind: (values.kind as RecurringKind | undefined) ?? before.kind,
-          accountId: typeof values.accountId === "string" ? values.accountId : null,
-          goalId: typeof values.goalId === "string" ? values.goalId : null,
-          account,
-          goal,
-        };
-        if (values.active !== false && skipReasonFor(after) === null) {
-          nextDate = firstOccurrenceOnOrAfter(
-            {
-              nextDate: values.nextDate,
-              frequency: values.frequency,
-              anchorDay: typeof values.anchorDay === "number" ? values.anchorDay : before.anchorDay,
-              secondAnchorDay: typeof values.secondAnchorDay === "number" ? values.secondAnchorDay : null,
-            },
-            today,
-          );
+        let nextDate = values.nextDate;
+        if (isBlocked(before) && before.nextDate.getTime() === values.nextDate.getTime() && values.nextDate.getTime() < today.getTime()) {
+          const [account, goal] = await Promise.all([
+            typeof values.accountId === "string"
+              ? tx.account.findUnique({ where: { id: values.accountId }, select: { status: true } })
+              : null,
+            typeof values.goalId === "string"
+              ? tx.goal.findUnique({ where: { id: values.goalId }, select: { achievedAt: true } })
+              : null,
+          ]);
+          const after = {
+            kind: (values.kind as RecurringKind | undefined) ?? before.kind,
+            accountId: typeof values.accountId === "string" ? values.accountId : null,
+            goalId: typeof values.goalId === "string" ? values.goalId : null,
+            account,
+            goal,
+          };
+          if (values.active !== false && skipReasonFor(after) === null) {
+            nextDate = firstOccurrenceOnOrAfter(
+              {
+                nextDate: values.nextDate,
+                frequency: values.frequency,
+                anchorDay: typeof values.anchorDay === "number" ? values.anchorDay : before.anchorDay,
+                secondAnchorDay: typeof values.secondAnchorDay === "number" ? values.secondAnchorDay : null,
+              },
+              today,
+            );
+          }
         }
-      }
 
-      const written = await tx.recurringItem.updateMany({
-        where: {
-          id,
-          ...(updatedAt ? { updatedAt } : {}),
-          // Moving the date is only right if nothing has moved it since it was read.
-          ...(nextDate.getTime() !== values.nextDate.getTime() ? { nextDate: before.nextDate } : {}),
-        },
-        data: { ...values, nextDate },
-      });
-      if (written.count === 0) return none;
-      // The automatic skip went past the occurrences the item missed, as
-      // skipMissedOccurrences does: a payment the user recorded for one of
-      // them is claimed, not moved or released.
-      if (nextDate.getTime() !== values.nextDate.getTime()) await claimPassedPairings(tx, id, nextDate);
+        const written = await tx.recurringItem.updateMany({
+          where: {
+            id,
+            ...(updatedAt ? { updatedAt } : {}),
+            // Moving the date is only right if nothing has moved it since it was read.
+            ...(nextDate.getTime() !== values.nextDate.getTime() ? { nextDate: before.nextDate } : {}),
+          },
+          data: { ...values, nextDate },
+        });
+        if (written.count === 0) return none;
+        // The automatic skip went past the occurrences the item missed, as
+        // skipMissedOccurrences does: a payment the user recorded for one of
+        // them is claimed, not moved or released.
+        if (nextDate.getTime() !== values.nextDate.getTime()) await claimPassedPairings(tx, id, nextDate);
 
-      const after = await tx.recurringItem.findUniqueOrThrow({ where: { id } });
-      const scheduleChanged =
-        after.nextDate.getTime() !== before.nextDate.getTime() ||
-        after.frequency !== before.frequency ||
-        after.anchorDay !== before.anchorDay ||
-        after.secondAnchorDay !== before.secondAnchorDay;
-      const settlements = scheduleChanged
-        ? await reconcileSettlements(tx, after, before.nextDate, rates, goalsToRebuild)
-        : { rekeyed: [], released: [] };
-      return { written: written.count, settlements };
-    },
-    { timeout: 20000 },
-  );
+        const after = await tx.recurringItem.findUniqueOrThrow({ where: { id } });
+        const scheduleChanged =
+          after.nextDate.getTime() !== before.nextDate.getTime() ||
+          after.frequency !== before.frequency ||
+          after.anchorDay !== before.anchorDay ||
+          after.secondAnchorDay !== before.secondAnchorDay;
+        const settlements = scheduleChanged
+          ? await reconcileSettlements(tx, after, before.nextDate, rates, goalsToRebuild)
+          : { rekeyed: [] };
+        return { written: written.count, settlements, refused: null };
+      },
+      { timeout: 20000 },
+    );
+  } catch (error) {
+    // Rolled back: nothing of the edit was written.
+    if (error instanceof RecordedPaymentWouldBeReleased) return { ...none, refused: error.block };
+    throw error;
+  }
   for (const goalId of goalsToRebuild) await recomputeGoalSaved(goalId);
   return result;
 }
@@ -558,9 +589,11 @@ const RECONCILE_REACH_DAYS = 62;
  *     date the new nextDate went past is claimed where it is
  *     (claimPassedPairings): the charge paid that occurrence, and posting
  *     will never reach it now, so it counts its installment there rather
- *     than being dropped. Only one still ahead of the new nextDate is
- *     released: the charge is an ordinary one again, and the occurrence that
- *     replaced it posts on its due date.
+ *     than being dropped. One still ahead of the new nextDate is never let
+ *     go: the occurrence that replaced it would post the money the charge
+ *     already paid (S17), so the whole edit is refused and rolled back
+ *     (RecordedPaymentWouldBeReleased) until the user changes or deletes
+ *     that charge.
  *   - A pairing posting already claimed is history, and stays, unless the
  *     schedule moved back (`formerNext`, the nextDate before the edit) over
  *     the span posting had claimed and the new schedule does not have its
@@ -579,9 +612,9 @@ const RECONCILE_REACH_DAYS = 62;
  * uses, against the new occurrence; for the user's own answer also the
  * question that produced it (planPostedDuplicates' upcoming occurrence, which
  * takes an amount in the account's currency within
- * CROSS_CURRENCY_MATCH_TOLERANCE). Moving or releasing a contribution's
- * pairing moves or removes its GoalContribution with it, so the goal counts
- * the money exactly when the ledger does.
+ * CROSS_CURRENCY_MATCH_TOLERANCE). Moving a contribution's pairing moves
+ * its GoalContribution with it, so the goal counts the money exactly when the
+ * ledger does.
  */
 async function reconcileSettlements(
   tx: Prisma.TransactionClient,
@@ -592,7 +625,7 @@ async function reconcileSettlements(
 ): Promise<RecurringEditResult["settlements"]> {
   const movedBack = item.nextDate.getTime() < formerNext.getTime();
   const reachBack = addDays(item.nextDate, -RECONCILE_REACH_DAYS);
-  const moves: RecurringEditResult["settlements"] = { rekeyed: [], released: [] };
+  const moves: RecurringEditResult["settlements"] = { rekeyed: [] };
   const recorded = await tx.recurringSettlement.findMany({
     where: {
       recurringItemId: item.id,
@@ -709,13 +742,14 @@ async function reconcileSettlements(
     } else if (row.dueDate.getTime() < item.nextDate.getTime()) {
       await claimPairings(tx, item.id, [row.id]);
     } else {
-      await tx.recurringSettlement.delete({ where: { id: row.id } });
-      const removed = await tx.goalContribution.findMany({ where: { recurringExternalId: row.occurrenceKey }, select: { goalId: true } });
-      if (removed.length > 0) {
-        await tx.goalContribution.deleteMany({ where: { recurringExternalId: row.occurrenceKey } });
-        for (const contribution of removed) goalsToRebuild.add(contribution.goalId);
-      }
-      moves.released.push({ itemName: item.name, dueDate: row.dueDate });
+      throw new RecordedPaymentWouldBeReleased({
+        itemName: item.name,
+        dueDate: row.dueDate,
+        chargeDate: charge.date,
+        amount,
+        currency: charge.currency,
+        note: charge.note,
+      });
     }
   }
   return moves;

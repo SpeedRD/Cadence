@@ -84,7 +84,8 @@ export async function approveStagedAction(
       (await getAppContext()).rates,
     );
   } catch (error) {
-    // In another currency with no current rate to convert it: not approved (R20).
+    // In another currency with no current rate to convert it (R20), or 0.00
+    // in the account's currency (S19): not approved.
     const message = refusedWriteMessage(error, locale);
     if (message) return fail(message);
     throw error;

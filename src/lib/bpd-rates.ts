@@ -2,7 +2,8 @@ import {
   BPD_RATES_API_URL,
   BPD_SOURCE,
   type BpdRates,
-  isPlausibleDopRate,
+  bpdRatesFromStored,
+  isPlausibleBpdRates,
   isWithinFreshnessWindow,
   parseBpdPayload,
   toRateTableEntries,
@@ -102,7 +103,7 @@ export async function storeBpdRates(
   rates: BpdRates,
   now: Date = new Date(),
 ): Promise<StoreBpdRatesResult> {
-  if (!isPlausibleDopRate(rates.dollarSellRate) || !isPlausibleDopRate(rates.euroSellRate)) {
+  if (!isPlausibleBpdRates(rates.dollarSellRate, rates.euroSellRate)) {
     return { ok: false, reason: "out_of_range" };
   }
   if (!(rates.asOf instanceof Date) || Number.isNaN(rates.asOf.getTime())) {
@@ -182,24 +183,15 @@ export async function getBpdRates(): Promise<BpdRates | null> {
   const stored = await prisma.exchangeRate.findMany({
     where: { baseCurrency: BASE_CURRENCY, source: BPD_SOURCE },
   });
-  const dopRow = stored.find((row) => row.targetCurrency === "DOP");
-  const eurRow = stored.find((row) => row.targetCurrency === "EUR");
-
-  if (
-    dopRow?.asOf &&
-    eurRow?.asOf &&
-    isWithinFreshnessWindow(dopRow.asOf, now) &&
-    isWithinFreshnessWindow(eurRow.asOf, now)
-  ) {
-    const dollarSellRate = Number(dopRow.rate);
-    const euroCrossRate = Number(eurRow.rate);
-    if (isPlausibleDopRate(dollarSellRate) && euroCrossRate > 0) {
-      // eurRow.rate is already the derived EUR-per-USD cross-rate (see
-      // toRateTableEntries); euroSellRate is reconstructed only so this
-      // returns the same shape fetchBpdRates does.
-      return { dollarSellRate, euroSellRate: dollarSellRate / euroCrossRate, asOf: dopRow.asOf };
-    }
-  }
+  // The EUR row holds the derived EUR-per-USD cross-rate (see
+  // toRateTableEntries), rounded to ten decimals; the bank's own euro quote
+  // is recovered from it, so EUR<->DOP converts at that quote exactly
+  // (euroSellFromStored).
+  const usable = bpdRatesFromStored(
+    stored.map((row) => ({ targetCurrency: row.targetCurrency, rate: Number(row.rate), asOf: row.asOf })),
+    now,
+  );
+  if (usable) return usable;
 
   const fetched = await fetchBpdRates();
   if (!fetched) return null;

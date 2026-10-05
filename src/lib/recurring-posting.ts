@@ -7,8 +7,14 @@
  *   SUBSCRIPTION  -> an EXPENSE Transaction (source RECURRING) charged to the
  *                    item's account on the occurrence's due date, in the
  *                    account's currency: an item in another currency is
- *                    converted once, at the day's rate, which is kept with
- *                    the row (src/lib/account-money.ts).
+ *                    converted once, at the rate table of the run that posts
+ *                    it, which is kept with the row (src/lib/account-money.ts).
+ *                    That is the rate stored when the run happens, not the
+ *                    rate of the due date: a backlog of several occurrences
+ *                    posted in one run all take the run's rate, and the first
+ *                    run after midnight uses the bank rate stored then -
+ *                    usually the previous day's - until the scraper stores
+ *                    the new one.
  *   CONTRIBUTION  -> the same outgoing Transaction from the item's account, plus
  *                    a GoalContribution on the item's goal, converted once into
  *                    the goal's own currency and tagged with the same
@@ -89,7 +95,7 @@
  * loaded it (the edit form takes the same lock) leaves the item to the next
  * run rather than being overwritten with the figures the run loaded.
  */
-import { exactAmountIn, inAccountCurrency, RatesUnavailableError } from "@/lib/account-money";
+import { exactAmountIn, inAccountCurrency, RatesUnavailableError, refuseZeroAmount, RoundsToZeroError } from "@/lib/account-money";
 import { IDENTITY_RATES, convert, ratesFitForWriting, type RateTable } from "@/lib/currency";
 import { startOfDay, toISODate } from "@/lib/date";
 import { contributionsOnOrBefore, markGoalsReachedByDate, recomputeGoalSaved, savedFromContributions } from "@/lib/goals";
@@ -109,13 +115,20 @@ export { MAX_OCCURRENCES_PER_ITEM };
 
 export type { RecurringSkipReason };
 
+/**
+ * Why a run left an item due: the item's own state (RecurringSkipReason), or
+ * `rounds_to_zero` - its amount comes to 0.00 in its account's currency, so
+ * the row would record nothing (R29/S19).
+ */
+export type PostingSkipReason = RecurringSkipReason | "rounds_to_zero";
+
 export interface SkippedRecurringItem {
   id: string;
   name: string;
   kind: RecurringKind;
   /** The still-unposted due date, "YYYY-MM-DD". */
   nextDate: string;
-  reason: RecurringSkipReason;
+  reason: PostingSkipReason;
 }
 
 export interface FailedRecurringItem {
@@ -428,10 +441,13 @@ async function postOccurrence(
       }
 
       // Stored in the account's currency (K7): an item in another currency is
-      // converted once, here, at the day's rate, and the item's own amount
+      // converted once, here, at the run's rate, and the item's own amount
       // and that rate are kept with the row. The row is then the fact of what
       // was charged; the item stays the schedule.
-      const charged = inAccountCurrency({ amount: num(item.amount), currency: item.currency }, accountCurrency, rates);
+      // An amount that comes to 0.00 there is refused (RoundsToZeroError):
+      // the run leaves the occurrence due and reports it (S19).
+      const entered = { amount: num(item.amount), currency: item.currency };
+      const charged = refuseZeroAmount(entered, inAccountCurrency(entered, accountCurrency, rates));
       await tx.transaction.create({
         data: {
           date: due,
@@ -699,6 +715,10 @@ export async function postDueRecurringItems(
       // any other item that needs a rate (R20).
       if (error instanceof RatesUnavailableError) {
         summary.waitingForRates.push({ id: item.id, name: item.name, nextDate: toISODate(occurrence) });
+      } else if (error instanceof RoundsToZeroError) {
+        // Rolled back, the occurrence still due: a row of 0.00 records nothing.
+        summary.itemsSkipped += 1;
+        summary.skipped.push({ id: item.id, name: item.name, kind: item.kind, nextDate: toISODate(occurrence), reason: "rounds_to_zero" });
       } else {
         summary.itemsFailed += 1;
         summary.failed.push({
@@ -724,12 +744,13 @@ export async function postDueRecurringItems(
   return summary;
 }
 
-const SKIP_REASON_TEXT: Record<RecurringSkipReason, string> = {
+const SKIP_REASON_TEXT: Record<PostingSkipReason, string> = {
   missing_account: "missing account",
   missing_goal: "missing goal",
   missing_account_and_goal: "missing account and goal",
   account_archived: "account archived",
   goal_achieved: "goal fully funded",
+  rounds_to_zero: "amount is 0.00 in the account's currency",
 };
 
 /** One log line for the cron output, e.g. "2 items posted ...; 1 item skipped: Netflix (missing account)". */

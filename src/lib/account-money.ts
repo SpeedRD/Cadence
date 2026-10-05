@@ -105,6 +105,24 @@ export function atRate(amount: number, rate: number): number {
   return round2(amount * rate);
 }
 
+/**
+ * Euros and pesos convert at Banco Popular's euro sell rate, a short decimal,
+ * and the bank's figure is that product rounded half up to the cent. The
+ * float product of two decimals can land a hair under the half cent (12.50 x
+ * 65.07 = 813.3749999999999), which atRate rounds down (S20); here the
+ * product is rounded to 15 significant digits first, which drops that noise
+ * and nothing else. Only this pair: every other conversion is atRate's.
+ */
+function isBankQuotePair(from: string, to: string): boolean {
+  return (from === "EUR" && to === "DOP") || (from === "DOP" && to === "EUR");
+}
+
+function atRateFor(amount: number, from: string, to: string, rate: number): number {
+  if (!isBankQuotePair(from, to)) return atRate(amount, rate);
+  const cents = Number((amount * rate * 100).toPrecision(15));
+  return (Math.sign(cents) * Math.round(Math.abs(cents))) / 100;
+}
+
 function plain(amount: number, currency: string): StoredMoney {
   return { amount: round2(amount), currency, originalAmount: null, originalCurrency: null, rate: null };
 }
@@ -121,7 +139,7 @@ export function inAccountCurrency(entered: EnteredMoney, accountCurrency: string
   if (!ratesFitForWriting(table, entered.currency, accountCurrency)) throw new RatesUnavailableError(entered.currency, accountCurrency);
   const rate = rateBetween(entered.currency, accountCurrency, table);
   return {
-    amount: atRate(entered.amount, rate),
+    amount: atRateFor(entered.amount, entered.currency, accountCurrency, rate),
     currency: accountCurrency,
     originalAmount: round2(entered.amount),
     originalCurrency: entered.currency,
@@ -168,7 +186,7 @@ export function toAccountMoney(
   if (kept && kept.currency === accountCurrency && kept.originalCurrency === entered.currency && kept.rate !== null) {
     if (kept.originalAmount !== null && withinCents(kept.originalAmount, entered.amount)) return kept;
     return {
-      amount: atRate(entered.amount, kept.rate),
+      amount: atRateFor(entered.amount, entered.currency, accountCurrency, kept.rate),
       currency: accountCurrency,
       originalAmount: round2(entered.amount),
       originalCurrency: entered.currency,
@@ -294,7 +312,9 @@ export function wasConverted(row: MoneyRow): boolean {
  * received"), kept with the entered amount and the rate that implies;
  * otherwise the entered amount converted at `table`'s rate, once. `previous`
  * are the stored legs of the transfer being edited, so re-saving it unchanged
- * converts nothing again.
+ * converts nothing again. A leg that comes to 0.00 in its account's currency
+ * from an amount above zero is refused (RoundsToZeroError, R29/S19): a
+ * 0.25 DOP transfer into a USD account would credit 0.00 USD.
  */
 export function transferLegsInAccounts(
   input: { amount: number; currency: string; receivedAmount: number | null; fromCurrency: string; toCurrency: string },
@@ -302,10 +322,10 @@ export function transferLegsInAccounts(
   previous?: { out?: { row: MoneyRow; accountCurrency: string } | null; in?: { row: MoneyRow; accountCurrency: string } | null },
 ): { out: StoredMoney; in: StoredMoney } {
   const entered = transferLegs(input);
-  const out = toAccountMoney(entered.out, input.fromCurrency, table, previous?.out);
+  const out = refuseZeroAmount(entered.out, toAccountMoney(entered.out, input.fromCurrency, table, previous?.out));
   const declared = input.fromCurrency !== input.toCurrency && input.receivedAmount !== null;
   if (!declared || input.currency === input.toCurrency) {
-    return { out, in: toAccountMoney(entered.in, input.toCurrency, table, previous?.in) };
+    return { out, in: refuseZeroAmount(entered.in, toAccountMoney(entered.in, input.toCurrency, table, previous?.in)) };
   }
   // What the bank credited, with what was sent and the rate that implies.
   const received = round2(entered.in.amount);
@@ -370,7 +390,21 @@ export interface BackfillBalance {
   currency: string;
   before: number;
   after: number;
-  appReads: number;
+  /** Null when a row on the account could not be converted (BackfillUnfit): the app's reading would need that rate too. */
+  appReads: number | null;
+}
+
+/**
+ * A row the backfill leaves as it is because converting it needs a rate
+ * that may not be written down (ratesFitForWriting, R20): no Banco Popular
+ * rate in its window for DOP, no current rate for the other currency. The
+ * script lists it and --apply writes nothing while one exists (S3).
+ */
+export interface BackfillUnfit {
+  id: string;
+  accountId: string;
+  from: string;
+  to: string;
 }
 
 /**
@@ -388,24 +422,39 @@ export interface BackfillBalance {
  * carried at the same rate from the share as entered, never above its
  * amount. Rows already in their account's currency are untouched, so
  * planning again after the backfill changes nothing.
+ *
+ * A row to convert is converted only when `table` holds rates fit to be
+ * written down for both currencies (ratesFitForWriting, as every app write
+ * path): otherwise it is reported in `unfit`, left out of the plan and of its
+ * account's balances, and never converted at a fallback or stale rate (S3).
  */
 export function planBackfill(
   accounts: readonly { id: string; currency: string }[],
   rows: readonly BackfillRow[],
   table: RateTable,
-): { changes: BackfillChange[]; balances: BackfillBalance[] } {
+): { changes: BackfillChange[]; balances: BackfillBalance[]; unfit: BackfillUnfit[] } {
   const changes: BackfillChange[] = [];
   const balances: BackfillBalance[] = [];
+  const unfit: BackfillUnfit[] = [];
   for (const account of accounts) {
     const own = rows.filter((row) => row.accountId === account.id);
     const foreign = own.filter((row) => row.currency !== account.currency).sort((a, b) => a.id.localeCompare(b.id));
     if (foreign.length === 0) continue;
     const signOf = (row: BackfillRow) => balanceSign(row.type, row.transferDirection);
-    const appReads = round2(own.reduce((total, row) => total + signOf(row) * accountAmount(row, account.currency, table), 0));
     // Rows holding the account's currency exactly take that figure back; the
-    // rest are converted from what they were entered as.
+    // rest are converted from what they were entered as, when the rates may
+    // be written down.
     const exactRows = foreign.filter((row) => exactAmountIn(row, account.currency) !== null);
-    const converted = foreign.filter((row) => exactAmountIn(row, account.currency) === null);
+    const fit = (row: BackfillRow) => ratesFitForWriting(table, enteredMoney(row).currency, account.currency);
+    const toConvert = foreign.filter((row) => exactAmountIn(row, account.currency) === null);
+    const converted = toConvert.filter(fit);
+    const unfitHere = toConvert.filter((row) => !fit(row));
+    unfit.push(...unfitHere.map((row) => ({ id: row.id, accountId: account.id, from: enteredMoney(row).currency, to: account.currency })));
+    if (exactRows.length + converted.length === 0) continue;
+    const appReads =
+      unfitHere.length > 0
+        ? null
+        : round2(own.reduce((total, row) => total + signOf(row) * accountAmount(row, account.currency, table), 0));
     const fixedCents =
       own
         .filter((row) => row.currency === account.currency)
@@ -472,5 +521,5 @@ export function planBackfill(
     });
     balances.push({ accountId: account.id, currency: account.currency, before, after: afterCents / 100, appReads });
   }
-  return { changes, balances };
+  return { changes, balances, unfit };
 }

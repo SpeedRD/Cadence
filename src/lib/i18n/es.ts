@@ -253,6 +253,7 @@ export const es = {
     notPostingReasonMissingAccountAndGoal: "sin cuenta ni meta asignadas",
     notPostingReasonAccountArchived: "su cuenta está archivada",
     notPostingReasonGoalAchieved: "su meta ya está completa",
+    notPostingReasonRoundsToZero: "su monto queda en 0.00 en la moneda de su cuenta",
     waitingForRates: (count: number) =>
       `${count === 1 ? "1 pago recurrente en otra moneda está esperando" : `${count} pagos recurrentes en otra moneda están esperando`} las tasas de cambio. ${count === 1 ? "Se registrará" : "Se registrarán"} cuando haya tasas actuales disponibles.`,
     notPostingReasonFailed: "la última ejecución falló",
@@ -880,8 +881,8 @@ export const es = {
     itemUpdated: "Elemento recurrente actualizado",
     paymentsMoved: (moves: string) => `El pago ya registrado pasó a la nueva fecha: ${moves}.`,
     paymentMove: (from: string, to: string) => `del ${from} al ${to}`,
-    paymentsReleased: (dates: string) =>
-      `El cargo registrado para el ${dates} ya no corresponde a la nueva fecha, así que ese pago se publicará cuando venza.`,
+    recordedPaymentBlocksEdit: (payment: string, chargeDate: string, dueDate: string) =>
+      `No se guardó: el pago ${payment} del ${chargeDate} está registrado como el pago del ${dueDate} de este elemento, y ninguna fecha del nuevo calendario le corresponde. Cambia o elimina ese cargo primero.`,
     itemAdded: "Elemento recurrente agregado",
     itemDeleted: "Elemento recurrente eliminado",
     itemNoLongerExists: "Ese elemento ya no existe",
@@ -967,6 +968,7 @@ export const es = {
     },
     suggestionEvidence: (count: number, first: string, last: string) =>
       `${count} cobros, de ${first} a ${last}`,
+    suggestionMayRepeat: (item: string, account: string | null) => `Puede repetir ${item}${account ? ` (${account})` : ""}`,
     addAsRecurring: "Agregar como recurrente",
     dismissSuggestion: "Descartar",
     dismissSuggestionHint: "No volver a sugerir esto",
@@ -1157,6 +1159,8 @@ export const es = {
     amountWithCurrency: (code: string) => `Monto (${code})`,
     contributionAccountHint: "El dinero sale de esta cuenta como un gasto, convertido a su moneda si es diferente.",
     goalUpdated: "Meta actualizada",
+    currencyLocked:
+      "Esta meta ya tiene aportes, así que su moneda no se puede cambiar. Crea una meta nueva en la otra moneda.",
     goalCreated: "Meta creada",
     goalDeleted: "Meta eliminada",
     goalNoLongerExists: "Esa meta ya no existe",

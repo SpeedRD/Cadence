@@ -2,6 +2,7 @@
 
 import { getSettings, requireAuth } from "@/lib/auth";
 import { today } from "@/lib/date";
+import { formatMoney } from "@/lib/currency";
 import { formatDayMonth } from "@/lib/date-format";
 import { getDictionary, isLocale } from "@/lib/i18n";
 import { prisma } from "@/lib/prisma";
@@ -78,6 +79,17 @@ export async function saveRecurringAction(
     // rendered with is the guard: no rows match once the item has moved on, and
     // the user is told to reopen rather than silently undoing the other change.
     const edited = await updateRecurringItemDetailed(id, updatedAt, values, today(), (await getAppContext()).rates);
+    // The edit would let a payment the user recorded go (S17): nothing was saved.
+    if (edited.refused) {
+      const block = edited.refused;
+      return fail(
+        t.recordedPaymentBlocksEdit(
+          block.note ? `${block.note} (${formatMoney(block.amount, block.currency)})` : formatMoney(block.amount, block.currency),
+          formatDayMonth(block.chargeDate, locale),
+          formatDayMonth(block.dueDate, locale),
+        ),
+      );
+    }
     if (edited.written === 0) {
       const stillThere = await prisma.recurringItem.findUnique({
         where: { id },
@@ -85,21 +97,13 @@ export async function saveRecurringAction(
       });
       return fail(stillThere ? t.itemChangedElsewhere : t.itemNoLongerExists);
     }
-    // A schedule edit moves the payments already recorded for the item, or
-    // lets one go (updateRecurringItemDetailed); the toast says which.
-    const { rekeyed, released } = edited.settlements;
-    if (rekeyed.length > 0 || released.length > 0) {
+    // A schedule edit moves the payments already recorded for the item
+    // (updateRecurringItemDetailed); the toast says so.
+    const { rekeyed } = edited.settlements;
+    if (rekeyed.length > 0) {
       revalidateApp();
       return done(
-        [
-          `${t.itemUpdated}.`,
-          rekeyed.length > 0
-            ? t.paymentsMoved(rekeyed.map((move) => t.paymentMove(formatDayMonth(move.from, locale), formatDayMonth(move.to, locale))).join(", "))
-            : null,
-          released.length > 0 ? t.paymentsReleased(released.map((release) => formatDayMonth(release.dueDate, locale)).join(", ")) : null,
-        ]
-          .filter(Boolean)
-          .join(" "),
+        `${t.itemUpdated}. ${t.paymentsMoved(rekeyed.map((move) => t.paymentMove(formatDayMonth(move.from, locale), formatDayMonth(move.to, locale))).join(", "))}`,
       );
     }
   } else {

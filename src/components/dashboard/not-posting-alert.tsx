@@ -6,8 +6,8 @@ import { formatDayMonth } from "@/lib/date-format";
 import type { Dictionary, Locale } from "@/lib/i18n";
 
 import type {
+  PostingSkipReason,
   RecurringPostingSummary,
-  RecurringSkipReason,
 } from "@/lib/recurring-posting";
 
 /**
@@ -26,12 +26,13 @@ export function NotPostingAlert({
   locale: Locale;
   t: Dictionary["dashboard"];
 }) {
-  const reasonText: Record<RecurringSkipReason, string> = {
+  const reasonText: Record<PostingSkipReason, string> = {
     missing_account: t.notPostingReasonMissingAccount,
     missing_goal: t.notPostingReasonMissingGoal,
     missing_account_and_goal: t.notPostingReasonMissingAccountAndGoal,
     account_archived: t.notPostingReasonAccountArchived,
     goal_achieved: t.notPostingReasonGoalAchieved,
+    rounds_to_zero: t.notPostingReasonRoundsToZero,
   };
 
   const lines = [

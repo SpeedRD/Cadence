@@ -12,6 +12,7 @@ import {
   recomputeGoalSaved,
   removeContribution,
   updateManualContribution,
+  updateGoal,
   updateRecurringContributionAmount,
 } from "@/lib/goals";
 import { getDictionary, isLocale } from "@/lib/i18n";
@@ -45,8 +46,10 @@ export async function saveGoalAction(
 
   const { id, ...values } = parsed.data;
   if (id) {
-    await prisma.goal.update({ where: { id }, data: values });
-    // The currency may have changed, which changes what the cache should hold.
+    // The currency is refused once the goal holds a contribution (updateGoal).
+    const updated = await updateGoal(id, values);
+    if (!updated.ok) return fail(updated.reason === "currency_locked" ? t.currencyLocked : t.goalNoLongerExists);
+    // The target may have changed, which changes whether the goal is reached.
     await recomputeGoalSaved(id);
   } else {
     await prisma.goal.create({ data: values });

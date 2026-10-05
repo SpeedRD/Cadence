@@ -264,6 +264,7 @@ export const en = {
     notPostingReasonMissingAccountAndGoal: "no account or goal set",
     notPostingReasonAccountArchived: "its account is archived",
     notPostingReasonGoalAchieved: "its goal is fully funded",
+    notPostingReasonRoundsToZero: "its amount comes to 0.00 in its account's currency",
     waitingForRates: (count: number) =>
       `${count === 1 ? "1 recurring payment in another currency is" : `${count} recurring payments in another currency are`} waiting for exchange rates. ${count === 1 ? "It posts" : "They post"} once current rates are available.`,
     notPostingReasonFailed: "last run failed",
@@ -892,8 +893,8 @@ export const en = {
     itemUpdated: "Recurring item updated",
     paymentsMoved: (moves: string) => `The payment already recorded moved to the new date: ${moves}.`,
     paymentMove: (from: string, to: string) => `${from} to ${to}`,
-    paymentsReleased: (dates: string) =>
-      `The charge recorded for ${dates} no longer fits the new date, so that payment will be posted when it falls due.`,
+    recordedPaymentBlocksEdit: (payment: string, chargeDate: string, dueDate: string) =>
+      `Not saved: the payment ${payment} on ${chargeDate} is recorded as this item's ${dueDate} payment, and no date on the new schedule matches it. Change or delete that charge first.`,
     itemAdded: "Recurring item added",
     itemDeleted: "Recurring item deleted",
     itemNoLongerExists: "That item no longer exists",
@@ -980,6 +981,7 @@ export const en = {
     },
     suggestionEvidence: (count: number, first: string, last: string) =>
       `${count} charges, ${first} to ${last}`,
+    suggestionMayRepeat: (item: string, account: string | null) => `May repeat ${item}${account ? ` (${account})` : ""}`,
     addAsRecurring: "Add as recurring",
     dismissSuggestion: "Dismiss",
     dismissSuggestionHint: "Never suggest this again",
@@ -1171,6 +1173,8 @@ export const en = {
     amountWithCurrency: (code: string) => `Amount (${code})`,
     contributionAccountHint: "The money leaves this account as an expense, converted to its currency if it differs.",
     goalUpdated: "Goal updated",
+    currencyLocked:
+      "This goal already has contributions, so its currency can't be changed. Create a new goal in the other currency instead.",
     goalCreated: "Goal created",
     goalDeleted: "Goal deleted",
     goalNoLongerExists: "That goal no longer exists",

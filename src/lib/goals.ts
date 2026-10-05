@@ -7,7 +7,7 @@ import {
   type MoneyRow,
   type StoredMoney,
 } from "@/lib/account-money";
-import { IDENTITY_RATES, convert, type RateTable } from "@/lib/currency";
+import { IDENTITY_RATES, convert, ratesFitForWriting, type RateTable } from "@/lib/currency";
 import { today as todayInAppZone } from "@/lib/date";
 import { num, round2, withinCents, type DecimalLike } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -15,6 +15,8 @@ import { getRateTable } from "@/lib/rates";
 import { refuseRecentDuplicate } from "@/lib/data/recent-duplicate";
 import { skipMissedOccurrences } from "@/lib/data/recurring";
 import { manualContributionExternalId } from "@/lib/transactions";
+
+import type { Prisma } from "@/generated/prisma/client";
 
 export interface ManualContributionInput {
   goalId: string;
@@ -382,6 +384,31 @@ export async function deleteGoalDetachingLedger(goalId: string): Promise<boolean
   });
 }
 
+export type UpdateGoalResult = { ok: true } | { ok: false; reason: "currency_locked" | "not_found" };
+
+/**
+ * The goal form's edit. The currency changes only while the goal holds no
+ * contribution (S13), as an account's does only while it holds no
+ * transaction (updateAccount, R19): its contributions are in the goal's
+ * currency, and a new one would turn the saved total - and with it
+ * achievedAt, so whether a paid debt takes payments again - into a figure
+ * that moves with the exchange rate. The check and the write are one
+ * conditional statement, so a contribution logged meanwhile cannot slip
+ * between them.
+ */
+export async function updateGoal(
+  id: string,
+  values: Prisma.GoalUpdateManyMutationInput & { currency: string },
+): Promise<UpdateGoalResult> {
+  const updated = await prisma.goal.updateMany({
+    where: { id, OR: [{ currency: values.currency }, { contributions: { none: {} } }] },
+    data: values,
+  });
+  if (updated.count === 1) return { ok: true };
+  const exists = await prisma.goal.findUnique({ where: { id }, select: { id: true } });
+  return exists ? { ok: false, reason: "currency_locked" } : { ok: false, reason: "not_found" };
+}
+
 /**
  * Recompute Goal.savedAmount from its contributions - the source of truth - and
  * write the cached value back. Thin wrapper over rebuildGoalSaved() for the
@@ -476,7 +503,7 @@ export async function rebuildGoalSaved(
 
     const goal = await tx.goal.findUnique({
       where: { id: goalId },
-      select: { currency: true, targetAmount: true, achievedAt: true },
+      select: { currency: true, targetAmount: true, savedAmount: true, achievedAt: true },
     });
     if (!goal) return { saved: 0, justAchieved: false };
 
@@ -484,6 +511,13 @@ export async function rebuildGoalSaved(
       where: { goalId },
       select: { amount: true, currency: true, date: true },
     });
+    // A contribution in another currency than the goal's (one changed before
+    // updateGoal refused that) is summed at a rate; with none fit to be
+    // written down (ratesFitForWriting, R20) the stored total and achievedAt
+    // stay as they are rather than follow a fallback or stale rate (S13).
+    if (contributions.some((contribution) => !ratesFitForWriting(rates, contribution.currency, goal.currency))) {
+      return { saved: num(goal.savedAmount), justAchieved: false };
+    }
 
     // The cached total holds every contribution, whatever its date; reaching
     // the target is judged on the ones dated today or earlier, the same

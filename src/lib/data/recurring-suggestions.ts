@@ -16,6 +16,7 @@ import { prisma } from "@/lib/prisma";
 import { loadPairedCharges } from "@/lib/data/recurring-settlement";
 import {
   detectRecurringPatterns,
+  repeatedItem,
   type RecurringCandidate,
   type RecurringSuggestion,
 } from "@/lib/recurring-detection";
@@ -78,14 +79,17 @@ export async function findRecurringSuggestions(context: AppContext): Promise<Rec
       },
     }),
     prisma.recurringItem.findMany({
-      select: { name: true, note: true, amount: true, currency: true, accountId: true, categoryId: true, active: true },
+      select: { name: true, note: true, amount: true, currency: true, accountId: true, categoryId: true, active: true, frequency: true },
+      orderBy: { name: "asc" },
     }),
     prisma.recurringSuggestionDismissal.findMany({ select: { accountId: true, merchantKey: true } }),
-    prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true, name: true } }),
+    // Every account: an item the hint names may sit on an archived one.
+    prisma.account.findMany({ select: { id: true, name: true } }),
     prisma.category.findMany({ select: { id: true, name: true } }),
     loadPairedCharges(context.today),
   ]);
   const transactions = found.filter((row) => !paired.has(row.id));
+  const tracked = items.map((item) => ({ ...item, amount: num(item.amount) }));
 
   const candidates = detectRecurringPatterns({
     // A charge is suggested as what it was entered as (K7): a subscription billed
@@ -95,21 +99,27 @@ export async function findRecurringSuggestions(context: AppContext): Promise<Rec
       ...row,
       ...enteredMoney(moneyRow({ amount: row.amount, currency: row.currency, originalAmount, originalCurrency })),
     })),
-    trackedItems: items.map((item) => ({ ...item, amount: num(item.amount) })),
+    trackedItems: tracked,
     dismissed,
     today: context.today,
   });
 
   const accountNameById = new Map(accounts.map((account) => [account.id, account.name]));
   const categoryNameById = new Map(categories.map((category) => [category.id, category.name]));
-  return candidates.map((candidate) => ({
-    ...candidate,
-    accountName: accountNameById.get(candidate.accountId) ?? "",
-    categoryName: candidate.categoryId ? (categoryNameById.get(candidate.categoryId) ?? null) : null,
-    displayAmount: round2(
-      convert(candidate.amount, candidate.currency, context.displayCurrency, context.rates),
-    ),
-  }));
+  return candidates.map((candidate) => {
+    const repeated = repeatedItem(candidate, tracked);
+    return {
+      ...candidate,
+      accountName: accountNameById.get(candidate.accountId) ?? "",
+      categoryName: candidate.categoryId ? (categoryNameById.get(candidate.categoryId) ?? null) : null,
+      displayAmount: round2(
+        convert(candidate.amount, candidate.currency, context.displayCurrency, context.rates),
+      ),
+      mayRepeat: repeated
+        ? { itemName: repeated.name, accountName: repeated.accountId ? (accountNameById.get(repeated.accountId) ?? null) : null }
+        : null,
+    };
+  });
 }
 
 /**

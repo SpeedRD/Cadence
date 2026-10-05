@@ -13,7 +13,7 @@
  * and records it as having paid that occurrence (recordUpcomingPayment).
  */
 import { Prisma } from "@/generated/prisma/client";
-import { inAccountCurrency } from "@/lib/account-money";
+import { inAccountCurrency, refuseZeroAmount } from "@/lib/account-money";
 import { ratesFitForWriting } from "@/lib/currency";
 import { prisma } from "@/lib/prisma";
 
@@ -65,7 +65,12 @@ function incomingFor(
     accountId: input.accountId,
     type: "EXPENSE" as const,
     date: input.date,
-    ...inAccountCurrency({ amount: input.amount, currency: input.currency }, accountCurrency, rates),
+    // A receipt that comes to 0.00 in the account's currency is refused
+    // (RoundsToZeroError, R29/S19), as a manual entry is.
+    ...refuseZeroAmount(
+      { amount: input.amount, currency: input.currency },
+      inAccountCurrency({ amount: input.amount, currency: input.currency }, accountCurrency, rates),
+    ),
     note: input.rawDescription,
     categoryId: input.categoryId,
   };

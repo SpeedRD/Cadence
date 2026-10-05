@@ -269,8 +269,9 @@ export async function importTransactionsAction(
   try {
     result = await importCsvTransactions(parsed.data, (await getAppContext()).rates);
   } catch (error) {
-    // Rows in another currency with no current rate to convert them: nothing
-    // was imported (R20).
+    // Rows in another currency with no current rate to convert them (R20),
+    // or one that comes to 0.00 in the account's currency (S19): nothing was
+    // imported.
     const message = refusedWriteMessage(error, locale);
     if (message) return fail(message);
     throw error;
