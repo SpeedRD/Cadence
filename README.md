@@ -1,173 +1,140 @@
 # Cadence
 
 Cadence is a single-user personal finance dashboard built around a twice-monthly pay
-cycle instead of the generic calendar month. Budgets, safe-to-spend, goal roadmaps,
-and the affordability check are all computed per pay period — **Period A: 1st–15th**
-and **Period B: 16th–end of month** — so the numbers match how you actually get paid.
+cycle instead of the calendar month. Budgets, safe-to-spend, goal roadmaps and the
+affordability check are all computed per pay period — **Period A: 1st–15th** and
+**Period B: 16th–end of month** — so the numbers match how you actually get paid.
 
 ![Cadence dashboard: payday check-in prompt, the current pay period's safe-to-spend per day, spending against budget, and monthly spending pace](screenshots/dashboard.png)
 
-*Every screenshot in this README was captured against a throwaway database seeded
-with fictional data.*
+*Every screenshot and example in this README comes from a throwaway database seeded
+with fictional data, shown in USD.*
 
 ## Why Cadence
 
 Most budgeting apps assume one paycheck a month. Cadence assumes two, and builds
 everything else around that:
 
-- Twice-monthly budgeting, split cleanly at the 1st–15th and 16th–end boundaries
-  (a payday that lands on a weekend is treated as the Friday before)
+- Twice-monthly budgeting, split at the 1st–15th and 16th–end boundaries. The pay for
+  the 16th–end lands on the 15th and the pay for the 1st–15th at the end of the month
+  before, each pulled back to the Friday when it falls on a weekend.
 - A guided payday check-in that reconciles balances, records income, and plans each
-  period's protected buffer per account and its category allocations
-- A safe-to-spend-per-day figure computed from the period budget and what's already
-  been spent
-- Recurring subscriptions and contributions that post themselves on their due
-  dates, so the ledger stays current without retyping the same charges
-- An Afford calculator that checks whether an installment purchase fits every pay
-  period it lands in before you commit to it
-- Savings goals with a per-pay-period contribution roadmap, funded from real
-  accounts
-- Multi-currency support (DOP, USD, and EUR as first-class currencies) with cached
-  USD-based exchange rates — changing your display currency only changes how
-  figures are presented, never the currency a transaction was recorded in
-- Manual entry and CSV import as the baseline, with optional Gmail/Outlook
-  review-based automation on top
-- English and Spanish interface localization, dark and light themes
-- A single-user, privacy-conscious design: no multi-tenant accounts, and nothing
-  enters the ledger that you did not set up yourself. Review happens when you
-  create and confirm a plan — a recurring item, an Afford installment plan, a
-  payday check-in, an emailed receipt — not per transaction afterwards. Once a
-  plan is confirmed, its transactions post on schedule without further prompts.
+  period's protected buffer, commitments, goal funding and category budgets per account.
+- A safe-to-spend-per-day figure from the period budget and what has been spent.
+- Recurring subscriptions and contributions that post themselves on their due dates.
+- An Afford calculator that checks an installment purchase against every pay period it
+  lands in before you commit to it.
+- Savings and debt goals with a per-pay-period roadmap, funded from real accounts.
+- USD, DOP and EUR as first-class currencies: every amount is stored in its account's
+  currency, and the display currency only changes how totals are presented.
+- Manual entry and CSV import as the baseline, with optional reviewed Gmail/Outlook
+  ingestion on top.
+- English and Spanish, dark and light themes, a phone layout and a tablet one.
+- Single-user and privacy-conscious: nothing enters the ledger that you did not set up.
+  Review happens once, when you confirm a plan (a recurring item, an Afford plan, a
+  check-in, an emailed receipt); after that its rows post on schedule.
+
+## The rules every screen shares
+
+A handful of rules are decided in one place and read everywhere, so the Dashboard,
+Budgets, the check-in, Afford, Goals and Reports never disagree.
+
+- **The period clock.** "Today" is a civil day in `APP_TIMEZONE`. The *current* period
+  is the one containing today; the *plan* period is the one a check-in opened today
+  plans for — the next one from the day the current period's pay lands, otherwise the
+  current one. Spending so far reads the current period; money already planned (the
+  check-in, goal pages, roadmaps) reads the plan period.
+- **Period commitments.** A period's commitments are every recurring occurrence due in
+  it, each in one of three states: posted (its row is in the ledger), paid by a charge
+  you entered, or still to come. An item that cannot post (no account, an archived
+  account, a goal already reached) is listed but never counted. The hero, Budgets,
+  the check-in, Afford and the goal plan all read this one list.
+- **Period income.** A period's income is the money that funds it: the check-in's
+  paycheck, plus any ordinary deposit from five days before the period starts (pay
+  often lands early) until the next period's window opens. One-off income and paybacks
+  of a shared expense count on the day they arrive and are never projected.
+- **Budget spending.** What counts against a period's budget is every expense that
+  does not stand for a recurring occurrence and is not a goal contribution's own
+  expense, at your share when it was shared. The category rows add up to the total.
+- **One history window.** Every average over past periods — Afford's income
+  projection, the check-in's category suggestions, Reports' per-period average, the
+  monthly pace — reads complete periods only, from your first recorded spending (a
+  partial first period is skipped; payments posted in one go for past dates do not
+  move it back) and, if set, from Settings' **Count history from** date.
+- **Money in the account's currency.** A transaction is stored in its account's
+  currency. An amount entered, imported, approved or posted in another currency is
+  converted once, at that day's rate, with the entered amount and the rate kept beside
+  it, so a balance never moves with the exchange rate.
+- **Rate fitness.** A conversion is only written down with a rate fit for it: USD needs
+  none; DOP needs Banco Popular's published sell rate from the last seven days; EUR
+  takes the bank's EUR rate or a market rate fetched within the last day. When no fit
+  rate exists the write is refused with nothing saved, and the form says so. Screens still show estimated totals on an older
+  table, and a notice says so only when the table is not fit for the currencies you
+  actually hold.
 
 ## Features
 
 ### Dashboard
 
-The period hero shows safe-to-spend per day, what's been spent against the period
-budget, what's still committed (recurring items due before the period ends), and
-income logged. Below it: the monthly spending pace against your own average, active
-goals, and everything due in the next seven days. If a recurring item cannot post
-(missing account or goal, archived account), the dashboard says so.
+The period hero shows safe-to-spend per day, spending against the period budget, what
+is still committed, and income so far. Below it: the monthly spending pace against
+your own average, active goals, and everything due in the next seven days. A recurring
+item that cannot post, or an Afford plan that stopped fitting, raises an alert here.
 
 ### Inbox
 
-Every standing signal the app has noticed, in one place: a recurring item that
-cannot post, an Afford plan whose remaining payments no longer fit, a charge pattern
-that looks like an untracked bill, a goal whose confirmed plan for the period is
-behind its roadmap, a dated goal whose pace the accounts' projected room cannot
-carry somewhere before its target date. Each one keeps appearing where it always
-did (the Dashboard alerts, the Recurring page's badges and "Looks recurring" card,
-the goal page's roadmap note) - the Inbox is a second place for the same signals,
-not a replacement, and it re-presents each signal's own result rather than
-detecting anything on its own. The goal forecast is the one exception with no
-other surface: it is Afford's projection (income, scheduled commitments, buffer,
-and the goals ahead in funding order) walked period by period from the plan
-period to the goal's target date, naming the first period the room falls short
-in and by how much - a different question from "behind its roadmap", which reads
-what this period's confirmed check-in set aside.
-Items are grouped by severity in the app's own two terms:
-**Needs attention** (red: money already committed is not where the plan says it is)
-first, **Advisory** (amber, like Afford's checks: nothing is blocked or changed)
-after; a plan that would stop fitting in a period ahead is advisory, since nothing
-has gone wrong yet. Each carries the figures that triggered it, a link to the
-surface that can resolve it, and **Dismiss**, which keeps that evidence out of the
-Inbox even while its condition persists - the same keyed dismissal the Recurring
-page's suggestions have, generalized to every source, but keyed by what it was made
-on: the period (goal behind its roadmap, goal at risk, an Afford plan's failing
-period) or the reason (why a recurring item is not posting), so a later or different
-problem is a new item, not a hidden one. Dismissing changes nothing else: the
-Dashboard alert, the Recurring badge or the goal page's note still show the signal
-until it is actually resolved. The Inbox nav link carries a count of everything
-still listed ("to review", advisory items included), so the badge and the page
-always agree. When dismissals are why the Inbox is empty, it says how many items
-are hidden instead of claiming everything is in order.
-Under the hood each source is one pure detector registered in
-`src/lib/insights.ts`; a new kind of insight is one more function there.
+Every standing signal in one place: a recurring item that cannot post, an Afford plan
+whose remaining payments no longer fit, a charge pattern that looks like an untracked
+bill (with "May repeat ..." when an existing item may already cover it), a goal whose
+confirmed plan is behind its roadmap, and a dated goal whose pace the projected room
+cannot carry before its target date. Each detector in `src/lib/insights.ts` is a pure
+function that re-presents a result the app already computes, so the Inbox can never
+disagree with the surface it links to.
+
+Items are grouped as **Needs attention** (money already committed is not where the plan
+says it is) and **Advisory** (nothing is blocked yet). Each carries the figures behind
+it, a link to where it is resolved, and **Dismiss**, keyed by what the item was made
+of — the period for a goal or an Afford plan, the reason for an item not posting — so a
+later or different problem shows up as a new item rather than staying hidden. Dismissing
+changes nothing else, and the nav badge always counts exactly what the page lists.
 
 ### Payday check-in
 
-A five-step planner that runs each payday: **confirm account balances → record
-income → review commitments and goals → flexible categories → confirm.** Every
-"recommended" figure is recomputed server-side on confirm, so what you saw is what
-gets written. The same wizard opens from the Budgets page for whichever period is
-being viewed, so a period that was never checked in can be done late (its paycheck
-is dated on that period's payday) and a confirmed one can be revisited; a check-in
-keeps its original date when it is re-confirmed. Step 2 takes, beside each
-account's income, an optional "of which one-off" part (a bonus, a 13th salary): it
-counts as the period's income, and like one-off income rows it is left out of the
-income estimate Afford and the room checks project later periods from.
-
-A period's income is the money that funds it: a check-in's paycheck counts in the
-period the check-in planned, and any other deposit that lands in the last five days
-before a period starts counts in that period - pay for the 16th-31st that arrives on
-the 15th, or a day or two early, is the second half's income, whether it came through
-the check-in or a CSV import. A deposit in those days is what the CSV import compares
-with a check-in's recorded paycheck, so the next period's pay is never offered as the
-one already recorded. Goal money follows the pay itself: a contribution belongs to a
-period from the day that period's pay is recorded landing (or its payday, when none
-is recorded) until the next period's pay lands, so a contribution made the day the
-salary arrives belongs to that salary's period, and one made before the next salary
-arrives still belongs to the current one. One-off income and paybacks of a shared
-expense are not pay for a period and count by the day they arrive. The Dashboard,
-Reports and Afford all read it that way; the Transactions and account pages total
-rows by their date and say so.
+A five-step planner: **confirm balances → record income → commitments and goals →
+flexible categories → confirm.** Every recommended figure is recomputed on the server
+when you confirm, and a second tab that changed the plan in between is caught rather
+than overwritten. The wizard opens from the Budgets page for any period, so a missed
+period can be planned late and a confirmed one revisited.
 
 ![Payday check-in step 1: reconcile each account's reported balance against the ledger](screenshots/payday-step-balances.png)
+
+**Step 1** asks for each account's balance *before* this period's pay landed; the
+ledger figure is usually the right answer. **Step 2** records the income per account,
+with an optional one-off part (a bonus) that counts now but is never projected. Pay
+that is already in the ledger — a CSV import of the salary, a deposit typed by hand —
+is listed and **adopted**: the check-in records only what is not there yet, so the
+paycheck is never counted twice. Deposits set aside for an upcoming payment (see
+Transactions) are not pay and are listed apart.
 
 ![Payday check-in step 2: record the income received into each account](screenshots/payday-step-income.png)
 
 ![Payday check-in step 3: protected buffer per account, with the subscriptions each account has to cover and a picker to move one to another account, then the goal roadmap funded from each account's room in proportion to how much it has to spare](screenshots/payday-step-buffer.png)
 
-The **protected buffer is per account**, not one global number. Each account that
-received income keeps its own buffer — a configurable percentage of that account's
-income or a fixed minimum, whichever is larger — and the step measures it against the
-subscriptions charged to that account. If one account would end below its buffer,
-the wizard says how far, suggests the account with the most room, and lets you move a
-subscription there without leaving the dialog (the change is saved to the recurring
-item itself). **Goal funding is per account too**: each dated goal's roadmap amount
-is recommended from the accounts that still have money to spare after their
-subscriptions and their own buffer, in proportion to how much room each one has,
-never more than an account has, and with a shortfall called out when the room across
-every account can't cover the goal. Goals are placed in the order they appear (oldest
-first), each taking its share out of the pool before the next is placed, so two goals
-are never pointed at the same money. Every account's share is editable in that
-account's currency; the goal's total is their sum, and confirming writes one
-allocation row per goal and account. Recurring contributions, goal funding,
-essential fixed categories, and last period's unspent carryover are then set aside,
-and what's left is available for flexible categories. A plan that ends in deficit,
-or with a zero buffer, can still be confirmed — but only after an explicit
-acknowledgement.
+**Step 3** works per account. Each account that received income keeps its own
+protected buffer (a percentage of its income or a fixed minimum, whichever is larger)
+and covers the commitments charged to it, already-paid ones included and marked. If an
+account would end below its buffer, the step says by how much and lets you move a
+subscription to the account with the most room. Each dated goal's roadmap amount is
+then recommended from the accounts' remaining room, in proportion to how much each has
+spare, oldest goal first; every share is editable. Essential fixed categories and last
+period's carryover are set aside too, and what is left is available for flexible
+categories in **Step 4**.
 
-Step 1 spells out exactly what "reported balance" means: each account's balance
-**before this period's income landed**, not its current balance if the pay has
-already arrived — the ledger balance already shown for that account is usually the
-right starting point, and the copy points there directly, so re-opening a check-in
-days after payday doesn't invite typing today's actual balance and double-counting
-the paycheck.
-
-That reported balance feeds one more figure in Step 3's buffer card: each account's
-row also shows what it **supports** — that account's own balance before this
-period's income, plus the income, minus its due subscriptions and its own buffer.
-That normally lines up with the income-only figures above it. When the balance was
-already negative before this check-in — money that left the account after the last
-payday but before this one was confirmed, which the period-income math has no way
-to see — supports comes in lower and the row shows an inline warning naming the
-exact gap, even when Step 1 still reads "Matches ledger" (the negative balance came
-from real transactions, not something typed in).
-
-That gap **caps "Available for flexible categories"** — Step 3's summary shows a
-"Capped by your reported balance" line for exactly that amount when it applies, so
-the figure never claims the accounts can support more than they actually can. If
-Step 4's allocations still add up to more than the capped figure, confirming scales
-every flexible category down proportionally (the same largest-remainder technique
-the planner already uses to fit suggestions and goal shares to a total) before
-writing the Budget rows the Dashboard's safe-to-spend reads — so that figure inherits
-the correction without its own formula changing — and a toast names the adjustment,
-e.g. "scaled down from DOP 30,000.00 to DOP 18,500.00 - what your reported balance
-supports." There's no separate acknowledgement gate for the gap itself; it works
-through the same mechanism that already asks for confirmation on any over-committed
-plan, since a Step 4 total that now exceeds the lowered figure reads as an ordinary
-over-allocation.
+When an account's reported balance was already negative before the pay — money that
+left after the last payday — its row shows what it really **supports** and warns about
+the gap. That gap caps "Available for flexible categories", and if Step 4 still adds up
+to more, confirming scales the flexible budgets down proportionally and says so, e.g.
+"scaled down from $995.00 to $342.43".
 
 ![Payday check-in step 3's buffer card showing the balance reconciliation warning: one account with a reported balance already negative, its "Supports" figure lower than its income-only figures and an inline warning naming the gap, next to a second account with a clean "Supports" line and no warning](screenshots/payday-step-buffer-reconciliation.png)
 
@@ -175,25 +142,21 @@ over-allocation.
 
 ![Payday check-in confirm toast showing a scaled-down allocation: flexible budgets reduced from the submitted total to what the reported balance actually supports](screenshots/payday-confirm-scaled-toast.png)
 
+The carryover offered to the next period is what this period left unspent of its
+flexible room; it is provisional while the period runs and settles on the first visit
+after it ends. A plan that ends in deficit, or with no buffer, can still be confirmed,
+after an explicit acknowledgement.
+
 ### Budgets and safe-to-spend
 
 ![Budgets page: overall period budget, committed and safe-to-spend figures, and a per-category table with progress meters](screenshots/budgets.png)
 
-Set an overall budget per period, or let it fall back to the sum of category
-budgets. The budget is net of commitments: safe-to-spend is the period budget minus
-flexible spending so far, divided by the days remaining. Charges posted by recurring
-items, charges you entered that paid a recurring occurrence and goal contributions
-don't eat into it — the payday check-in already set that money aside — and a shared
-expense counts at your share. Anything else counts in its category, a charge filed
-under Subscriptions or Savings that no recurring item or contribution covers
-included, so no charge is left out of every figure.
-The category rows count the same spending, so they add up to the overall figure,
-and the check-in's category suggestions and the carryover are measured on it too. The period switcher steps
-through any past or future period; its plan button reads "Plan this period" for
-the one due next, "Review this period's plan" once it's confirmed, and "Check in
-for this period" for any other period that was never checked in, so a period
-missed months ago can still be planned retroactively. "Copy last period" carries
-a previous budget forward.
+Set an overall budget per period or let it be the sum of the category budgets.
+Safe-to-spend is the budget minus budget spending so far, divided by the days left.
+Recurring charges, charges that paid a recurring occurrence and goal contributions
+don't count against it — the check-in already set that money aside. The period switcher
+steps through any period; its button reads "Plan this period", "Review this period's
+plan" or "Check in for this period", and "Copy last period" carries a budget forward.
 
 ![Budgets page on a past period that was never checked in, showing its "Check in for this period" button](screenshots/budgets-plan-period.png)
 
@@ -201,221 +164,92 @@ a previous budget forward.
 
 ![Transactions page with search, account, category, type, source, and date filters above the ledger](screenshots/transactions.png)
 
-Manual entry, transfers between your own accounts (linked debit/credit rows that
-never count as income or expense; between accounts in different currencies you can
-declare the amount the bank actually credited, and the receiving leg records
-exactly that instead of a converted figure), external transfers (money leaving to
-or arriving from somewhere Cadence doesn't track), and CSV import with a
-date-format picker for bank exports that don't use ISO dates. Imports run through
-deterministic merchant-name categorization rules and a review step that can group
-repeated rows into a recurring item or record a pair as a transfer. Rows that match
-a CSV row already in the ledger (same account, date, amount, currency and
-description) are shown as possible duplicates and skipped unless you import them
-anyway, so re-importing an overlapping statement adds nothing twice. Optional
-column mappings cover a file that already carries more than a bank statement does,
-such as Cadence's own `transactions.csv` export: with an Account column set, only
-the rows naming the account you picked are imported (one pass per account brings
-a multi-account file back), a Category column files each row under the category
-whose name it carries, and One-off, One-off income, Your share and Reimburses
-columns restore the per-row flags described below - a payback names its shared expense by date,
-description and amount, and is linked to it when exactly one such expense exists
-(in the same file first, then in the ledger); otherwise it lands as ordinary
-income and the import says so. Every row shows where it came from: manual, CSV,
-Gmail, Outlook, a payday check-in, an opening balance, or automatic recurring
-posting.
+Manual entry; transfers between your accounts (never income or spending; across
+currencies you can enter the amount the bank actually credited); external transfers;
+and CSV import with a date-format picker, merchant-name categorization rules, and a
+review step that can group repeated rows into a recurring item. A row matching one
+already in the ledger is shown as a possible duplicate and skipped unless you import
+it anyway. Cadence's own `transactions.csv` export re-imports through the same importer.
+Every row shows its source: manual, CSV, Gmail, Outlook, check-in, opening balance or
+recurring posting.
 
-An expense that is unusually large for its category - more than three times the
-median of the category's organic spending over the last six months, once it has at
-least three prior transactions to measure against - is offered as a possible
-**one-off** at the point of entry: a question after saving a manual transaction,
-and an "Unusually large" group in the CSV review step. Nothing is decided for you:
-the row lands as normal spending unless you confirm it, and any organic expense can
-be marked or unmarked as a one-off from the row menu at any time. A one-off still
-counts as spending everywhere - balances, period totals, budgets - but is left out
-of the two averages that estimate typical spending - the payday check-in's category
-suggestions and Reports' calendar-month average - and of the Dashboard's monthly pace
-projection, which lists what it left out as its own line (never extrapolated, never
-compared with the average). Automatically posted recurring
-charges are never classified; their amounts are scheduled, not organic.
+A few flags change how a row is averaged, never what it is:
 
-An expense paid on behalf of several people can be marked as a **shared expense**
-with your own share of it. The transaction keeps the full amount - it is what left
-the account, so the ledger and the account balance count it in full - while the
-budgets (the period's spent, its category rows, the carryover and the suggestions),
-Reports' spending and averages, the one-off check and the monthly pace projection read
-your share in its place (the rest shows on the pace card's "not projected" line), so
-a DOP 2,725 round of movie tickets neither overspends the budget, trips the one-off
-prompt nor drags future suggestions up by money that was never yours.
-As people pay you back, log each deposit as income and pick the expense it
-reimburses: a linked deposit raises the balance and counts as the period's income, but it never
-offsets the expense and is never averaged as income by Afford's projections, and the expense's row shows how much
-has come back so far and what is still pending. Nothing is projected for money
-not yet received; a share is recovered only when its deposit is a real, logged
-row. A shared expense with deposits linked to it cannot be deleted or unshared
-until they are unlinked.
+- **One-off** — an unusually large expense (over three times its category's median)
+  is offered as a one-off when you save it. It still counts everywhere money is a
+  fact, but not in the averages that estimate typical spending.
+- **Shared expense** — a USD 120 dinner paid for four keeps its full amount in the
+  ledger, while budgets and averages read your USD 30 share. Paybacks are logged as
+  income linked to the expense, which shows what has come back.
+- **One-off income** — a gift or a refund counts as income but is never projected.
+- **Set aside for an upcoming payment** — a deposit (say USD 200 from a relative
+  toward a laptop installment) can be earmarked for one or more upcoming recurring
+  payments on the same account. Each payment then asks that much less of the plan
+  everywhere its cost is read — the check-in, Afford, the From Afford tracker, the
+  room check — while the posted charge keeps the full bank amount, and the earmarked
+  part is not income. Lowering or pausing the payment hands the rest back as income.
 
-Income that will not come again - a gift, a sale, a refund - can be marked as
-**one-off income** with the switch on the transaction form. It counts as real
-income wherever income is a fact - the period's income, Reports, the account
-ledger and balance - but is left out of the income history Afford averages to
-project future periods, so a single DOP 5,000 gift does not inflate what Cadence
-expects you to earn next. Paychecks recorded by a payday check-in, automatically
-posted recurring income and deposits linked to a shared expense cannot carry the
-flag (the last are already left out of the averages by their link). Flagged rows
-show a "One-off income" badge in the Transactions table and the account ledger,
-and the export's One-off income column brings the flag back through the CSV import.
-
-A deposit can also be set aside for an upcoming recurring payment - a family
-member sending part of an installment, money moved in from an account Cadence
-does not track. Switch on **This money is for an upcoming payment** on an income
-row or an incoming external transfer and pick the payment (each one charged to
-the same account is listed with its date and what it still asks); the amount
-starts at the smaller of the deposit and what the payment still asks, and a
-deposit can be split over several payments with "Add another payment". That
-payment then asks that much less of the plan everywhere its cost is read - the
-check-in's Step 3 and the account's room, the confirmed plan and
-"Recommended", Afford's checks, the From Afford tracker and the room check -
-whether it has posted yet or not, and the set-aside part of the deposit is left
-out of the income Afford averages and of the pay a check-in's Step 2 lists and
-adopts, so the money is counted once - only the part that still covers a payment:
-if the payment is lowered or paused, the rest counts as income and pay again. The posted charge keeps the full bank amount; the Recurring page
-and Step 3 say what covered it ("DOP 5,000.00 covered by ..."). Editing the
-deposit later keeps what it set aside, even for a payment already in an earlier
-period (that payment stays listed for this deposit only); a line goes only when
-you remove it, switch the section off or move the deposit to another account.
-Deleting the deposit removes what it covered. A paycheck recorded by a check-in cannot be set aside (it is already
-the plan's income).
-
-A charge in the account's currency that may be an upcoming payment in another
-currency - a peso charge for a euro installment not posted yet - is put to you
-as a possible match, as it is after posting: when you type it by hand, as a row
-of a CSV import (in the possible-duplicates group) and as a receipt in the
-review queue. "It's that payment" keeps the charge exactly as it is and records
-it as that payment, so posting never charges it again, whatever you later change
-in its note; "It's a different charge" brings it in on its own. Deleting the
-charge undoes it: the payment then posts on its due date.
+When a charge you enter (or import, or approve from a receipt) looks like a recurring
+payment that already posted, or one about to post, Cadence asks rather than guessing:
+"It's that payment" records the charge as that occurrence, so it never posts again;
+"It's a different charge" keeps both. Nothing is matched silently.
 
 ### Review queue
 
 ![Review queue for email-derived transactions, empty, with the Manage connections action](screenshots/review.png)
 
 Connect Gmail and/or Outlook and transactional emails are parsed into a staged queue.
-Pick an account, adjust the category or amount, then approve or reject each one.
-Nothing from email becomes a real transaction until you approve it — and if an
-approved receipt is the charge a recurring item was about to post, posting notices
-and skips the duplicate.
+Pick the account, adjust the category or amount, and approve or reject each one.
+Nothing from email becomes a transaction until you approve it.
 
 ### Accounts
 
 ![Accounts page listing a checking and a savings account with balances and activity counts](screenshots/accounts.png)
 
-Checking, savings, cash, and other account types, each in its own native currency.
-Set an opening balance per account to seed its starting point before tracked
-transactions begin (exactly one per account, enforced by the database). Once an
-account has other transactions the opening balance is fixed; "Correct starting
-balance" in the account's menu records what was already there as an incoming
-external transfer dated at the start, which raises the balance the same way without
-counting as income or spending. Archive an account you no longer use; its history
-stays.
+Checking, savings, cash and other accounts, each in its own currency, with one opening
+balance each. "Correct starting balance" fixes the start of an account that already has
+history; archiving keeps its history.
 
 ### Recurring
 
 ![Recurring page: subscriptions and recurring contributions, one item tagged "4 payments left"](screenshots/recurring.png)
 
-Subscriptions (bills going out) and recurring contributions (money you put into a
-goal on a schedule). Both reduce safe-to-spend for the period they fall in - a
-subscription the period its due date is in, a contribution the period whose pay
-funds it (one due on a payday belongs to the period that pay starts, where the goal
-also counts it as contributed) - and both
-**post automatically** when they come due: a subscription becomes an expense on its
-account; a contribution becomes the same expense plus a logged contribution to its
-goal, converted once into the goal's currency. A daily Vercel Cron
-(`/api/cron/recurring`) does the posting, and opening the app runs the same catch-up,
-so a day the cron missed is never lost. Monthly and yearly items keep their anchor
-day (an item due on the 31st is charged on the 28th in February and back on the 31st
-in March). An item missing its account or goal, or pointing at an archived account,
-is flagged here and skipped rather than posted; so is a contribution to a goal that
-is already fully funded, which resumes on its own if the goal's target is raised; a
-backlog of contributions stops as soon as the goal is reached, and the plan reserves
-only the contributions up to the one that reaches it (the rest are listed as not
-posting). What an item missed
-while it could not post is never charged afterwards: resuming it, restoring or
-assigning its account, giving it a goal, or raising an achieved goal's target moves
-its next date to the first occurrence on or after today (a payments-left count is
-left as it was), whereas an item merely overdue because a run failed posts its whole
-backlog. A due date you type that is already behind today counts the dates before
-today as already paid, as Afford does: the item starts at its first occurrence on or
-after today, with a payments-left count less those, and a plan with every payment
-behind today is not saved. The form says which dates count as paid and offers "Post
-them - they're not in my accounts" for when they are missing from your accounts. A charge you already
-entered yourself (by hand, from a CSV or an approved receipt, on any account, up to
-five days before a due date early in a pay period) is taken as that occurrence paid
-and nothing is posted for it. Each such charge stands for one occurrence of one item,
-for good, and the payday check-in marks exactly the same occurrences "Already paid".
-For a contribution, the goal gets the contribution and your charge stays its expense. A
-finite item — an installment plan recorded from Afford, or any item given a "Payments
-left" count — shows how many payments are left and switches itself off after the last
-one, showing as finished rather than paused. "Mark as paid off" ends a plan early when
-the remainder was settled outside the app; a finished plan restarts only by editing
-its payments left.
+Subscriptions (bills going out) and recurring contributions (money into a goal on a
+schedule), weekly, every two weeks, twice a month on two days, monthly or yearly. Both
+**post automatically** through one code path: a daily Vercel Cron
+(`/api/cron/recurring`) runs it and so does opening the app, so a missed day is never
+lost. A subscription becomes an expense on its account; a contribution becomes that
+expense plus a contribution to its goal. A charge you already entered for an
+occurrence — up to five days before it is due — pays it, and nothing is posted twice.
+
+A due date typed in the past counts the dates before today as already paid unless you
+choose to post them. An item that could not post (no account, an archived account) is
+moved to its next date when fixed, instead of charging the gap. A finite item — an
+installment plan, or any item given "Payments left" — counts down and switches itself
+off after the last payment; "Mark as paid off" ends one early. Moving a schedule never
+drops a payment you already recorded: the edit is refused with the charge named until
+that charge is changed or deleted.
 
 Plans recorded from Afford's **I bought this** have their own **From Afford** section
-rather than sitting among the subscriptions (a hand-entered plan, even one given
-"Payments left", stays a subscription). Each one still paying is re-checked on every
-visit: its remaining payments - the live due dates and countdown, exactly what will
-post - are run through Afford's two checks again against today's projections, with
-the plan's own installments left out of the commitments it is judged against. The
-badge reads **Still on track** while every remaining period passes, or names the
-first period that no longer does and by how much ("Short by DOP 1,683.33 in Oct
-1-15") - typically because a commitment recorded since took the room. The Dashboard
-shows an alert naming those plans, and each one is listed in the Inbox and counted
-by its nav badge while it lasts; all of it clears on its own once the room is back
-(a commitment paused or removed, the plan paid off). Advisory only, like Afford
-itself: nothing is blocked, and posting is untouched.
+and are re-checked on every visit against today's projections: **Still on track**, or
+the first period that no longer fits and by how much ("Short by $360.00 in Nov 1-15").
+The Dashboard and the Inbox list them while it lasts. Advisory only: posting is
+untouched.
 
 ![Recurring page's From Afford section: one plan still on track, another short by a named amount in a named pay period, with the nav's red count badge visible in the sidebar](screenshots/recurring-from-afford.png)
 
 ![Dashboard alert for a no-longer-viable Afford plan, naming the plan and the shortfall and linking back to the Recurring page](screenshots/dashboard-afford-alert.png)
 
-A **large subscription** — DOP 10,000 or more a charge, converted if entered in another
-currency — gets an advisory room check right in the form, recomputed as the amount,
-currency, frequency or due date changes. It reuses Afford's projection for the one pay
-period the "Next due" date lands in: each active account's income averaged from its
-comparable periods, its other recurring items due then, its share of the essential
-fixed categories, and its protected buffer, then this charge on top. The panel lists every account's headroom before and after, marks
-which keep their buffer, and names the one with the most room; if none does it says so
-and suggests two smaller subscriptions on different accounts, since a subscription is
-always charged to a single account. It never blocks saving, and a contribution is never
-checked here — its funding is planned per account in the payday check-in's Step 3.
+A **large subscription** (about USD 165 a charge or more; the threshold is DOP 10,000,
+converted) gets a room check in the form for the period its next due date lands in:
+each account's headroom before and after the charge, which keep their buffer, and the
+one with the most room. It never blocks saving.
 
 ![Large-subscription room check in the Recurring form: each account's headroom before and after the charge, with the one that keeps its buffer recommended](screenshots/recurring-large-subscription.png)
 
-A bill you pay but never set up is found for you. Every visit to the page scans
-your manual and imported spending for a merchant charged the same amount (within
-10%) on a schedule at least three times, and lists what it finds under **Looks
-recurring** with the cadence, the account, the category the charges are filed
-under, the next due date and the charges themselves. Nothing is created until you
-click **Add as recurring**, which makes the real subscription through the same path
-as the form; **Dismiss** is permanent for that merchant on that account, however
-many more charges arrive. A charge posted by an existing item, a confirmed one-off,
-income, and anything an active item already covers are never evidence, and a
-pattern that has stopped is not suggested. Weekly, every-2-weeks, monthly and yearly
-are read from the gaps between charges; **twice a month** is read from the days of
-the month instead, since its gaps look exactly like a biweekly's: two anchor days
-about half a month apart that the charges land on, with the same weekend slop a
-payday gets (a 1st that falls on a Sunday is paid on the Friday before). A biweekly
-charge drifts across the month and cannot fit two anchors without leaning on those
-shifts, and the reading that needs fewer of them wins. Accepting a twice-a-month pattern creates one real **twice a month** recurring
-item, anchored on both days - the Recurring form can create one directly too, with
-a second "Second due day" field that appears once that frequency is picked. Each
-of its two due days is independently weekend-shifted the same way a payday is, so
-posting, Afford's projections and every other consumer of a recurring schedule see
-the real dates, month to month, including the case where one shift pushes a due
-date into the previous calendar month (the 1st landing on a Saturday posts on the
-last day of the month before). The large-subscription room check doesn't run for
-one, since its projection has no notion of two due days in a period; Afford's own
-installment calculator doesn't offer the frequency either, for the same reason.
-A CSV import that completes a pattern says so in its confirmation, with a link here.
+**Looks recurring** finds bills you pay but never set up: a merchant charged the same
+amount (within 10%) on a schedule at least three times. Nothing is created until you
+click **Add as recurring**; **Dismiss** is permanent for that merchant on that account.
 
 ### Afford
 
@@ -423,41 +257,16 @@ A CSV import that completes a pattern says so in its confirmation, with a link h
 
 ![Afford result: a "Viable" verdict, each installment checked against its pay period's account buffer and available-for-flexible figure, the projection table behind those figures, and the "I bought this" action](screenshots/afford-result.png)
 
-Type in a purchase, its price, how many installments, how often, the first payment
-date, and the account each installment is charged to. Cadence splits the price into
-equal parts, places each on the pay period it lands in, and runs two checks per
-period: the chosen account stays at or above its own protected buffer, and the
-period's available-for-flexible figure (the payday check-in's own formula, essential
-fixed categories included) stays out of deficit. Installments landing in
-the same period are checked together. Installments dated before today count as already
-paid: the schedule marks them, the checks leave them out, and "I bought this" records
-only the payments still ahead (a plan with none ahead is refused). Because those periods haven't happened yet,
-income is projected from the average of your comparable periods (same half of the
-month) — up to the last six, fewer if a **Count history from** date (Settings)
-has trimmed some of them off. Every account divides by the same count, from the first
-of those periods with income in any account, so pay that moved from one account to
-another is not projected in both; the results say how many periods back the figure
-and warn when it is fewer than three. Commitments are exact: every active recurring
-item's occurrences in that period, including installment plans already recorded here
-and, for the period you are in, what already posted in it as well as what is still
-ahead, plus whatever a confirmed payday check-in already planned toward your goals for
-that period. Essential fixed categories are subtracted in both checks, filled the way
-the check-in fills them (the period's budget, else its suggestion from your last
-budgets or average spending); each account carries the share its projected income is
-of the period's. A period with no confirmed check-in yet instead carries an *estimate* of that
-goal funding — each dated goal's current pace (the same remaining-over-periods-left
-figure the Goals page shows), spread over the accounts by the room each has left, the
-way the check-in itself recommends it — because you most likely will keep funding
-your goals, and assuming zero would overstate the room for anything landing more
-than one period out. The results mark it and name it per goal as not yet confirmed.
-A goal that is reached, or has nothing left to save, is estimated nothing, and so is
-a goal with no target date: its roadmap figure is its whole remaining balance, which
-the check-in recommends for the one period it plans but which cannot be repeated in
-every period ahead.
-Nothing is written until you press **I bought this**, which records one self-limiting
-recurring subscription for the schedule shown, marked as from Afford so the Recurring
-page can list it apart and keep re-checking it (see "From Afford" above); a shortfall
-verdict has to be acknowledged first.
+Enter a purchase, its price, the installments, how often, the first payment date and
+the account. Cadence places each installment on its pay period and runs two checks per
+period: the account stays above its protected buffer, and the period's available-for-
+flexible figure (the check-in's own formula) stays out of deficit. Future income is
+the average of your comparable periods (same half of the month, up to six) from the
+history window; commitments are the period's exact occurrences; a period with a
+confirmed check-in carries its real goal funding, and one without carries an estimate
+of each dated goal's pace, marked as such. Installments dated before today count as
+paid. Nothing is written until **I bought this**, which records one self-limiting
+subscription for the schedule shown.
 
 ### Goals
 
@@ -467,156 +276,74 @@ verdict has to be acknowledged first.
 
 ![Log contribution dialog with amount, date, the account the money leaves, and a note](screenshots/goal-contribution.png)
 
-Target amount, optional target date, and a roadmap of what each pay period needs to
-carry — net of any recurring contribution already scheduled for that goal, so the
-check-in never reserves the same money twice. A contribution logged by hand moves
-real money: you pick the account it leaves, and Cadence writes the matching expense
-in that account's currency alongside the contribution (the pair is deleted together
-too). Auto-posted contributions from recurring items land here as well; their amount
-can be corrected in place, which updates the ledger row they wrote, and removing one
-from either side removes both. A goal that reaches its target is marked as achieved.
-A contribution dated after today is not in the goal's saved figure until its day:
-the Goals page, the goal and the Dashboard card show it apart, as an account's
-balance shows rows dated later. It still counts toward the roadmap when it falls
-before the target date, so money already scheduled to the goal is not asked for
-again. A contribution of the same amount as a recurring one, logged by hand near
-its due date, counts as that automatic contribution (it will not post a second
-time); the log dialog says so before you save, and the confirmation repeats it, and
-so does the dialog for correcting a hand-logged contribution.
-Once the period's check-in is confirmed, the goal page shows what it planned for the
-goal beside the live roadmap figure and says by how much the plan is behind; a dated
-goal in that state is also an advisory item in the Inbox. Deleting a goal removes its
-contribution history but leaves the expenses those contributions wrote in the ledger
-as ordinary, editable transactions.
+A target, an optional target date, and a roadmap of what each pay period needs to
+carry, net of recurring contributions already scheduled. Goal money follows the pay: a
+contribution belongs to the period whose pay was in hand when it was made. A
+contribution logged by hand moves real money — you pick the account, and Cadence writes
+the matching expense in that account's currency. A goal keeps its currency once it
+holds contributions. After a confirmed check-in the goal page shows what the plan set
+aside beside the live roadmap, and a goal behind it appears in the Inbox.
 
-A goal can be marked as a **debt** on its form (a plain toggle, never inferred from
-the name). Once two or more open goals are marked, the Goals page adds a payoff
-comparison: type an extra amount per pay period and it shows, side by side, the order
-each debt is paid off in under **largest balance first** (avalanche) and **smallest
-balance first** (snowball), with the pay period each one finishes in. Every debt keeps
-receiving its own roadmap pace, the extra goes entirely to the next debt in each
-order, and a paid-off debt's pace folds into the extra from the following period on.
-Cadence holds no interest rates, so these are the balance-ordered forms of both
-strategies. The total number of periods is the same either way (the same money reaches
-the debts every period); what differs is which debt finishes when, and the page says
-so rather than calling either order better. Like Afford it is exploratory and
-read-only: nothing it shows feeds the check-in's goal funding.
+Goals marked as **debts** get a payoff comparison: an extra amount per pay period
+applied largest balance first or smallest balance first, side by side, with the period
+each debt finishes. It is exploratory and feeds nothing else.
 
 ### Reports
 
 ![Reports page: spending by category for the current period, the last six pay periods as bars, average monthly lifestyle spending by category, and the last four completed months](screenshots/reports.png)
 
-Current-period spending by category, a six-pay-period trend, and a calendar-month
-view: average monthly lifestyle spending by category, the last completed months, and
-the averages for committed spending, savings and investing, and total cash outflow.
-The pay-period trend's average is over completed periods only since your first
-full period: the period in progress stays in the chart, marked "so far", and is
-left out of the mean, and so is the period of your first recorded activity unless
-that activity started in its first four days. The calendar-month average starts at your first full month: the
-month of your first recorded activity counts only when that activity started on or
-before its 7th, and an item's scheduled amount fills a month only from the month of
-its first occurrence. And - like every pay-period average - an optional **Count
-history from** date (Settings) bounds it a second way: the months start at the first
-one that starts on or after the first pay period the date lets count, whichever
-boundary is later. A boundary set recently enough to leave fewer than three completed
-months shows as not enough history yet, the same honest result a brand-new account
-gets, rather than an average forced over too little.
+Current-period spending by category, a six-pay-period trend (the period in progress
+marked "so far" and left out of the average), and a calendar-month view: lifestyle
+spending by category, committed spending, savings and investing, and total outflow,
+averaged over completed months from the history window. A recurring occurrence counts
+in the month it was due, whatever day the charge that paid it is dated, and a yearly
+item counts a twelfth of its price every month.
 
 ### Settings
 
 ![Settings page: display currency, cached exchange rates, planning preferences (buffer percentage and floor, and a Count history from date), essential fixed categories, goal recalculation, categorization, email connections, and session](screenshots/settings.png)
 
-Display currency; the cached exchange-rate table; how the payday planner sizes the
-protected buffer (percentage of income and a fixed minimum), whether carryover is
-included by default, and an optional **Count history from** date; category
-management; changing the PIN; which categories count as essential fixed spending;
-goal-total recalculation; categorizing older imports; a full data export;
-Gmail/Outlook connections; and locking the app.
-
-**Export all** downloads a ZIP with one CSV per data type: transactions, goals, goal
-contributions, recurring items, budgets, accounts (archived ones included) and
-categories, with readable headers in the app's language, ISO dates and plain
-two-decimal amounts. `transactions.csv` is laid out for the CSV importer (Date,
-Amount with spending negative, Description first, then Account, Currency, Category
-and the rest), so it re-imports through the importer's defaults plus its Account and
-Category column mappings; the other six are backups with no import path, so every
-column they carry is included and linked rows are named rather than shown by id.
-
-"Count history from" is for when your situation genuinely changed - a new job, a
-move - and the older history would only drag the averages the wrong way. One date
-bounds every average, income and spending alike, by pay period: only the pay
-periods that start on or after it are read by Afford's income projection, the
-payday planner's category suggestions and Reports' per-period average, and the
-monthly pace and averages read only the months that start on or after the first
-of those periods. A period or month the date falls inside is left out whole. It
-applies to every account alike, and whatever remains is averaged over its own count
-exactly as it already is for an account that did not exist yet. Blank - the
-default - changes nothing.
+Display currency; the exchange-rate table and which source is in use; buffer
+percentage and floor; carryover default; **Count history from** (for when your
+situation changed and older history would only skew the averages); essential fixed
+categories; category management; categorizing older imports; **Export all** (a ZIP of
+CSVs, with `transactions.csv` laid out for the importer); email connections; the PIN;
+and locking the app.
 
 ![PIN change form in Settings: current PIN, new PIN, and confirmation](screenshots/settings-pin-change.png)
 
 ![Category manager: every category with its kind and how many transactions, recurring items, and budgets are filed under it](screenshots/settings-categories.png)
 
-Categories (Settings → Manage categories) can be added, renamed, and recolored at
-any time. A category's kind (expense or income) can only change while nothing is
-filed under it. Removing a category that transactions, recurring items, or budgets
-still use opens a reassignment step first: the rows move to a category you pick, the
-removed category's per-period budgets are cleared, and only then is it deleted, all
-in one database transaction. The two categories whole calculations hang off
-(Subscriptions, the default for recurring subscriptions, and Savings/Investment,
-where manual goal contributions file their expense) can be renamed but never removed.
+Categories can be added, renamed and recolored. Removing one still in use first moves
+its transactions, recurring items and budgets to a category you pick (each budget is
+added to that category's for the same period), in one database transaction. Subscriptions and Savings/Investment can be renamed but never
+removed.
 
-![Category reassignment dialog mid-flow: a category's transactions and recurring item about to move to another category, its period budget about to be cleared](screenshots/settings-categories-reassign.png)
+![Category reassignment dialog mid-flow: a category's transactions, recurring items and period budgets about to move to another category](screenshots/settings-categories-reassign.png)
 
-### Multi-currency, localization, and the PIN gate
+### Currencies, languages and the PIN
 
-Every account, transaction, recurring item, and goal is recorded in DOP, USD, or
-EUR. A transaction is stored in its account's currency: an amount entered (or
-imported, approved from a receipt, or posted by a recurring item) in another
-currency is converted once, at that day's rate, and the entered amount and the
-rate are kept beside it - the form shows the converted amount and the rate
-before you save, and the ledger shows what each converted row was entered as.
-The transaction form starts in the chosen account's currency; in another one it
-offers an optional **Amount charged in** the account's currency, the figure on
-your statement, which is stored as typed with the entered amount kept (the rate is
-then the one the two imply). Editing a converted row - a posted foreign
-subscription, say - offers the same field, so the real pesos replace the
-conversion without losing what it was charged for.
-So a balance never moves with the exchange rate. Changing the display currency
-only changes how figures are presented everywhere; it never converts or mutates
-what was recorded. Conversions use cached,
-periodically refreshed USD-based rates, and a stale rate table is flagged on every
-page. For DOP and EUR, Banco Popular Dominicano's own published sell rate is
-preferred over the market rate whenever one less than a week old is stored; Settings
-shows which source is in use. The bank's feed blocks server-side clients, so that
-rate arrives through a daily GitHub Actions job that reads it with a real browser
-and posts it to the app (`.github/workflows/scrape-bpd-rate.yml`, set up in
-[DEPLOY.md](./DEPLOY.md)). The interface is available in English and Spanish, switchable from the top
-bar, alongside a dark/light theme toggle. Access is a single PIN-protected session;
-every route except login is protected server-side. The PIN can be changed from
-Settings (current PIN required), and a forgotten one can be replaced from the unlock
-screen by whoever holds the server's `RECOVERY_SECRET`, when that variable is set.
+Every account, transaction, recurring item and goal is in USD, DOP or EUR. Market rates
+come from open.er-api.com, cached and refreshed daily. For DOP and EUR, Banco Popular
+Dominicano's published sell rate is preferred whenever one from the last seven days is
+stored; the bank's feed blocks server-side clients, so a daily GitHub Actions job reads
+it with a real browser and posts it to the app (`.github/workflows/scrape-bpd-rate.yml`,
+see [DEPLOY.md](./DEPLOY.md)). The interface is in English and Spanish. Access is one
+PIN-protected session; a forgotten PIN can be replaced by whoever holds the server's
+`RECOVERY_SECRET`, when it is set.
 
 ![Login screen with the PIN entry](screenshots/login.png)
 
 ## How it works
 
-1. Create the accounts you actually use (checking, savings, cash, etc.), with an
-   opening balance if you're not starting from zero.
-2. Enter transactions manually, import a CSV, or connect Gmail/Outlook and approve
-   the staged items on `/review`.
-3. Add recurring subscriptions and contributions, tied to the account each one is
-   charged to (and, for a contribution, the goal it feeds). From then on they post
-   themselves on their due dates.
-4. Create savings goals and follow their per-pay-period roadmap; log contributions
-   from a real account when you move money by hand.
-5. On payday, run the check-in: reconcile balances, record income, review the
-   per-account buffer, commitments, and per-account goal funding, set flexible
-   category budgets, confirm.
-6. Before an installment purchase, run it through Afford; if you buy it, record it
-   there and it becomes a recurring item with a countdown.
-7. Watch the dashboard's safe-to-spend per day through the period, and the Inbox
-   for anything that needs a decision from you.
+1. Create your accounts, with an opening balance if you're not starting from zero.
+2. Enter transactions, import a CSV, or connect Gmail/Outlook and approve the queue.
+3. Add recurring subscriptions and contributions; from then on they post themselves.
+4. Create goals and follow their per-pay-period roadmap.
+5. On payday, run the check-in.
+6. Before an installment purchase, run it through Afford.
+7. Watch safe-to-spend per day through the period, and the Inbox for anything that
+   needs a decision.
 
 ## Tech stack
 
@@ -628,7 +355,7 @@ screen by whoever holds the server's `RECOVERY_SECRET`, when that variable is se
 | ORM | Prisma 7 |
 | Email ingestion | Gmail API, Microsoft Graph, Claude structured extraction |
 | Deployment | Vercel |
-| Scheduling | Vercel Cron |
+| Scheduling | Vercel Cron, GitHub Actions (bank rate) |
 
 ## Getting started
 
@@ -645,9 +372,8 @@ npm run db:seed             # inserts the default categories
 npm run dev
 ```
 
-Open `http://localhost:3000`, choose a 4–6 digit PIN on first run, and the app is
-ready to use. Email automation (Gmail/Outlook) is optional — see
-[PHASE2.md](./PHASE2.md) for that setup.
+Open `http://localhost:3000`, choose a 4–6 digit PIN on first run, and the app is ready.
+Email automation is optional — see [PHASE2.md](./PHASE2.md).
 
 ### Scripts
 
@@ -660,60 +386,49 @@ ready to use. Email automation (Gmail/Outlook) is optional — see
 | `npm run db:migrate` | `prisma migrate deploy` |
 | `npm run db:seed` | Seeds the default categories (idempotent) |
 | `npm run db:studio` | Prisma Studio |
-| `npx tsx scripts/verify-domain.ts` | Domain checks (pay periods, safe-to-spend, posting, payday, Afford, currency, CSV). Writes and then deletes rows, so run it with `DATABASE_URL` pointed at a scratch database |
-| `npx tsx scripts/verify-no-double-counting.ts` | Double-counting integrity audit over real data: goal-contribution twins, SEMI_MONTHLY anchors, Afford's goal estimate vs confirmed GOAL rows. Read-only (the connection is opened `default_transaction_read_only`), so it can be pointed at any database; exit 1 means it found something to investigate |
-| `npx tsx scripts/scrape-bpd-rate.ts` | Captures Banco Popular's published exchange rate with a real (headed) Chromium and posts it to `/api/cron/bpd-rate/ingest` on `CADENCE_APP_URL` with `BPD_SCRAPE_INGEST_SECRET`. `--dry-run` scrapes and prints without posting. Needs `npx playwright install chromium` once; run daily by the GitHub Actions workflow |
+| `npx tsx scripts/verify-domain.ts` | The domain checks (the only test harness). Writes and then deletes rows, so point `DATABASE_URL` at a scratch database |
+| `npx tsx scripts/verify-no-double-counting.ts` | Integrity audit over real data for five pairs of mechanisms that could count one commitment twice or drop it. Read-only at the database level, so it can be pointed at any database; exit 1 means something to investigate |
+| `npx tsx scripts/backfill-account-currency.ts` | Stores older rows that were written in another currency than their account's in the account's currency (dry run by default; refuses rates not fit for writing) |
+| `npx tsx scripts/scrape-bpd-rate.ts` | Captures Banco Popular's published rate with a real (headed) Chromium and posts it to the app; `--dry-run` only prints. Run daily by GitHub Actions |
 
 ## Environment variables
 
 Values must never be committed — `.env*` is gitignored except `.env.example`.
-`APP_TIMEZONE` should be set to `America/Santo_Domingo` (its default), since that's
-the authoritative source for "today" and pay-period boundaries.
+`APP_TIMEZONE` defaults to `America/Santo_Domingo`, the source of "today" and of the
+pay-period boundaries.
 
 | Variable | Required for | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | Core app | Runtime PostgreSQL connection string |
-| `DIRECT_URL` | Core app (CLI) | Session-capable connection used by the Prisma CLI for migrations/seeding. On Supabase this must be the session pooler; the transaction pooler hangs on migrations |
+| `DIRECT_URL` | Core app (CLI) | Session-capable connection for migrations and seeding. On Supabase this must be the session pooler; the transaction pooler hangs on migrations |
 | `SESSION_SECRET` | Core app | Signs the session cookie |
-| `RECOVERY_SECRET` | Core app (optional) | Enables "Forgot your PIN?" on the unlock screen; entering it sets a new PIN without the old one. Unset hides the recovery path |
-| `APP_TIMEZONE` | Core app | IANA timezone for resolving pay periods; defaults to `America/Santo_Domingo` |
-| `CRON_SECRET` | Core app / Email automation | Bearer token required by both cron routes (`/api/cron/recurring` posts due recurring items; `/api/cron/ingest` syncs email) |
-| `BPD_SCRAPE_INGEST_SECRET` | Banco Popular rate scraper | Bearer token required by `/api/cron/bpd-rate/ingest`, where the GitHub Actions scraper posts the bank's published rate. The same value goes in the repository's Actions secrets (see [DEPLOY.md](./DEPLOY.md)) |
+| `RECOVERY_SECRET` | Core app (optional) | Enables "Forgot your PIN?" on the unlock screen |
+| `APP_TIMEZONE` | Core app | IANA timezone for "today" and pay periods |
+| `CRON_SECRET` | Core app / Email automation | Bearer token for `/api/cron/recurring` and `/api/cron/ingest` |
+| `BPD_SCRAPE_INGEST_SECRET` | Banco Popular rate scraper | Bearer token for `/api/cron/bpd-rate/ingest`; the same value goes in the repository's Actions secrets (see [DEPLOY.md](./DEPLOY.md)) |
 | `OAUTH_ENCRYPTION_KEY` | Email automation | Encrypts stored OAuth tokens at rest |
-| `APP_URL` | Email automation (production) | Canonical production origin used to build the stable Gmail OAuth redirect URI |
+| `APP_URL` | Email automation (production) | Canonical origin for the Gmail OAuth redirect URI |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Email automation | Gmail OAuth |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Email automation | Outlook OAuth |
 | `ANTHROPIC_API_KEY` | Email automation | Parses transactional emails into structured data |
 
-Full setup for the email-automation variables (Google Cloud Console and Azure app
-registration steps) is in [PHASE2.md](./PHASE2.md).
-
 ## Deployment
 
-Production runs on Vercel with a Supabase PostgreSQL database. The app connects at
-runtime through the pooled (transaction-mode) connection string, while Prisma
-migrations go through the session pooler — the transaction pooler hangs on DDL. The
-Vercel build does not run migrations, so apply a new migration to Supabase before
-deploying the code that needs it. Environment-variable changes in Vercel only take
-effect on the next deploy. `vercel.json` schedules two daily crons: email ingestion at
-04:00 UTC and recurring posting at 04:15 UTC. See [DEPLOY.md](./DEPLOY.md) for the
-full walkthrough.
+Production runs on Vercel with a Supabase PostgreSQL database: the app connects through
+the transaction pooler at runtime, and migrations go through the session pooler. The
+Vercel build does not run migrations, so apply a new one before deploying the code that
+needs it. `vercel.json` schedules email ingestion at 04:00 UTC and recurring posting at
+04:15 UTC. See [DEPLOY.md](./DEPLOY.md).
 
 ## Current limitations
 
-- Email ingestion supports Gmail and Outlook only; PayPal ingestion is intentionally
-  not included. Email-derived transactions are staged for review and never become
-  real transactions without approval.
-- A mailbox's first sync may need several runs to catch up, since ingestion caps
-  each run at a limited batch per mailbox.
+- Email ingestion supports Gmail and Outlook only; email-derived transactions always go
+  through review.
 - No direct bank synchronization.
-- No native mobile app; the responsive web app works from mobile browsers.
-- Both crons run once a day; the in-app "Sync now" button and simply opening the app
-  cover the gaps for email and recurring posting respectively.
-- A long recurring backlog (an item untouched for months) catches up at most 24
-  occurrences per run; the rest post on the following runs.
-- Afford projects future income from history, so an account with no comparable-period
-  income is judged on its buffer floor alone.
+- Both crons run once a day; opening the app and "Sync now" cover the gaps.
+- A long recurring backlog catches up at most 24 occurrences per run.
+- Afford projects income from history, so an account with no comparable-period income
+  is judged on its buffer floor alone.
 
 ### On your phone
 
@@ -753,24 +468,20 @@ desktop layout. Captured in the iOS Simulator.
 
 ## Project status
 
-Cadence is an actively used personal project. Manual tracking, CSV import, budgets,
-the payday check-in, automatic recurring posting, Afford, goals, reports, and
-reviewed Gmail/Outlook ingestion are all implemented. It is not a public or
-commercial service — see [PHASE2.md](./PHASE2.md) for the email-ingestion layer and
-what it deliberately leaves out.
+Cadence is an actively used personal project. Manual tracking, CSV import, budgets, the
+payday check-in, automatic recurring posting, Afford, goals, reports and reviewed
+Gmail/Outlook ingestion are all implemented. It is not a public or commercial service.
 
 ## Security notes
 
-- Access is gated behind a single PIN; every route except `/login` requires an
-  authenticated session, and the cron routes require a bearer secret.
-- Gmail and Outlook connections request read-only scopes; stored OAuth tokens are
-  encrypted at rest.
-- Emails are parsed into a staged review queue — nothing from email is written as a
-  real transaction without explicit approval. Recurring items and Afford plans post
-  automatically only after you have created and confirmed them.
+- Access is gated behind a single PIN; every route except `/login` requires a session,
+  and the cron routes require a bearer secret.
+- Gmail and Outlook connections request read-only scopes; OAuth tokens are encrypted at
+  rest.
+- Nothing from email is written as a transaction without explicit approval; recurring
+  items and Afford plans post only after you have created them.
 - Never commit `.env*` files; `.env.example` is the only one tracked in git.
-- Cadence is a personal tracking tool, not professional financial advice or a
-  bank-grade financial institution.
+- Cadence is a personal tracking tool, not financial advice.
 
 ## License
 

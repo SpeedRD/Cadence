@@ -8,7 +8,7 @@ item: pending / done / skipped, plus one sentence. No real figures here.
 - 2b. S10 occurrence paid by a charge in the previous month counted twice: done - posted or settled occurrences count in their due-date month (completed and current month).
 - 2c. S11 back-posted RECURRING rows setting first activity: done - a RECURRING row created more than 7 days after its date no longer opens the history.
 - 3a. Delete QUANTITIES_MAP.md and its doc references: done - file removed, AGENTS.md references dropped (README and DEPLOY had none); source comments left as asked.
-- 3b. README rewrite (USD, fictional) and desktop screenshots: pending
+- 3b. README rewrite (USD, fictional) and desktop screenshots: done - README rewritten for the current app in USD; all 27 desktop screenshots recaptured from a throwaway fictional seed at 1440 wide, dark, English, quantized.
 - 3c. Stale-rates banner only when the table is unfit: done - shown only when the refresh failed and the table is unfit for the currencies in use (ratesOutOfDateFor); harness, Chromium 375/1280 en/es, Simulator.
 - 3d. Stale documentation (AGENTS.md audit line, RecurringSettlement comment, others): done - audit line, RecurringSettlement and claimedByPostingAt comments, remainingOccurrences comment, AGENTS.md settlement writers corrected; README lines handled in 3b.
 - 4. Scrub real figures from tracked files: pending
