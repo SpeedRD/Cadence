@@ -49,8 +49,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   settled by its row. Reuse it rather than matching charges to items a
   second way.
 - Every average over past periods reads them through the one history window,
-  `comparableHistory()` and its helpers in `src/lib/history-window.ts`
-  (QUANTITIES_MAP.md K9): complete periods only, Settings' "Count history
+  `comparableHistory()` and its helpers in `src/lib/history-window.ts`:
+  complete periods only, Settings' "Count history
   from" date applied by period, a partial first period of spending skipped,
   and the monthly windows derived from the same boundary. Do not walk
   periods for an average a second way.
@@ -66,8 +66,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   place, `wholeAmount`/`outstandingAmount` in `src/lib/period-commitments.ts`
   (the loader applies it); read an occurrence's cost through those, never
   `occurrence.amount`, which stays the charge itself. Its earmarked part is
-  left out of K5's income estimate.
-- A Transaction is stored in its account's currency (QUANTITIES_MAP.md K7):
+  left out of the period income estimate (`src/lib/period-income.ts`).
+- A Transaction is stored in its account's currency:
   every write converts through `src/lib/account-money.ts` (`toAccountMoney`,
   `inAccountCurrency`, `transferLegsInAccounts`), keeping `originalAmount`,
   `originalCurrency` and `rate` when the entry was in another currency. Rows
