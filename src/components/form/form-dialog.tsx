@@ -15,6 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { revealScrollDelta } from "@/lib/reveal";
 
 import type { ActionState } from "@/server/actions/utils";
 
@@ -72,6 +73,26 @@ export function FormDialog({
     }
   }, [state, setOpen, savedMessage, onSuccess]);
 
+  // On a phone the error line sits right above DialogFooter, which is
+  // sticky over the sheet's bottom edge, so after Save it would land under
+  // the footer. Each new result scrolls the sheet just enough to show it
+  // above the footer; focus stays where it was, and an error already in
+  // view does not move. Above sm the footer is not sticky: no change there.
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const error = errorRef.current;
+    if (!error || !window.matchMedia("(width < 40rem)").matches) return;
+    const scroller = error.closest<HTMLElement>("[data-slot=dialog-content]");
+    if (!scroller) return;
+    const footer = error.closest("form")?.querySelector("[data-slot=dialog-footer]");
+    const delta = revealScrollDelta(scroller.getBoundingClientRect(), error.getBoundingClientRect(), {
+      bottom: footer?.getBoundingClientRect().height ?? 0,
+    });
+    if (delta === 0) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    scroller.scrollBy({ top: delta, behavior: reduceMotion ? "auto" : "smooth" });
+  }, [state]);
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
@@ -87,7 +108,7 @@ export function FormDialog({
           <div className="grid gap-4">{children}</div>
 
           {state?.error ? (
-            <p className="text-sm text-destructive" role="alert">
+            <p ref={errorRef} className="text-sm text-destructive" role="alert">
               {state.error}
             </p>
           ) : null}

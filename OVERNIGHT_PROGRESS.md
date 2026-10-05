@@ -3,7 +3,7 @@
 Checklist for the unattended job on branch fix/round2-conversion. One line per
 item: pending / done / skipped, plus one sentence. No real figures here.
 
-- 1. Form errors visible on phones: pending
+- 1. Form errors visible on phones: done - FormDialog scrolls its error line above the sticky footer below sm (pure revealScrollDelta, harness checks; Chromium 375/430 en/es, iPhone Simulator real taps, desktop and iPad unchanged).
 - 2a. S9 yearly item counted twice in the monthly pace: pending
 - 2b. S10 occurrence paid by a charge in the previous month counted twice: pending
 - 2c. S11 back-posted RECURRING rows setting first activity: pending

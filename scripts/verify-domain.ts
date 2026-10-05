@@ -18212,6 +18212,27 @@ async function main() {
     }
   }
 
+  console.log("\n== phone form errors clear the sticky footer (overnight part 1) ==");
+  {
+    // FormDialog scrolls its error line by this delta on a phone. The
+    // measured case: a 375x667 sheet from 53 to 667, its sticky footer 77
+    // tall (590-667), and the error rendered at 590-670 under it.
+    const reveal = await import("../src/lib/reveal").catch(() => null);
+    check("part 1: the reveal helper exists", reveal !== null);
+    if (reveal) {
+      const { revealScrollDelta } = reveal;
+      const sheet = { top: 53, bottom: 667 };
+      eq("part 1: an error under the footer scrolls up by its overlap with the footer", revealScrollDelta(sheet, { top: 590, bottom: 670 }, { bottom: 77 }), 80);
+      eq("part 1: an error wholly above the footer does not move", revealScrollDelta(sheet, { top: 400, bottom: 440 }, { bottom: 77 }), 0);
+      eq("part 1: an error ending exactly at the footer's top does not move", revealScrollDelta(sheet, { top: 550, bottom: 590 }, { bottom: 77 }), 0);
+      eq("part 1: an error 1px into the footer scrolls 1px", revealScrollDelta(sheet, { top: 551, bottom: 591 }, { bottom: 77 }), 1);
+      eq("part 1: an error scrolled above the sheet comes back down to its top", revealScrollDelta(sheet, { top: 20, bottom: 60 }, { bottom: 77 }), -33);
+      eq("part 1: an error below the sheet entirely scrolls to just above the footer", revealScrollDelta(sheet, { top: 900, bottom: 940 }, { bottom: 77 }), 350);
+      eq("part 1: an error taller than the band shows its start", revealScrollDelta(sheet, { top: 700, bottom: 1400 }, { bottom: 77 }), 647);
+      eq("part 1: with no footer the sheet's own edge is the limit", revealScrollDelta(sheet, { top: 640, bottom: 680 }), 13);
+    }
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });
