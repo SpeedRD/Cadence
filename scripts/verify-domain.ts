@@ -16391,7 +16391,10 @@ async function main() {
           "2024-09",
         );
 
-        await expense(civilDate(2024, 8, 10), { source: "RECURRING", externalId: `${sub.id}:2024-08-10`, note: "Verify R27 Twin subscription row" });
+        // Posted on its own date: since S11 (overnight part 2) a row written
+        // more than 7 days after its date no longer opens the history, and
+        // this one was created today, two years after it.
+        await expense(civilDate(2024, 8, 10), { source: "RECURRING", externalId: `${sub.id}:2024-08-10`, note: "Verify R27 Twin subscription row", createdAt: new Date(Date.UTC(2024, 7, 10, 12)) });
         eq("a posted subscription charge is a real expense: it sets the boundary (Aug 10), though it has the same key shape as a twin", await first(), "2024-08-10");
 
         await expense(civilDate(2024, 8, 1), { source: "CSV", externalId: "verify-r27-twin-csv-fingerprint" });
@@ -18209,6 +18212,151 @@ async function main() {
       await prisma.exchangeRate.deleteMany();
       if (cRatesBefore.length > 0) await prisma.exchangeRate.createMany({ data: cRatesBefore });
       await prisma.recurringItem.updateMany({ where: { id: { in: cPaused } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== monthly pace and history (overnight part 2: S9 S10 S11) ==");
+  {
+    // Public APIs only, so the block also runs on the code before the fixes
+    // and fails there on each finding. The review's amounts, a year earlier
+    // (2022-2023) so that nothing else in the database shares the months;
+    // S11's plan is a fictional 10,000 DOP x 6 rather than a euro amount.
+    // Fixtures `Verify Pace ...`; every other active item is paused.
+    const pMonthly = await import("../src/lib/data/monthly");
+    const pReports = await import("../src/lib/data/reports");
+    const pContext = (today: Date) =>
+      ({
+        displayCurrency: "DOP" as const,
+        language: "en" as const,
+        rates: { rates: { USD: 1, DOP: 60, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() } as RateTable,
+        today,
+        currentPeriod: periodForDate(today),
+        bufferPercent: 10,
+        bufferFloorAmount: 2000,
+        bufferFloorCurrency: "DOP",
+      }) as unknown as Parameters<typeof pMonthly.getHistoricalMonthlyAverage>[0];
+    const pStray =
+      (await prisma.transaction.count({ where: { date: { lt: civilDate(2025, 1, 1) } } })) +
+      (await prisma.goalContribution.count({ where: { date: { lt: civilDate(2025, 1, 1) } } }));
+    eq("part 2 fixture isolation: nothing in the database predates 2025", pStray, 0);
+    const pPaused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pPaused } }, data: { active: false } });
+    const pAccount = await prisma.account.create({ data: { name: "Verify Pace Account", currency: "DOP", type: "CHECKING" } });
+    const pWipe = async () => {
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: pAccount.id } } });
+      await prisma.transaction.deleteMany({ where: { accountId: pAccount.id } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Pace " } } });
+    };
+    const pExpense = (date: Date, amount: number, extra: Record<string, unknown> = {}) =>
+      prisma.transaction.create({ data: { date, amount, currency: "DOP", type: "EXPENSE", accountId: pAccount.id, source: "MANUAL", ...extra } as never });
+    // Ordinary spending on the 3rd of Mar-Sep 2023, so the six months
+    // Apr-Sep are complete history (the first activity is Mar 3).
+    const pLifestyle = async () => {
+      for (let month = 3; month <= 9; month++) await pExpense(civilDate(2023, month, 3), 1000, { note: "Verify Pace groceries" });
+    };
+    const pMonths = async (today: Date) => {
+      const history = await pMonthly.getHistoricalMonthlyAverage(pContext(today));
+      return history;
+    };
+    try {
+      console.log("-- S9: a yearly item counts its monthly equivalent in every month --");
+      {
+        await pLifestyle();
+        const domain = await prisma.recurringItem.create({
+          data: { name: "Verify Pace Domain renewal", amount: 1200, currency: "DOP", kind: "SUBSCRIPTION", frequency: "YEARLY", anchorDay: 10, nextDate: civilDate(2024, 8, 10), active: true, accountId: pAccount.id, createdAt: new Date(Date.UTC(2022, 7, 1)) },
+        });
+        for (const year of [2022, 2023]) {
+          await pExpense(civilDate(year, 8, 10), 1200, { source: "RECURRING", externalId: `${domain.id}:${year}-08-10`, note: "Verify Pace Domain renewal", createdAt: new Date(Date.UTC(year, 7, 10, 12)) });
+        }
+        const history = await pMonths(civilDate(2023, 10, 5));
+        eq("S9: the months are Apr-Sep 2023", history.months.map((month) => month.window.key).join(","), "2023-04,2023-05,2023-06,2023-07,2023-08,2023-09");
+        eq(
+          "S9: Domain renewal (1,200 yearly) commits 100 in every month, August's charge month included (was 100,100,100,100,1200,100)",
+          history.months.map((month) => month.committed).join(","),
+          "100,100,100,100,100,100",
+        );
+        eq("S9: averageCommitted is 100 (was 283.33)", history.averageCommitted, 100);
+        eq("S9: the August charge is not lifestyle spending: every month's lifestyle is the 1,000 of groceries", history.months.map((month) => month.lifestyle).join(","), "1000,1000,1000,1000,1000,1000");
+        await pWipe();
+      }
+
+      console.log("-- S10: an occurrence paid by a charge dated the month before counts once, in its due month --");
+      {
+        await pLifestyle();
+        const netflix = await prisma.recurringItem.create({
+          data: { name: "Verify Pace Netflix", amount: 500, currency: "DOP", kind: "SUBSCRIPTION", frequency: "MONTHLY", anchorDay: 1, nextDate: civilDate(2023, 10, 1), active: true, accountId: pAccount.id, createdAt: new Date(Date.UTC(2023, 2, 1)) },
+        });
+        for (const month of [4, 5, 6, 7, 9]) {
+          const due = civilDate(2023, month, 1);
+          await pExpense(due, 500, { source: "RECURRING", externalId: `${netflix.id}:${toISODate(due)}`, note: "Verify Pace Netflix", createdAt: new Date(Date.UTC(2023, month - 1, 1, 12)) });
+        }
+        // The Aug 1 occurrence, paid by an imported charge dated Jul 29 that
+        // posting settled it with.
+        const early = await pExpense(civilDate(2023, 7, 29), 500, { source: "CSV", note: "Verify Pace NETFLIX.COM" });
+        await prisma.recurringSettlement.create({
+          data: { transactionId: early.id, occurrenceKey: `${netflix.id}:2023-08-01`, recurringItemId: netflix.id, kind: "SUBSCRIPTION", dueDate: civilDate(2023, 8, 1), claimedByPostingAt: new Date(Date.UTC(2023, 7, 1, 12)) },
+        });
+        const history = await pMonths(civilDate(2023, 10, 5));
+        eq(
+          "S10: every month Apr-Sep commits 500 - July only its own Jul 1, August the Aug 1 paid on Jul 29 (was 500,500,500,1000,500,500)",
+          history.months.map((month) => month.committed).join(","),
+          "500,500,500,500,500,500",
+        );
+        eq("S10: averageCommitted is 500 (was 583.33)", history.averageCommitted, 500);
+        eq("S10: the Jul 29 charge is not July's lifestyle spending, before or after", history.months.find((month) => month.window.key === "2023-07")?.lifestyle, 1000);
+        const august = await pMonthly.getCurrentMonthPace(pContext(civilDate(2023, 8, 5)));
+        eq("S10: on Aug 5 the month in progress has spent its Aug 1 occurrence, paid on Jul 29 (was 0)", august.committedSpentSoFar, 500);
+        const july = await pMonthly.getCurrentMonthPace(pContext(civilDate(2023, 7, 31)));
+        eq("S10: on Jul 31 July has spent only its own Jul 1 occurrence (was 1,000)", july.committedSpentSoFar, 500);
+        eq("S10: ... and the Jul 29 charge is not July's lifestyle either", july.lifestyleSpentSoFar, 1000);
+        await pWipe();
+      }
+
+      console.log("-- S11: payments posted in one go for past dates do not open the history --");
+      {
+        // Logging starts in September 2023: 1,000 a week. On Sep 20 a plan of
+        // 10,000 x 6 from Apr 5 is entered, its past payments posted at once.
+        for (const day of [1, 8, 15, 22]) await pExpense(civilDate(2023, 9, day), 1000, { note: "Verify Pace weekly" });
+        const plan = await prisma.recurringItem.create({
+          data: { name: "Verify Pace Plan", amount: 10000, currency: "DOP", kind: "SUBSCRIPTION", frequency: "MONTHLY", anchorDay: 5, nextDate: civilDate(2023, 10, 5), remainingOccurrences: 0, active: false, accountId: pAccount.id, createdAt: new Date(Date.UTC(2023, 8, 20, 12)) },
+        });
+        const posted = new Date(Date.UTC(2023, 8, 20, 12));
+        for (const month of [4, 5, 6, 7, 8, 9]) {
+          const due = civilDate(2023, month, 5);
+          await pExpense(due, 10000, { source: "RECURRING", externalId: `${plan.id}:${toISODate(due)}`, note: "Verify Pace Plan", createdAt: posted });
+        }
+        const first = await pMonthly.getFirstActivityDate();
+        eq("S11: the first activity is Sep 1, the first spending recorded as it happened (was Apr 5)", first ? toISODate(first) : "none", "2023-09-01");
+        const oct5 = pContext(civilDate(2023, 10, 5));
+        eq(
+          "S11: the monthly windows are only September (were Apr-Sep, five of them with 0 lifestyle)",
+          (await pMonthly.getCompletedMonthWindows(oct5)).map((window) => window.key).join(","),
+          "2023-09",
+        );
+        const history = await pMonthly.getHistoricalMonthlyAverage(oct5);
+        eq("S11: one month is too little history for an average, so none is shown (was averageLifestyle 666.67)", `${history.sufficient}:${history.averageLifestyle}`, "false:0");
+        const trend = await pReports.getSpendingTrendSummary(oct5 as Parameters<typeof pReports.getSpendingTrendSummary>[0], 7);
+        eq("S11: Reports averages the two September periods only (was 6 periods reaching back to the April payment)", trend.average?.periods, 2);
+        const september = await pMonthly.classifyCompletedMonth(
+          { ...monthWindow({ year: 2023, month: 9 }) },
+          oct5,
+          [],
+          [],
+        );
+        eq("S11: the Sep 5 payment still counts in September, as committed spending", `${september.committed}:${september.lifestyle}`, "10000:4000");
+        // The boundary itself: a row written 7 days after its date counts, 8 days after does not.
+        await pExpense(civilDate(2023, 8, 20), 300, { source: "RECURRING", externalId: `${plan.id}:2023-08-20`, note: "Verify Pace Plan late", createdAt: new Date(Date.UTC(2023, 7, 28, 12)) });
+        const eightDays = await pMonthly.getFirstActivityDate();
+        eq("S11: a RECURRING row written 8 days after its date does not open the history", eightDays ? toISODate(eightDays) : "none", "2023-09-01");
+        await prisma.transaction.updateMany({ where: { accountId: pAccount.id, externalId: `${plan.id}:2023-08-20` }, data: { createdAt: new Date(Date.UTC(2023, 7, 27, 12)) } });
+        const sevenDays = await pMonthly.getFirstActivityDate();
+        eq("S11: one written 7 days after its date does", sevenDays ? toISODate(sevenDays) : "none", "2023-08-20");
+        await pWipe();
+      }
+    } finally {
+      await pWipe();
+      await prisma.account.delete({ where: { id: pAccount.id } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pPaused } }, data: { active: true } });
     }
   }
 

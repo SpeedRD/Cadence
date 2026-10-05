@@ -2,8 +2,16 @@
  * The inputs of the one history window (K9, src/lib/history-window.ts): the
  * first recorded spending and Settings' "count history from" date.
  */
+import { appTimeZone, civilDateInZone, daysBetween } from "@/lib/date";
 import { prisma } from "@/lib/prisma";
 import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } from "@/lib/transactions";
+
+/**
+ * A RECURRING row written more than this many days after its own date was
+ * posted for a payment already past (a plan entered late, its past payments
+ * posted at once), not recorded as it happened.
+ */
+export const BACK_POSTED_DAYS = 7;
 
 import type { HistoryBounds } from "@/lib/history-window";
 import type { AppContext } from "@/lib/data/context";
@@ -30,7 +38,13 @@ import type { AppContext } from "@/lib/data/context";
  * contribution occurrence, or the charge the user entered that settled one:
  * the last two are told from a subscription's rows, which share their key
  * shape, only by a GoalContribution carrying the key (the rule monthly.ts
- * reads them by). A subscription's posted charge is spending.
+ * reads them by). A subscription's posted charge is spending - except one
+ * posted for a date already well behind when it was written (S11): a plan
+ * entered in September with its April-August payments posted in one go is
+ * not spending recorded in April, and opening April there made five empty
+ * months of lifestyle spending. Such a row (created more than
+ * BACK_POSTED_DAYS after its date) still counts in its own month everywhere
+ * else; it only does not mark the start of the history.
  */
 export async function getFirstActivityDate(): Promise<Date | null> {
   const contributionKeys = (
@@ -42,30 +56,37 @@ export async function getFirstActivityDate(): Promise<Date | null> {
   // Each clause says "is not that kind of twin" positively (a null externalId
   // or no settlement passes): a NOT over a nullable column would drop the
   // rows where it is NULL, plain expenses first among them.
-  const first = await prisma.transaction.findFirst({
-    where: {
-      type: "EXPENSE",
-      AND: [
-        {
-          OR: [
-            { source: { not: "MANUAL" } },
-            { externalId: null },
-            { externalId: { not: { startsWith: MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } } },
-          ],
-        },
-        { OR: [{ source: { not: "RECURRING" } }, { externalId: null }, { externalId: { notIn: contributionKeys } }] },
-        {
-          OR: [
-            { recurringSettlement: { is: null } },
-            { recurringSettlement: { isNot: { occurrenceKey: { in: contributionKeys } } } },
-          ],
-        },
+  const notATwin = [
+    {
+      OR: [
+        { source: { not: "MANUAL" as const } },
+        { externalId: null },
+        { externalId: { not: { startsWith: MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX } } },
       ],
     },
+    { OR: [{ source: { not: "RECURRING" as const } }, { externalId: null }, { externalId: { notIn: contributionKeys } }] },
+    {
+      OR: [
+        { recurringSettlement: { is: null } },
+        { recurringSettlement: { isNot: { occurrenceKey: { in: contributionKeys } } } },
+      ],
+    },
+  ];
+  const first = await prisma.transaction.findFirst({
+    where: { type: "EXPENSE", source: { not: "RECURRING" }, AND: notATwin },
     orderBy: { date: "asc" },
     select: { date: true },
   });
-  return first?.date ?? null;
+  // Posting's own rows ahead of that, earliest first, until one was written
+  // on time. Its date and its write time cannot be compared in a query.
+  const posted = await prisma.transaction.findMany({
+    where: { type: "EXPENSE", source: "RECURRING", AND: notATwin, ...(first ? { date: { lt: first.date } } : {}) },
+    orderBy: { date: "asc" },
+    select: { date: true, createdAt: true },
+  });
+  const zone = appTimeZone();
+  const firstOnTime = posted.find((row) => daysBetween(row.date, civilDateInZone(row.createdAt, zone)) <= BACK_POSTED_DAYS);
+  return firstOnTime?.date ?? first?.date ?? null;
 }
 
 /** Both bounds of the history window for the request's context. */

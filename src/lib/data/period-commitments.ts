@@ -14,7 +14,7 @@
  * window, and their goals' contributions, which cap them at what each goal
  * still needs.
  */
-import { addDays, fromISODate, toISODate } from "@/lib/date";
+import { addDays, toISODate } from "@/lib/date";
 import { num, type DecimalLike } from "@/lib/money";
 import {
   applyEarmarks,
@@ -29,7 +29,7 @@ import {
 import { convert } from "@/lib/currency";
 import { nextPeriod, periodForDate, periodInfo, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
-import { itemIdFromOccurrenceKey, SETTLEMENT_LEAD_DAYS } from "@/lib/recurring-settlement";
+import { dueDateFromOccurrenceKey, itemIdFromOccurrenceKey, SETTLEMENT_LEAD_DAYS } from "@/lib/recurring-settlement";
 
 import { loadOccurrenceEarmarks } from "@/lib/data/earmarks";
 import { loadPayLanded } from "@/lib/data/pay-landed";
@@ -45,12 +45,6 @@ import { loadSettlementPlan } from "@/lib/data/recurring-settlement";
 const LEDGER_MARGIN_DAYS = 21;
 
 import type { AppContext } from "@/lib/data/context";
-
-/** The date inside a recurringExternalId ("<itemId>:<YYYY-MM-DD>"), or null for anything not shaped like one. */
-function dueDateFromOccurrenceKey(key: string): Date | null {
-  const separator = key.lastIndexOf(":");
-  return separator > 0 ? fromISODate(key.slice(separator + 1)) : null;
-}
 
 /**
  * Every period's occurrences (see planCommitments), keyed by period key.

@@ -25,11 +25,18 @@
  *                        a shared expense) is reported apart as setAsideSoFar,
  *                        never extrapolated and never compared with the average.
  *   committed          = SUBSCRIPTION charges - every RECURRING transaction the
- *                        posting job wrote for one, plus, only for a month with
- *                        no such charge, the item's scheduled monthly-equivalent
- *                        amount, from the month of its first occurrence on (see
- *                        firstOccurrenceOf) and never for the month in progress
- *                        (see committedStillDueThisMonth).
+ *                        posting job wrote for one, and every charge that
+ *                        paid one, counted in the month of the occurrence's
+ *                        due date whatever day the charge is dated (a charge
+ *                        can pay an occurrence a few days before it falls
+ *                        due) - plus, only for a month with no such charge,
+ *                        the item's scheduled monthly-equivalent amount, from
+ *                        the month of its first occurrence on (see
+ *                        firstOccurrenceOf) and never for the month in
+ *                        progress (see committedStillDueThisMonth). A
+ *                        completed month reads an active YEARLY item at its
+ *                        monthly equivalent every month, its charge's month
+ *                        included, never the charge itself.
  *   savings/investing  = GoalContribution rows with no Transaction standing in
  *                        for them + CONTRIBUTION charges (same actual-or-
  *                        scheduled rule as committed). A hand-logged contribution's
@@ -66,7 +73,7 @@
  */
 import { exactAmountIn } from "@/lib/account-money";
 import { convert } from "@/lib/currency";
-import { appTimeZone, civilDateInZone, minDate, startOfDay } from "@/lib/date";
+import { addDays, appTimeZone, civilDateInZone, minDate, startOfDay } from "@/lib/date";
 import { num, round2, sum } from "@/lib/money";
 import { firstMonthFrom, firstPeriodFrom } from "@/lib/history-window";
 import { daysElapsedInMonth, monthForDate, monthWindow, nextMonth, previousMonth, type MonthRef, type MonthWindow } from "@/lib/month";
@@ -74,7 +81,7 @@ import { prisma } from "@/lib/prisma";
 import { nextPeriod, periodForDate, periodInfo } from "@/lib/period";
 import { outstanding, outstandingCharge, sumOccurrences } from "@/lib/period-commitments";
 import { monthlyEquivalent } from "@/lib/recurring";
-import { chargeMatchesItem, itemsWithAmbiguousCategory } from "@/lib/recurring-settlement";
+import { chargeMatchesItem, dueDateFromOccurrenceKey, itemsWithAmbiguousCategory, PROXIMITY_DAYS, SETTLEMENT_LEAD_DAYS } from "@/lib/recurring-settlement";
 import { inUnbudgetedCategory } from "@/lib/budget-spending";
 import { ownShare } from "@/lib/shared-expense";
 import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX, manualContributionIdFromTransaction } from "@/lib/transactions";
@@ -399,13 +406,24 @@ async function computeMonthActuals(
   recurringItems: RecurringForMatch[],
   categories: CategoryMeta[],
   typicalOnly = false,
+  amortizeYearly = false,
 ): Promise<MonthActuals> {
   const rangeEnd = minDate(window.end, throughDate);
-  const [transactions, goalContributions, paired] = await Promise.all([
+  const inMonth = (date: Date) => date.getTime() >= window.start.getTime() && date.getTime() <= rangeEnd.getTime();
+  const [fetched, goalContributions, paired] = await Promise.all([
+    // The month's own rows, and around them the charges that paid one of its
+    // occurrences from outside it: a settlement pairs a charge up to
+    // SETTLEMENT_LEAD_DAYS before the due date and up to PROXIMITY_DAYS after
+    // (settlementWindow). Which of these this month counts is decided by
+    // occurrence below.
     prisma.transaction.findMany({
-      where: { type: "EXPENSE", date: { gte: window.start, lte: rangeEnd } },
+      where: {
+        type: "EXPENSE",
+        date: { gte: addDays(window.start, -SETTLEMENT_LEAD_DAYS), lte: addDays(rangeEnd, PROXIMITY_DAYS) },
+      },
       select: {
         id: true,
+        date: true,
         amount: true,
         currency: true,
         originalAmount: true,
@@ -434,6 +452,47 @@ async function computeMonthActuals(
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
 
+  // A hand-logged contribution that moved money is one event as two rows: the
+  // GoalContribution, counted below in goalContributionTotal, and the MANUAL
+  // Transaction it wrote (see manualContributionExternalId). The Transaction is
+  // set aside here so it is neither lifestyle spending nor a heuristic match
+  // for some CONTRIBUTION item that happens to share its amount.
+  const isManualContributionTwin = (tx: (typeof fetched)[number]) =>
+    tx.source === "MANUAL" && tx.externalId !== null && tx.externalId.startsWith(MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX);
+
+  // The ledger row standing for one recurring occurrence: the RECURRING row
+  // posting wrote, keyed "<itemId>:<YYYY-MM-DD>", or the charge the user
+  // entered that posting settled the occurrence with instead
+  // (RecurringSettlement, same key). A hand-logged contribution's own expense
+  // can settle one too, but it stays the manual twin above.
+  const occurrenceKeyOf = (tx: (typeof fetched)[number]): string | null => {
+    if (tx.source === "RECURRING") return tx.externalId;
+    if (isManualContributionTwin(tx)) return null;
+    return tx.recurringSettlement?.occurrenceKey ?? paired.get(tx.id)?.key ?? null;
+  };
+
+  // A month counts an occurrence by its due date, once, whatever day the
+  // charge that paid it is dated (S10): a charge dated Jul 29 that paid the
+  // Aug 1 occurrence is August's, and July only sets it aside. Everything
+  // else is the month's by its own date.
+  const occurrenceInMonth = (key: string) => {
+    const due = dueDateFromOccurrenceKey(key);
+    return due !== null && inMonth(due);
+  };
+  const transactions = fetched.filter((tx) => {
+    const key = occurrenceKeyOf(tx);
+    return key !== null && occurrenceInMonth(key) ? true : inMonth(tx.date);
+  });
+  // Rows of the month that paid another month's occurrence: that month counts them.
+  const otherMonthsOccurrenceIds = new Set(
+    transactions
+      .filter((tx) => {
+        const key = occurrenceKeyOf(tx);
+        return key !== null && !occurrenceInMonth(key);
+      })
+      .map((tx) => tx.id),
+  );
+
   const matchable: ClassifiableTransaction[] = transactions.map((tx) => ({
     id: tx.id,
     amount: num(tx.amount),
@@ -446,40 +505,16 @@ async function computeMonthActuals(
     yourShare: tx.yourShare === null ? null : num(tx.yourShare),
   }));
   const itemById = new Map(recurringItems.map((item) => [item.id, item]));
-
-  // A hand-logged contribution that moved money is one event as two rows: the
-  // GoalContribution, counted below in goalContributionTotal, and the MANUAL
-  // Transaction it wrote (see manualContributionExternalId). The Transaction is
-  // set aside here so it is neither lifestyle spending nor a heuristic match
-  // for some CONTRIBUTION item that happens to share its amount.
-  const manualContributionTwinIds = new Set(
-    transactions
-      .filter(
-        (tx) =>
-          tx.source === "MANUAL" &&
-          tx.externalId !== null &&
-          tx.externalId.startsWith(MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX),
-      )
-      .map((tx) => tx.id),
-  );
-
-  // The ledger row standing for one recurring occurrence: the RECURRING row
-  // posting wrote, keyed "<itemId>:<YYYY-MM-DD>", or the charge the user
-  // entered that posting settled the occurrence with instead
-  // (RecurringSettlement, same key). A hand-logged contribution's own expense
-  // can settle one too, but it stays the manual twin above.
-  const occurrenceKeyOf = (tx: (typeof transactions)[number]): string | null => {
-    if (tx.source === "RECURRING") return tx.externalId;
-    if (manualContributionTwinIds.has(tx.id)) return null;
-    return tx.recurringSettlement?.occurrenceKey ?? paired.get(tx.id)?.key ?? null;
-  };
+  const manualContributionTwinIds = new Set(transactions.filter(isManualContributionTwin).map((tx) => tx.id));
 
   // An auto-posted occurrence is one event written as two rows. The pairing key
   // both rows carry survives anything that can happen to the RecurringItem
   // afterwards - editing its amount, pausing it, deleting it - which is exactly
-  // what reading the item's current fields did not.
+  // what reading the item's current fields did not. Every key read, this
+  // month's or not: a contribution whose row another month counts is that
+  // month's money too.
   const postedExternalIds = new Set(
-    transactions.map(occurrenceKeyOf).filter((key): key is string => key !== null),
+    fetched.map(occurrenceKeyOf).filter((key): key is string => key !== null),
   );
   const pairedContributionKeys = new Set(
     goalContributions
@@ -496,8 +531,14 @@ async function computeMonthActuals(
   for (const tx of transactions) {
     const key = occurrenceKeyOf(tx);
     if (key === null) continue;
+    postedTransactionIds.add(tx.id);
+    if (otherMonthsOccurrenceIds.has(tx.id)) continue;
     const itemId = recurringItemIdFromExternalId(key);
     const item = itemId ? itemById.get(itemId) : undefined;
+    // A completed month reads a yearly item at its monthly equivalent, the
+    // charge's month included (S9): the charge itself would count the year
+    // in one month on top of the equivalent every other month adds.
+    if (amortizeYearly && item?.frequency === "YEARLY") continue;
     // A contribution is known by its GoalContribution twin first and by the
     // item's kind second (as recorded on a settlement, then as it is now), so
     // an occurrence stays savings even after the item behind it is gone.
@@ -514,7 +555,6 @@ async function computeMonthActuals(
       committedActual += amount;
       if (itemId) actualSubscriptionItemIds.add(itemId);
     }
-    postedTransactionIds.add(tx.id);
   }
 
   // What is left - no occurrence's row, no contribution twin - is budget
@@ -644,7 +684,7 @@ export async function classifyCompletedMonth(
   // Typical spending only - confirmed one-offs left out, shared expenses at
   // the user's own share: a completed month's figures exist to be averaged
   // into what a month usually costs (getHistoricalMonthlyAverage).
-  const actuals = await computeMonthActuals(window, window.end, context, recurringItems, categories, true);
+  const actuals = await computeMonthActuals(window, window.end, context, recurringItems, categories, true, true);
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
 

@@ -49,7 +49,7 @@
  */
 import { exactAmountIn, sameMoneyExactly, wasConverted } from "@/lib/account-money";
 import { convert, type RateTable } from "@/lib/currency";
-import { addDays, daysBetween, maxDate, minDate, toISODate } from "@/lib/date";
+import { addDays, daysBetween, fromISODate, maxDate, minDate, toISODate } from "@/lib/date";
 import { withinCents } from "@/lib/money";
 import { incomeWindow, periodForDate, type PeriodRef } from "@/lib/period";
 
@@ -199,6 +199,12 @@ export function recurringExternalId(itemId: string, due: Date): string {
 export function itemIdFromOccurrenceKey(key: string): string | null {
   const separator = key.lastIndexOf(":");
   return separator > 0 ? key.slice(0, separator) : null;
+}
+
+/** The due date inside a recurringExternalId, or null for anything not shaped like one. */
+export function dueDateFromOccurrenceKey(key: string): Date | null {
+  const separator = key.lastIndexOf(":");
+  return separator > 0 ? fromISODate(key.slice(separator + 1)) : null;
 }
 
 /**
