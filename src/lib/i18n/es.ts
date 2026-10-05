@@ -1041,6 +1041,7 @@ export const es = {
     summaryPerDay: "Por día",
     summaryPerDayHint: (days: number, future: boolean) =>
       future ? `Antes / después, en sus ${days} ${days === 1 ? "día" : "días"}` : `Antes / después, ${days} ${days === 1 ? "día" : "días"} restantes contando hoy`,
+    summaryPerDayNoBudget: "También cuenta el dinero que no está en ningún presupuesto; lo disponible para gastar por día del Panel cuenta solo tus presupuestos.",
     summaryAccount: (account: string) => `Saldo de ${account}`,
     summaryAccountHint: (payments: number) =>
       `Ahora / después de ${payments === 1 ? "este pago" : `estos ${payments} pagos`}. Incluye tu reserva y supone que no gastas nada más.`,

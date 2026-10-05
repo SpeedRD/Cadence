@@ -79,7 +79,7 @@ export async function findRecurringSuggestions(context: AppContext): Promise<Rec
       },
     }),
     prisma.recurringItem.findMany({
-      select: { name: true, note: true, amount: true, currency: true, accountId: true, categoryId: true, active: true, frequency: true },
+      select: { name: true, note: true, amount: true, currency: true, accountId: true, categoryId: true, active: true, frequency: true, kind: true },
       orderBy: { name: "asc" },
     }),
     prisma.recurringSuggestionDismissal.findMany({ select: { accountId: true, merchantKey: true } }),

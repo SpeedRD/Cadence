@@ -214,7 +214,17 @@ function AffordSummaryCard({
               format={left}
             />
           </SummaryRow>
-          <SummaryRow label={t.summaryPerDay} hint={t.summaryPerDayHint(summary.days, future)}>
+          <SummaryRow
+            label={t.summaryPerDay}
+            hint={
+              <>
+                {t.summaryPerDayHint(summary.days, future)}
+                {summary.split.before.noBudget > 0 || summary.split.after.noBudget > 0 ? (
+                  <span className="block">{t.summaryPerDayNoBudget}</span>
+                ) : null}
+              </>
+            }
+          >
             <BeforeAfter
               before={summary.perDay.before}
               after={summary.perDay.after}

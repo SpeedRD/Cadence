@@ -1054,6 +1054,7 @@ export const en = {
     summaryPerDay: "Per day",
     summaryPerDayHint: (days: number, future: boolean) =>
       future ? `Before / after, over its ${days} ${days === 1 ? "day" : "days"}` : `Before / after, ${days} ${days === 1 ? "day" : "days"} left including today`,
+    summaryPerDayNoBudget: "Counts the money in no budget too; the Dashboard's safe to spend a day counts only your budgets.",
     summaryAccount: (account: string) => `${account} balance`,
     summaryAccountHint: (payments: number) =>
       `Now / after ${payments === 1 ? "this payment" : `these ${payments} payments`}. Includes your cushion and assumes nothing else is spent.`,

@@ -18207,6 +18207,75 @@ async function main() {
           await cWipe();
         }
       }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- the May repeat hint: subscriptions only, and the same kind of spending --");
+      {
+        await cRates([]);
+        const restore = await seedStoredRates({ USD: 1, DOP: 63.1, EUR: 63.1 / 73.2 });
+        try {
+          const bank = await cAccount("Hint Bank");
+          const card = await cAccount("Hint Card");
+          const groceries = await prisma.category.create({ data: { name: "Verify Rev2C Hint Groceries", kind: "EXPENSE" } as never });
+          const savings = await prisma.category.create({ data: { name: "Verify Rev2C Hint Savings", kind: "EXPENSE" } as never });
+          const video = await prisma.category.create({ data: { name: "Verify Rev2C Hint Video", kind: "EXPENSE" } as never });
+          const rainyDay = await prisma.recurringItem.create({
+            data: { name: "Verify Rev2C Rainy Day", amount: 5100, currency: "DOP", kind: "CONTRIBUTION", frequency: "MONTHLY", anchorDay: 12, nextDate: cDay(10, 12), active: true, accountId: bank.id, categoryId: savings.id },
+          });
+          const plan = await prisma.recurringItem.create({
+            data: { name: "Verify Rev2C Video Plan", amount: 650, currency: "DOP", kind: "SUBSCRIPTION", frequency: "MONTHLY", anchorDay: 12, nextDate: cDay(10, 12), active: true, accountId: bank.id, categoryId: video.id },
+          });
+          for (const month of [7, 8, 9]) {
+            await prisma.transaction.create({ data: { accountId: card.id, date: cDay(month, 12), amount: 5000, currency: "DOP", type: "EXPENSE", source: "CSV", note: "GROCERY MART 7", categoryId: groceries.id, externalId: `verify-rev2c-hint-grocery-${month}` } });
+            await prisma.transaction.create({ data: { accountId: card.id, date: cDay(month, 12), amount: 650, currency: "DOP", type: "EXPENSE", source: "CSV", note: "CLIPFLIX STREAM 99", categoryId: video.id, externalId: `verify-rev2c-hint-clipflix-${month}` } });
+          }
+          const context = {
+            displayCurrency: "DOP" as const,
+            language: "en" as const,
+            rates: await getRateTable(),
+            today: cDay(10, 4),
+            currentPeriod: periodForDate(cDay(10, 4)),
+            bufferPercent: 10,
+            bufferFloorAmount: 0,
+            bufferFloorCurrency: "DOP",
+          };
+          const hints = async () => {
+            const found = (await cSuggestions.findRecurringSuggestions(context as never)).filter((s) => s.accountId === card.id) as (Awaited<ReturnType<typeof cSuggestions.findRecurringSuggestions>>[number] & { mayRepeat?: { itemName: string } | null })[];
+            return found
+              .map((s) => `${s.sampleNote}: ${s.mayRepeat ? s.mayRepeat.itemName.replace("Verify Rev2C ", "") : "no hint"}`)
+              .sort()
+              .join(" | ");
+          };
+          eq(
+            "hint: a grocery charge is not offered the savings contribution of a similar amount, while the video charge is offered the video subscription (was: both offered)",
+            await hints(),
+            "CLIPFLIX STREAM 99: Video Plan | GROCERY MART 7: no hint",
+          );
+          await prisma.recurringItem.update({ where: { id: rainyDay.id }, data: { kind: "SUBSCRIPTION" } });
+          eq(
+            "hint: the same item as a subscription in another category still gives the grocery charge no hint",
+            await hints(),
+            "CLIPFLIX STREAM 99: Video Plan | GROCERY MART 7: no hint",
+          );
+          await prisma.recurringItem.update({ where: { id: rainyDay.id }, data: { categoryId: groceries.id } });
+          eq(
+            "hint: a subscription in the grocery charge's own category is offered",
+            await hints(),
+            "CLIPFLIX STREAM 99: Video Plan | GROCERY MART 7: Rainy Day",
+          );
+          await prisma.recurringItem.update({ where: { id: plan.id }, data: { categoryId: savings.id } });
+          eq("hint: the video plan in another category, sharing no word with the charge, is no longer offered", await hints(), "CLIPFLIX STREAM 99: no hint | GROCERY MART 7: Rainy Day");
+          await prisma.recurringItem.update({ where: { id: plan.id }, data: { name: "Verify Rev2C Stream Plan" } });
+          eq("hint: a word of three letters or more shared with the item's name offers it whatever the category", await hints(), "CLIPFLIX STREAM 99: Stream Plan | GROCERY MART 7: Rainy Day");
+          await prisma.recurringItem.update({ where: { id: plan.id }, data: { name: "Verify Rev2C Cl Plan" } });
+          eq("hint: a shorter shared word does not count", await hints(), "CLIPFLIX STREAM 99: no hint | GROCERY MART 7: Rainy Day");
+          await prisma.recurringItem.update({ where: { id: plan.id }, data: { categoryId: video.id, kind: "CONTRIBUTION" } });
+          eq("hint: a contribution item in the charge's own category is never offered", await hints(), "CLIPFLIX STREAM 99: no hint | GROCERY MART 7: Rainy Day");
+        } finally {
+          await restore();
+          await cWipe();
+        }
+      }
     } finally {
       await cWipe();
       await prisma.exchangeRate.deleteMany();

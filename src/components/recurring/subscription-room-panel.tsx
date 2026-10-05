@@ -44,6 +44,14 @@ export function SubscriptionRoomPanel({
   const fitting = room.accounts.filter((account) => account.passes);
   const selected = room.accounts.find((account) => account.accountId === selectedAccountId) ?? null;
   const withoutHistory = room.accounts.filter((account) => account.basis === "none");
+  const verdictBadge = (account: LargeRoom["accounts"][number]) =>
+    account.passes ? (
+      <Badge variant="secondary" className="text-[var(--good)]">
+        {t.roomFits}
+      </Badge>
+    ) : (
+      <Badge variant="destructive">{t.roomShort}</Badge>
+    );
 
   return (
     <div
@@ -68,52 +76,84 @@ export function SubscriptionRoomPanel({
         ) : null}
       </div>
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t.roomColumnAccount}</TableHead>
-            <TableHead className="text-right whitespace-normal">
-              {t.roomColumnHeadroom}
-              <span className="block text-badge font-normal text-muted-foreground">
-                {t.roomBeforeAfter}
-              </span>
-            </TableHead>
-            <TableHead />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {room.accounts.map((account) => (
-            <TableRow
-              key={account.accountId}
-              className={cn(account.accountId === room.recommendedAccountId && "bg-[var(--good)]/5")}
-            >
-              <TableCell>
+      {/* Below sm each account is a stacked block, like the CSV duplicates
+          review's rows: the table needs 347px (a nowrap name, the two
+          figures and the badge) in the dialog's 317px, and its last column,
+          the verdict, sat past the edge of a sideways scroll. From sm the
+          table stays. Both read the same rows. */}
+      <ul className="divide-y divide-border/50 overflow-hidden rounded-md border border-border/50 sm:hidden">
+        {room.accounts.map((account) => (
+          <li
+            key={account.accountId}
+            className={cn(
+              "flex flex-col gap-1.5 px-3 py-2.5",
+              account.accountId === room.recommendedAccountId && "bg-[var(--good)]/5",
+            )}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="min-w-0">
                 {account.name}
                 {account.accountId === selectedAccountId ? (
                   <span className="ml-1.5 text-badge text-muted-foreground">{t.roomSelected}</span>
                 ) : null}
-              </TableCell>
-              <TableCell className="text-right">
-                <BeforeAfter
-                  before={account.headroomBefore}
-                  after={account.headroomAfter}
-                  currency={account.currency}
-                  passes={account.passes}
-                />
-              </TableCell>
-              <TableCell>
-                {account.passes ? (
-                  <Badge variant="secondary" className="text-[var(--good)]">
-                    {t.roomFits}
-                  </Badge>
-                ) : (
-                  <Badge variant="destructive">{t.roomShort}</Badge>
-                )}
-              </TableCell>
+              </span>
+              {verdictBadge(account)}
+            </div>
+            <div className="flex items-end justify-between gap-3">
+              <span className="text-hint text-muted-foreground">
+                {t.roomColumnHeadroom} · {t.roomBeforeAfter}
+              </span>
+              <BeforeAfter
+                before={account.headroomBefore}
+                after={account.headroomAfter}
+                currency={account.currency}
+                passes={account.passes}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <div className="max-sm:hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t.roomColumnAccount}</TableHead>
+              <TableHead className="text-right whitespace-normal">
+                {t.roomColumnHeadroom}
+                <span className="block text-badge font-normal text-muted-foreground">
+                  {t.roomBeforeAfter}
+                </span>
+              </TableHead>
+              <TableHead />
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {room.accounts.map((account) => (
+              <TableRow
+                key={account.accountId}
+                className={cn(account.accountId === room.recommendedAccountId && "bg-[var(--good)]/5")}
+              >
+                <TableCell className="whitespace-normal">
+                  {account.name}
+                  {account.accountId === selectedAccountId ? (
+                    <span className="ml-1.5 text-badge text-muted-foreground">{t.roomSelected}</span>
+                  ) : null}
+                </TableCell>
+                <TableCell className="text-right">
+                  <BeforeAfter
+                    before={account.headroomBefore}
+                    after={account.headroomAfter}
+                    currency={account.currency}
+                    passes={account.passes}
+                  />
+                </TableCell>
+                <TableCell>{verdictBadge(account)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
 
       <div className="space-y-1 text-xs">
         {recommended ? (

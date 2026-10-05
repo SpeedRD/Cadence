@@ -273,8 +273,10 @@ left to spend until the next check-in once the first payment is in, and per day 
 the days left. That figure is the period's room less your budget spending so far, the
 same amount the next check-in would offer as carryover, and it shows as "over" when
 negative. The summary also shows the first payment converted at the rate the check
-used, how much of what is left sits in your budgets and how much in no budget, and the
-paying account's balance now and after the payment. With several payments it names
+used, how much of what is left sits in your budgets and how much in no budget (the
+per-day figure counts the no-budget money too, so it can differ from the Dashboard's
+safe to spend a day, which counts only your budgets), and the paying account's
+balance now and after the payment. With several payments it names
 the tightest period. When the plan does not fit, it says how much the tightest period
 is short and the largest payment that would still fit. If the first payment falls in
 a later period, the figures use that period's projected room.

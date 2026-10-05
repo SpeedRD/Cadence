@@ -85,6 +85,8 @@ export interface TrackedRecurringItem {
   active: boolean;
   /** RecurringItem.frequency; read only by repeatedItem. */
   frequency?: string;
+  /** RecurringItem.kind; read only by repeatedItem. */
+  kind?: string;
 }
 
 /** One RecurringSuggestionDismissal row: never suggest this merchant on this account again. */
@@ -674,27 +676,39 @@ function isTracked(
 }
 
 /**
- * An active item that may already track `candidate` under another name or on
- * another account (S23): the same currency and cadence, and an amount within
- * the tolerance detection groups a bill's own charges by. Not proof - two
- * subscriptions can cost the same - so the suggestion is still offered, with
- * the item named beside it. isTracked has already dropped the candidates an
- * item matches by name, note or account and category.
+ * An active subscription that may already track `candidate` under another
+ * name or on another account (S23): the same currency and cadence, and an
+ * amount within the tolerance detection groups a bill's own charges by. A
+ * goal contribution is never offered - it is money set aside, not a bill a
+ * charge pays - and neither is an item in another category unless the
+ * charges' description shares a word of three letters or more with its name.
+ * Not proof - two subscriptions can cost the same - so the suggestion is
+ * still offered, with the item named beside it. isTracked has already
+ * dropped the candidates an item matches by name, note or account and
+ * category.
  */
 export function repeatedItem<T extends TrackedRecurringItem>(
-  candidate: Pick<RecurringCandidate, "amount" | "currency" | "cadence">,
+  candidate: Pick<RecurringCandidate, "amount" | "currency" | "cadence" | "categoryId" | "sampleNote">,
   items: readonly T[],
 ): T | null {
   const tolerance = amountTolerance(candidate.amount);
+  const described = new Set(wordsOf(candidate.sampleNote));
   return (
     items.find(
       (item) =>
         item.active &&
+        item.kind === "SUBSCRIPTION" &&
         item.frequency === candidate.cadence &&
         item.currency === candidate.currency &&
-        Math.abs(item.amount - candidate.amount) <= tolerance,
+        Math.abs(item.amount - candidate.amount) <= tolerance &&
+        (item.categoryId === candidate.categoryId || wordsOf(item.name).some((word) => described.has(word))),
     ) ?? null
   );
+}
+
+/** The words of three letters or more in `text`, lower-cased. */
+function wordsOf(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z]+/).filter((word) => word.length >= 3);
 }
 
 /** The most common value, ties to the one on the most recent row (rows are oldest first). */

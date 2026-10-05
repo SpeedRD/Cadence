@@ -39,7 +39,7 @@ import {
 } from "@/lib/payday";
 import { skipReasonLabel } from "@/lib/labels";
 import { cn } from "@/lib/utils";
-import { confirmPaydayCheckinAction } from "@/server/actions/payday";
+import { confirmPaydayCheckinAction, type PaydayActionState } from "@/server/actions/payday";
 
 import type { PaydayAcknowledgementState } from "@/lib/data/payday";
 import { reassignRecurringAccountAction } from "@/server/actions/recurring";
@@ -74,7 +74,16 @@ export function PaydayCheckinDialog({
   const [acknowledgedDeficit, setAcknowledgedDeficit] = useState(false);
   const [acknowledgedZeroBuffer, setAcknowledgedZeroBuffer] = useState(false);
   const [reassigningItemId, setReassigningItemId] = useState<string | null>(null);
-  const [state, formAction, pending] = useActionState(confirmPaydayCheckinAction, null);
+  // The confirmation toast is raised here, where the server's answer arrives,
+  // not from `state` in an effect: confirming moves the Dashboard's check-in
+  // card to another place in the page (it stops leading), which remounts this
+  // dialog with a fresh `state`, so an effect would never see the answer.
+  const confirmAndAnnounce = async (previous: PaydayActionState, formData: FormData) => {
+    const result = await confirmPaydayCheckinAction(previous, formData);
+    if (result?.ok) toast.success(result.message ?? t.checkinConfirmed);
+    return result;
+  };
+  const [state, formAction, pending] = useActionState(confirmAndAnnounce, null);
   const handled = useRef<number | undefined>(undefined);
   // What the server measured when it last refused, kept alongside the plan that
   // produced it. The figures further down come from the rates this dialog
@@ -109,11 +118,10 @@ export function PaydayCheckinDialog({
     if (!state || state.at === handled.current) return;
     handled.current = state.at;
     if (state.ok) {
-      toast.success(state.message ?? t.checkinConfirmed);
       onOpenChange(false);
       return;
     }
-  }, [state, onOpenChange, t.checkinConfirmed]);
+  }, [state, onOpenChange]);
 
   // Adjusted during render rather than in an effect, the same pattern as the
   // reopen reset above.
