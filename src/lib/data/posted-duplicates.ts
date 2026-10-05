@@ -28,7 +28,7 @@ import { num, type DecimalLike } from "@/lib/money";
 import { fundedPeriodFor, periodInfo } from "@/lib/period";
 import { scheduleDates } from "@/lib/period-commitments";
 import { prisma } from "@/lib/prisma";
-import { advanceDate, skipReasonFor } from "@/lib/recurring";
+import { advanceDate, owedOccurrences, skipReasonFor } from "@/lib/recurring";
 import {
   itemIdFromOccurrenceKey,
   paycheckWindow,
@@ -713,7 +713,11 @@ export async function keepEntryAsUpcoming(
  * approved receipt (approveStagedTransaction); run inside the caller's
  * database transaction, after the caller's own checks of the charge. The
  * occurrence must still be ahead of posting - its item active with nextDate
- * not past the due date, and no RECURRING row for it - and both of
+ * not past the due date, and no RECURRING row for it - and be one of the
+ * item's schedule as it is now, within its payments left: a key read before
+ * the schedule was edited (a CSV import whose check failed open, an edit
+ * between the caller's check and this write) would otherwise pair the charge
+ * with a date posting never reaches while the real occurrence posts too. And both of
  * RecurringSettlement's unique keys refuse a second pairing of either side;
  * otherwise "match_gone" and nothing is written.
  *
@@ -735,8 +739,9 @@ export async function recordUpcomingPayment(
   await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${itemId} FOR UPDATE`;
   const item = await tx.recurringItem.findFirst({
     where: { id: itemId, active: true, nextDate: { lte: dueDate } },
-    select: { id: true, name: true, kind: true },
+    select: { id: true, name: true, kind: true, nextDate: true, frequency: true, anchorDay: true, secondAnchorDay: true, remainingOccurrences: true },
   });
+  if (item && !owedOccurrences(item, item.nextDate, dueDate).some((date) => date.getTime() === dueDate.getTime())) return "match_gone";
   const posted = await tx.transaction.findUnique({
     where: { source_externalId: { source: "RECURRING", externalId: occurrenceKey } },
     select: { id: true },

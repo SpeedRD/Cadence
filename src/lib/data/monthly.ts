@@ -98,8 +98,8 @@ export const MAX_HISTORICAL_MONTHS = 6;
 
 /**
  * The month of the first recorded activity is a full month of history only when
- * that activity starts on or before this day of it (day 7 leaves at least 24 of
- * the month's 28-31 days covered). Later than that, the month is a partial one
+ * that activity starts on or before this day of it (day 7 leaves at most six
+ * days uncovered: 22 to 25 of the month's 28-31 days covered). Later than that, the month is a partial one
  * - a first expense on Jun 25 says nothing about what June costs - and the
  * average starts at the next month instead (see firstUsableMonth).
  */

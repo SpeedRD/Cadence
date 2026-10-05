@@ -44,6 +44,15 @@ export interface StagedApprovalInput {
    * Null when no match was shown.
    */
   resolution: "posted" | "different" | "upcoming" | null;
+  /**
+   * The posted row (or upcoming occurrence) the reviewer was shown and
+   * answered "posted" or "upcoming" about. The match is recomputed here with
+   * the reviewer's own picks - a changed category can make another
+   * look-alike item the match - so an answer about one row is never applied
+   * to another: a different match is refused as match_gone. Absent for
+   * callers that showed nothing.
+   */
+  shownPostedId?: string | null;
 }
 
 export type StagedApprovalResult =
@@ -113,6 +122,8 @@ export async function approveStagedTransaction(
   const found = await lookUpPostedDuplicates([incoming], rates, { ...options, upcoming: true });
   if (!found && (input.resolution === "posted" || input.resolution === "upcoming")) return { ok: false, reason: "check_failed" };
   const match = found?.get(staged.id) ?? null;
+  const answersShownMatch = !input.shownPostedId || match?.posted.id === input.shownPostedId;
+  if ((input.resolution === "posted" || input.resolution === "upcoming") && !answersShownMatch) return { ok: false, reason: "match_gone" };
   const reviewed = {
     date: input.date,
     amount: input.amount,

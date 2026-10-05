@@ -49,7 +49,9 @@ function StatusBadge({ status, t }: { status: string; t: ReviewDictionary }) {
 function useReviewActions(row: StagedRow, t: ReviewDictionary, accountId: string, categoryId: string) {
   const [pending, startTransition] = useTransition();
 
-  const approve = (resolution?: "posted" | "different" | "upcoming") => {
+  // `postedId` is the posted row the reviewer answered about: approval acts
+  // on it only if its own match, recomputed with these picks, is that row.
+  const approve = (resolution?: "posted" | "different" | "upcoming", postedId?: string) => {
     if (!accountId) {
       toast.error(t.pickAccountFirst);
       return;
@@ -64,6 +66,7 @@ function useReviewActions(row: StagedRow, t: ReviewDictionary, accountId: string
       formData.set("accountId", accountId);
       formData.set("categoryId", categoryId === "none" ? "" : categoryId);
       if (resolution) formData.set("resolution", resolution);
+      if (postedId) formData.set("postedId", postedId);
       const result = await approveStagedAction(null, formData);
       if (result?.error) toast.error(result.error);
       else toast.success(result?.message ?? t.approvedToast);
@@ -248,7 +251,7 @@ export function ReviewRow({
             </Button>
             {match ? (
               <>
-                <Button size="sm" disabled={pending} onClick={() => approve(match.kind === "upcoming" ? "upcoming" : "posted")}>
+                <Button size="sm" disabled={pending} onClick={() => approve(match.kind === "upcoming" ? "upcoming" : "posted", match.posted.id)}>
                   {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
                   {match.kind === "upcoming" ? tx.isUpcomingPayment : tx.isPostedCharge}
                 </Button>
@@ -383,7 +386,7 @@ export function ReviewCard({
           </div>
           {match ? (
             <div className="grid gap-2">
-              <Button size="sm" disabled={pending} onClick={() => approve(match.kind === "upcoming" ? "upcoming" : "posted")}>
+              <Button size="sm" disabled={pending} onClick={() => approve(match.kind === "upcoming" ? "upcoming" : "posted", match.posted.id)}>
                 {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
                 {match.kind === "upcoming" ? tx.isUpcomingPayment : tx.isPostedCharge}
               </Button>

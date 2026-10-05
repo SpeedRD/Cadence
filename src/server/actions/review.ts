@@ -76,11 +76,12 @@ export async function approveStagedAction(
   const rawResolution = String(formData.get("resolution") ?? "");
   const resolution =
     rawResolution === "posted" || rawResolution === "different" || rawResolution === "upcoming" ? rawResolution : null;
+  const shownPostedId = String(formData.get("postedId") ?? "") || null;
 
   let result;
   try {
     result = await approveStagedTransaction(
-      { id, date, amount, currency, rawDescription, accountId, categoryId, resolution },
+      { id, date, amount, currency, rawDescription, accountId, categoryId, resolution, shownPostedId },
       (await getAppContext()).rates,
     );
   } catch (error) {

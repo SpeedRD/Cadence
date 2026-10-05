@@ -18360,6 +18360,125 @@ async function main() {
     }
   }
 
+  console.log("\n== the second review's unproven items (overnight part 5a) ==");
+  {
+    // Public APIs only, so the block also runs on the code before the fixes
+    // and fails there on each item fixed (U1 U2 U3 U7; U4 reproduces but is
+    // the rule the cleanup list's item 4 asked for, checked there). Fixtures
+    // `Verify Unproven ...`; every other active item is paused, the rates are
+    // put back as they were.
+    const uStaged = await import("../src/lib/data/staged-approval");
+    const uImport = await import("../src/lib/data/import");
+    const uPayload = await import("../src/lib/bpd-rate-payload");
+    const uExtra = await import("../src/lib/data/extraordinary");
+    const { postDueRecurringItems: uPost } = await import("../src/lib/recurring-posting");
+    const uDay = (month: number, day: number) => civilDate(2026, month, day);
+    const uCategory = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
+    const uAccount = (name: string, currency = "USD") => prisma.account.create({ data: { name: `Verify Unproven ${name}`, currency, type: "CHECKING" } });
+    const uWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Unproven " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.stagedTransaction.deleteMany({ where: { rawDescription: { startsWith: "Verify Unproven " } } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Unproven " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Unproven " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Unproven " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    const uPaused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: uPaused } }, data: { active: false } });
+    const uRestore = await seedStoredRates({ USD: 1, DOP: 60.5, EUR: 60.5 / 70.25 });
+    try {
+      console.log("-- U1: an answer about the posted row shown is never applied to another --");
+      {
+        const card = await uAccount("Card");
+        const gym = await prisma.recurringItem.create({ data: { name: "Verify Unproven Gym", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", anchorDay: 3, nextDate: uDay(10, 3), accountId: card.id, categoryId: await uCategory("Bills") } });
+        await prisma.recurringItem.create({ data: { name: "Verify Unproven Streaming", amount: 15, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", anchorDay: 3, nextDate: uDay(10, 3), accountId: card.id, categoryId: await uCategory("Subscriptions") } });
+        await uPost(uDay(10, 3));
+        const staged = await prisma.stagedTransaction.create({ data: { date: uDay(10, 4), amount: 15, currency: "USD", rawDescription: "Verify Unproven card payment 15.00", accountId: card.id, source: "GMAIL", externalId: "verify-unproven-u1", suggestedCategoryId: await uCategory("Bills") } });
+        const rates = await getRateTable();
+        const shown = (await uStaged.stagedPostedMatches([{ ...staged, amount: 15 } as never], [card.id], rates))[staged.id]?.[card.id];
+        const gymRow = await prisma.transaction.findFirst({ where: { source: "RECURRING", externalId: { startsWith: `${gym.id}:` } } });
+        eq("U1: filed under Bills, the receipt is shown as Gym's posted charge", shown?.posted.id === gymRow?.id, true);
+        const answer = await uStaged.approveStagedTransaction(
+          { id: staged.id, date: staged.date, amount: 15, currency: "USD", rawDescription: staged.rawDescription, accountId: card.id, categoryId: await uCategory("Subscriptions"), resolution: "posted", shownPostedId: shown?.posted.id ?? null } as never,
+          rates,
+        );
+        eq(
+          "U1: switched to Subscriptions before answering, 'It's the posted charge' is refused, nothing changed (was: kept as Streaming's charge)",
+          `${answer.ok ? (answer as { outcome: string }).outcome : (answer as { reason: string }).reason}|${(await prisma.stagedTransaction.findUniqueOrThrow({ where: { id: staged.id } })).status}`,
+          "match_gone|PENDING",
+        );
+        const kept = await uStaged.approveStagedTransaction(
+          { id: staged.id, date: staged.date, amount: 15, currency: "USD", rawDescription: staged.rawDescription, accountId: card.id, categoryId: await uCategory("Bills"), resolution: "posted", shownPostedId: shown?.posted.id ?? null } as never,
+          rates,
+        );
+        eq("U1: the same answer with the picks it was shown for is kept as Gym's charge, as before", `${kept.ok ? (kept as { outcome: string }).outcome : "refused"}|${kept.ok && "match" in kept ? kept.match.posted.id === gymRow?.id : false}`, "kept_posted|true");
+        await uWipe();
+      }
+
+      console.log("-- U2: 'It's that payment' only for a date on the item's schedule as it is now --");
+      {
+        const bank = await uAccount("Bank", "DOP");
+        // Reviewed while the plan was due on the 28th; moved to the 20th since.
+        const plan = await prisma.recurringItem.create({ data: { name: "Verify Unproven Console plan", amount: 100, currency: "EUR", frequency: "MONTHLY", kind: "SUBSCRIPTION", anchorDay: 20, nextDate: uDay(10, 20), remainingOccurrences: 3, accountId: bank.id } });
+        const failingLookup = (async () => {
+          throw new Error("Verify Unproven lookup down");
+        }) as never;
+        const row = (key: string) => ({ date: "2026-10-27", amount: 7025, type: "EXPENSE" as const, transferDirection: null, note: "Verify Unproven COMPRA CONSOLE", categoryId: null, importAnyway: false, isExtraordinary: false, yourShare: null, settlesOccurrence: key });
+        const stale = await uImport.importCsvTransactions({ accountId: bank.id, currency: "DOP", rows: [row(`${plan.id}:2026-10-28`)] } as never, await getRateTable(), { lookup: failingLookup });
+        eq(
+          "U2: with the duplicate check down, a row answered for Oct 28 - no longer on the schedule - is refused whole (was: imported and recorded on Oct 28)",
+          `${stale.ok ? "imported" : (stale as { reason: string }).reason}|${await prisma.transaction.count({ where: { accountId: bank.id } })}|${await prisma.recurringSettlement.count({ where: { recurringItemId: plan.id } })}`,
+          "posted_match_changed|0|0",
+        );
+        await uPost(uDay(10, 31));
+        eq("U2: and the Oct 20 payment posts once, the only charge for it (was: posted beside the Oct 27 charge, paid twice)", await prisma.transaction.count({ where: { accountId: bank.id } }), 1);
+        const onSchedule = await uImport.importCsvTransactions({ accountId: bank.id, currency: "DOP", rows: [{ ...row(`${plan.id}:2026-11-20`), date: "2026-11-18" }] } as never, await getRateTable(), { lookup: failingLookup });
+        eq("U2: a date that is on the schedule is still recorded, as before", `${onSchedule.ok}|${(await prisma.recurringSettlement.findMany({ where: { recurringItemId: plan.id } })).map((r) => toISODate(r.dueDate)).join(",")}`, "true|2026-11-20");
+        const pastPlan = await uImport.importCsvTransactions({ accountId: bank.id, currency: "DOP", rows: [{ ...row(`${plan.id}:2027-01-20`), date: "2027-01-18", note: "Verify Unproven COMPRA CONSOLE 2" }] } as never, await getRateTable(), { lookup: failingLookup });
+        eq("U2: one past the plan's last payment (two were left from Nov 20) is refused too", pastPlan.ok ? "imported" : (pastPlan as { reason: string }).reason, "posted_match_changed");
+        await uWipe();
+      }
+
+      console.log("-- U3: the bank rate's seven days are the app's civil days --");
+      {
+        const within = uPayload.isWithinFreshnessWindow as unknown as (asOf: Date, now: Date, zone?: string) => boolean;
+        const asOf = new Date(Date.UTC(2026, 9, 2));
+        const at = (iso: string) => new Date(iso);
+        eq(
+          "U3: dated Oct 2, the rate still counts at 21:30 Santo Domingo time on Oct 9, its seventh day (was: dropped at 20:00, already Oct 10 in UTC)",
+          within(asOf, at("2026-10-09T21:30:00-04:00"), "America/Santo_Domingo"),
+          true,
+        );
+        eq("U3: ... and no longer on Oct 10 there, the eighth day", within(asOf, at("2026-10-10T00:30:00-04:00"), "America/Santo_Domingo"), false);
+        eq("U3: in UTC the window is as before: Oct 9 counts, Oct 10 does not", `${within(asOf, at("2026-10-09T23:59:00Z"), "UTC")}|${within(asOf, at("2026-10-10T00:01:00Z"), "UTC")}`, "true|false");
+      }
+
+      console.log("-- U7: the one-off median reads the category's budget spending only --");
+      {
+        const card = await uAccount("Music card");
+        const subscriptions = await uCategory("Subscriptions");
+        const music = await prisma.recurringItem.create({ data: { name: "Verify Unproven Music", amount: 10, currency: "USD", frequency: "MONTHLY", kind: "SUBSCRIPTION", anchorDay: 10, nextDate: uDay(10, 10), accountId: card.id, categoryId: subscriptions, active: false } });
+        for (const month of [7, 8, 9]) {
+          const charge = await prisma.transaction.create({ data: { accountId: card.id, date: uDay(month, 9), amount: 10, currency: "USD", type: "EXPENSE", source: "MANUAL", categoryId: subscriptions, note: "Verify Unproven Music" } });
+          await prisma.recurringSettlement.create({ data: { transactionId: charge.id, occurrenceKey: `${music.id}:2026-0${month}-10`, recurringItemId: music.id, kind: "SUBSCRIPTION", dueDate: uDay(month, 10), claimedByPostingAt: new Date() } });
+        }
+        const today = uDay(10, 5);
+        const uContext = { displayCurrency: "USD", language: "en", rates: await getRateTable(), today, currentPeriod: periodForDate(today), bufferPercent: 10, bufferFloorAmount: 0, bufferFloorCurrency: "USD" } as never;
+        const others = await prisma.transaction.count({ where: { categoryId: subscriptions, type: "EXPENSE", source: { not: "RECURRING" }, date: { gte: uDay(4, 5) }, accountId: { not: card.id } } });
+        eq("U7 fixture isolation: no other Subscriptions spending in the last six months", others, 0);
+        const hits = await uExtra.findExtraordinaryCandidates([{ key: "new", categoryId: subscriptions, amount: 40, currency: "USD" }], uContext);
+        eq("U7: a 40.00 purchase is not asked about as a one-off against three charges that paid Music (was: median 10, asked)", hits.has("new"), false);
+        await uWipe();
+      }
+    } finally {
+      await uWipe();
+      await uRestore();
+      await prisma.recurringItem.updateMany({ where: { id: { in: uPaused } }, data: { active: true } });
+    }
+  }
+
   console.log("\n== stale-rates notice only when the rates are unfit for the currencies in use (overnight part 3c) ==");
   {
     // The shell showed "Converted figures may be out of date" whenever the

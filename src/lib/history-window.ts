@@ -34,8 +34,10 @@ export const HISTORY_PERIODS = 6;
 
 /**
  * The first period of activity is a full period of history only when that
- * activity starts on or before this day of it (the 4th or the 19th): at least
- * 12 of its 13-16 days covered, as day 7 leaves a first month 24 of its days.
+ * activity starts on or before this day of it (the 4th or the 19th): at most
+ * its first three days uncovered - 12 of a first half's 15 days, 12 or 13 of
+ * a 15- or 16-day second half, 10 of February's 13 - as day 7 leaves a first
+ * month at most six days short (22 to 25 of its 28-31 days covered).
  */
 export const FIRST_PERIOD_MAX_START_DAY = 4;
 

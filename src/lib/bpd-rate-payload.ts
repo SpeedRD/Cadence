@@ -18,6 +18,8 @@
  * open.er-api.com for DOP and EUR because it's the bank's own published
  * rate, not a market aggregator's.
  */
+import { appTimeZone, civilDateInZone } from "./date";
+
 export const BPD_RATES_API_URL =
   "https://popularenlinea.com/_api/web/lists/getbytitle('Rates')/items?$filter=ItemID%20eq%20'1'";
 
@@ -102,10 +104,15 @@ function utcDaysBetween(asOf: Date, now: Date): number {
 
 /**
  * `asOf` is today or up to BPD_RATE_MAX_AGE_DAYS calendar days in the past -
- * never in the future, and never older than the bounded window.
+ * never in the future, and never older than the bounded window. "Today" is
+ * the app's civil day (APP_TIMEZONE), the day every other date in the app
+ * is read on: counted in UTC days, a rate dated a week back dropped out at
+ * 20:00 Santo Domingo time on its seventh day, four hours early. `asOf` is
+ * the bank's publication date, read on its UTC date as everywhere in this
+ * module.
  */
-export function isWithinFreshnessWindow(asOf: Date, now: Date): boolean {
-  const ageDays = utcDaysBetween(asOf, now);
+export function isWithinFreshnessWindow(asOf: Date, now: Date, timeZone: string = appTimeZone()): boolean {
+  const ageDays = utcDaysBetween(asOf, civilDateInZone(now, timeZone));
   return ageDays >= 0 && ageDays <= BPD_RATE_MAX_AGE_DAYS;
 }
 

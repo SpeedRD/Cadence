@@ -12,7 +12,7 @@ item: pending / done / skipped, plus one sentence. No real figures here.
 - 3c. Stale-rates banner only when the table is unfit: done - shown only when the refresh failed and the table is unfit for the currencies in use (ratesOutOfDateFor); harness, Chromium 375/1280 en/es, Simulator.
 - 3d. Stale documentation (AGENTS.md audit line, RecurringSettlement comment, others): done - audit line, RecurringSettlement and claimedByPostingAt comments, remainingOccurrences comment, AGENTS.md settlement writers corrected; README lines handled in 3b.
 - 4. Scrub real figures from tracked files: done - listed figures, the goal name and the Part 6 anchor amounts replaced with a consistent fictional mapping in the findings docs and the harness (same check count before and after); none left in the tree.
-- 5a. Unproven items of REVIEW_FINDINGS_2.md: pending
+- 5a. Unproven items of REVIEW_FINDINGS_2.md: done - four reproduced and fixed (staged approval, off-schedule pairing, bank-rate window, one-off median), one comment corrected, one measured as by design, one reproduced but left as the cleanup list decided; status lines added.
 - 5b. "May repeat" hint in the Inbox suggestion: pending
 - 6a. Read-only production connection: pending
 - 6b. Local throwaway copy: pending

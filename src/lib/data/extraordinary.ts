@@ -1,3 +1,4 @@
+import { isBudgetSpending } from "@/lib/budget-spending";
 import { convert } from "@/lib/currency";
 import { addMonths } from "@/lib/date";
 import {
@@ -10,6 +11,8 @@ import { prisma } from "@/lib/prisma";
 import { ownShare } from "@/lib/shared-expense";
 
 import type { AppContext } from "@/lib/data/context";
+import { SPENDING_ROW_SELECT, spendingRowFrom } from "@/lib/data/budget-spending";
+import { loadPairedCharges } from "@/lib/data/recurring-settlement";
 
 /** One new expense to measure against its category's recent history. */
 export interface ExtraordinaryCandidate<K> {
@@ -37,10 +40,11 @@ export interface ExtraordinaryHit extends ExtraordinaryClassification {
  * Which of the candidates look extraordinary for their own category: above
  * EXTRAORDINARY_MULTIPLIER x the median of the category's organic EXPENSE
  * amounts over the last EXTRAORDINARY_LOOKBACK_MONTHS. The history is the
- * same rows the category-suggestion average reads - EXPENSE transactions
- * filed under the category - minus the two kinds it cannot speak for:
- * RECURRING rows (scheduled amounts, not organic spending) and one-offs
- * already confirmed extraordinary. A shared expense in the history counts at
+ * same rows the category-suggestion average reads - the category's budget
+ * spending (isBudgetSpending: no RECURRING row, no charge that paid a
+ * recurring occurrence, no contribution's own expense - scheduled amounts
+ * and savings, not organic spending) - minus one-offs already confirmed
+ * extraordinary. A shared expense in the history counts at
  * the user's own share, the same figure the averages read for it. Amounts are
  * compared in the display currency so a category paid in two currencies
  * still has one median.
@@ -57,7 +61,7 @@ export async function findExtraordinaryCandidates<K>(
   const categoryIds = [...new Set(candidates.map((candidate) => candidate.categoryId))];
   if (categoryIds.length === 0) return hits;
 
-  const [history, categories] = await Promise.all([
+  const [rows, categories, paired] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         type: "EXPENSE",
@@ -66,13 +70,15 @@ export async function findExtraordinaryCandidates<K>(
         categoryId: { in: categoryIds },
         date: { gte: addMonths(context.today, -EXTRAORDINARY_LOOKBACK_MONTHS) },
       },
-      select: { categoryId: true, amount: true, yourShare: true, currency: true },
+      select: SPENDING_ROW_SELECT,
     }),
     prisma.category.findMany({
       where: { id: { in: categoryIds } },
       select: { id: true, name: true },
     }),
+    loadPairedCharges(context.today),
   ]);
+  const history = rows.filter((row) => isBudgetSpending(spendingRowFrom(row, paired)));
 
   const toDisplay = (amount: number, currency: string) =>
     convert(amount, currency, context.displayCurrency, context.rates);
