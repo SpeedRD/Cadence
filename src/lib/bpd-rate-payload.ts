@@ -159,7 +159,7 @@ export function toRateTableEntries(rates: BpdRates): { DOP: number; EUR: number 
  * The euro sell rate behind a stored EUR row. The row keeps the cross-rate
  * toRateTableEntries derives (dollar sell / euro sell) at ExchangeRate.rate's
  * ten decimals, so dividing back gives the quote only to within about 5e-9 -
- * and 163.71 EUR at a sell rate of 68.50 then converts at 68.4999999973, a
+ * and 158.37 EUR at a sell rate of 68.50 then converts at 68.4999999973, a
  * cent low (S20). The bank quotes to a few decimals, so a division that lands
  * that close to a six-decimal figure is that quote; anything else is kept as
  * divided.
