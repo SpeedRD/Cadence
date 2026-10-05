@@ -11263,12 +11263,12 @@ async function main() {
       console.log("-- D1 (trace (a)): the Goals page counts from the plan period, like the check-in --");
       {
         const goal = await prisma.goal.create({
-          data: { name: "Verify K Pay back money", targetAmount: 29000, currency: "DOP", targetDate: civilDate(2026, 11, 15), savedAmount: 17857.35 },
+          data: { name: "Verify K Loan repayment", targetAmount: 24000, currency: "DOP", targetDate: civilDate(2026, 11, 15), savedAmount: 15017.35 },
         });
         await prisma.goalContribution.createMany({
           data: [
-            { goalId: goal.id, amount: 12286.03, currency: "DOP", date: civilDate(2026, 9, 1) },
-            { goalId: goal.id, amount: 5571.32, currency: "DOP", date: civilDate(2026, 10, 1) },
+            { goalId: goal.id, amount: 10526.03, currency: "DOP", date: civilDate(2026, 9, 1) },
+            { goalId: goal.id, amount: 4491.32, currency: "DOP", date: civilDate(2026, 10, 1) },
           ],
         });
         const sep30 = kContext(civilDate(2026, 9, 30));
@@ -11276,17 +11276,17 @@ async function main() {
         const roadmap = (await kPaces(kPlanRef(sep30), sep30)).find((pace) => pace.goalId === goal.id)?.amount;
         // Flipped deliberately with K3. D2: the pace is fixed at the plan
         // period's start, so the Oct 1 contribution no longer lowers Oct 1-15's
-        // own bar (16,713.97 still to go on Oct 1). D9 / B43: Nov 16-30 is paid
+        // own bar (13,473.97 still to go on Oct 1). D9 / B43: Nov 16-30 is paid
         // Fri Nov 13, before the Sun Nov 15 target, so it is a fourth period.
-        // Was 3,714.22 x 3 (11,142.65 over Oct 1-15, Oct 16-31, Nov 1-15).
+        // Was 2,994.22 x 3 (8,982.65 over Oct 1-15, Oct 16-31, Nov 1-15).
         eq(
-          "D1: on Wed Sep 30 (payday) the Goals page asks 4,178.49 per pay period over 4 periods, counted from Oct 1 (was 2,785.66 x 4 counted from today, then 3,714.22 x 3)",
+          "D1: on Wed Sep 30 (payday) the Goals page asks 3,368.49 per pay period over 4 periods, counted from Oct 1 (was 2,245.66 x 4 counted from today, then 2,994.22 x 3)",
           `${listed?.displayPerPeriod}:${listed?.periodsLeft}`,
-          "4178.49:4",
+          "3368.49:4",
         );
-        eq("D1: ... the same figure the check-in's roadmap asks for the plan period", roadmap, 4178.49);
+        eq("D1: ... the same figure the check-in's roadmap asks for the plan period", roadmap, 3368.49);
         const oct5 = kContext(civilDate(2026, 10, 5));
-        eq("D1: a day that is not between payday and period end reads the same either way", (await kGoals(oct5)).find((g) => g.id === goal.id)?.displayPerPeriod, 4178.49);
+        eq("D1: a day that is not between payday and period end reads the same either way", (await kGoals(oct5)).find((g) => g.id === goal.id)?.displayPerPeriod, 3368.49);
         await kWipe();
       }
 
@@ -11874,24 +11874,24 @@ async function main() {
         "false,true,true,true",
       );
 
-      console.log("-- the user's case (trace (a)): Pay back money, 29,000 due Sun Nov 15 2026 --");
+      console.log("-- the user's case (trace (a)): Loan repayment, 24,000 due Sun Nov 15 2026 --");
       {
         const main = await gAccount("Main");
-        // As in production: 12,286.03 in before Sep 30, the 5,571.32 moved ON
+        // As in production: 10,526.03 in before Sep 30, the 4,491.32 moved ON
         // Sep 30 - the payday Oct 1-15's check-in was confirmed on - and
-        // 5,571.32 planned for Oct 1-15.
-        const payBack = await gGoal({ name: "Pay back money", target: 29000, targetDate: civilDate(2026, 11, 15), isDebt: true, contributions: [[8285.94, civilDate(2026, 9, 15)], [4000.09, civilDate(2026, 9, 15)], [5571.32, civilDate(2026, 9, 30)]] });
-        // D2 as the map ran trace (a): the 5,571.32 dated Oct 1, and due Thu
+        // 4,491.32 planned for Oct 1-15.
+        const payBack = await gGoal({ name: "Loan repayment", target: 24000, targetDate: civilDate(2026, 11, 15), isDebt: true, contributions: [[6525.94, civilDate(2026, 9, 15)], [4000.09, civilDate(2026, 9, 15)], [4491.32, civilDate(2026, 9, 30)]] });
+        // D2 as the map ran trace (a): the 4,491.32 dated Oct 1, and due Thu
         // Nov 12 so its pay periods are Oct 1-15, Oct 16-31 and Nov 1-15.
-        const threePeriods = await gGoal({ name: "Pay back money (3 periods)", target: 29000, targetDate: civilDate(2026, 11, 12), contributions: [[12286.03, civilDate(2026, 9, 1)], [5571.32, civilDate(2026, 10, 1)]] });
+        const threePeriods = await gGoal({ name: "Loan repayment (3 periods)", target: 24000, targetDate: civilDate(2026, 11, 12), contributions: [[10526.03, civilDate(2026, 9, 1)], [4491.32, civilDate(2026, 10, 1)]] });
         // D2's variant (and D11): planned and contributed 4,000 against the
-        // 5,571.32 the roadmap asks, the room at confirm covering only 4,000.
-        const variant = await gGoal({ name: "Variant", target: 29000, targetDate: civilDate(2026, 11, 12), isDebt: true, contributions: [[12286.03, civilDate(2026, 9, 1)], [4000, civilDate(2026, 10, 1)]] });
+        // 4,491.32 the roadmap asks, the room at confirm covering only 4,000.
+        const variant = await gGoal({ name: "Variant", target: 24000, targetDate: civilDate(2026, 11, 12), isDebt: true, contributions: [[10526.03, civilDate(2026, 9, 1)], [4000, civilDate(2026, 10, 1)]] });
         // D3: 5,000 planned for a 30,000 goal due Dec 31, nothing contributed.
         const thirty = await gGoal({ name: "Thirty", target: 30000, targetDate: civilDate(2026, 12, 31) });
         await gCheckin(gRef(2026, 10, "A"), [
-          { goalId: payBack.id, accountId: main.id, planned: 5571.32, recommended: 5571.32 },
-          { goalId: threePeriods.id, accountId: main.id, planned: 5571.32, recommended: 5571.32 },
+          { goalId: payBack.id, accountId: main.id, planned: 4491.32, recommended: 4491.32 },
+          { goalId: threePeriods.id, accountId: main.id, planned: 4491.32, recommended: 4491.32 },
           { goalId: variant.id, accountId: main.id, planned: 4000, recommended: 4000 },
           { goalId: thirty.id, accountId: main.id, planned: 5000, recommended: 5000 },
         ]);
@@ -11902,14 +11902,14 @@ async function main() {
         // Oct 1-15's money is in hand from its payday, Sep 30: a contribution
         // made that day is Oct 1-15's, and the pace is fixed before it.
         eq(
-          "user's case: on Sep 30 Oct 1-15 shows 5,571.32 planned and the 5,571.32 moved on its Sep 30 payday as contributed (was 0.00, dated before Oct 1)",
+          "user's case: on Sep 30 Oct 1-15 shows 4,491.32 planned and the 4,491.32 moved on its Sep 30 payday as contributed (was 0.00, dated before Oct 1)",
           `${k3(planOf(payBackRow)?.period)?.key}:${planOf(payBackRow)?.planned}:${planOf(payBackRow)?.contributed}`,
-          "2026-10-A:5571.32:5571.32",
+          "2026-10-A:4491.32:4491.32",
         );
         eq(
-          "user's case: Oct 1-15's pace is fixed before its payday - 16,713.97 over 4 periods (Nov 16-30 is paid Fri Nov 13), 4,178.49 (was 2,785.66, the Sep 30 money counted as already saved)",
+          "user's case: Oct 1-15's pace is fixed before its payday - 13,473.97 over 4 periods (Nov 16-30 is paid Fri Nov 13), 3,368.49 (was 2,245.66, the Sep 30 money counted as already saved)",
           `${payBackRow?.displayPerPeriod}:${payBackRow?.periodsLeft}`,
-          "4178.49:4",
+          "3368.49:4",
         );
         const days: Date[] = [];
         for (let day = civilDate(2026, 9, 30); day.getTime() <= civilDate(2026, 10, 31).getTime(); day = addDays(day, 1)) days.push(day);
@@ -11918,7 +11918,7 @@ async function main() {
           const statuses = (await gStatuses(gContext(day))).filter((status) => status.goalId === payBack.id && k3(status)?.period && (k3(k3(status)?.period)?.key === "2026-10-A"));
           if (statuses.some((status) => Number(k3(status)?.followThroughShortfall ?? 0) > 0)) followThroughDays.push(toISODate(day));
         }
-        eq("user's case: no follow-through shortfall for Oct 1-15 on any day from its Sep 30 payday to Oct 31 (was Oct 13 onward, 5,571.32)", followThroughDays.join(","), "");
+        eq("user's case: no follow-through shortfall for Oct 1-15 on any day from its Sep 30 payday to Oct 31 (was Oct 13 onward, 4,491.32)", followThroughDays.join(","), "");
         eq(
           "user's case: the Inbox raises nothing for the goal on Oct 13, Oct 15 or Oct 16",
           `${(await goalInsights(gContext(civilDate(2026, 10, 13)), payBack.id)).length}:${(await goalInsights(gContext(civilDate(2026, 10, 15)), payBack.id)).length}:${(await goalInsights(gContext(civilDate(2026, 10, 16)), payBack.id)).length}`,
@@ -11926,34 +11926,34 @@ async function main() {
         );
         const oct15 = gContext(civilDate(2026, 10, 15));
         const payBackOct15 = (await gGoals(oct15)).find((goal) => goal.id === payBack.id);
-        eq("user's case: from the Oct 15 payday, 3,714.22 per period over 3 periods", `${payBackOct15?.displayPerPeriod}:${payBackOct15?.periodsLeft}`, "3714.22:3");
+        eq("user's case: from the Oct 15 payday, 2,994.22 per period over 3 periods", `${payBackOct15?.displayPerPeriod}:${payBackOct15?.periodsLeft}`, "2994.22:3");
         eq(
-          "user's case: ... and the forecast asks 3,714.22 of each of Oct 16-31, Nov 1-15 and Nov 16-30",
+          "user's case: ... and the forecast asks 2,994.22 of each of Oct 16-31, Nov 1-15 and Nov 16-30",
           (await gForecast(oct15)).find((forecast) => forecast.goalId === payBack.id)?.periods.map((period) => `${period.period.key}=${period.pace}`).join(","),
-          "2026-10-B=3714.22,2026-11-A=3714.22,2026-11-B=3714.22",
+          "2026-10-B=2994.22,2026-11-A=2994.22,2026-11-B=2994.22",
         );
         eq(
-          "D2 (the map's trace (a), contributed Oct 1, due Nov 12): 5,571.32 asked of Oct 1-15, planned and contributed - on Sep 30 (was 3,714.22)",
+          "D2 (the map's trace (a), contributed Oct 1, due Nov 12): 4,491.32 asked of Oct 1-15, planned and contributed - on Sep 30 (was 2,994.22)",
           `${threeRow?.displayPerPeriod}:${threeRow?.periodsLeft}:${planOf(threeRow)?.planned}:${planOf(threeRow)?.contributed}`,
-          "5571.32:3:5571.32:5571.32",
+          "4491.32:3:4491.32:4491.32",
         );
         const oct5 = gContext(civilDate(2026, 10, 5));
         eq(
-          "D2: the Oct 1-15 contributions do not move Oct 1-15's bar - on Oct 5 still 5,571.32 and 4,178.49 (was 3,714.22 and 2,785.66 on the roadmap)",
+          "D2: the Oct 1-15 contributions do not move Oct 1-15's bar - on Oct 5 still 4,491.32 and 3,368.49 (was 2,994.22 and 2,245.66 on the roadmap)",
           (await gPaces(gPlanRef(oct5), oct5)).filter((pace) => pace.goalId === threePeriods.id || pace.goalId === payBack.id).map((pace) => pace.amount).sort().join(","),
-          "4178.49,5571.32",
+          "3368.49,4491.32",
         );
         const fromOct15 = (await gGoals(oct15)).find((goal) => goal.id === threePeriods.id);
         eq(
-          "D2: from the Oct 15 payday Oct 16-31 recomputes from its own payday: 5,571.33 over the 2 periods left",
+          "D2: from the Oct 15 payday Oct 16-31 recomputes from its own payday: 4,491.33 over the 2 periods left",
           `${fromOct15?.displayPerPeriod}:${fromOct15?.periodsLeft}`,
-          "5571.33:2",
+          "4491.33:2",
         );
         const forecastOct15 = (await gForecast(oct15)).find((forecast) => forecast.goalId === threePeriods.id);
         eq(
-          "D2: ... and the forecast asks 5,571.33 of each of Oct 16-31 and Nov 1-15",
+          "D2: ... and the forecast asks 4,491.33 of each of Oct 16-31 and Nov 1-15",
           forecastOct15?.periods.map((period) => `${period.period.key}=${period.pace}`).join(","),
-          "2026-10-B=5571.33,2026-11-A=5571.33",
+          "2026-10-B=4491.33,2026-11-A=4491.33",
         );
         eq(
           "D2: nothing to flag for the map's trace either - planned covers the roadmap and the plan went in (Oct 14)",
@@ -11964,38 +11964,38 @@ async function main() {
         console.log("-- D2: a contribution inside the plan period no longer lowers the plan period's pace --");
         const reopened = await gDraft(sep30);
         eq(
-          "D2: the wizard re-opened on Sep 30 recommends 5,571.32 for Oct 1-15 - what was confirmed, so on track (was 3,714.22, '1,857.10 ahead')",
+          "D2: the wizard re-opened on Sep 30 recommends 4,491.32 for Oct 1-15 - what was confirmed, so on track (was 2,994.22, '1,497.10 ahead')",
           reopened.goals.find((goal) => goal.goalId === threePeriods.id)?.recommendedAmount,
-          5571.32,
+          4491.32,
         );
         const forecastSep30 = (await gForecast(sep30)).find((forecast) => forecast.goalId === threePeriods.id);
         eq(
-          "D2: the forecast asks the plan period's 5,571.32 of Oct 16-31 and Nov 1-15, 11,142.64 for the 11,142.65 still needed (was 3,714.22 each, 7,428.44)",
+          "D2: the forecast asks the plan period's 4,491.32 of Oct 16-31 and Nov 1-15, 8,982.64 for the 8,982.65 still needed (was 2,994.22 each, 5,988.44)",
           `${forecastSep30?.periods.map((period) => period.pace).join(",")}:${round2((forecastSep30?.periods ?? []).reduce((sum, period) => sum + period.pace, 0))}`,
-          "5571.32,5571.32:11142.64",
+          "4491.32,4491.32:8982.64",
         );
         const afford = await gProject([gRef(2026, 10, "B"), gRef(2026, 11, "A")], main, [main], sep30);
         eq(
-          "D2: Afford estimates 5,571.32 of Oct 16-31 and Nov 1-15 for it (was 3,714.22, overstating the room by 1,857.10 each)",
+          "D2: Afford estimates 4,491.32 of Oct 16-31 and Nov 1-15 for it (was 2,994.22, overstating the room by 1,497.10 each)",
           ["2026-10-B", "2026-11-A"].map((key) => afford.get(key)!.goalPlans.find((plan) => plan.goalId === threePeriods.id)?.pace).join(","),
-          "5571.32,5571.32",
+          "4491.32,4491.32",
         );
         const variantStatus = (await gStatuses(sep30)).find((status) => status.goalId === variant.id && k3(status)?.role !== "earlier") as GStatus | undefined;
         eq(
-          "D2 variant: 4,000 planned and contributed against a 5,571.32 roadmap - the plan is 1,571.32 behind, the follow-through is complete (was '237.99 behind the roadmap' once the 4,000 went in)",
+          "D2 variant: 4,000 planned and contributed against a 4,491.32 roadmap - the plan is 491.32 behind, the follow-through is complete (was measured against what was left once the 4,000 went in)",
           `${k3(variantStatus)?.byHand}:${k3(variantStatus)?.planningShortfall}:${k3(variantStatus)?.contributed}:${k3(variantStatus)?.followThroughShortfall}`,
-          "5571.32:1571.32:4000:0",
+          "4491.32:491.32:4000:0",
         );
         eq(
-          "D11: the room note is the roadmap less the room recorded at confirm, 1,571.32, all period (was 237.99 after the contribution)",
+          "D11: the room note is the roadmap less the room recorded at confirm, 491.32, all period (was measured after the contribution)",
           k3(variantStatus)?.roomShortfall,
-          1571.32,
+          491.32,
         );
         const variantInsight = (await goalInsights(sep30, variant.id))[0];
         eq(
-          "D2 variant: the Inbox says the plan is behind by 1,571.32, keyed by the goal, the period and the planning statement",
+          "D2 variant: the Inbox says the plan is behind by 491.32, keyed by the goal, the period and the planning statement",
           `${variantInsight?.key === `${variant.id}:2026-10-A:plan`}:${amountOf(variantInsight)}`,
-          "true:1571.32",
+          "true:491.32",
         );
 
         console.log("-- D3: planned is compared with contributed, in the plan period's last days and after it ends --");
@@ -12018,9 +12018,9 @@ async function main() {
         const debts = await gDebts(sep30);
         const payBackDebt = debts.find((debt) => debt.goalId === payBack.id);
         eq(
-          "D6: the Nov 15 goal marked as a debt: minimum 4,178.49, the 5,571.32 already paid in Oct 1-15 beside it (was 3,714.22 and nothing)",
+          "D6: the Nov 15 goal marked as a debt: minimum 3,368.49, the 4,491.32 already paid in Oct 1-15 beside it (was 2,994.22 and nothing)",
           `${payBackDebt?.balance}:${payBackDebt?.minimum}:${k3(payBackDebt)?.paidThisPeriod}`,
-          "11142.65:4178.49:5571.32",
+          "8982.65:3368.49:4491.32",
         );
         const payoff = compareDebtStrategies(debts.filter((debt) => debt.goalId === payBack.id || debt.goalId === variant.id), 0);
         eq(
@@ -12029,7 +12029,7 @@ async function main() {
           4,
         );
         eq(
-          "D6: the 3-period variant still owing 5,571.32 in Oct 1-15 is paid in period 3, its target's last pay, cents included",
+          "D6: the 3-period variant still owing 4,491.32 in Oct 1-15 is paid in period 3, its target's last pay, cents included",
           payoff.avalanche.payoffs.find((row) => row.goalId === variant.id)?.period,
           3,
         );
@@ -12136,16 +12136,16 @@ async function main() {
       console.log("-- D10: Afford's goal window is the roadmap's --");
       {
         const main = await gAccount("Window");
-        const goal = await gGoal({ name: "Window", target: 29000, targetDate: civilDate(2026, 11, 15), contributions: [[17857.35, civilDate(2026, 9, 1)]] });
+        const goal = await gGoal({ name: "Window", target: 24000, targetDate: civilDate(2026, 11, 15), contributions: [[15017.35, civilDate(2026, 9, 1)]] });
         const sep30 = gContext(civilDate(2026, 9, 30));
         const refs = [gRef(2026, 9, "B"), gRef(2026, 10, "A"), gRef(2026, 10, "B"), gRef(2026, 11, "A"), gRef(2026, 11, "B")];
         const projected = await gProject(refs, main, [main], sep30);
         const keys = refs.map((ref) => periodInfo(ref).key).filter((key) => projected.get(key)!.goalPlans.some((plan) => plan.goalId === goal.id));
         const paces = keys.map((key) => projected.get(key)!.goalPlans.find((plan) => plan.goalId === goal.id)!.pace);
         eq(
-          "D10: on Sep 30 with no check-in, the 11,142.65 is estimated in Oct 1-15 to Nov 16-30 at 2,785.66, 11,142.64 in all - not in Sep 16-30 (was Sep 16-30 to Nov 1-15 at 3,714.22: 14,856.88)",
+          "D10: on Sep 30 with no check-in, the 8,982.65 is estimated in Oct 1-15 to Nov 16-30 at 2,245.66, 8,982.64 in all - not in Sep 16-30 (was Sep 16-30 to Nov 1-15 at 2,994.22: 11,976.88)",
           `${keys.join(",")}:${paces[0]}:${round2(paces.reduce((sum, pace) => sum + pace, 0))}`,
-          "2026-10-A,2026-10-B,2026-11-A,2026-11-B:2785.66:11142.64",
+          "2026-10-A,2026-10-B,2026-11-A,2026-11-B:2245.66:8982.64",
         );
         const oct30 = gContext(civilDate(2026, 10, 30));
         eq(
@@ -12728,12 +12728,12 @@ async function main() {
         await wWipe();
       }
 
-      console.log("-- the user's goal: Pay back money, 29,000 due Sun Nov 15 2026 --");
+      console.log("-- the user's goal: Loan repayment, 24,000 due Sun Nov 15 2026 --");
       for (const [label, movedOn, refund] of [
         ["moved on the Sep 30 payday", civilDate(2026, 9, 30), false],
         ["moved Mon Sep 28, the day a salary landed before the payday", civilDate(2026, 9, 28), false],
         // R4: beside it, a refund landing that day is not pay - the salary
-        // lands on the payday, so the 5,571.32 moved Sep 28 is September's.
+        // lands on the payday, so the 4,491.32 moved Sep 28 is September's.
         ["moved Mon Sep 28, the day a 1,500 refund landed, the salary on the Sep 30 payday", civilDate(2026, 9, 28), true],
       ] as const) {
         const main = await wAccount("Goal account");
@@ -12743,22 +12743,22 @@ async function main() {
         // The salary that funds Oct 1-15, recorded (by CSV) the day it landed.
         await prisma.transaction.create({ data: { date: refund ? civilDate(2026, 9, 30) : movedOn, amount: 45000, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window PAYROLL", source: "CSV" } });
         if (refund) await prisma.transaction.create({ data: { date: movedOn, amount: 1500, currency: "DOP", type: "INCOME", accountId: main.id, note: "Verify Window REFUND", source: "CSV" } });
-        const payBack = await wGoal("Pay back money", 29000, civilDate(2026, 11, 15), [[8285.94, civilDate(2026, 9, 15)], [4000.09, civilDate(2026, 9, 15)], [5571.32, movedOn]]);
-        await wCheckin(wRef(2026, 10, "A"), civilDate(2026, 9, 30), null, [{ goalId: payBack.id, accountId: main.id, amount: 5571.32 }]);
+        const payBack = await wGoal("Loan repayment", 24000, civilDate(2026, 11, 15), [[6525.94, civilDate(2026, 9, 15)], [4000.09, civilDate(2026, 9, 15)], [4491.32, movedOn]]);
+        await wCheckin(wRef(2026, 10, "A"), civilDate(2026, 9, 30), null, [{ goalId: payBack.id, accountId: main.id, amount: 4491.32 }]);
         const read = async (today: Date) => (await wGoals(wContext(today))).find((goal) => goal.id === payBack.id) as { displayPerPeriod?: number; periodsLeft?: number; plan?: { period?: { key: string }; planned?: number; contributed?: number } } | undefined;
         const sep30 = await read(civilDate(2026, 9, 30));
         const oct15 = await read(civilDate(2026, 10, 15));
         if (refund) {
           eq(
-            `window, user's goal (${label}): Oct 1-15 5,571.32 planned and 0 contributed, the 5,571.32 counted before its pace (11,142.65 left over 4: 2,785.66); from Oct 15, 3,714.22 over 3 (R4; the refund opened the window: 5,571.32 contributed, 4,178.49)`,
+            `window, user's goal (${label}): Oct 1-15 4,491.32 planned and 0 contributed, the 4,491.32 counted before its pace (8,982.65 left over 4: 2,245.66); from Oct 15, 2,994.22 over 3 (R4; the refund opened the window: 4,491.32 contributed, 3,368.49)`,
             `${sep30?.plan?.period?.key}:${sep30?.plan?.planned}:${sep30?.plan?.contributed}:${sep30?.displayPerPeriod}:${sep30?.periodsLeft}|${oct15?.displayPerPeriod}:${oct15?.periodsLeft}`,
-            "2026-10-A:5571.32:0:2785.66:4|3714.22:3",
+            "2026-10-A:4491.32:0:2245.66:4|2994.22:3",
           );
         } else {
           eq(
-            `window, user's goal (${label}): Oct 1-15 5,571.32 planned and 5,571.32 contributed, pace 4,178.49 over 4; from Oct 15, 3,714.22 over 3`,
+            `window, user's goal (${label}): Oct 1-15 4,491.32 planned and 4,491.32 contributed, pace 3,368.49 over 4; from Oct 15, 2,994.22 over 3`,
             `${sep30?.plan?.period?.key}:${sep30?.plan?.planned}:${sep30?.plan?.contributed}:${sep30?.displayPerPeriod}:${sep30?.periodsLeft}|${oct15?.displayPerPeriod}:${oct15?.periodsLeft}`,
-            "2026-10-A:5571.32:5571.32:4178.49:4|3714.22:3",
+            "2026-10-A:4491.32:4491.32:3368.49:4|2994.22:3",
           );
         }
         await wWipe();
@@ -13775,7 +13775,7 @@ async function main() {
     // RecurringEarmark otherwise, so this block also runs against the code
     // before the feature (with the table migrated) and fails there on every
     // reader that ignores an earmark. The user's shape: a Klarna plan of 6 x
-    // 163.71 EUR from Oct 28, charged to the DOP account "Popular" - 11,493
+    // 158.37 EUR from Oct 28, charged to the DOP account "Popular" - 11,493
     // DOP at the rates below - part-covered by a 5,000 DOP deposit from a
     // family member and by money moved in from outside Cadence. Display DOP,
     // buffer 10% with a 2,000 DOP floor (the Settings row). Fixtures are
@@ -13795,8 +13795,8 @@ async function main() {
     const eTargets = await import("../src/lib/data/earmark-targets").catch(() => null);
     const { transactionSchema: eSchema } = await import("../src/lib/validation");
     const { getDictionary: eDictionary } = await import("../src/lib/i18n");
-    // 163.71 EUR is 11,493 DOP: USD 1 = DOP 60 = EUR 0.85465...
-    const EUR = (163.71 * 60) / 11493;
+    // 158.37 EUR is 11,493 DOP: USD 1 = DOP 60 = EUR 0.82678...
+    const EUR = (158.37 * 60) / 11493;
     const eRates = (): RateTable => ({ rates: { USD: 1, DOP: 60, EUR }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
     const eContext = (today: Date) => ({
       displayCurrency: "DOP" as const,
@@ -13871,8 +13871,8 @@ async function main() {
       }
       const klarna = await prisma.recurringItem.create({
         data: {
-          name: "Verify Earmark Klarna PS5 Pro",
-          amount: 163.71,
+          name: "Verify Earmark Klarna console",
+          amount: 158.37,
           currency: "EUR",
           frequency: "MONTHLY",
           anchorDay: 28,
@@ -14060,9 +14060,9 @@ async function main() {
       );
       const match = charge.posted?.match as { kind: string; possible: boolean; posted: { id: string; amount: number; currency: string } } | undefined;
       eq(
-        "the 11,520 DOP charge on Nov 27 is offered as a possible match of the Nov 28 installment of 163.71 EUR, not posted yet",
+        "the 11,520 DOP charge on Nov 27 is offered as a possible match of the Nov 28 installment of 158.37 EUR, not posted yet",
         `${match?.kind}|${match?.possible}|${match?.posted.id === nov28}|${match?.posted.amount}:${match?.posted.currency}`,
-        "upcoming|true|true|163.71:EUR",
+        "upcoming|true|true|158.37:EUR",
       );
       const keepUpcoming = eDuplicates.keepEntryAsUpcoming as
         | ((input: { transactionId: string; savedDigest: string; occurrenceKey: string }, rates: RateTable) => Promise<{ ok: boolean }>)
@@ -15131,8 +15131,8 @@ async function main() {
         const yesterday = addDays(today, -1);
         const a = await rAccount("Checking");
         const plan = async (name: string, due: Date) => {
-          const item = await rItem({ name, amount: 163.71, currency: "EUR", nextDate: due, anchorDay: due.getUTCDate(), accountId: a.id, remainingOccurrences: 6 });
-          const charge = await rCharge({ accountId: a.id, date: addDays(due, -1), amount: 10914, note: name, source: "MANUAL" });
+          const item = await rItem({ name, amount: 158.37, currency: "EUR", nextDate: due, anchorDay: due.getUTCDate(), accountId: a.id, remainingOccurrences: 6 });
+          const charge = await rCharge({ accountId: a.id, date: addDays(due, -1), amount: 10558, note: name, source: "MANUAL" });
           return { item, charge, key: rKey(item.id, due) };
         };
         const state = async (id: string) => {
@@ -15177,8 +15177,8 @@ async function main() {
         const a = await rAccount("Checking");
         const results: string[] = [];
         for (const round of [0, 1, 2]) {
-          const klarna = await rItem({ name: `Klarna ${round}`, amount: 163.71, currency: "EUR", nextDate: oct(28), anchorDay: 28, accountId: a.id, remainingOccurrences: 6 });
-          const charge = await rCharge({ accountId: a.id, date: oct(27), amount: 10914, note: `Klarna ${round}`, source: "MANUAL" });
+          const klarna = await rItem({ name: `Klarna ${round}`, amount: 158.37, currency: "EUR", nextDate: oct(28), anchorDay: 28, accountId: a.id, remainingOccurrences: 6 });
+          const charge = await rCharge({ accountId: a.id, date: oct(27), amount: 10558, note: `Klarna ${round}`, source: "MANUAL" });
           const key = rKey(klarna.id, oct(28));
           // Round 0: the answer holds its transaction open while posting
           // runs; round 1: posting first; round 2: both at once.
@@ -15367,16 +15367,16 @@ async function main() {
         eq("R1: and in Spanish", refusal(es), "No se guardó nada: el ingreso de Popular no puede ser menor que los DOP 60,000.00 que ya están en tu libro para este periodo. Esos depósitos son el pago de este periodo y se quedan como están.");
         await pWipe();
 
-        // The user's shape: Popular gets a 20,191 net deposit and a 3,000
+        // The user's shape: Popular gets a 15,450 net deposit and a 3,000
         // extra (typed as one-off); BSC has no income.
         const userPopular = await pAccount("Popular");
         const bsc = await pAccount("BSC");
-        await pDeposit(userPopular.id, sep30, 20191, "NOMINA");
-        const shape = await pConfirm(pInput(octA, [{ accountId: userPopular.id, incomeEntered: 23191, oneOffIncome: 3000 }, { accountId: bsc.id, incomeEntered: 0 }]), sep30);
+        await pDeposit(userPopular.id, sep30, 15450, "NOMINA");
+        const shape = await pConfirm(pInput(octA, [{ accountId: userPopular.id, incomeEntered: 18450, oneOffIncome: 3000 }, { accountId: bsc.id, incomeEntered: 0 }]), sep30);
         eq(
-          "R1, the user's shape: 23,191 typed (3,000 one-off) over a 20,191 deposit records one 3,000 row; Oct 1-15 income 23,191 as fact, 20,191 as estimate (was a 23,191 row, 43,382 / 40,382)",
+          "R1, the user's shape: 18,450 typed (3,000 one-off) over a 15,450 deposit records one 3,000 row; Oct 1-15 income 18,450 as fact, 15,450 as estimate (was a 18,450 row, 33,900 / 30,900)",
           `${pVerdict(shape)} | ${await pIncomeRows(userPopular.id)} | ${await pIncomeOf(octA, sep30)}`,
-          "ok | 2026-09-30 20191 CSV, 2026-09-30 3000 PAYDAY_CHECKIN | 23191/20191",
+          "ok | 2026-09-30 15450 CSV, 2026-09-30 3000 PAYDAY_CHECKIN | 18450/15450",
         );
         await pWipe();
 
@@ -15556,18 +15556,18 @@ async function main() {
           september,
         );
         eq(
-          "R4, the user's case: 20,191 landing Mon Sep 28 against a 23,191 confirmed paycheck opens it that day (as before)",
-          await r4(async (id) => { await pDeposit(id, pDay(9, 28), 20191, "NOMINA"); }, 23191),
+          "R4, the user's case: 15,450 landing Mon Sep 28 against a 18,450 confirmed paycheck opens it that day (as before)",
+          await r4(async (id) => { await pDeposit(id, pDay(9, 28), 15450, "NOMINA"); }, 18450),
           "2026-09-28 | 09-B 0 10-A 5000 pace 7142.86 | ledger 2026-09-27",
         );
         eq(
-          "R4: exactly half of the 23,191 paycheck (11,595.50) is pay",
-          (await r4(async (id) => { await pDeposit(id, pDay(9, 28), 11595.5, "HALF"); }, 23191)).split(" | ")[0],
+          "R4: exactly half of the 18,450 paycheck (9,225.00) is pay",
+          (await r4(async (id) => { await pDeposit(id, pDay(9, 28), 9225, "HALF"); }, 18450)).split(" | ")[0],
           "2026-09-28",
         );
         eq(
           "R4: a cent less (11,595.49) is not (was Sep 28)",
-          (await r4(async (id) => { await pDeposit(id, pDay(9, 28), 11595.49, "HALF"); }, 23191)).split(" | ")[0],
+          (await r4(async (id) => { await pDeposit(id, pDay(9, 28), 9224.99, "HALF"); }, 18450)).split(" | ")[0],
           "payday",
         );
       }
@@ -16558,7 +16558,7 @@ async function main() {
         // Fitness is per currency: USD always; DOP only with the bank's rate;
         // EUR with the bank's EUR rate or a fresh open.er-api one.
         const fitPair = hCurrency.ratesFitForWriting as ((table: RateTable, from: string, to: string) => boolean) | undefined;
-        const bankOnly: RateTable = { rates: { USD: 1, DOP: 60.95, EUR: 0.86 }, fetchedAt: new Date(Date.now() - 2 * 86_400_000), stale: true, source: "bpd", asOf: new Date() };
+        const bankOnly: RateTable = { rates: { USD: 1, DOP: 61.25, EUR: 0.86 }, fetchedAt: new Date(Date.now() - 2 * 86_400_000), stale: true, source: "bpd", asOf: new Date() };
         const openOnly: RateTable = { rates: { USD: 1, DOP: 59.56, EUR: 0.887 }, fetchedAt: new Date(), stale: false, source: "open-er-api", asOf: null };
         const pairs = (table: RateTable) =>
           fitPair ? (["USD>DOP", "EUR>DOP", "USD>EUR", "DOP>DOP"] as const).map((pair) => fitPair(table, pair.slice(0, 3), pair.slice(4))).join(",") : "missing";
@@ -16632,7 +16632,7 @@ async function main() {
           await prisma.exchangeRate.createMany({
             data: [
               ...[["USD", 1], ["DOP", 59.56], ["EUR", 0.887]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "open-er-api", rate: rate as number, fetchedAt: openFetchedAt })),
-              ...[["DOP", 60.95], ["EUR", 0.8608757062]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "bpd", rate: rate as number, fetchedAt: bankAsOf, asOf: bankAsOf })),
+              ...[["DOP", 61.25], ["EUR", 0.8614627286]].map(([targetCurrency, rate]) => ({ baseCurrency: "USD", targetCurrency: targetCurrency as string, source: "bpd", rate: rate as number, fetchedAt: bankAsOf, asOf: bankAsOf })),
             ],
           });
           globalThis.fetch = (async () => {
@@ -16648,27 +16648,27 @@ async function main() {
         const nextDates = async (ids: string[]) => (await prisma.recurringItem.findMany({ where: { id: { in: ids } } })).map((i) => toISODate(i.nextDate)).sort().join(",");
 
         // (a) open.er-api 2 days old, its live fetch failing; the bank's rate published today.
-        const aSports = await item("Verify Harden A Sports", 37.9, "USD", dop.id);
+        const aSports = await item("Verify Harden A Sports", 39.9, "USD", dop.id);
         const aWhoop = await item("Verify Harden A Whoop", 30, "EUR", dop.id);
         await storeRates(twoDaysAgo, new Date());
         const aTable = await getRateTable();
         // Flipped deliberately with S20 (round 2): the table's EUR is the
-        // bank's quote (70.80) recovered from the stored cross-rate, 60.95 /
-        // 70.8 unrounded, no longer the ten-decimal cross-rate as stored
-        // (0.8608757062), which converted EUR to DOP a hair off the quote.
-        eq("(a) the table: open.er-api stale after the failed fetch, the bank's DOP 60.95 and EUR preferred", `${aTable.stale}:${aTable.source}:${aTable.rates.DOP}:${aTable.rates.EUR}`, `true:bpd:60.95:${60.95 / 70.8}`);
+        // bank's quote (71.10) recovered from the stored cross-rate, 61.25 /
+        // 71.1 unrounded, no longer the ten-decimal cross-rate as stored
+        // (0.8614627286), which converted EUR to DOP a hair off the quote.
+        eq("(a) the table: open.er-api stale after the failed fetch, the bank's DOP 61.25 and EUR preferred", `${aTable.stale}:${aTable.source}:${aTable.rates.DOP}:${aTable.rates.EUR}`, `true:bpd:61.25:${61.25 / 71.1}`);
         const aRun = await hPost(due);
         // Flipped deliberately: under the previous rule the EUR item waited here.
         eq(
-          "(a) both items post to the DOP account at the bank's rates: 37.90 USD = 2,310.01 DOP (60.95), 30 EUR = 2,124.00 DOP (70.80)",
+          "(a) both items post to the DOP account at the bank's rates: 39.90 USD = 2,443.88 DOP (61.25), 30 EUR = 2,133.00 DOP (71.10)",
           await posted([aSports.id, aWhoop.id]),
-          "Verify Harden A Sports:2310.01 DOP|Verify Harden A Whoop:2124 DOP",
+          "Verify Harden A Sports:2443.88 DOP|Verify Harden A Whoop:2133 DOP",
         );
         eq("(a) ... nothing waits, and both moved on", `${waiting(aRun)}|${await nextDates([aSports.id, aWhoop.id])}`, "|2026-11-02,2026-11-02");
         await prisma.recurringItem.updateMany({ where: { id: { in: [aSports.id, aWhoop.id] } }, data: { active: false } });
 
         // (b) the bank's rate past its window (9 days) and open.er-api stale.
-        const bSports = await item("Verify Harden B Sports", 37.9, "USD", dop.id);
+        const bSports = await item("Verify Harden B Sports", 39.9, "USD", dop.id);
         const bWhoop = await item("Verify Harden B Whoop", 30, "EUR", dop.id);
         const bAbroad = await item("Verify Harden B Abroad", 12, "EUR", usd.id);
         const bIds = [bSports.id, bWhoop.id, bAbroad.id];
@@ -16944,15 +16944,15 @@ async function main() {
       // ---------------------------------------------------------------------
       console.log("\n-- S2: a deposit that changes between opening the check-in and confirming it --");
       {
-        // Oct 30, plan period Nov A: Main holds the 20,191 salary (Oct 30)
-        // and a 5,000 family transfer (Oct 28); a 163.71 EUR installment is
+        // Oct 30, plan period Nov A: Main holds the 15,450 salary (Oct 30)
+        // and a 5,000 family transfer (Oct 28); a 158.37 EUR installment is
         // due Nov 5 on Main.
         const oct30 = vDay(10, 30);
         const setUp = async () => {
           const main = await vAccount("Main");
-          const salary = await vDeposit(main.id, oct30, 20191, "NOMINA");
+          const salary = await vDeposit(main.id, oct30, 15450, "NOMINA");
           const family = await vDeposit(main.id, vDay(10, 28), 5000, "FAMILIA", "MANUAL");
-          const klarna = await vItem("PS5 Klarna", main.id, 163.71, vDay(11, 5), "EUR");
+          const klarna = await vItem("Console Klarna", main.id, 158.37, vDay(11, 5), "EUR");
           const opened = await vDraft(novA, oct30);
           const typed = opened.accounts.find((a) => a.accountId === main.id)?.incomeEntered ?? 0;
           return { main, salary, family, key: `${klarna.id}:2026-11-05`, opened, typed };
@@ -16961,20 +16961,20 @@ async function main() {
           vConfirm(vInput(novA, [{ accountId: s.main.id, incomeEntered: s.typed }], vVersions(s.opened)), oct30);
 
         const review = await setUp();
-        eq("S2: Step 2 lists both deposits and prefills 25,191", `${review.opened.accounts.find((a) => a.accountId === review.main.id)?.ledgerDeposits.map((d) => d.amount).join(" + ")} = ${review.typed}`, "5000 + 20191 = 25191");
+        eq("S2: Step 2 lists both deposits and prefills 20,450", `${review.opened.accounts.find((a) => a.accountId === review.main.id)?.ledgerDeposits.map((d) => d.amount).join(" + ")} = ${review.typed}`, "5000 + 15450 = 20450");
         eq("S2: another tab earmarks the whole transfer for the Nov 5 installment", await vEarmark(review.family.id, review.key, 5000, oct30), "ok");
         eq("S2, the review's case: confirming the wizard as loaded is refused, deposits_changed (was ok)", await confirmAsLoaded(review), "deposits_changed");
         eq(
-          "S2: and nothing was written: no check-in, the ledger holds the two deposits only, Nov A's income is the 25,191 that arrived (was a 5,000 PAYDAY_CHECKIN row, 30,191)",
+          "S2: and nothing was written: no check-in, the ledger holds the two deposits only, Nov A's income is the 20,450 that arrived (was a 5,000 PAYDAY_CHECKIN row, 25,450)",
           `${await prisma.paydayCheckin.count({ where: { ...novA } })} | ${await vIncomeRows(review.main.id)} | ${(await vIncome.loadPeriodIncome([novA], "fact", vContext(oct30))).get(periodInfo(novA).key)?.total}`,
-          "0 | 2026-10-28 5000 MANUAL, 2026-10-30 20191 CSV | 25191",
+          "0 | 2026-10-28 5000 MANUAL, 2026-10-30 15450 CSV | 20450",
         );
         const reloaded = await vDraft(novA, oct30);
         const reloadedTyped = reloaded.accounts.find((a) => a.accountId === review.main.id)?.incomeEntered ?? 0;
         eq(
-          "S2: after reloading, Step 2 lists the salary alone (20,191) and that confirms with no row of its own",
+          "S2: after reloading, Step 2 lists the salary alone (15,450) and that confirms with no row of its own",
           `${reloadedTyped} | ${await vConfirm(vInput(novA, [{ accountId: review.main.id, incomeEntered: reloadedTyped }], vVersions(reloaded)), oct30)} | ${await vIncomeRows(review.main.id)}`,
-          "20191 | ok | 2026-10-28 5000 MANUAL, 2026-10-30 20191 CSV",
+          "15450 | ok | 2026-10-28 5000 MANUAL, 2026-10-30 15450 CSV",
         );
         eq("S2: the message says the deposits changed and to reload, in English", vLine(en, "depositsChangedSinceLoaded"), "The deposits changed since you opened this check-in, so nothing was saved. Reload the page to see them as they are now, then confirm again.");
         eq("S2: and in Spanish", vLine(es, "depositsChangedSinceLoaded"), "Los depósitos cambiaron desde que abriste este chequeo, así que no se guardó nada. Recarga la página para verlos como están ahora y vuelve a confirmar.");
@@ -17080,7 +17080,7 @@ async function main() {
       {
         const oct30 = vDay(10, 30);
         const main = await vAccount("Main");
-        const salary = await vDeposit(main.id, oct30, 20191, "NOMINA");
+        const salary = await vDeposit(main.id, oct30, 15450, "NOMINA");
         const transfer = await vDeposit(main.id, vDay(10, 28), 5000, "FAMILIA", "MANUAL");
         const tv = await vItem("TV", main.id, 6000, vDay(11, 5));
         const key = `${tv.id}:2026-11-05`;
@@ -17088,8 +17088,8 @@ async function main() {
         const opened = await vDraft(novA, oct30);
         eq(
           "S18: Step 2 adopts only the salary, and Nov A confirms",
-          `${opened.accounts.find((a) => a.accountId === main.id)?.incomeEntered} ${await vConfirm(vInput(novA, [{ accountId: main.id, incomeEntered: 20191 }], vVersions(opened)), oct30)}`,
-          "20191 ok",
+          `${opened.accounts.find((a) => a.accountId === main.id)?.incomeEntered} ${await vConfirm(vInput(novA, [{ accountId: main.id, incomeEntered: 15450 }], vVersions(opened)), oct30)}`,
+          "15450 ok",
         );
         const before = await vRoomOf(novA, oct30);
         eq(
@@ -17099,9 +17099,9 @@ async function main() {
         );
         const lowered = await vRoomOf(novA, oct30);
         eq(
-          "S18: the transfer was not adopted, so the 1,000 it frees is not the plan's income until the check-in is confirmed again: income 20,191, the TV asks 1,000 more",
+          "S18: the transfer was not adopted, so the 1,000 it frees is not the plan's income until the check-in is confirmed again: income 15,450, the TV asks 1,000 more",
           `${before.income}/${before.commitments}/${before.available} -> ${lowered.income}/${lowered.commitments}/${lowered.available}`,
-          "20191/1000/17171.9 -> 20191/2000/16171.9",
+          "15450/1000/12905 -> 15450/2000/11905",
         );
         eq(
           "S18: earmarking 1,000 of the adopted salary for the TV is accepted (was adopted_paycheck)",
@@ -17110,14 +17110,14 @@ async function main() {
         );
         const moved = await vRoomOf(novA, oct30);
         eq(
-          "S18: it moves 1,000 from the plan's income to the TV and leaves the room as it was: income 19,191, commitments 1,000, available 16,171.90, adjusted by -1,000",
+          "S18: it moves 1,000 from the plan's income to the TV and leaves the room as it was: income 14,450, commitments 1,000, available 11,905.00, adjusted by -1,000",
           `${moved.income} ${moved.commitments} ${moved.available} ${vAdjusted(moved)}`,
-          "19191 1000 16171.9 -1000",
+          "14450 1000 11905 -1000",
         );
         eq(
-          "S18: income is counted once: the 1,000 is in the TV's cover, not in the plan's income nor its estimate (Nov A estimate 19,191 + 4,000 transfer pay... = fact 25,191 less 5,000 earmarked)",
+          "S18: income is counted once: the 1,000 is in the TV's cover, not in the plan's income nor its estimate (Nov A estimate 14,450 + 4,000 transfer pay... = fact 20,450 less 5,000 earmarked)",
           `${(await vIncome.loadPeriodIncome([novA], "estimate", vContext(oct30))).get(periodInfo(novA).key)?.total} ${(await vIncome.loadPeriodIncome([novA], "fact", vContext(oct30))).get(periodInfo(novA).key)?.total}`,
-          "20191 25191",
+          "15450 20450",
         );
         // A check-in that adopted deposits before they were recorded keeps
         // its income as confirmed, so its deposits are still refused: an
@@ -17126,9 +17126,9 @@ async function main() {
         await prisma.$executeRaw`UPDATE "PaydayAccountSnapshot" SET "adoptedTransactionIds" = NULL WHERE "accountId" = ${main.id}`;
         const legacy = await vRoomOf(novA, oct30);
         eq(
-          "S18 guard: a snapshot that adopted the salary without recording it keeps its 20,191, and earmarking the salary is still refused (as before)",
+          "S18 guard: a snapshot that adopted the salary without recording it keeps its 15,450, and earmarking the salary is still refused (as before)",
           `${legacy.income} ${await vEarmark(salary.id, key, 1000, oct30)}`,
-          "20191 adopted_paycheck",
+          "15450 adopted_paycheck",
         );
         // How a paycheck confirmed before the ids were kept is told from one
         // that adopted nothing: Prisma reads a NULL list as [], so the ids
@@ -17151,27 +17151,27 @@ async function main() {
           return `${state} | income ${income} | earmark ${verdict}`;
         };
         eq(
-          "S18 legacy vs none: adoptedIncome 20,191 with NULL ids (Prisma reads []) is a paycheck from before the ids: one adoption window, income as confirmed, earmark refused",
+          "S18 legacy vs none: adoptedIncome 15,450 with NULL ids (Prisma reads []) is a paycheck from before the ids: one adoption window, income as confirmed, earmark refused",
           await classify(),
-          "stored NULL, read [], adopted 20191, windows 1 | income 20191 | earmark adopted_paycheck",
+          "stored NULL, read [], adopted 15450, windows 1 | income 15450 | earmark adopted_paycheck",
         );
         await prisma.$executeRaw`UPDATE "PaydayAccountSnapshot" SET "adoptedTransactionIds" = ARRAY[${salary.id}]::text[] WHERE "accountId" = ${main.id}`;
         eq(
           "S18 legacy vs none: with its id recorded it is not legacy: no window, and the earmark is accepted",
           await classify(),
-          `stored [1], read ["${salary.id}"], adopted 20191, windows 0 | income 20191 | earmark ok`,
+          `stored [1], read ["${salary.id}"], adopted 15450, windows 0 | income 15450 | earmark ok`,
         );
         await prisma.$executeRaw`UPDATE "PaydayAccountSnapshot" SET "adoptedIncome" = NULL, "adoptedTransactionIds" = NULL WHERE "accountId" = ${main.id}`;
         eq(
           "S18 legacy vs none: adoptedIncome null and NULL ids adopted nothing: neither legacy (earmark accepted) nor following deposits (income as entered)",
           await classify(),
-          "stored NULL, read [], adopted null, windows 0 | income 20191 | earmark ok",
+          "stored NULL, read [], adopted null, windows 0 | income 15450 | earmark ok",
         );
         await prisma.$executeRaw`UPDATE "PaydayAccountSnapshot" SET "adoptedIncome" = 0 WHERE "accountId" = ${main.id}`;
         eq(
           "S18 legacy vs none: adoptedIncome 0 and NULL ids: the same",
           await classify(),
-          "stored NULL, read [], adopted 0, windows 0 | income 20191 | earmark ok",
+          "stored NULL, read [], adopted 0, windows 0 | income 15450 | earmark ok",
         );
         await vWipe();
       }
@@ -17244,14 +17244,14 @@ async function main() {
       // ---------------------------------------------------------------------
       console.log("\n-- S6: a small deposit in the lead days and Step 1's balance --");
       {
-        // Oct A paid 23,191 (the reference for the 50% rule) and Main is at
+        // Oct A paid 18,450 (the reference for the 50% rule) and Main is at
         // -2,000 by Oct 12; a 3,000 extra lands Oct 13 (under half the
-        // paycheck), the 20,191 salary Oct 15.
+        // paycheck), the 15,450 salary Oct 15.
         const main = await vAccount("Main");
-        await vConfirm(vInput(octA, [{ accountId: main.id, incomeEntered: 23191 }]), vDay(9, 30));
-        await vSpend(main.id, vDay(10, 5), 25191, "RENT");
+        await vConfirm(vInput(octA, [{ accountId: main.id, incomeEntered: 18450 }]), vDay(9, 30));
+        await vSpend(main.id, vDay(10, 5), 20450, "RENT");
         await vDeposit(main.id, vDay(10, 13), 3000, "EXTRA");
-        await vDeposit(main.id, vDay(10, 15), 20191, "NOMINA");
+        await vDeposit(main.id, vDay(10, 15), 15450, "NOMINA");
         const oct15 = vDay(10, 15);
         // A second account with no income this period spends in the lead
         // days, from money it already held.
@@ -17261,7 +17261,7 @@ async function main() {
         await vSpend(savings.id, vDay(10, 14), 300, "TAXI");
         const opened = await vDraft(octB, oct15);
         const account = opened.accounts.find((a) => a.accountId === main.id);
-        eq("S6: Step 2 adopts both, 23,191", `${account?.ledgerDeposits.map((d) => d.amount).join(" + ")} = ${account?.incomeEntered}`, "3000 + 20191 = 23191");
+        eq("S6: Step 2 adopts both, 18,450", `${account?.ledgerDeposits.map((d) => d.amount).join(" + ")} = ${account?.incomeEntered}`, "3000 + 15450 = 18450");
         eq(
           "S6, the review's case: Step 1 is read the day before the pay (Oct 14), without the deposits Step 2 adopts: -2,000 (was 1,000, the extra inside it)",
           `${toISODate(opened.ledgerDate)} ${account?.expectedLedgerBalance}`,
@@ -17278,9 +17278,9 @@ async function main() {
           `${toISODate(ledger.date)} ${ledger.byAccount.get(main.id)} ${ledger.byAccount.get(savings.id)}`,
           "2026-10-14 -2000 3500",
         );
-        await vConfirm(vInput(octB, [{ accountId: main.id, incomeEntered: 23191, reportedBalance: account?.expectedLedgerBalance ?? 0 }], vVersions(opened)), oct15);
+        await vConfirm(vInput(octB, [{ accountId: main.id, incomeEntered: 18450, reportedBalance: account?.expectedLedgerBalance ?? 0 }], vVersions(opened)), oct15);
         const room = await vRoomOf(octB, oct15);
-        eq("S6: confirmed with the prefilled balance, the cap is 2,000 and available 18,871.90 (was 0 and 20,871.90)", `${room.cap} ${room.available}`, "2000 18871.9");
+        eq("S6: confirmed with the prefilled balance, the cap is 2,000 and available 14,605.00 (was 0 and 16,605.00)", `${room.cap} ${room.available}`, "2000 14605");
         const snapshot = await prisma.paydayAccountSnapshot.findFirstOrThrow({ where: { accountId: main.id, checkin: { ...octB } } });
         eq("S6: the snapshot reconciles against the same -2,000", `${num(snapshot.expectedLedgerBalance)} ${num(snapshot.reportedBalance)} ${num(snapshot.difference)}`, "-2000 -2000 0");
         await vWipe();
@@ -17348,21 +17348,21 @@ async function main() {
         );
         eq("S8: 5,000 logged against a 3,000 GOAL row takes the 2,000 beyond it: 23,500 (was 25,500)", await scenario({ logged: 5000, goalRow: 3000, target: 20000, automatic: false }), "0 3000 25500 23500");
 
-        // Reproduction 2: an unplanned 1,500 contribution from a 23,191 pay
-        // (buffer 10%: available 20,871.90).
+        // Reproduction 2: an unplanned 1,500 contribution from a 18,450 pay
+        // (buffer 10%: available 16,605.00).
         const main = await vAccount("Main");
-        await vDeposit(main.id, vDay(10, 15), 20191, "NOMINA");
+        await vDeposit(main.id, vDay(10, 15), 15450, "NOMINA");
         const debt = await prisma.goal.create({ data: { name: "Verify Rev2 Debt", targetAmount: 100000, currency: "DOP", savedAmount: 0 } });
         const opened = await vDraft(octB, vDay(10, 15));
-        await vConfirm(vInput(octB, [{ accountId: main.id, incomeEntered: 23191, oneOffIncome: 3000 }], vVersions(opened)), vDay(10, 15));
+        await vConfirm(vInput(octB, [{ accountId: main.id, incomeEntered: 18450, oneOffIncome: 3000 }], vVersions(opened)), vDay(10, 15));
         await vLogContribution({ goalId: debt.id, accountId: main.id, amount: 1500, date: vDay(10, 20), note: null } as Parameters<typeof vLogContribution>[0], vRates());
         const room = await vRoomOf(octB, vDay(11, 1));
         eq(
-          "S8, the review's second case: an unplanned 1,500 contribution leaves 19,371.90, not the room's 20,871.90 (was 20,871.90)",
+          "S8, the review's second case: an unplanned 1,500 contribution leaves 15,105.00, not the room's 16,605.00 (was 16,605.00)",
           `${room.available} ${(await vRoom.periodLeftover(octB, vContext(vDay(11, 1)))).amount}`,
-          "20871.9 19371.9",
+          "16605 15105",
         );
-        eq("S8: and that is the carryover Nov A is offered (was 20,871.90)", (await vPayday.getAvailableCarryover(novA, vContext(vDay(11, 1)))).amount, 19371.9);
+        eq("S8: and that is the carryover Nov A is offered (was 16,605.00)", (await vPayday.getAvailableCarryover(novA, vContext(vDay(11, 1)))).amount, 15105);
         await vWipe();
       }
     } finally {
@@ -17492,16 +17492,16 @@ async function main() {
         const editPaid = await pPayments(edited.id, [editedCharge.id]);
         eq("S1 edit form: the plan makes 3 payments, as created (was 4)", `${editPaid.total} | ${editPaid.posted} | ${editPaid.pairings} | ${editPaid.state}`, "3 | 2026-11-20,2026-12-20 | 2026-10-20 claimed | remaining 0 active false next 2027-01-20");
 
-        // Reproduction 2: Laptop, 163.71 EUR x 6, payment recorded for Oct
+        // Reproduction 2: Laptop, 158.37 EUR x 6, payment recorded for Oct
         // 28; paused Oct 27, resumed Nov 2.
-        const laptop = await pItem({ name: "Laptop", amount: 163.71, currency: "EUR", nextDate: pDay(10, 28), accountId: card.id, remainingOccurrences: 6 });
+        const laptop = await pItem({ name: "Laptop", amount: 158.37, currency: "EUR", nextDate: pDay(10, 28), accountId: card.id, remainingOccurrences: 6 });
         const laptopCharge = await pCharge(card.id, pDay(10, 26), 11983.57, "Laptop");
         await pRecorded(laptopCharge.id, pKey(laptop.id, pDay(10, 28)));
         await pRecurring.setRecurringItemActive(laptop.id, false, pDay(10, 27));
         await pRecurring.setRecurringItemActive(laptop.id, true, pDay(11, 2));
         await pPostThrough([pDay(11, 2), ...Array.from({ length: 8 }, (_, i) => civilDate(2026 + Math.floor((10 + i) / 12), ((10 + i) % 12) + 1, 28))]);
         const laptopPaid = await pPayments(laptop.id, [laptopCharge.id]);
-        eq("S1, reproduction 2: the 163.71 EUR x 6 plan makes 6 payments (was 7)", `${laptopPaid.total} ${laptopPaid.state}`, "6 remaining 0 active false next 2027-04-28");
+        eq("S1, reproduction 2: the 158.37 EUR x 6 plan makes 6 payments (was 7)", `${laptopPaid.total} ${laptopPaid.state}`, "6 remaining 0 active false next 2027-04-28");
 
         // Coverage gap: a resumed plan with a recorded payment still ahead
         // of the resume - nothing to skip, posting claims it on its day.
@@ -17596,34 +17596,34 @@ async function main() {
       // ---------------------------------------------------------------------
       console.log("\n-- S14: correcting a recurring contribution whose goal is in a third currency --");
       {
-        // A USD goal fed by a 43.66 EUR item from a DOP account: the twin is
-        // 3,067.12 DOP (43.66 EUR at 70.25), the contribution 50.70 USD, as
+        // A USD goal fed by a 41.29 EUR item from a DOP account: the twin is
+        // 2,900.62 DOP (41.29 EUR at 70.25), the contribution 47.95 USD, as
         // posting stores them. Corrected to 55.00 USD with USD/DOP at 62.
         const a = await pAccount("Third");
         const goal = await prisma.goal.create({ data: { name: "Verify Rev2P USD Goal", targetAmount: 5000, currency: "USD" } });
-        const item = await pItem({ name: "Third Save", amount: 43.66, currency: "EUR", nextDate: pDay(11, 5), accountId: a.id, kind: "CONTRIBUTION", goalId: goal.id });
+        const item = await pItem({ name: "Third Save", amount: 41.29, currency: "EUR", nextDate: pDay(11, 5), accountId: a.id, kind: "CONTRIBUTION", goalId: goal.id });
         const key = pKey(item.id, pDay(10, 5));
-        await prisma.transaction.create({ data: { accountId: a.id, date: pDay(10, 5), amount: 3067.12, currency: "DOP", originalAmount: 43.66, originalCurrency: "EUR", rate: 70.25, type: "EXPENSE", source: "RECURRING", externalId: key, note: item.name } });
-        const contribution = await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 50.7, currency: "USD", date: pDay(10, 5), recurringItemId: item.id, recurringExternalId: key, note: item.name } });
+        await prisma.transaction.create({ data: { accountId: a.id, date: pDay(10, 5), amount: 2900.62, currency: "DOP", originalAmount: 41.29, originalCurrency: "EUR", rate: 70.25, type: "EXPENSE", source: "RECURRING", externalId: key, note: item.name } });
+        const contribution = await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 47.95, currency: "USD", date: pDay(10, 5), recurringItemId: item.id, recurringExternalId: key, note: item.name } });
         const today62: RateTable = { rates: { USD: 1, DOP: 62, EUR: 62 / 72 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() };
         const corrected = await pGoals.updateRecurringContributionAmount(contribution.id, 55, today62);
         const twin = await prisma.transaction.findFirstOrThrow({ where: { externalId: key, source: "RECURRING" } });
-        eq("S14: the twin scales by 55/50.70 at its stored conversion: 3,327.25 DOP, original 47.36 EUR at 70.25 (was 3,410.00 DOP, original 55 USD)", `${num(twin.amount)} ${twin.currency} orig ${num(twin.originalAmount)} ${twin.originalCurrency} @${num(twin.rate)}`, "3327.25 DOP orig 47.36 EUR @70.25");
-        eq("S14: and reports that figure", corrected.ok ? corrected.transactionAmount : "not ok", 3327.25);
-        await pGoals.updateRecurringContributionAmount(contribution.id, 50.7, today62);
+        eq("S14: the twin scales by 55/47.95 at its stored conversion: 3,327.09 DOP, original 47.36 EUR at 70.25 (was 3,410.00 DOP, original 55 USD)", `${num(twin.amount)} ${twin.currency} orig ${num(twin.originalAmount)} ${twin.originalCurrency} @${num(twin.rate)}`, "3327.09 DOP orig 47.36 EUR @70.25");
+        eq("S14: and reports that figure", corrected.ok ? corrected.transactionAmount : "not ok", 3327.09);
+        await pGoals.updateRecurringContributionAmount(contribution.id, 47.95, today62);
         const back = await prisma.transaction.findFirstOrThrow({ where: { externalId: key, source: "RECURRING" } });
-        eq("S14: corrected back to 50.70 USD, the twin is 3,067.12 DOP again, original 43.66 EUR", `${num(back.amount)} ${back.currency} orig ${num(back.originalAmount)} ${back.originalCurrency}`, "3067.12 DOP orig 43.66 EUR");
+        eq("S14: corrected back to 47.95 USD, the twin is 2,900.62 DOP again, original 41.29 EUR", `${num(back.amount)} ${back.currency} orig ${num(back.originalAmount)} ${back.originalCurrency}`, "2900.62 DOP orig 41.29 EUR");
         await pWipe();
       }
 
       // ---------------------------------------------------------------------
       console.log("\n-- S16: the debt comparator and a payment dated ahead --");
       {
-        // Today is Oct 4. A 5,571.32 card debt with target Nov 30 has a full
+        // Today is Oct 4. A 4,491.32 card debt with target Nov 30 has a full
         // payment logged for Oct 8; a 20,000 loan has no target date.
-        const card = await prisma.goal.create({ data: { name: "Verify Rev2P Card", targetAmount: 5571.32, currency: "DOP", targetDate: pDay(11, 30), isDebt: true } });
+        const card = await prisma.goal.create({ data: { name: "Verify Rev2P Card", targetAmount: 4491.32, currency: "DOP", targetDate: pDay(11, 30), isDebt: true } });
         await prisma.goal.create({ data: { name: "Verify Rev2P Loan", targetAmount: 20000, currency: "DOP", isDebt: true } });
-        await prisma.goalContribution.create({ data: { goalId: card.id, amount: 5571.32, currency: "DOP", date: pDay(10, 8), note: "Card payment" } });
+        await prisma.goalContribution.create({ data: { goalId: card.id, amount: 4491.32, currency: "DOP", date: pDay(10, 8), note: "Card payment" } });
         await pGoals.recomputeGoalSaved(card.id);
         const debts = async () => (await pDebts.listDebtGoals(pContext(pDay(10, 4)) as never)).filter((debt) => debt.name.startsWith("Verify Rev2P "));
         const payoffs = async () => {
@@ -17631,13 +17631,13 @@ async function main() {
           return (["avalanche", "snowball"] as const).map((strategy) => compared[strategy].payoffs.map((p) => `${p.name.replace("Verify Rev2P ", "")} ${p.period}`).join(", ")).join(" | ");
         };
         const cardInput = (await debts()).find((debt) => debt.goalId === card.id);
-        eq("S16: Card enters with the Oct 8 payment counted once, in both: balance 0, paid 5,571.32 (was balance 5,571.32)", `${cardInput?.balance} ${cardInput?.paidThisPeriod}`, "0 5571.32");
-        eq("S16: Card is paid off in period 1 and its minimum frees for the loan (was Card 5, Loan 23)", await payoffs(), "Card 1, Loan 19 | Card 1, Loan 19");
+        eq("S16: Card enters with the Oct 8 payment counted once, in both: balance 0, paid 4,491.32 (was balance 4,491.32)", `${cardInput?.balance} ${cardInput?.paidThisPeriod}`, "0 4491.32");
+        eq("S16: Card is paid off in period 1 and its minimum frees for the loan (was Card 5, Loan 28)", await payoffs(), "Card 1, Loan 24 | Card 1, Loan 24");
         // Guard: a payment dated after the plan period's window is not counted in period 1.
         await prisma.goalContribution.updateMany({ where: { goalId: card.id }, data: { date: pDay(11, 20) } });
         await pGoals.recomputeGoalSaved(card.id);
         const later = (await debts()).find((debt) => debt.goalId === card.id);
-        eq("S16 guard: dated Nov 20, past the plan window, the payment is in neither (balance 5,571.32, paid 0)", `${later?.balance} ${later?.paidThisPeriod}`, "5571.32 0");
+        eq("S16 guard: dated Nov 20, past the plan window, the payment is in neither (balance 4,491.32, paid 0)", `${later?.balance} ${later?.paidThisPeriod}`, "4491.32 0");
         await pWipe();
       }
 
@@ -17839,11 +17839,11 @@ async function main() {
         await cRates([]);
         await cStoredBank(58, 68.5);
         const table = await getRateTable();
-        const stored = cMoney.inAccountCurrency({ amount: 163.71, currency: "EUR" }, "DOP", table);
+        const stored = cMoney.inAccountCurrency({ amount: 158.37, currency: "EUR" }, "DOP", table);
         eq(
-          "S20: 163.71 EUR at euro sell 68.50 (dollar 58.00) stores 11,214.14 DOP at rate 68.5 (was 11,214.13 at 68.4999999973)",
+          "S20: 158.37 EUR at euro sell 68.50 (dollar 58.00) stores 10,848.35 DOP at rate 68.5 (was 10,848.34 at 68.4999999973)",
           `${stored.amount}:${stored.rate}`,
-          "11214.14:68.5",
+          "10848.35:68.5",
         );
         // The review's sweep, through the stored row the way the app reads it
         // (ten decimals), against the bank's own decimal arithmetic.
@@ -17855,7 +17855,7 @@ async function main() {
           const eur = rows.find((row) => row.targetCurrency === "EUR")!;
           return { dollarSellRate: dop.rate, euroSellRate: dop.rate / eur.rate, asOf: dop.asOf! };
         });
-        const amounts = [163.71, 43.66, 9.99, 12.5, 1.83, 650, 1333.33, 5571.32, 3660, 100.01, 0.37];
+        const amounts = [158.37, 41.29, 9.99, 12.5, 1.83, 650, 1333.33, 4491.32, 3660, 100.01, 0.37];
         let combos = 0;
         let offInto = 0;
         let offBack = 0;
@@ -17903,7 +17903,7 @@ async function main() {
       {
         const card = await cAccount("Backfill Card");
         const legacy = await prisma.transaction.create({
-          data: { date: cDay(9, 20), amount: 163.71, currency: "EUR", type: "EXPENSE", accountId: card.id, note: "Verify Rev2C Klarna", source: "MANUAL" },
+          data: { date: cDay(9, 20), amount: 158.37, currency: "EUR", type: "EXPENSE", accountId: card.id, note: "Verify Rev2C Klarna", source: "MANUAL" },
         });
         const backfill = (args: string[]) =>
           cSpawn("npx", ["tsx", "scripts/backfill-account-currency.ts", ...args], { encoding: "utf8", env: { ...process.env } });
@@ -17915,21 +17915,21 @@ async function main() {
         await cRates([{ target: "DOP", source: "open-er-api", rate: 58, fetchedAt: addDays(new Date(), -10) }]);
         const dry = backfill([]);
         check(
-          "S3: the dry run lists the 163.71 EUR row as \"cannot convert: rates not fit\" (was: 10,320.85 DOP at the fallback EUR 0.92)",
+          "S3: the dry run lists the 158.37 EUR row as \"cannot convert: rates not fit\" (was: 9,984.20 DOP at the fallback EUR 0.92)",
           dry.stdout.includes(legacy.id) && /cannot convert: rates not fit/.test(dry.stdout.split("\n").find((line) => line.includes(legacy.id)) ?? ""),
           dry.stdout + dry.stderr,
         );
         const applied = backfill(["--apply"]);
         eq(
-          "S3: --apply writes nothing and exits 1 (was: exit 0, 10,320.85 DOP frozen at rate 63.0434782609)",
+          "S3: --apply writes nothing and exits 1 (was: exit 0, 9,984.20 DOP frozen at rate 63.0434782609)",
           `${applied.status}|${await legacyNow()}`,
-          "1|163.71 EUR",
+          "1|158.37 EUR",
         );
         // With the bank's EUR sell rate of 70.25 the row converts at it.
         await cRates([]);
         await cStoredBank(63.1, 70.25);
         const fit = backfill(["--apply"]);
-        eq("S3: with the bank's euro sell 70.25 in its window, --apply stores 11,500.63 DOP", `${fit.status}|${await legacyNow()}`, "0|11500.63 DOP");
+        eq("S3: with the bank's euro sell 70.25 in its window, --apply stores 11,125.49 DOP", `${fit.status}|${await legacyNow()}`, "0|11125.49 DOP");
         const again = backfill(["--apply"]);
         eq("S3: a second --apply finds nothing to change", `${again.status}|${/Nothing to change/.test(again.stdout)}`, "0|true");
         await cWipe();
@@ -17939,18 +17939,18 @@ async function main() {
       console.log("\n-- S13: a goal that holds contributions keeps its currency --");
       {
         await cRates([]);
-        const restore61 = await seedStoredRates({ USD: 1, DOP: 61, EUR: 61 / 70.8 });
+        const restore61 = await seedStoredRates({ USD: 1, DOP: 61, EUR: 61 / 71.1 });
         try {
           const bank = await cAccount("Goal Bank");
-          const debt = await prisma.goal.create({ data: { name: "Verify Rev2C Card debt", targetAmount: 5571.32, currency: "DOP", isDebt: true } });
-          await cGoals.logManualContribution({ goalId: debt.id, accountId: bank.id, amount: 5571.32, date: cDay(9, 30), note: "Verify Rev2C payoff" }, await getRateTable());
+          const debt = await prisma.goal.create({ data: { name: "Verify Rev2C Card debt", targetAmount: 4491.32, currency: "DOP", isDebt: true } });
+          await cGoals.logManualContribution({ goalId: debt.id, accountId: bank.id, amount: 4491.32, date: cDay(9, 30), note: "Verify Rev2C payoff" }, await getRateTable());
           await cGoals.recomputeGoalSaved(debt.id, cDay(10, 4));
           const paid = await prisma.goal.findUniqueOrThrow({ where: { id: debt.id } });
-          eq("S13: the 5,571.32 DOP debt is paid in full and achieved", `${num(paid.savedAmount)} ${paid.achievedAt ? "achieved" : "open"}`, "5571.32 achieved");
+          eq("S13: the 4,491.32 DOP debt is paid in full and achieved", `${num(paid.savedAmount)} ${paid.achievedAt ? "achieved" : "open"}`, "4491.32 achieved");
           const monthly = await prisma.recurringItem.create({
             data: { name: "Verify Rev2C debt payment", amount: 1000, currency: "DOP", kind: "CONTRIBUTION", frequency: "MONTHLY", anchorDay: 20, nextDate: cDay(10, 20), active: true, accountId: bank.id, goalId: debt.id },
           });
-          const values = { name: "Verify Rev2C Card debt", targetAmount: 92.09, currency: "USD", targetDate: null, isDebt: true };
+          const values = { name: "Verify Rev2C Card debt", targetAmount: 74.24, currency: "USD", targetDate: null, isDebt: true };
           // The goal form's save: updateGoal, or (before it) a plain update and a rebuild.
           const save = (cGoals.updateGoal as ((id: string, v: typeof values) => Promise<{ ok: boolean; reason?: string }>) | undefined) ??
             (async (id: string, v: typeof values) => {
@@ -17961,9 +17961,9 @@ async function main() {
           await cGoals.recomputeGoalSaved(debt.id, cDay(10, 4));
           const after = await prisma.goal.findUniqueOrThrow({ where: { id: debt.id } });
           eq(
-            "S13: switching it to USD with a target of 92.09 is refused as currency_locked (was: saved, and at DOP 61.0 saved 91.33 and achievedAt cleared)",
+            "S13: switching it to USD with a target of 74.24 is refused as currency_locked (was: saved, and at DOP 61.0 saved 73.63 and achievedAt cleared)",
             `${switched.ok}:${switched.reason ?? ""}|${after.currency} ${num(after.savedAmount)} ${after.achievedAt ? "achieved" : "open"}`,
-            "false:currency_locked|DOP 5571.32 achieved",
+            "false:currency_locked|DOP 4491.32 achieved",
           );
           const run = await cPosting.postDueRecurringItems(cDay(10, 20));
           eq(
@@ -17971,7 +17971,7 @@ async function main() {
             `${run.skipped.filter((s) => s.id === monthly.id).map((s) => s.reason).join(",") || "none"}|${await prisma.goalContribution.count({ where: { goalId: debt.id } })}`,
             "goal_achieved|1",
           );
-          const renamed = await save(debt.id, { ...values, name: "Verify Rev2C Card debt paid", currency: "DOP", targetAmount: 5571.32 });
+          const renamed = await save(debt.id, { ...values, name: "Verify Rev2C Card debt paid", currency: "DOP", targetAmount: 4491.32 });
           eq("S13: renaming it, currency unchanged, still saves", `${renamed.ok}:${(await prisma.goal.findUniqueOrThrow({ where: { id: debt.id } })).name}`, "true:Verify Rev2C Card debt paid");
           const fresh = await prisma.goal.create({ data: { name: "Verify Rev2C Empty goal", targetAmount: 100, currency: "DOP" } });
           const freshSwitched = await save(fresh.id, { name: "Verify Rev2C Empty goal", targetAmount: 100, currency: "USD", targetDate: null, isDebt: false });
@@ -17983,15 +17983,15 @@ async function main() {
           // A goal already switched before the lock (a USD goal holding the
           // DOP contribution) rebuilt with no rate fit to write DOP down:
           // fresh open.er-api rates, no bank rate, DOP 60.
-          const legacy = await prisma.goal.create({ data: { name: "Verify Rev2C Legacy debt", targetAmount: 92.09, currency: "USD", isDebt: true, savedAmount: 91.33 } });
-          await prisma.goalContribution.create({ data: { goalId: legacy.id, amount: 5571.32, currency: "DOP", date: cDay(9, 30), note: "Verify Rev2C legacy" } });
+          const legacy = await prisma.goal.create({ data: { name: "Verify Rev2C Legacy debt", targetAmount: 74.24, currency: "USD", isDebt: true, savedAmount: 73.63 } });
+          await prisma.goalContribution.create({ data: { goalId: legacy.id, amount: 4491.32, currency: "DOP", date: cDay(9, 30), note: "Verify Rev2C legacy" } });
           await cRates(["USD", "DOP", "EUR"].map((target) => ({ target, source: "open-er-api", rate: { USD: 1, DOP: 60, EUR: 0.92 }[target] as number, fetchedAt: new Date() })));
           await cGoals.recomputeGoalSaved(legacy.id, cDay(10, 4));
           const legacyAfter = await prisma.goal.findUniqueOrThrow({ where: { id: legacy.id } });
           eq(
             "S13: rebuilt with no fit DOP rate, its saved total and achievedAt stay as they were (was: 92.86 at DOP 60, and achieved)",
             `${num(legacyAfter.savedAmount)} ${legacyAfter.achievedAt ? "achieved" : "open"}`,
-            "91.33 open",
+            "73.63 open",
           );
         } finally {
           await restore61();

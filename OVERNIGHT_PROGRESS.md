@@ -11,7 +11,7 @@ item: pending / done / skipped, plus one sentence. No real figures here.
 - 3b. README rewrite (USD, fictional) and desktop screenshots: done - README rewritten for the current app in USD; all 27 desktop screenshots recaptured from a throwaway fictional seed at 1440 wide, dark, English, quantized.
 - 3c. Stale-rates banner only when the table is unfit: done - shown only when the refresh failed and the table is unfit for the currencies in use (ratesOutOfDateFor); harness, Chromium 375/1280 en/es, Simulator.
 - 3d. Stale documentation (AGENTS.md audit line, RecurringSettlement comment, others): done - audit line, RecurringSettlement and claimedByPostingAt comments, remainingOccurrences comment, AGENTS.md settlement writers corrected; README lines handled in 3b.
-- 4. Scrub real figures from tracked files: pending
+- 4. Scrub real figures from tracked files: done - listed figures, the goal name and the Part 6 anchor amounts replaced with a consistent fictional mapping in the findings docs and the harness (same check count before and after); none left in the tree.
 - 5a. Unproven items of REVIEW_FINDINGS_2.md: pending
 - 5b. "May repeat" hint in the Inbox suggestion: pending
 - 6a. Read-only production connection: pending

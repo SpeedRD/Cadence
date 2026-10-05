@@ -35,7 +35,7 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
   - Oct 18: charge of 6,667 DOP, recorded as the Oct 20 payment.
   - Paused Oct 19, resumed Oct 25.
   - Result: 1 manual charge + 3 RECURRING rows (Nov 20, Dec 20, Jan 20) = **4 payments for a 3-payment plan**. Both the toggle and the edit form give this; the edit form says "released". Without the pause it is 1 + 2 = 3.
-- **Reproduction 2 (independent script, scenario `pauseResume`):** Laptop, 163.71 EUR × 6.
+- **Reproduction 2 (independent script, scenario `pauseResume`):** Laptop, 158.37 EUR × 6.
   - Payment recorded for Oct 28; paused Oct 27, resumed Nov 2.
   - The plan will make **7** payments.
 - **Who / direction:** anyone with an Afford installment plan who pauses it. One extra installment is charged and written: 6,666.67 DOP in reproduction 1, 11,983.57 DOP in reproduction 2. Commitments over-count by the same amount.
@@ -44,11 +44,11 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
 ### S2. A deposit that changes between opening the check-in and confirming it creates a phantom paycheck row
 - **Where:** `src/lib/data/payday.ts:1608-1610` re-reads the deposits under the lock, and `:1681-1707` derives `ownIncome = incomeEntered - adopted`. `checkinVersion` guards the check-in row, not the deposits Step 2 showed.
 - **Reproduction:**
-  - Oct 30: plan period Nov A. Main (DOP) already holds a 20,191 salary (Oct 30) and a 5,000 family transfer (Oct 28).
-  - Step 2 lists both and prefills 25,191.
-  - Before confirming, the user earmarks the transfer, in another tab, for the Nov 5 163.71 EUR installment.
+  - Oct 30: plan period Nov A. Main (DOP) already holds a 15,450 salary (Oct 30) and a 5,000 family transfer (Oct 28).
+  - Step 2 lists both and prefills 20,450.
+  - Before confirming, the user earmarks the transfer, in another tab, for the Nov 5 158.37 EUR installment.
   - The user confirms the wizard as loaded.
-  - Confirm adopts only 20,191 and writes a **PAYDAY_CHECKIN INCOME row of 5,000**. Ledger income on Main becomes 30,191; 25,191 actually arrived.
+  - Confirm adopts only 15,450 and writes a **PAYDAY_CHECKIN INCOME row of 5,000**. Ledger income on Main becomes 25,450; 20,450 actually arrived.
 - **Other routes, same root cause (code reading):** deleting or marking one-off an adopted deposit between draft and confirm.
 - **Who / direction:**
   - Account balance and income are overstated by 5,000.
@@ -58,7 +58,7 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
 ### S3. The backfill script freezes fallback and stale rates that the app itself now refuses to write
 - **Where:** `scripts/backfill-account-currency.ts:97-135` (`loadRates`). A missing currency falls back to `FALLBACK_RATES`, a stale open.er-api row is used as is, and no `ratesFitForWriting` check runs before `--apply`.
 - **Reproduction:**
-  - Setup: a pre-K7 row of 163.71 EUR on a DOP account. No EUR rate is stored; DOP is a 10-day-old 58.0; there is no bank rate.
+  - Setup: a pre-K7 row of 158.37 EUR on a DOP account. No EUR rate is stored; DOP is a 10-day-old 58.0; there is no bank rate.
   - `--apply` prints two notes, then writes **10,320.85 DOP at rate 63.0434782609**, using EUR at the fallback 0.92.
   - At a bank EUR sell rate of 70.25 the figure would be 11,500.63.
   - A second `--apply` reports "Nothing to change", so the frozen figure is never corrected.
@@ -95,8 +95,8 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
   - `src/lib/data/payday.ts:640` (`reconciliationLedger`): its date is `fundingWindow.from − 1`, and the window opens on the deposit that passes the 50% rule.
   - `loadLedgerDeposits` adopts every deposit from `incomeWindow.from` onward.
 - **Reproduction:**
-  - Main stands at −2,000. A 3,000 extra lands Oct 13; it is under 50% of the last 23,191 paycheck. The 20,191 salary lands Oct 15.
-  - Step 2 adopts 23,191, the 3,000 included. Step 1's ledger date is Oct 14, so the expected balance (and the prefill) is 1,000.
+  - Main stands at −2,000. A 3,000 extra lands Oct 13; it is under 50% of the last 18,450 paycheck. The 15,450 salary lands Oct 15.
+  - Step 2 adopts 18,450, the 3,000 included. Step 1's ledger date is Oct 14, so the expected balance (and the prefill) is 1,000.
   - Cap 0, available 20,871.90. Measured before any of the period's income, the cap is 2,000 and available is 18,871.90.
   - Independent script: cap 2,000 vs app 0.
 - **Who / direction:** the room is overstated by the hole the lead-day deposit filled, and the cushion double-counts it.
@@ -108,7 +108,7 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
   - A 25,000 deposit has 3,000 earmarked for the Oct 28 TV installment (3,000). Step 2 adopts 22,000, and the check-in is confirmed at 22,000.
   - The installment is then lowered to 1,500, so the cover drops to 1,500 and the deposit's pay part is 23,500. The confirmed room still counts 22,000.
   - Independent script, scenario `earmarkRaised`: 23,500 vs 22,000.
-  - Raising the installment does the reverse. Subagent repro: an 8,000 transfer, the installment restored from 50 to 163.71 EUR, and the room overstated by 1,500.
+  - Raising the installment does the reverse. Subagent repro: an 8,000 transfer, the installment restored from 50 to 158.37 EUR, and the room overstated by 1,500.
   - When the user does reopen, R1 forces the new figure. In scenario `adoptEarmark`, a re-confirm at 21,000 is refused (`below_ledger_deposits`, 22,000), and 22,000 is accepted.
 - **Who / direction:** either direction, by the change in cover, until the check-in is reopened. The confirmed card and "Recommended" show the wrong room.
 - **Confidence:** high.
@@ -147,7 +147,7 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
 ### S11. RECURRING rows posted for past dates set "first activity", so empty months enter the lifestyle average
 - **Where:** `src/lib/data/history-window.ts:35-69` (`getFirstActivityDate`, line 56 lets a subscription's RECURRING row count). It feeds the monthly windows and Reports.
 - **Reproduction:**
-  - The user starts logging in Sep 2026 (1,000 a week). In September they add a 163.71 EUR × 6 plan starting Apr 5, with "post" chosen for past payments.
+  - The user starts logging in Sep 2026 (1,000 a week). In September they add a 158.37 EUR × 6 plan starting Apr 5, with "post" chosen for past payments.
   - First activity becomes **2026-04-05**. Lifestyle by month: 0, 0, 0, 0, 0, 4,000. `averageLifestyle` is 666.67; real spending is about 4,000.
   - The Reports per-period average is 5,165.6 over 5 periods, including two periods with zero.
 - **Who / direction:** the lifestyle average is deflated about 6×, so the current month reads far above average.
@@ -167,8 +167,8 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
   - `src/server/actions/goals.ts:47-49`: no lock like accounts' R19.
   - `src/lib/goals.ts` (`rebuildGoalSaved`): converts with `getRateTable()` and no fitness check, then writes `savedAmount` and `achievedAt`.
 - **Reproduction:**
-  - A 5,571.32 DOP debt is paid in full and achieved. The user switches the goal to USD with a target of 92.09.
-  - At DOP 61.0 the rebuild writes saved 91.33 and clears `achievedAt`. The monthly 1,000 DOP contribution item to it (next Oct 20) is active again.
+  - A 4,491.32 DOP debt is paid in full and achieved. The user switches the goal to USD with a target of 74.24.
+  - At DOP 61.0 the rebuild writes saved 73.63 and clears `achievedAt`. The monthly 1,000 DOP contribution item to it (next Oct 20) is active again.
   - With no stored rates, the fallback DOP 60 writes 92.86 and achieved.
 - **Who / direction:** wrong persisted saved total, and money posted into a debt that is already paid.
 - **Confidence:** high.
@@ -176,7 +176,7 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
 ### S14. Correcting a recurring contribution whose goal is in a third currency re-converts its ledger twin at today's rate
 - **Where:** `src/lib/goals.ts` (`updateRecurringContributionAmount`, `toAccountMoney` with `twinAsStored`, ~line 214). The kept conversion's original is EUR (the item's currency), not the goal's USD, so it falls through to `inAccountCurrency`.
 - **Reproduction:**
-  - A USD goal is fed by a 43.66 EUR item from a DOP account. The twin is 3,067.12 DOP (rate 70.25); the contribution is 50.70 USD.
+  - A USD goal is fed by a 41.29 EUR item from a DOP account. The twin is 2,900.62 DOP (rate 70.25); the contribution is 47.95 USD.
   - Corrected to 55.00 USD at USD/DOP 62: the twin becomes **3,410.00** DOP (original 55 USD), and the EUR original is lost.
   - Scaled at its stored conversion it would be 3,327.25.
 - **Who / direction:** the ledger moves by rate drift, +82.75 DOP here.
@@ -194,8 +194,8 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
 ### S16. The debt comparator subtracts a payment dated ahead from period 1's minimum but not from the balance
 - **Where:** `src/lib/data/debt-payoff.ts:40-42`. `balance` is `displayRemaining` (as of today); `paidThisPeriod` is `plan.contributed` (the whole window, including dates after today).
 - **Reproduction:**
-  - Today is Oct 4. A 5,571.32 card debt with target Nov 30 has a full payment logged for Oct 8. There is also a 20,000 undated loan.
-  - Card shows balance 5,571.32, minimum 1,114.26, paid 5,571.32. The comparator puts Card's payoff in **period 5** and Loan's in period 23. Card is really paid in period 1, which frees its minimum for the loan.
+  - Today is Oct 4. A 4,491.32 card debt with target Nov 30 has a full payment logged for Oct 8. There is also a 20,000 undated loan.
+  - Card shows balance 4,491.32, minimum 898.26, paid 4,491.32. The comparator puts Card's payoff in **period 5** and Loan's in period 28. Card is really paid in period 1, which frees its minimum for the loan.
 - **Who / direction:** payoff dates are later than they will be.
 - **Confidence:** high.
 
@@ -220,12 +220,12 @@ Also in this report: the independent recomputation (6 mismatches, all of them fi
 
 ### S20. The bank's EUR rate is stored as a rounded cross-rate, so some conversions come out one cent low
 - **Where:** `src/lib/bpd-rate-payload.ts:121-125` (EUR = dollar sell / euro sell, stored at 10 decimals), then `rateBetween`/`atRate`.
-- **Reproduction:** 163.71 EUR at euro sell 68.50 (dollar 58.00) converts at 68.4999999973. That stores 11,214.13; the bank's figure is 11,214.14. 501 of 13,122 rate/amount combinations scanned are off by one cent.
+- **Reproduction:** 158.37 EUR at euro sell 68.50 (dollar 58.00) converts at 68.4999999973. That stores 10,848.34; the bank's figure is 10,848.35. 501 of 13,122 rate/amount combinations scanned are off by one cent.
 - **Confidence:** high.
 
 ### S21. A posted row freezes the rate of the run, not of its due date
 - **Where:** `src/lib/recurring-posting.ts`: one rate table per run.
-- **Reproduction:** a backlog of four 163.71 EUR and four 43.66 EUR occurrences, posted in one run. Every row gets rate 70.250000001.
+- **Reproduction:** a backlog of four 158.37 EUR and four 41.29 EUR occurrences, posted in one run. Every row gets rate 70.250000001.
 - **Related (code reading):** the first request after local midnight posts that day's occurrence at the stored bank rate, usually the previous day's, before the scraper stores the new one.
 - **Note:** the file header promises "at the day's rate".
 - **Confidence:** high. This is a design limitation rather than a defect.
