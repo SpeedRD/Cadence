@@ -58,7 +58,7 @@ import {
   type RecurringSkipReason,
   type ScheduledItem,
 } from "@/lib/recurring";
-import { recurringExternalId, SETTLEMENT_LEAD_DAYS } from "@/lib/recurring-settlement";
+import { plannable, recurringExternalId, SETTLEMENT_LEAD_DAYS } from "@/lib/recurring-settlement";
 
 import type { RecurringKind } from "@/generated/prisma/enums";
 
@@ -330,15 +330,19 @@ export function planCommitments(input: PlanCommitmentsInput): Map<string, Commit
     for (const date of dates) {
       const key = recurringExternalId(item.id, date.dueDate);
       if (counted.has(key)) continue;
-      const settledBy = reason ? undefined : input.settlement.settledBy.get(key);
-      const status: OccurrenceStatus = reason
+      // The pairing is decided first: a contribution whose goal is now
+      // reached is still settled by the hand-logged contribution the plan
+      // pairs with it (the one that filled the goal), not skipped.
+      const settledBy = plannable(reason) ? input.settlement.settledBy.get(key) : undefined;
+      const skipped = reason !== null && !settledBy;
+      const status: OccurrenceStatus = skipped
         ? "wont_post"
         : input.settlement.posted.has(key)
           ? "posted"
           : settledBy
             ? "settled"
             : "outstanding";
-      entries.push({ item, date, key, status, reason, settledBy });
+      entries.push({ item, date, key, status, reason: skipped ? reason : null, settledBy });
     }
   }
   if (input.goals) capContributions(entries, input.goals, input.today, input.rates);

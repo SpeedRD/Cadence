@@ -106,6 +106,16 @@ export interface GoalPeriodFigures {
   recommended: number | null;
   /** Contributions dated in the period, logged and posted. */
   contributed: number;
+  /**
+   * The follow-through figures again in the goal's own currency, each summed
+   * from the stored amounts without rounding on the way: what
+   * followThroughShortfall compares planned and contributed in, so the
+   * rounding of conversions into the display currency (a ledger row rounded
+   * in the account's currency beside a contribution rounded in the goal's)
+   * cannot read as money not contributed. Absent: judged in the display
+   * currency alone.
+   */
+  native?: { planned: number | null; scheduled: number; outstandingScheduled: number; contributed: number };
 }
 
 export function goalPeriodFigures(input: Omit<GoalPeriodFigures, "byHand">): GoalPeriodFigures {
@@ -138,9 +148,18 @@ export function roomShortfall(figures: GoalPeriodFigures): number {
  * The follow-through statement: what was planned for the period (by hand
  * and scheduled) that has neither been contributed nor is still due to post.
  * 0 when everything planned went in, or there is no confirmed plan.
+ *
+ * Whether anything is missing is judged in the goal's own currency
+ * (`native`), where the contributions are stored: a shortfall that rounds to
+ * less than a cent there is the conversions' rounding, not money, and is no
+ * shortfall; one of a cent or more is, and is stated in the display currency.
  */
 export function followThroughShortfall(figures: GoalPeriodFigures): number {
   if (figures.planned === null) return 0;
+  const own = figures.native;
+  if (own && own.planned !== null && round2(own.planned + own.scheduled - own.contributed - own.outstandingScheduled) <= TOLERANCE) {
+    return 0;
+  }
   const shortfall = round2(
     figures.planned + figures.scheduled - figures.contributed - figures.outstandingScheduled,
   );

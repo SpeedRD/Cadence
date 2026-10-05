@@ -54,6 +54,7 @@ import { withinCents } from "@/lib/money";
 import { incomeWindow, periodForDate, type PeriodRef } from "@/lib/period";
 
 import type { RecurringKind } from "@/generated/prisma/enums";
+import type { RecurringSkipReason } from "@/lib/recurring";
 
 /** Amounts within a cent of each other are treated as the same charge. */
 export const AMOUNT_MATCH_TOLERANCE = 0.01;
@@ -247,6 +248,24 @@ export interface SettlementOccurrence {
   due: Date;
   /** The item's occurrence after this one, which bounds this one's window past its period (settlementWindow). */
   nextDue?: Date | null;
+  /**
+   * A contribution whose goal is already reached (skipReasonFor's
+   * goal_achieved): posting writes nothing more into the goal, so only a
+   * hand-logged contribution to it - whose money the goal already counts -
+   * can be the charge that paid it.
+   */
+  contributionTwinOnly?: boolean;
+}
+
+/**
+ * Whether the settlement plan covers an item posting skips for `reason`
+ * (skipReasonFor): one it posts, and a contribution to a reached goal, which
+ * a hand-logged contribution to that goal may still have paid - the pairing
+ * is decided first, so that occurrence is settled rather than skipped
+ * (contributionTwinOnly).
+ */
+export function plannable(reason: RecurringSkipReason | null): boolean {
+  return reason === null || reason === "goal_achieved";
 }
 
 /**
@@ -282,6 +301,7 @@ export function planSettlements(input: {
       if (charge.contributionGoalId !== null) {
         return item.kind === "CONTRIBUTION" && item.goalId === charge.contributionGoalId && holdsItemAmount(item, charge);
       }
+      if (occurrence.contributionTwinOnly) return false;
       return chargeMatchesItem(item, charge, ambiguous.has(item.id));
     });
     if (!match) continue;

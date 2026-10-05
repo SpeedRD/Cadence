@@ -5,7 +5,7 @@ import { num, round2 } from "@/lib/money";
 import { nextPeriod, periodForDate, periodInfo, type PeriodInfo } from "@/lib/period";
 import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
-import { advanceDate, firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, paidPastOccurrences, semiMonthlyAnchorsCollide, skipReasonFor } from "@/lib/recurring";
+import { advanceDate, firstOccurrenceOnOrAfter, isFinishedPlan, monthlyEquivalent, occurrencesBefore, paidPastOccurrences, semiMonthlyAnchorsCollide, skipReasonFor } from "@/lib/recurring";
 import {
   planPostedDuplicates,
   planSettlements,
@@ -287,8 +287,11 @@ export function startAfterPaidOccurrences<
  * by design, for an item a failed run left overdue). The caller says which
  * items just changed state (`scope`); this narrows to the active ones whose
  * links let them post (skipReasonFor, the rule posting itself applies) and
- * whose date is behind. `remainingOccurrences` is not touched: a skipped
- * occurrence was not spent.
+ * whose date is behind. A skipped occurrence was not spent, so it does not
+ * count against `remainingOccurrences` - except one the user already paid
+ * and recorded ("It's that payment"): the move claims that pairing
+ * (claimPassedPairings), counting its installment, since posting will never
+ * reach it now.
  *
  * Each move is a compare-and-swap on the nextDate it read, so a posting run
  * that claimed an occurrence in the meantime wins and the item is left as
@@ -314,9 +317,54 @@ export async function skipMissedOccurrences(
       where: { id: item.id, active: true, nextDate: item.nextDate },
       data: { nextDate: to },
     });
-    if (claimed.count > 0) moved.push({ id: item.id, from: item.nextDate, to });
+    if (claimed.count === 0) continue;
+    await claimPassedPairings(db, item.id, to);
+    moved.push({ id: item.id, from: item.nextDate, to });
   }
   return moved;
+}
+
+/**
+ * Claims each payment the user recorded ahead for item `itemId` ("It's that
+ * payment", recordUpcomingPayment) whose occurrence is now behind the item's
+ * nextDate `nextDate`: a move of nextDate went past it (a skip, or an edit),
+ * so posting - the one place that otherwise claims it - never will. The
+ * pairing is kept and marked claimed (claimedByPostingAt), as posting marks
+ * it, and an installment plan counts its installment: the charge paid it.
+ * Without this the plan would make one payment more than it was created
+ * with, the recorded charge beside the occurrences still to post.
+ *
+ * Exactly once: only a pairing not claimed yet is claimed, and its
+ * installment is counted in the same transaction, under the item's row lock
+ * the caller holds (the move it just wrote). A claim that reaches 0 also
+ * switches the item off, as posting's last claim does. Returns how many
+ * were claimed.
+ */
+async function claimPassedPairings(db: Prisma.TransactionClient, itemId: string, nextDate: Date): Promise<number> {
+  const passed = await db.recurringSettlement.findMany({
+    where: { recurringItemId: itemId, claimedByPostingAt: null, dueDate: { lt: nextDate } },
+    select: { id: true },
+  });
+  return claimPairings(db, itemId, passed.map((row) => row.id));
+}
+
+/** Claims these recorded payments of item `itemId` and counts their installments; see claimPassedPairings. */
+async function claimPairings(db: Prisma.TransactionClient, itemId: string, ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const claimed = await db.recurringSettlement.updateMany({
+    where: { id: { in: ids }, recurringItemId: itemId, claimedByPostingAt: null },
+    data: { claimedByPostingAt: new Date() },
+  });
+  if (claimed.count === 0) return 0;
+  const item = await db.recurringItem.findUnique({ where: { id: itemId }, select: { remainingOccurrences: true } });
+  if (item && item.remainingOccurrences !== null) {
+    const left = Math.max(0, item.remainingOccurrences - claimed.count);
+    await db.recurringItem.update({
+      where: { id: itemId },
+      data: left === 0 ? { remainingOccurrences: 0, active: false } : { remainingOccurrences: left },
+    });
+  }
+  return claimed.count;
 }
 
 /** Whether posting would skip this item right now, for the state it was read in - `active` included. */
@@ -410,8 +458,9 @@ export async function updateRecurringItem(
  * item's recorded payments (RecurringSettlement) the new schedule would
  * otherwise charge again, so none is left on a key the schedule no longer
  * has while the occurrence that replaced it posts the same money
- * (reconcileSettlements). The write, and that, happen under the item's row
- * lock, the one posting's claim takes.
+ * (reconcileSettlements), and claims one whose occurrence the new nextDate
+ * went past (claimPassedPairings) rather than dropping it. The write, and
+ * that, happen under the item's row lock, the one posting's claim takes.
  */
 export async function updateRecurringItemDetailed(
   id: string,
@@ -471,6 +520,10 @@ export async function updateRecurringItemDetailed(
         data: { ...values, nextDate },
       });
       if (written.count === 0) return none;
+      // The automatic skip went past the occurrences the item missed, as
+      // skipMissedOccurrences does: a payment the user recorded for one of
+      // them is claimed, not moved or released.
+      if (nextDate.getTime() !== values.nextDate.getTime()) await claimPassedPairings(tx, id, nextDate);
 
       const after = await tx.recurringItem.findUniqueOrThrow({ where: { id } });
       const scheduleChanged =
@@ -494,21 +547,33 @@ const RECONCILE_REACH_DAYS = 62;
 
 /**
  * Moves each recorded payment of `item` whose occurrence the item's new
- * schedule no longer has to the occurrence that replaces it, or lets it go.
+ * schedule no longer has to the occurrence that replaces it, claims it, or
+ * lets it go.
  *
  *   - A pairing posting has not claimed yet (the user's "It's that payment",
  *     settlementClaimed false) is always looked at. One whose due date is on
  *     the new schedule stays; any other moves to the new occurrence nearest
  *     its old due date that is free (no RECURRING row, no other recorded
- *     payment) and that the charge still pays, or is released: the charge is
- *     an ordinary one again, and the occurrence that replaced it posts on its
- *     due date.
+ *     payment) and that the charge still pays. Failing that, one whose due
+ *     date the new nextDate went past is claimed where it is
+ *     (claimPassedPairings): the charge paid that occurrence, and posting
+ *     will never reach it now, so it counts its installment there rather
+ *     than being dropped. Only one still ahead of the new nextDate is
+ *     released: the charge is an ordinary one again, and the occurrence that
+ *     replaced it posts on its due date.
  *   - A pairing posting already claimed is history, and stays, unless the
- *     schedule moved back (`formerNext`, the nextDate before the edit) so that
- *     it walks again the span posting had claimed. Then one not on the new
- *     schedule moves to a free new occurrence in that span that the charge
- *     still pays - the occurrence that replaced it - and otherwise stays: it
- *     paid what it paid.
+ *     schedule moved back (`formerNext`, the nextDate before the edit) over
+ *     the span posting had claimed and the new schedule does not have its
+ *     day. Then it moves to the new schedule's occurrence nearest its old
+ *     due date among those already behind the new nextDate
+ *     (occurrencesBefore) that is free and that the charge still pays - so
+ *     each slot of the new schedule holds one payment - and otherwise stays
+ *     on its own key: it paid what it paid, and the period commitments read
+ *     it by its own due date (a ledger fact). It is never moved onto the new
+ *     nextDate or after: those occurrences are still to post, and taking one
+ *     would leave it unposted with nothing paying it. A nextDate moved back
+ *     onto its very day rolls past it without counting it again
+ *     (settlementClaimed).
  *
  * "Pays" is the settlement rules: planSettlements, the one matcher posting
  * uses, against the new occurrence; for the user's own answer also the
@@ -516,9 +581,7 @@ const RECONCILE_REACH_DAYS = 62;
  * takes an amount in the account's currency within
  * CROSS_CURRENCY_MATCH_TOLERANCE). Moving or releasing a contribution's
  * pairing moves or removes its GoalContribution with it, so the goal counts
- * the money exactly when the ledger does. A moved pairing keeps whether
- * posting has claimed it, so a claimed one is rolled past, never counted
- * again.
+ * the money exactly when the ledger does.
  */
 async function reconcileSettlements(
   tx: Prisma.TransactionClient,
@@ -528,28 +591,27 @@ async function reconcileSettlements(
   goalsToRebuild: Set<string>,
 ): Promise<RecurringEditResult["settlements"]> {
   const movedBack = item.nextDate.getTime() < formerNext.getTime();
+  const reachBack = addDays(item.nextDate, -RECONCILE_REACH_DAYS);
   const moves: RecurringEditResult["settlements"] = { rekeyed: [], released: [] };
-  const recorded = (
-    await tx.recurringSettlement.findMany({
-      where: { recurringItemId: item.id },
-      select: {
-        id: true,
-        occurrenceKey: true,
-        dueDate: true,
-        claimedByPostingAt: true,
-        transaction: {
-          select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, accountId: true, categoryId: true, note: true, source: true, externalId: true },
-        },
+  const recorded = await tx.recurringSettlement.findMany({
+    where: {
+      recurringItemId: item.id,
+      OR: [
+        { claimedByPostingAt: null },
+        ...(movedBack ? [{ dueDate: { gte: reachBack, lt: formerNext } }] : []),
+      ],
+    },
+    select: {
+      id: true,
+      occurrenceKey: true,
+      dueDate: true,
+      claimedByPostingAt: true,
+      transaction: {
+        select: { id: true, date: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, accountId: true, categoryId: true, note: true, source: true, externalId: true },
       },
-      orderBy: { dueDate: "asc" },
-    })
-  ).filter(
-    (row) =>
-      !settlementClaimed(row) ||
-      (movedBack &&
-        row.dueDate.getTime() < formerNext.getTime() &&
-        row.dueDate.getTime() >= addDays(item.nextDate, -RECONCILE_REACH_DAYS).getTime()),
-  );
+    },
+    orderBy: { dueDate: "asc" },
+  });
   if (recorded.length === 0) return moves;
 
   const walkTo = addDays(recorded[recorded.length - 1].dueDate, RECONCILE_REACH_DAYS);
@@ -560,7 +622,10 @@ async function reconcileSettlements(
   }
   const nextAfter = (due: Date) => advanceDate(due, item.frequency, item.anchorDay, item.secondAnchorDay);
   const onSchedule = new Set(schedule.map((due) => toISODate(due)));
-  const scheduleKeys = schedule.map((due) => recurringExternalId(item.id, due));
+  // Where a claimed pairing may move: the new schedule's occurrences already
+  // behind its nextDate, within reach of the earliest one looked at.
+  const behind = movedBack ? occurrencesBefore(item, addDays(recorded[0].dueDate, -RECONCILE_REACH_DAYS)) : [];
+  const scheduleKeys = [...behind, ...schedule].map((due) => recurringExternalId(item.id, due));
   const taken = new Set([
     ...(
       await tx.transaction.findMany({ where: { source: "RECURRING", externalId: { in: scheduleKeys } }, select: { externalId: true } })
@@ -615,8 +680,8 @@ async function reconcileSettlements(
         rates: table,
       }).has(charge.id);
     };
-    const candidates = schedule
-      .filter((due) => !taken.has(recurringExternalId(item.id, due)) && (!claimed || due.getTime() < formerNext.getTime()))
+    const candidates = (claimed ? behind : schedule)
+      .filter((due) => !taken.has(recurringExternalId(item.id, due)))
       .sort(
         (a, b) =>
           Math.abs(a.getTime() - row.dueDate.getTime()) - Math.abs(b.getTime() - row.dueDate.getTime()) || a.getTime() - b.getTime(),
@@ -639,7 +704,11 @@ async function reconcileSettlements(
       const moved = await tx.goalContribution.updateMany({ where: { recurringExternalId: row.occurrenceKey }, data: { recurringExternalId: key } });
       if (moved.count > 0 && item.goalId) goalsToRebuild.add(item.goalId);
       moves.rekeyed.push({ itemName: item.name, from: row.dueDate, to: target });
-    } else if (!claimed) {
+    } else if (claimed) {
+      // Stays on its own key.
+    } else if (row.dueDate.getTime() < item.nextDate.getTime()) {
+      await claimPairings(tx, item.id, [row.id]);
+    } else {
       await tx.recurringSettlement.delete({ where: { id: row.id } });
       const removed = await tx.goalContribution.findMany({ where: { recurringExternalId: row.occurrenceKey }, select: { goalId: true } });
       if (removed.length > 0) {

@@ -17,8 +17,12 @@
  * posted one, without counting against an installment plan.
  *
  * Only items posting will post are planned: an item it skips
- * (skipReasonFor - no account, an archived one, no goal, a goal reached)
- * claims no charge, or its look-alike would post the same money.
+ * (skipReasonFor - no account, an archived one, no goal) claims no charge,
+ * or its look-alike would post the same money. A contribution whose goal is
+ * reached is planned too, but only a hand-logged contribution to that goal
+ * can pay it (contributionTwinOnly): the pairing is decided first, so the
+ * contribution logged by hand in its place - the one that filled the goal -
+ * settles the occurrence it was meant to pay rather than leaving it skipped.
  */
 import { num } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -27,6 +31,7 @@ import { addDays, fromISODate } from "@/lib/date";
 import {
   SETTLEMENT_LEAD_DAYS,
   itemIdFromOccurrenceKey,
+  plannable,
   planSettlements,
   recurringExternalId,
   settlementClaimed,
@@ -125,7 +130,8 @@ export async function loadSettlementPlan(
       goal: { select: { achievedAt: true } },
     },
   });
-  const rows = found.filter((row) => skipReasonFor(row) === null);
+  const rows = found.filter((row) => plannable(skipReasonFor(row)));
+  const goalReached = new Set(rows.filter((row) => skipReasonFor(row) === "goal_achieved").map((row) => row.id));
   if (rows.length === 0) return plan;
   const kindById = new Map(rows.map((row) => [row.id, row.kind]));
 
@@ -188,7 +194,12 @@ export async function loadSettlementPlan(
         left -= 1;
         continue;
       }
-      occurrences.push({ itemId: row.id, due, nextDue: advanceDate(due, row.frequency, row.anchorDay, row.secondAnchorDay) });
+      occurrences.push({
+        itemId: row.id,
+        due,
+        nextDue: advanceDate(due, row.frequency, row.anchorDay, row.secondAnchorDay),
+        ...(goalReached.has(row.id) ? { contributionTwinOnly: true } : {}),
+      });
       left -= 1;
     }
   }

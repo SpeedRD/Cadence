@@ -48,7 +48,10 @@
  *           count its paycheck beside deposits the ledger already held for it
  *           when it was confirmed (a CSV salary imported first): those are
  *           adopted, so what the check-in itself adds plus them never comes
- *           to more than the paycheck the user typed.
+ *           to more than the paycheck the user typed. And an installment
+ *           plan's posted rows plus its recorded pairings never come to more
+ *           payments than it was created with, paused, resumed or finished:
+ *           no "It's that payment" left behind its nextDate uncounted.
  *   pair 5  a deposit the user earmarked for a recurring occurrence
  *           (RecurringEarmark, src/lib/earmarks.ts) and the occurrence it
  *           covers: the earmarked part lowers what the occurrence asks of the
@@ -124,7 +127,7 @@ import {
   type PeriodRef,
 } from "../src/lib/period";
 import { whole, wholeAmount } from "../src/lib/period-commitments";
-import { monthlyEquivalent, owedOccurrences, skipReasonFor, type ScheduledItem } from "../src/lib/recurring";
+import { advanceDate, monthlyEquivalent, owedOccurrences, skipReasonFor, type ScheduledItem } from "../src/lib/recurring";
 import {
   manualContributionExternalId,
   manualContributionIdFromTransaction,
@@ -1512,11 +1515,65 @@ async function main(): Promise<number> {
       ]);
     }
 
+    // (e) An installment plan (remainingOccurrences set) makes no more
+    // payments than it was created with, paused, resumed or finished. What
+    // it was created with is what it has counted - its RECURRING rows and
+    // the pairings claimed against it (posting's claim, or a skip or edit
+    // that moved nextDate past a recorded "It's that payment") - plus what
+    // is left. What it makes is every row and every recorded pairing, plus
+    // the payments still to post. A pairing not claimed yet is one of those
+    // only while it is one of the next `remaining` occurrences posting will
+    // count from nextDate (as stored: resuming a paused plan claims one its
+    // skip goes past); any other - behind nextDate, past the countdown, off
+    // the schedule - was paid and will never be counted, so the plan pays
+    // one installment more. The walk is the app's own (advanceDate), over
+    // the keys posting would count (a posted or claimed one is rolled past).
+    let plansChecked = 0;
+    const plans = allItems.filter((item) => item.remainingOccurrences !== null);
+    if (plans.length > 0) {
+      const planIds = plans.map((item) => item.id);
+      const planPairings = await prisma.recurringSettlement.findMany({
+        where: { recurringItemId: { in: planIds } },
+        select: { id: true, occurrenceKey: true, dueDate: true, claimedByPostingAt: true, transactionId: true },
+      });
+      const planRows = await prisma.$queryRaw<{ externalId: string }[]>`
+        SELECT "externalId" FROM "Transaction"
+        WHERE source = 'RECURRING' AND type = 'EXPENSE' AND "externalId" IS NOT NULL
+          AND left("externalId", length("externalId") - 11) = ANY(${planIds})`;
+      for (const item of plans) {
+        plansChecked += 1;
+        const remaining = Math.max(0, item.remainingOccurrences as number);
+        const postedKeys = new Set(planRows.map((row) => row.externalId).filter((key) => itemIdFromKey(key) === item.id));
+        const pairings = planPairings.filter((row) => itemIdFromKey(row.occurrenceKey) === item.id);
+        const claimedKeys = new Set(pairings.filter((row) => row.claimedByPostingAt !== null).map((row) => row.occurrenceKey));
+        const counting = new Set<string>();
+        let cursor = item.nextDate;
+        for (let guard = 0; counting.size < remaining && guard < 400; guard += 1) {
+          const key = `${item.id}:${toISODate(cursor)}`;
+          if (!postedKeys.has(key) && !claimedKeys.has(key)) counting.add(key);
+          cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
+        }
+        const pending = pairings.filter((row) => row.claimedByPostingAt === null);
+        const stranded = pending.filter((row) => !counting.has(row.occurrenceKey));
+        const createdWith = postedKeys.size + claimedKeys.size + remaining;
+        const makes = postedKeys.size + pairings.length + remaining - (pending.length - stranded.length);
+        if (makes <= createdWith) continue;
+        const state = item.active ? "active" : remaining > 0 ? "paused" : "finished";
+        flag(4, "DOUBLE", `installment plan "${item.name}" (${state}) makes ${makes} payments; it was created with ${createdWith}`, [
+          `counted: ${postedKeys.size} posted row${postedKeys.size === 1 ? "" : "s"}, ${claimedKeys.size} claimed pairing${claimedKeys.size === 1 ? "" : "s"}; ${remaining} left from ${toISODate(item.nextDate)}`,
+          ...stranded.map(
+            (row) => `recorded payment never counted: RecurringSettlement ${row.id} (due ${toISODate(row.dueDate)}, Transaction ${row.transactionId}) is not claimed and posting will not reach it`,
+          ),
+        ]);
+      }
+    }
+
     const written = await prisma.$queryRaw<{ source: string; currency: string; n: number }[]>`
       SELECT source::text AS source, currency, count(*)::int AS n FROM "Transaction"
       WHERE (source = 'RECURRING' AND type = 'EXPENSE') OR (source = 'PAYDAY_CHECKIN' AND type = 'INCOME')
       GROUP BY 1, 2 ORDER BY 1, 2`;
     info(`settled and posted: ${settledAndPosted} of ${settlements.length} settlement${settlements.length === 1 ? "" : "s"} name an occurrence that also has a RECURRING row`);
+    info(`installment plans: ${plansChecked} checked for more payments than they were created with`);
     info(`slots: ${slotsChecked} consumed occurrence${slotsChecked === 1 ? "" : "s"} of ${byItem.size} item${byItem.size === 1 ? "" : "s"} checked for one slot paid twice`);
     info(`paychecks: ${paychecksChecked} confirmed check-in paycheck${paychecksChecked === 1 ? "" : "s"} checked against the deposits the ledger held for them when confirmed (${recordedAdoptions.size} that recorded their deposits are checked in pair 5)`);
     info(

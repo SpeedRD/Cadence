@@ -1,4 +1,4 @@
-import { addDays, civilDate, daysInMonth } from "@/lib/date";
+import { addDays, civilDate, daysBetween, daysInMonth } from "@/lib/date";
 import { payDayOfMonth } from "@/lib/period";
 
 import type { RecurringFrequency, RecurringKind } from "@/generated/prisma/enums";
@@ -172,6 +172,59 @@ export function firstOccurrenceOnOrAfter(
 }
 
 const MAX_SKIP_WALK = 5000;
+
+/**
+ * The occurrences of `item`'s schedule from `from` up to, not including, its
+ * nextDate - the dates its walk would have reached before nextDate had it
+ * always run on this schedule. The walk is advanceDate's own, started on a
+ * date of the schedule at or before `from` (the same weekday a whole number
+ * of weeks back, the anchor day some months back, each SEMI_MONTHLY
+ * anchor's realization), so every date is one posting itself would have
+ * reached. Empty when `from` is not before nextDate.
+ */
+export function occurrencesBefore(
+  item: Pick<ScheduledItem, "nextDate" | "frequency" | "anchorDay" | "secondAnchorDay">,
+  from: Date,
+): Date[] {
+  const days = daysBetween(from, item.nextDate);
+  if (days <= 0) return [];
+  const anchor = item.anchorDay ?? item.nextDate.getUTCDate();
+  // Whole months back to a month before `from`'s.
+  const months =
+    (item.nextDate.getUTCFullYear() - from.getUTCFullYear()) * 12 + (item.nextDate.getUTCMonth() - from.getUTCMonth()) + 1;
+  let seed: Date;
+  switch (item.frequency) {
+    case "WEEKLY":
+      seed = addDays(item.nextDate, -7 * Math.ceil(days / 7));
+      break;
+    case "BIWEEKLY":
+      seed = addDays(item.nextDate, -14 * Math.ceil(days / 14));
+      break;
+    case "YEARLY":
+      seed = occurrenceAfter(item.nextDate, -12 * (Math.ceil(months / 12) + 1), anchor);
+      break;
+    case "SEMI_MONTHLY": {
+      const second = item.secondAnchorDay;
+      if (second === null || second === undefined) {
+        seed = occurrenceAfter(item.nextDate, -months, anchor);
+        break;
+      }
+      const a = semiMonthlyRealization(item.nextDate, -months, anchor);
+      const b = semiMonthlyRealization(item.nextDate, -months, second);
+      seed = a.getTime() <= b.getTime() ? a : b;
+      break;
+    }
+    case "MONTHLY":
+    default:
+      seed = occurrenceAfter(item.nextDate, -months, anchor);
+  }
+  const dates: Date[] = [];
+  for (let cursor = seed, i = 0; cursor.getTime() < item.nextDate.getTime() && i < MAX_OCCURRENCE_WALK; i += 1) {
+    if (cursor.getTime() >= from.getTime()) dates.push(cursor);
+    cursor = advanceDate(cursor, item.frequency, item.anchorDay, item.secondAnchorDay);
+  }
+  return dates;
+}
 
 /** The schedule fields every occurrence walk needs, whatever loaded the row. */
 export interface ScheduledItem {

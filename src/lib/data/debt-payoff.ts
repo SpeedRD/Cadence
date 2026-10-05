@@ -17,14 +17,18 @@ export interface DebtGoal extends DebtInput {
  * the recurring contributions that pay into the debt: the simulation adds
  * nothing else, so a debt paid by an automatic contribution still receives
  * that money. What already went into the debt in the plan period - period 1
- * of the simulation - is passed beside it, since the balance is already net
- * of it, and so is the period its target date's last pay lands in, where the
- * roadmap asks for whatever is left. A goal with no target date has no per-period pace (its figure is
- * the whole balance for the one period being planned), so it enters the
- * simulation with a minimum of 0: paid only by the extra and by the paces
- * other debts free up. Achieved goals and goals with nothing left are not
- * debts to pay. Order: the goal list's (oldest first) - the strategies impose
- * their own.
+ * of the simulation - is passed beside it, and the balance is measured on
+ * the same basis: what is left once every contribution dated in the plan
+ * period's funding window is counted (remainingAfterPeriod), a payment dated
+ * ahead of today included, so it counts once in both. The period its target
+ * date's last pay lands in is passed too, where the roadmap asks for
+ * whatever is left. A goal with no target date has no per-period pace (its
+ * figure is the whole balance for the one period being planned), so it
+ * enters the simulation with a minimum of 0: paid only by the extra and by the paces
+ * other debts free up (what went into it in period 1 is passed all the
+ * same, so one that payment cleared shows as paid off in period 1). Achieved
+ * goals and goals with nothing left are not debts to pay. Order: the goal
+ * list's (oldest first) - the strategies impose their own.
  *
  * Read-only and standalone: nothing here feeds the check-in's goal funding.
  */
@@ -36,9 +40,9 @@ export async function listDebtGoals(context: AppContext): Promise<DebtGoal[]> {
     debts.push({
       goalId: goal.id,
       name: goal.name,
-      balance: goal.displayRemaining,
+      balance: goal.plan.remainingAfterPeriod,
       minimum: goal.targetDate ? goal.plan.pace : 0,
-      paidThisPeriod: goal.targetDate ? goal.plan.contributed : 0,
+      paidThisPeriod: goal.plan.contributed,
       targetPeriod: goal.plan.periodsLeft === null ? undefined : Math.max(1, goal.plan.periodsLeft),
       targetDate: goal.targetDate,
     });

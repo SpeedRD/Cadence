@@ -172,6 +172,37 @@ function twinAsStored(
   return { ...row, originalAmount: contributed, originalCurrency: contribution.currency, rate: roundRate(row.amount / contributed) };
 }
 
+/**
+ * A contribution's ledger twin converted from a third currency - neither the
+ * goal's nor the account's: the item's (a 43.66 EUR item paying a USD goal
+ * from a DOP account) - corrected to `amount` in the goal's currency. The
+ * twin and the contribution were each converted from the item's figure, so
+ * neither converts into the other at a stored rate: the stored conversion is
+ * scaled by the ratio of the new contribution to the old, the account's
+ * figure and the original alike, keeping the original's currency and the
+ * rate it was stored at - the same proportional correction the
+ * same-currency path makes (toAccountMoney), never a re-conversion at
+ * today's rate. Null for any other twin, which that path handles.
+ */
+function scaledThirdCurrencyTwin(
+  twin: { amount: DecimalLike; currency: string; originalAmount: DecimalLike; originalCurrency: string | null; rate: DecimalLike },
+  contribution: { amount: DecimalLike; currency: string },
+  amount: number,
+): StoredMoney | null {
+  const row = moneyRow(twin);
+  const before = num(contribution.amount);
+  if (row.originalCurrency == null || row.originalAmount == null) return null;
+  if (row.originalCurrency === contribution.currency || row.currency === contribution.currency || before <= 0) return null;
+  const ratio = amount / before;
+  return {
+    amount: round2(row.amount * ratio),
+    currency: row.currency,
+    originalAmount: round2(row.originalAmount * ratio),
+    originalCurrency: row.originalCurrency,
+    rate: row.rate ?? null,
+  };
+}
+
 export type RecurringContributionUpdate =
   | { ok: true; goalId: string; transactionAmount: number | null }
   | { ok: false; reason: "not_found" }
@@ -184,7 +215,9 @@ export type RecurringContributionUpdate =
  * that moved the money - the RECURRING row, or the charge that settled the
  * occurrence - in one write. The expense stays in its account's currency: a
  * new amount is carried across at the rate the expense was stored at (K7), so
- * the correction scales it rather than re-converting it at today's rate.
+ * the correction scales it rather than re-converting it at today's rate - an
+ * expense converted from a third currency (the item's) included
+ * (scaledThirdCurrencyTwin).
  * The RecurringItem itself is untouched: this is about what was charged on
  * that date, not what the item charges next. The caller rebuilds the goal's
  * cached total afterwards, as every contribution write does.
@@ -207,14 +240,16 @@ export async function updateRecurringContributionAmount(
   // the goal's nor the account's, which toAccountMoney would otherwise
   // convert afresh at today's rate (R25).
   const unchanged = withinCents(amount, num(contribution.amount));
+  const scaled = twin && !unchanged ? scaledThirdCurrencyTwin(twin, contribution, amount) : null;
   const table =
     rates ??
-    (!twin || unchanged || twin.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
+    (!twin || unchanged || scaled || twin.currency === contribution.currency ? IDENTITY_RATES : await getRateTable());
   const stored = twin && !unchanged
-    ? toAccountMoney({ amount, currency: contribution.currency }, twin.currency, table, {
+    ? (scaled ??
+      toAccountMoney({ amount, currency: contribution.currency }, twin.currency, table, {
         row: twinAsStored(twin, contribution),
         accountCurrency: twin.currency,
-      })
+      }))
     : null;
   const transactionAmount = stored ? stored.amount : twin ? num(twin.amount) : null;
 

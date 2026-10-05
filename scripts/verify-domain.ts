@@ -9891,7 +9891,7 @@ async function main() {
       const judged = (over.open ?? true) && targetDate !== null;
       return {
         ...figures, goalId: over.goalId ?? "goal_1", name: "Emergency Fund", currency: "USD", targetDate, achievedAt: null, open: over.open ?? true,
-        period: over.period ?? sepB, periodsLeft: 13, nativePace: figures.pace, nativeByHand: figures.byHand, role: "plan",
+        period: over.period ?? sepB, periodsLeft: 13, nativePace: figures.pace, nativeByHand: figures.byHand, remainingAfterPeriod: 0, role: "plan",
         planningShortfall: judged ? goalPlanLib.planningShortfall(figures) : 0, roomShortfall: judged ? goalPlanLib.roomShortfall(figures) : 0, followThroughShortfall: 0,
       };
     };
@@ -14897,16 +14897,22 @@ async function main() {
         const commitments = (await rCommitments.periodCommitments(oct10A, rContext(oct(7)))).filter((o) => o.itemId === cloud.id);
         eq("R5: Oct 1-15 lists one occurrence, settled at 667", commitments.map((o) => `${toISODate(o.dueDate)} ${o.status} ${round2(o.amount)}`).join(","), "2026-10-06 settled 667");
 
-        // Moved where the charge can no longer be that payment: released.
+        // Moved where the charge can no longer be that payment: the move
+        // went past the Oct 5 occurrence the charge paid. Flipped
+        // deliberately with S1 (round 2): the pairing was released here
+        // (count 0, "released 2026-10-05", Oct 5 gone from Oct 1-15); an
+        // edit that moves nextDate past a recorded payment now claims it
+        // where it is, so the charge stays that payment and counts once.
         const music = await rItem({ name: "Tidal", amount: 10, currency: "EUR", nextDate: oct(5), anchorDay: 5, accountId: a.id });
         const musicCharge = await rCharge({ accountId: a.id, date: oct(3), amount: 667, note: "Tidal", source: "MANUAL" });
         await prisma.$transaction((tx) => rDuplicates.recordUpcomingPayment(tx, musicCharge.id, rKey(music.id, oct(5))));
         const away = await rEditSchedule(music.id, oct(20), 20, oct(3));
-        eq("R5: moved to Oct 20, the Oct 3 charge is outside its window, so the pairing is released", await prisma.recurringSettlement.count({ where: { transactionId: musicCharge.id } }), 0);
-        eq("R5: the save says so", away.settlements.released.map((m) => toISODate(m.dueDate)).join(","), "2026-10-05");
+        const kept = await prisma.recurringSettlement.findFirst({ where: { transactionId: musicCharge.id } });
+        eq("R5 (S1): moved to Oct 20, past the Oct 5 occurrence the Oct 3 charge paid: the pairing stays on Oct 5, claimed", kept ? `${toISODate(kept.dueDate)} ${kept.claimedByPostingAt ? "claimed" : "unclaimed"}` : "released", "2026-10-05 claimed");
+        eq("R5 (S1): the save moves and releases nothing", away.settlements.released.length + away.settlements.rekeyed.length, 0);
         const later = (await rCommitments.loadCommitments([oct10A, periodInfo({ year: 2026, month: 10, period: "B" })], rContext(oct(4))));
         eq("R5: Oct 20 is outstanding again, at the item's charge", (later.get("2026-10-B") ?? []).filter((o) => o.itemId === music.id).map((o) => `${toISODate(o.dueDate)} ${o.status}`).join(","), "2026-10-20 outstanding");
-        eq("R5: and the Oct 5 occurrence is gone from Oct 1-15", (later.get("2026-10-A") ?? []).filter((o) => o.itemId === music.id).length, 0);
+        eq("R5 (S1): and Oct 1-15 keeps the Oct 5 occurrence, settled by the charge", (later.get("2026-10-A") ?? []).filter((o) => o.itemId === music.id).map((o) => `${toISODate(o.dueDate)} ${o.status}`).join(","), "2026-10-05 settled");
         const unchanged = await rEditSchedule(cloud.id, rDay(11, 6), 6, oct(7));
         eq("R5: an edit that leaves the schedule alone moves nothing", unchanged.settlements.rekeyed.length + unchanged.settlements.released.length, 0);
 
@@ -15061,16 +15067,21 @@ async function main() {
         const tvItem = await prisma.recurringItem.findUniqueOrThrow({ where: { id: tv.id } });
         eq("R12: a posted occurrence moved back onto is rolled past, its installment not spent again", `${tvItem.remainingOccurrences} ${toISODate(tvItem.nextDate)} ${(await rRecurringRows(tv.id)).length}`, "2 2026-11-06 1");
 
-        // Moved back across a claimed settlement and re-anchored: the
-        // settlement follows to the new day, which is not counted again.
+        // Moved back across a claimed settlement and re-anchored. Flipped
+        // deliberately with S4 (round 2): the claimed Oct 7 payment moved to
+        // Oct 8 here and Oct 8 never posted. A claimed pairing is history:
+        // it moves only to an occurrence already behind the new nextDate
+        // (Sep 8 here, which the Oct 6 charge does not pay) and otherwise
+        // stays on its own key, never onto one still to post - so the Oct 8
+        // the user set as the next date posts.
         const phone = await rItem({ name: "Phone", amount: 1500, nextDate: oct(7), anchorDay: 7, accountId: a.id, remainingOccurrences: 3 });
         await rCharge({ accountId: a.id, date: oct(6), amount: 1500, note: "Verify Review Phone" });
         await rPost(oct(7));
         const rekey = await rEditSchedule(phone.id, oct(8), 8, oct(7));
-        eq("R12: re-anchored from the 7th to the 8th, the claimed payment moves to Oct 8", rekey.settlements.rekeyed.map((m) => toISODate(m.to)).join(","), "2026-10-08");
+        eq("R12 (S4): re-anchored from the 7th to the 8th, the claimed payment stays on Oct 7", `${rekey.settlements.rekeyed.length} ${(await prisma.recurringSettlement.findMany({ where: { recurringItemId: phone.id } })).map((row) => toISODate(row.dueDate)).join(",")}`, "0 2026-10-07");
         await rPost(oct(8));
         const phoneItem = await prisma.recurringItem.findUniqueOrThrow({ where: { id: phone.id } });
-        eq("R12: posting on Oct 8 writes nothing and spends no installment", `${phoneItem.remainingOccurrences} ${toISODate(phoneItem.nextDate)} ${(await rRecurringRows(phone.id)).length}`, "2 2026-11-08 0");
+        eq("R12 (S4): posting on Oct 8 posts the new date, one installment", `${phoneItem.remainingOccurrences} ${toISODate(phoneItem.nextDate)} ${(await rRecurringRows(phone.id)).length}`, "1 2026-11-08 1");
         await rWipe();
       }
 
@@ -16691,7 +16702,11 @@ async function main() {
         eq("re-saving the same 90 EUR at rates 63 / 0.86 keeps 6,000 DOP (was re-converted to 6,593.02)", await twin(), "6000 DOP orig 100 USD @60");
         eq("... and reports the stored figure", resaved.ok ? resaved.transactionAmount : "not ok", 6000);
         await hResave(contribution.id, 80, hTable(63, 0.86));
-        eq("a new amount, 80 EUR, is still converted as the correction it is (5,860.47 DOP at today's rate)", await twin(), "5860.47 DOP orig 80 EUR @73.2558139535");
+        // Flipped deliberately with S14 (round 2): a twin converted from a
+        // third currency (the item's USD) was re-converted at today's rate
+        // (5,860.47 DOP orig 80 EUR). It is scaled by 80/90 instead, keeping
+        // its USD original and its rate.
+        eq("S14: a new amount, 80 EUR, scales the stored conversion (6,000 x 80/90 = 5,333.33 DOP, orig 88.89 USD @60)", await twin(), "5333.33 DOP orig 88.89 USD @60");
       }
 
       console.log("-- R28: money compared in whole cents --");
@@ -17301,10 +17316,15 @@ async function main() {
           return `${room.commitments} ${room.goalPlan} ${room.available} ${leftover}`;
         };
         eq("S8 guard: nothing logged, the 4,000 automatic contribution is a commitment: available and leftover 24,500", await scenario({ logged: 0 }), "4000 0 24500 24500");
+        // Flipped deliberately with S8's pairing half (round 2): the
+        // automatic contribution read "won't post" here (commitments 0,
+        // room 28,500). The pairing is decided first, so the 4,000 logged by
+        // hand settles it although it filled the goal: a settled commitment,
+        // as in the 20,000 guard below. The leftover is 24,500 either way.
         eq(
-          "S8, the review's case: 4,000 logged by hand on Oct 15 fills the goal, the automatic one won't post: the room is 28,500 but the 4,000 left Banco, so Oct B leaves 24,500 (was 28,500)",
+          "S8, the review's case: 4,000 logged by hand on Oct 15 fills the goal and settles the automatic one: commitments 4,000, room and leftover 24,500",
           await scenario({ logged: 4000 }),
-          "0 0 28500 24500",
+          "4000 0 24500 24500",
         );
         eq(
           "S8 guard: 4,000 logged toward a 20,000 target pairs with the automatic one - a settled commitment - and is not counted again: 24,500 (as before)",
@@ -17342,6 +17362,354 @@ async function main() {
       await prisma.account.updateMany({ where: { id: { in: vArchived } }, data: { status: "ACTIVE" } });
       await prisma.goal.updateMany({ where: { id: { in: vParked } }, data: { achievedAt: null } });
       await prisma.recurringItem.updateMany({ where: { id: { in: vPaused } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== second adversarial review: posting, settlement and goals (S1 S4 S14 S15 S16 S22, S8's pairing half) ==");
+  {
+    // Public APIs only, every new field reached through `?.` or not at all,
+    // so this block also runs against the code before the fixes and fails
+    // there on each finding. The review's rates (USD 1 = DOP 63.10,
+    // EUR 1 = DOP 73.20), display DOP. Fixtures `Verify Rev2P ...`; every
+    // other active item is paused, open goal parked and active account
+    // archived meanwhile, all restored in the finally.
+    const pPosting = await import("../src/lib/recurring-posting");
+    const pRecurring = await import("../src/lib/data/recurring");
+    const pDuplicates = await import("../src/lib/data/posted-duplicates");
+    const pCommitments = await import("../src/lib/data/period-commitments");
+    const pGoals = await import("../src/lib/goals");
+    const pDebts = await import("../src/lib/data/debt-payoff");
+    const { compareDebtStrategies: pCompare } = await import("../src/lib/debt-payoff");
+    const pPayday = await import("../src/lib/data/payday");
+    const pRates = (): RateTable => ({ rates: { USD: 1, DOP: 63.1, EUR: 63.1 / 73.2 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
+    const pContext = (today: Date) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: pRates(),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: 10,
+      bufferFloorAmount: 0,
+      bufferFloorCurrency: "DOP",
+    });
+    const pDay = (month: number, day: number, year = 2026) => civilDate(year, month, day);
+    const pKey = (itemId: string, due: Date) => `${itemId}:${toISODate(due)}`;
+    const pCheckins: string[] = [];
+    const pWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Rev2P " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { id: { in: pCheckins } } });
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Rev2P " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Rev2P " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Rev2P " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    const pAccount = (name: string) => prisma.account.create({ data: { name: `Verify Rev2P ${name}`, currency: "DOP", type: "CHECKING" } });
+    const pItem = (data: { name: string; amount: number; currency?: string; nextDate: Date; accountId: string; frequency?: "WEEKLY" | "MONTHLY"; kind?: "SUBSCRIPTION" | "CONTRIBUTION"; goalId?: string | null; remainingOccurrences?: number | null }) =>
+      prisma.recurringItem.create({
+        data: {
+          name: `Verify Rev2P ${data.name}`,
+          amount: data.amount,
+          currency: data.currency ?? "DOP",
+          frequency: data.frequency ?? "MONTHLY",
+          anchorDay: data.nextDate.getUTCDate(),
+          nextDate: data.nextDate,
+          active: true,
+          kind: data.kind ?? "SUBSCRIPTION",
+          accountId: data.accountId,
+          goalId: data.goalId ?? null,
+          remainingOccurrences: data.remainingOccurrences ?? null,
+          fromAfford: data.remainingOccurrences !== undefined && data.remainingOccurrences !== null,
+        },
+      });
+    const pCharge = (accountId: string, date: Date, amount: number, note: string) =>
+      prisma.transaction.create({ data: { accountId, date, amount, currency: "DOP", type: "EXPENSE", source: "MANUAL", note: `Verify Rev2P ${note}` } });
+    const pRecorded = (chargeId: string, key: string) => prisma.$transaction((tx) => pDuplicates.recordUpcomingPayment(tx, chargeId, key));
+    const pRows = (itemId: string) => prisma.transaction.findMany({ where: { source: "RECURRING", externalId: { startsWith: `${itemId}:` } }, orderBy: { date: "asc" } });
+    const pPostThrough = async (dates: Date[]) => {
+      for (const date of dates) await pPosting.postDueRecurringItems(date);
+    };
+    // One plan's payments: the charges recorded as its payments plus its RECURRING rows.
+    const pPayments = async (itemId: string, chargeIds: string[]) => {
+      const rows = await pRows(itemId);
+      const pairings = await prisma.recurringSettlement.findMany({ where: { recurringItemId: itemId }, orderBy: { dueDate: "asc" } });
+      const item = await prisma.recurringItem.findUniqueOrThrow({ where: { id: itemId } });
+      return {
+        total: chargeIds.length + rows.length,
+        posted: rows.map((row) => toISODate(row.date)).join(","),
+        pairings: pairings.map((row) => `${toISODate(row.dueDate)} ${row.claimedByPostingAt ? "claimed" : "unclaimed"}`).join(","),
+        state: `remaining ${item.remainingOccurrences} active ${item.active} next ${toISODate(item.nextDate)}`,
+      };
+    };
+
+    const pPaused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const pParked = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const pArchived = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pPaused } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: pParked } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: pArchived } }, data: { status: "ARCHIVED" } });
+    const pRestoreRates = await seedStoredRates({ USD: 1, DOP: 63.1, EUR: 63.1 / 73.2 });
+    try {
+      // ---------------------------------------------------------------------
+      console.log("\n-- S1: pausing and resuming an installment plan around \"It's that payment\" --");
+      {
+        // Reproduction 1: Aplazame, 100 EUR monthly, 3 payments, on a DOP
+        // card. Oct 18: 6,667 DOP recorded as the Oct 20 payment. Paused
+        // Oct 19, resumed Oct 25 - by the toggle and by the edit form.
+        const card = await pAccount("Card");
+        const after = [pDay(10, 25), pDay(11, 20), pDay(12, 20), pDay(1, 20, 2027), pDay(2, 20, 2027), pDay(3, 20, 2027)];
+        const toggle = await pItem({ name: "Aplazame", amount: 100, currency: "EUR", nextDate: pDay(10, 20), accountId: card.id, remainingOccurrences: 3 });
+        const toggleCharge = await pCharge(card.id, pDay(10, 18), 6667, "Aplazame");
+        eq("S1: the Oct 18 charge is recorded as the Oct 20 payment", typeof (await pRecorded(toggleCharge.id, pKey(toggle.id, pDay(10, 20)))), "object");
+        await pRecurring.setRecurringItemActive(toggle.id, false, pDay(10, 19));
+        await pRecurring.setRecurringItemActive(toggle.id, true, pDay(10, 25));
+        eq("S1 toggle: resuming on Oct 25 claims the recorded Oct 20 payment and counts it (3 -> 2), next Nov 20", (await pPayments(toggle.id, [toggleCharge.id])).state, "remaining 2 active true next 2026-11-20");
+        await pRecurring.setRecurringItemActive(toggle.id, false, pDay(10, 26));
+        await pRecurring.setRecurringItemActive(toggle.id, true, pDay(10, 27));
+        eq("S1 toggle: paused and resumed again, it is counted once", (await pPayments(toggle.id, [toggleCharge.id])).state, "remaining 2 active true next 2026-11-20");
+        await pPostThrough(after);
+        const togglePaid = await pPayments(toggle.id, [toggleCharge.id]);
+        eq("S1 toggle: the plan makes 3 payments, as created (was 4: Nov 20, Dec 20 and Jan 20 posted beside the charge)", `${togglePaid.total} | ${togglePaid.posted} | ${togglePaid.pairings} | ${togglePaid.state}`, "3 | 2026-11-20,2026-12-20 | 2026-10-20 claimed | remaining 0 active false next 2027-01-20");
+
+        const edited = await pItem({ name: "Aplazame Edit", amount: 100, currency: "EUR", nextDate: pDay(10, 20), accountId: card.id, remainingOccurrences: 3 });
+        const editedCharge = await pCharge(card.id, pDay(10, 18), 6667, "Aplazame Edit");
+        await pRecorded(editedCharge.id, pKey(edited.id, pDay(10, 20)));
+        await pRecurring.setRecurringItemActive(edited.id, false, pDay(10, 19));
+        const resumed = await pRecurring.updateRecurringItemDetailed(edited.id, null, { nextDate: pDay(10, 20), frequency: "MONTHLY", anchorDay: 20, active: true, accountId: card.id, kind: "SUBSCRIPTION" }, pDay(10, 25), pRates());
+        eq("S1 edit form: resuming on Oct 25 releases nothing (was: released Oct 20)", resumed.settlements.released.map((m) => toISODate(m.dueDate)).join(",") || "none", "none");
+        await pPostThrough(after);
+        const editPaid = await pPayments(edited.id, [editedCharge.id]);
+        eq("S1 edit form: the plan makes 3 payments, as created (was 4)", `${editPaid.total} | ${editPaid.posted} | ${editPaid.pairings} | ${editPaid.state}`, "3 | 2026-11-20,2026-12-20 | 2026-10-20 claimed | remaining 0 active false next 2027-01-20");
+
+        // Reproduction 2: Laptop, 163.71 EUR x 6, payment recorded for Oct
+        // 28; paused Oct 27, resumed Nov 2.
+        const laptop = await pItem({ name: "Laptop", amount: 163.71, currency: "EUR", nextDate: pDay(10, 28), accountId: card.id, remainingOccurrences: 6 });
+        const laptopCharge = await pCharge(card.id, pDay(10, 26), 11983.57, "Laptop");
+        await pRecorded(laptopCharge.id, pKey(laptop.id, pDay(10, 28)));
+        await pRecurring.setRecurringItemActive(laptop.id, false, pDay(10, 27));
+        await pRecurring.setRecurringItemActive(laptop.id, true, pDay(11, 2));
+        await pPostThrough([pDay(11, 2), ...Array.from({ length: 8 }, (_, i) => civilDate(2026 + Math.floor((10 + i) / 12), ((10 + i) % 12) + 1, 28))]);
+        const laptopPaid = await pPayments(laptop.id, [laptopCharge.id]);
+        eq("S1, reproduction 2: the 163.71 EUR x 6 plan makes 6 payments (was 7)", `${laptopPaid.total} ${laptopPaid.state}`, "6 remaining 0 active false next 2027-04-28");
+
+        // Coverage gap: a resumed plan with a recorded payment still ahead
+        // of the resume - nothing to skip, posting claims it on its day.
+        const ahead = await pItem({ name: "Ahead", amount: 100, currency: "EUR", nextDate: pDay(10, 20), accountId: card.id, remainingOccurrences: 3 });
+        const aheadCharge = await pCharge(card.id, pDay(10, 18), 6667, "Ahead");
+        await pRecorded(aheadCharge.id, pKey(ahead.id, pDay(10, 20)));
+        await pRecurring.setRecurringItemActive(ahead.id, false, pDay(10, 10));
+        await pRecurring.setRecurringItemActive(ahead.id, true, pDay(10, 15));
+        eq("S1 guard: resumed before the recorded payment's due date, the countdown is untouched (3), next Oct 20", (await pPayments(ahead.id, [aheadCharge.id])).state, "remaining 3 active true next 2026-10-20");
+        await pPostThrough([pDay(10, 20), ...after]);
+        const aheadPaid = await pPayments(ahead.id, [aheadCharge.id]);
+        eq("S1 guard: posting claims it on Oct 20, and the plan makes 3 payments", `${aheadPaid.total} | ${aheadPaid.posted} | ${aheadPaid.pairings}`, "3 | 2026-11-20,2026-12-20 | 2026-10-20 claimed");
+
+        // A finite plan resumed with nothing recorded keeps its countdown
+        // (the skipped payments were never charged) - as before.
+        const plain = await pItem({ name: "Plain", amount: 100, currency: "EUR", nextDate: pDay(10, 20), accountId: card.id, remainingOccurrences: 3 });
+        await pRecurring.setRecurringItemActive(plain.id, false, pDay(10, 19));
+        await pRecurring.setRecurringItemActive(plain.id, true, pDay(10, 25));
+        eq("S1 guard: a plan resumed with no recorded payment keeps its countdown", (await pPayments(plain.id, [])).state, "remaining 3 active true next 2026-11-20");
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S4: moving a schedule back across a settlement posting already claimed --");
+      {
+        // Weekly "Lavanderia", 500 DOP, on Tuesdays. Oct 19: a manual 500;
+        // Oct 20: posting settles Oct 20 with it, nextDate Oct 27. Oct 21:
+        // moved to Fridays, nextDate Oct 23.
+        const a = await pAccount("Checking");
+        const run = async (withCharge: boolean) => {
+          const item = await pItem({ name: withCharge ? "Lavanderia" : "Lavanderia Posted", amount: 500, frequency: "WEEKLY", nextDate: pDay(10, 20), accountId: a.id });
+          if (withCharge) await pCharge(a.id, pDay(10, 19), 500, "Lavanderia");
+          await pPosting.postDueRecurringItems(pDay(10, 20));
+          const edit = await pRecurring.updateRecurringItemDetailed(item.id, null, { nextDate: pDay(10, 23), frequency: "WEEKLY", anchorDay: 23 }, pDay(10, 21), pRates());
+          await pPostThrough([pDay(10, 23), pDay(10, 23), pDay(10, 30)]);
+          const ledger = [
+            ...(withCharge ? (await prisma.transaction.findMany({ where: { accountId: a.id, source: "MANUAL", note: "Verify Rev2P Lavanderia" } })).map((row) => toISODate(row.date)) : []),
+            ...(await pRows(item.id)).map((row) => toISODate(row.date)),
+          ].sort();
+          const settled = (await prisma.recurringSettlement.findMany({ where: { recurringItemId: item.id } })).map((row) => toISODate(row.dueDate)).join(",");
+          const octB = ((await pCommitments.loadCommitments([periodInfo({ year: 2026, month: 10, period: "B" })], pContext(pDay(10, 31)))).get("2026-10-B") ?? []).filter((o) => o.itemId === item.id);
+          return { edit, ledger: ledger.join(","), settled, octB: octB.map((o) => `${toISODate(o.dueDate)} ${o.status}`).join(",") };
+        };
+        const settledRun = await run(true);
+        eq(
+          "S4: the claimed Oct 20 pairing moves to Oct 16, the new schedule's Friday behind the new date, never onto Oct 23 (was moved to Oct 23)",
+          `${settledRun.edit.settlements.rekeyed.map((m) => `${toISODate(m.from)}>${toISODate(m.to)}`).join(",")} ${settledRun.settled}`,
+          "2026-10-20>2026-10-16 2026-10-16",
+        );
+        eq("S4: the ledger holds Oct 19 (the charge), Oct 23 and Oct 30 (was Oct 19 and Oct 30 only)", settledRun.ledger, "2026-10-19,2026-10-23,2026-10-30");
+        eq("S4: Oct 16-31 counts each 500 once, one per Friday: Oct 16 settled, Oct 23 and Oct 30 posted", settledRun.octB, "2026-10-16 settled,2026-10-23 posted,2026-10-30 posted");
+        const postedRun = await run(false);
+        eq("S4 guard: the same history with Oct 20 posted as a RECURRING row gives Oct 20, Oct 23 and Oct 30", postedRun.ledger, "2026-10-20,2026-10-23,2026-10-30");
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S15: an edit committed while posting holds the item it loaded --");
+      {
+        // Monthly Gym, 500 DOP, due Oct 4. Posting loads it; an edit holding
+        // the item's row lock commits WEEKLY at 650 with the same date before
+        // the claim takes the lock.
+        const a = await pAccount("Gym");
+        const race = async (name: string, change: { frequency?: "WEEKLY"; amount?: number } | null) => {
+          const item = await pItem({ name, amount: 500, nextDate: pDay(10, 4), accountId: a.id });
+          const held = prisma.$transaction(
+            async (tx) => {
+              await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${item.id} FOR UPDATE`;
+              await tx.$queryRaw`SELECT pg_sleep(1.5)::text`;
+              if (change) await tx.recurringItem.update({ where: { id: item.id }, data: change });
+            },
+            { timeout: 20000 },
+          );
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          const summary = await pPosting.postDueRecurringItems(pDay(10, 4));
+          await held;
+          const now = await prisma.recurringItem.findUniqueOrThrow({ where: { id: item.id } });
+          const rows = (await pRows(item.id)).map((row) => `${toISODate(row.date)} ${num(row.amount)}`).join(",") || "none";
+          return { item, summary, state: `${rows} | ${now.frequency} ${num(now.amount)} next ${toISODate(now.nextDate)}` };
+        };
+        const weekly = await race("Gym", { frequency: "WEEKLY", amount: 650 });
+        eq("S15: the run writes nothing and leaves the edited item as saved (was a 500 row and nextDate Nov 4 on a WEEKLY item)", weekly.state, "none | WEEKLY 650 next 2026-10-04");
+        await pPostThrough([pDay(10, 4), pDay(10, 11), pDay(10, 18), pDay(10, 25)]);
+        eq("S15: the next runs post the weekly 650s from Oct 4 (were never posted)", (await pRows(weekly.item.id)).map((row) => `${toISODate(row.date)} ${num(row.amount)}`).join(","), "2026-10-04 650,2026-10-11 650,2026-10-18 650,2026-10-25 650");
+        const amountOnly = await race("Gym Amount", { amount: 650 });
+        eq("S15: an amount-only edit in between is not overwritten either", amountOnly.state, "none | MONTHLY 650 next 2026-10-04");
+        const untouched = await race("Gym Untouched", null);
+        eq("S15 guard: a lock held without an edit only delays the claim: 500 posted, next Nov 4", untouched.state, "2026-10-04 500 | MONTHLY 500 next 2026-11-04");
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S14: correcting a recurring contribution whose goal is in a third currency --");
+      {
+        // A USD goal fed by a 43.66 EUR item from a DOP account: the twin is
+        // 3,067.12 DOP (43.66 EUR at 70.25), the contribution 50.70 USD, as
+        // posting stores them. Corrected to 55.00 USD with USD/DOP at 62.
+        const a = await pAccount("Third");
+        const goal = await prisma.goal.create({ data: { name: "Verify Rev2P USD Goal", targetAmount: 5000, currency: "USD" } });
+        const item = await pItem({ name: "Third Save", amount: 43.66, currency: "EUR", nextDate: pDay(11, 5), accountId: a.id, kind: "CONTRIBUTION", goalId: goal.id });
+        const key = pKey(item.id, pDay(10, 5));
+        await prisma.transaction.create({ data: { accountId: a.id, date: pDay(10, 5), amount: 3067.12, currency: "DOP", originalAmount: 43.66, originalCurrency: "EUR", rate: 70.25, type: "EXPENSE", source: "RECURRING", externalId: key, note: item.name } });
+        const contribution = await prisma.goalContribution.create({ data: { goalId: goal.id, amount: 50.7, currency: "USD", date: pDay(10, 5), recurringItemId: item.id, recurringExternalId: key, note: item.name } });
+        const today62: RateTable = { rates: { USD: 1, DOP: 62, EUR: 62 / 72 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() };
+        const corrected = await pGoals.updateRecurringContributionAmount(contribution.id, 55, today62);
+        const twin = await prisma.transaction.findFirstOrThrow({ where: { externalId: key, source: "RECURRING" } });
+        eq("S14: the twin scales by 55/50.70 at its stored conversion: 3,327.25 DOP, original 47.36 EUR at 70.25 (was 3,410.00 DOP, original 55 USD)", `${num(twin.amount)} ${twin.currency} orig ${num(twin.originalAmount)} ${twin.originalCurrency} @${num(twin.rate)}`, "3327.25 DOP orig 47.36 EUR @70.25");
+        eq("S14: and reports that figure", corrected.ok ? corrected.transactionAmount : "not ok", 3327.25);
+        await pGoals.updateRecurringContributionAmount(contribution.id, 50.7, today62);
+        const back = await prisma.transaction.findFirstOrThrow({ where: { externalId: key, source: "RECURRING" } });
+        eq("S14: corrected back to 50.70 USD, the twin is 3,067.12 DOP again, original 43.66 EUR", `${num(back.amount)} ${back.currency} orig ${num(back.originalAmount)} ${back.originalCurrency}`, "3067.12 DOP orig 43.66 EUR");
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S16: the debt comparator and a payment dated ahead --");
+      {
+        // Today is Oct 4. A 5,571.32 card debt with target Nov 30 has a full
+        // payment logged for Oct 8; a 20,000 loan has no target date.
+        const card = await prisma.goal.create({ data: { name: "Verify Rev2P Card", targetAmount: 5571.32, currency: "DOP", targetDate: pDay(11, 30), isDebt: true } });
+        await prisma.goal.create({ data: { name: "Verify Rev2P Loan", targetAmount: 20000, currency: "DOP", isDebt: true } });
+        await prisma.goalContribution.create({ data: { goalId: card.id, amount: 5571.32, currency: "DOP", date: pDay(10, 8), note: "Card payment" } });
+        await pGoals.recomputeGoalSaved(card.id);
+        const debts = async () => (await pDebts.listDebtGoals(pContext(pDay(10, 4)) as never)).filter((debt) => debt.name.startsWith("Verify Rev2P "));
+        const payoffs = async () => {
+          const compared = pCompare(await debts(), 0);
+          return (["avalanche", "snowball"] as const).map((strategy) => compared[strategy].payoffs.map((p) => `${p.name.replace("Verify Rev2P ", "")} ${p.period}`).join(", ")).join(" | ");
+        };
+        const cardInput = (await debts()).find((debt) => debt.goalId === card.id);
+        eq("S16: Card enters with the Oct 8 payment counted once, in both: balance 0, paid 5,571.32 (was balance 5,571.32)", `${cardInput?.balance} ${cardInput?.paidThisPeriod}`, "0 5571.32");
+        eq("S16: Card is paid off in period 1 and its minimum frees for the loan (was Card 5, Loan 23)", await payoffs(), "Card 1, Loan 19 | Card 1, Loan 19");
+        // Guard: a payment dated after the plan period's window is not counted in period 1.
+        await prisma.goalContribution.updateMany({ where: { goalId: card.id }, data: { date: pDay(11, 20) } });
+        await pGoals.recomputeGoalSaved(card.id);
+        const later = (await debts()).find((debt) => debt.goalId === card.id);
+        eq("S16 guard: dated Nov 20, past the plan window, the payment is in neither (balance 5,571.32, paid 0)", `${later?.balance} ${later?.paidThisPeriod}`, "5571.32 0");
+        await pWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S22: a goal in a third currency and the follow-through statement --");
+      {
+        // A 50 EUR contribution item from a DOP account into a USD goal:
+        // posted Oct 20 as 3,660.00 DOP and 58.00 USD. The confirmed Oct B
+        // plan's by-hand 2,982.11 DOP is contributed as 47.26 USD.
+        check("S22: no check-in for Oct B 2026 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: { year: 2026, month: 10, period: "B" } })) === 0);
+        const scenario = async (byHand: number) => {
+          const a = await pAccount("Main");
+          const goal = await prisma.goal.create({ data: { name: "Verify Rev2P USD Fund", targetAmount: 5000, currency: "USD", targetDate: pDay(6, 30, 2027) } });
+          await pItem({ name: "USD Fund auto", amount: 50, currency: "EUR", nextDate: pDay(10, 20), accountId: a.id, kind: "CONTRIBUTION", goalId: goal.id });
+          await pPosting.postDueRecurringItems(pDay(10, 20));
+          await pGoals.logManualContribution({ goalId: goal.id, accountId: a.id, amount: byHand, date: pDay(10, 21), note: null } as Parameters<typeof pGoals.logManualContribution>[0], pRates());
+          await pGoals.recomputeGoalSaved(goal.id);
+          const checkin = await prisma.paydayCheckin.create({
+            data: { year: 2026, month: 10, period: "B", checkinDate: pDay(10, 15), currency: "DOP", status: "CONFIRMED", allocations: { create: [{ type: "GOAL", goalId: goal.id, accountId: a.id, recommendedAmount: 2982.11, plannedAmount: 2982.11, currency: "DOP" }] } },
+          });
+          pCheckins.push(checkin.id);
+          const ledger = (await prisma.transaction.findMany({ where: { accountId: a.id }, orderBy: { date: "asc" } })).map((row) => `${num(row.amount)} ${row.currency}`).join(", ");
+          const shortfalls: string[] = [];
+          for (const today of [pDay(10, 30), pDay(11, 3)]) {
+            const statuses = (await pPayday.getGoalRoadmapStatuses(pContext(today) as never)).filter((status) => status.goalId === goal.id && status.period.key === "2026-10-B");
+            shortfalls.push(statuses.map((status) => String(status.followThroughShortfall)).join(",") || "none");
+          }
+          await pWipe();
+          await prisma.paydayCheckin.deleteMany({ where: { id: checkin.id } });
+          return `${ledger} | ${shortfalls.join(" ")}`;
+        };
+        eq("S22: the rows are 3,660.00 and 2,982.11 DOP, and Oct B carries no follow-through shortfall on Oct 30 or Nov 3 (was 0.20)", await scenario(47.26), "3660 DOP, 2982.11 DOP | none none");
+        eq("S22 guard: a real cent short in USD (47.25 contributed) is still stated, in DOP", await scenario(47.25), "3660 DOP, 2981.48 DOP | 0.83 0.83");
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S8 (pairing half): a hand-logged contribution that fills the goal --");
+      {
+        // Fondo: target 10,000, 7,000 saved, a 4,000 automatic contribution
+        // due Oct 15. The user logs 4,000 by hand on Oct 15.
+        const run = async (lookAlike: boolean) => {
+          const banco = await pAccount("Banco");
+          const fondo = await prisma.goal.create({ data: { name: "Verify Rev2P Fondo", targetAmount: 10000, currency: "DOP" } });
+          await prisma.goalContribution.create({ data: { goalId: fondo.id, amount: 7000, currency: "DOP", date: pDay(8, 1) } });
+          const item = await pItem({ name: "Fondo auto", amount: 4000, nextDate: pDay(10, 15), accountId: banco.id, kind: "CONTRIBUTION", goalId: fondo.id });
+          if (lookAlike) {
+            // Filled by an earlier contribution; an ordinary 4,000 charge named like the item on its day.
+            await prisma.goalContribution.create({ data: { goalId: fondo.id, amount: 4000, currency: "DOP", date: pDay(9, 30) } });
+            await pCharge(banco.id, pDay(10, 15), 4000, "Fondo auto");
+          } else {
+            await pGoals.logManualContribution({ goalId: fondo.id, accountId: banco.id, amount: 4000, date: pDay(10, 15), note: null } as Parameters<typeof pGoals.logManualContribution>[0], pRates());
+          }
+          await pGoals.recomputeGoalSaved(fondo.id);
+          const summary = await pPosting.postDueRecurringItems(pDay(10, 15));
+          const now = await prisma.recurringItem.findUniqueOrThrow({ where: { id: item.id } });
+          const settlements = await prisma.recurringSettlement.count({ where: { recurringItemId: item.id } });
+          const saved = num((await prisma.goal.findUniqueOrThrow({ where: { id: fondo.id } })).savedAmount);
+          const periods = [periodInfo({ year: 2026, month: 10, period: "B" }), periodInfo({ year: 2026, month: 11, period: "B" })];
+          const listed = [...(await pCommitments.loadCommitments(periods, pContext(pDay(10, 16)))).values()].flat().filter((o) => o.itemId === item.id);
+          await pPosting.postDueRecurringItems(pDay(11, 15));
+          const later = await prisma.recurringItem.findUniqueOrThrow({ where: { id: item.id } });
+          await pWipe();
+          return {
+            posting: `logged ${summary.occurrencesAlreadyLogged} skipped ${summary.skipped.filter((s) => s.id === item.id).map((s) => s.reason).join(",") || "none"} settlements ${settlements} next ${toISODate(now.nextDate)} saved ${saved}`,
+            listed: listed.map((o) => `${toISODate(o.dueDate)} ${o.status}${o.wontPostReason ? `:${o.wontPostReason}` : ""}`).join(", "),
+            later: toISODate(later.nextDate),
+          };
+        };
+        const filled = await run(false);
+        eq("S8: posting settles the Oct 15 occurrence with the hand-logged 4,000 and writes nothing more into the goal (was skipped goal_achieved, unsettled)", filled.posting, "logged 1 skipped none settlements 1 next 2026-11-15 saved 11000");
+        eq("S8: the commitments list it settled (was wont_post: goal_achieved); Nov 15 won't post, the goal being reached", filled.listed, "2026-10-15 settled, 2026-11-15 wont_post:goal_achieved");
+        eq("S8: on Nov 15 the item waits on its reached goal, as before", filled.later, "2026-11-15");
+        const lookAlike = await run(true);
+        eq("S8 guard: an ordinary look-alike charge does not settle a contribution to a reached goal: still skipped", `${lookAlike.posting} | ${lookAlike.listed}`, "logged 0 skipped goal_achieved settlements 0 next 2026-10-15 saved 11000 | 2026-10-15 wont_post:goal_achieved, 2026-11-15 wont_post:goal_achieved");
+      }
+    } finally {
+      await pWipe();
+      await prisma.paydayCheckin.deleteMany({ where: { id: { in: pCheckins } } });
+      await pRestoreRates();
+      await prisma.account.updateMany({ where: { id: { in: pArchived } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: pParked } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: pPaused } }, data: { active: true } });
     }
   }
 

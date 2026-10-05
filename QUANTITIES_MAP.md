@@ -387,7 +387,7 @@ otherwise the current period.
 **Q72. Debt comparator** (balance, pace, payoff period)
 - Label: `goals.debtPace`, `goals.debtNoPace` "No target date: no pace of its own", `goals.debtFlowPerPeriod`, `goals.debtPaidOffIn` "Paid off in period {n} · {date}" / "Saldada en el periodo {n} · {date}", `goals.debtFreeAfter`, `goals.debtNothingFlowing`.
 - Computed: `listDebtGoals`, `lib/data/debt-payoff.ts:29-49`; `simulateDebtPayoff` / `compareDebtStrategies`, `lib/debt-payoff.ts:93-166`.
-- Definition: balance = Q32 (live); minimum = Q34 for a dated debt, 0 for an undated one; period 1 = the plan period. Installment plans are never debts here.
+- Definition: balance = what the target still needs once every contribution dated before the plan period's funding window closes is counted (`remainingAfterPeriod`, `lib/data/goal-plan.ts`; S16), the same basis as period 1's paid = the window's contributions, so a payment dated ahead inside the window counts once in both; a debt that payment clears is paid off in period 1; minimum = Q34 for a dated debt, 0 for an undated one; period 1 = the plan period. Installment plans are never debts here.
 
 **Q73. Installment plan re-check window** — see Q11: the tracker judges only the installments from `nextDate` on, so a posted installment of the current period stays counted in Afford's commitments (Q9) rather than being re-judged.
 

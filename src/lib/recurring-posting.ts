@@ -84,7 +84,10 @@
  * holds the item's row lock from its first statement, the lock the user's
  * "It's that payment" takes too (recordUpcomingPayment), and reads the
  * occurrence's settlement under it, so an answer recorded while the run was
- * planning is the pairing the claim keeps, never a second row beside it.
+ * planning is the pairing the claim keeps, never a second row beside it. It
+ * also re-reads the item under that lock: an edit committed after the run
+ * loaded it (the edit form takes the same lock) leaves the item to the next
+ * run rather than being overwritten with the figures the run loaded.
  */
 import { exactAmountIn, inAccountCurrency, RatesUnavailableError } from "@/lib/account-money";
 import { IDENTITY_RATES, convert, ratesFitForWriting, type RateTable } from "@/lib/currency";
@@ -95,10 +98,11 @@ import { prisma } from "@/lib/prisma";
 import { getRateTable } from "@/lib/rates";
 import { MAX_OCCURRENCES_PER_ITEM, advanceDate, skipReasonFor, type RecurringSkipReason } from "@/lib/recurring";
 import { manualContributionIdFromTransaction } from "@/lib/transactions";
-import { recurringExternalId, settlementClaimed } from "@/lib/recurring-settlement";
+import { plannable, recurringExternalId, settlementClaimed } from "@/lib/recurring-settlement";
 
 import { loadSettlementPlan, type PlannedCharge } from "@/lib/data/recurring-settlement";
 
+import type { Prisma } from "@/generated/prisma/client";
 import type { RecurringKind } from "@/generated/prisma/enums";
 
 export { MAX_OCCURRENCES_PER_ITEM };
@@ -191,7 +195,59 @@ type OccurrenceOutcome =
   /** The goal was reached before this occurrence; nothing was claimed. */
   | { result: "goal_achieved" }
   /** The planned charge was paired elsewhere first (or removed); nothing was claimed. */
-  | { result: "settlement_lost" };
+  | { result: "settlement_lost" }
+  /** The item was edited after the run loaded it; nothing was claimed, the next run posts it as it is now. */
+  | { result: "item_changed" };
+
+/**
+ * Whether the item row still holds, under the claim's row lock, every field
+ * posting reads from the copy the run loaded: the schedule (frequency,
+ * anchors), what it charges (amount, currency, kind, category, name), where
+ * (account, goal), and the state the claim expects - active, nextDate on
+ * `due`, and a finite plan's countdown at `expectedRemaining` (what the run
+ * loaded less what it has counted since).
+ */
+async function unchangedSinceLoaded(
+  tx: Prisma.TransactionClient,
+  item: DueItem,
+  due: Date,
+  expectedRemaining: number | null,
+): Promise<boolean> {
+  const now = await tx.recurringItem.findUnique({
+    where: { id: item.id },
+    select: {
+      name: true,
+      kind: true,
+      frequency: true,
+      anchorDay: true,
+      secondAnchorDay: true,
+      amount: true,
+      currency: true,
+      categoryId: true,
+      accountId: true,
+      goalId: true,
+      active: true,
+      nextDate: true,
+      remainingOccurrences: true,
+    },
+  });
+  return (
+    now !== null &&
+    now.active &&
+    now.nextDate.getTime() === due.getTime() &&
+    now.remainingOccurrences === expectedRemaining &&
+    now.name === item.name &&
+    now.kind === item.kind &&
+    now.frequency === item.frequency &&
+    now.anchorDay === item.anchorDay &&
+    now.secondAnchorDay === item.secondAnchorDay &&
+    num(now.amount) === num(item.amount) &&
+    now.currency === item.currency &&
+    now.categoryId === item.categoryId &&
+    now.accountId === item.accountId &&
+    now.goalId === item.goalId
+  );
+}
 
 /** Thrown inside a claim to roll it back when its planned charge is no longer free. */
 class SettlementLost extends Error {}
@@ -230,6 +286,12 @@ async function postOccurrence(
       // same lock) either committed before this claim and is read below, or
       // waits and then finds the occurrence claimed.
       await tx.$queryRaw`SELECT "id" FROM "RecurringItem" WHERE "id" = ${item.id} FOR UPDATE`;
+      // The item as it is now, under the lock: an edit committed since the
+      // run loaded it (a new frequency, anchor, amount, account, goal...)
+      // would otherwise be overwritten by this claim's roll-forward and
+      // charged at the old figures. Any change leaves the item to the next
+      // run, which loads it afresh; nothing is written.
+      if (!(await unchangedSinceLoaded(tx, item, due, expectedRemaining))) return { result: "item_changed" as const };
       // A pairing recorded for this occurrence, read now rather than taken
       // from the plan: the user's answer may have landed since the plan was
       // loaded, and one posting already claimed is never claimed again.
@@ -518,11 +580,22 @@ export async function postDueRecurringItems(
   // once for the whole run, over every item together (see
   // src/lib/recurring-settlement.ts). An item this run skips or stops early
   // leaves its planned charges unpaired; the next run plans again.
-  const plan = postable.length > 0 ? await loadSettlementPlan(today) : { posted: new Set<string>(), settledBy: new Map() };
+  // A contribution to a reached goal is planned too: a hand-logged
+  // contribution may have paid its occurrence (plannable).
+  const plan = due.some((item) => plannable(skipReasonFor(item)) && item.accountId !== null)
+    ? await loadSettlementPlan(today)
+    : { posted: new Set<string>(), settledBy: new Map() };
+  // A contribution to a reached goal whose occurrence due first the plan
+  // settles: the pairing is decided first, so posting claims it as settled
+  // (writing nothing into the goal - the hand-logged contribution is already
+  // there) and stops at the first occurrence nothing paid.
+  const settledDespiteGoal = (item: DueItem) =>
+    skipReasonFor(item) === "goal_achieved" && plan.settledBy.has(recurringExternalId(item.id, item.nextDate));
 
   for (const item of due) {
     const reason = skipReasonFor(item);
-    if (reason || !item.accountId) {
+    const settlesFirst = settledDespiteGoal(item);
+    if ((reason && !settlesFirst) || !item.accountId) {
       summary.itemsSkipped += 1;
       summary.skipped.push({
         id: item.id,
@@ -534,7 +607,7 @@ export async function postDueRecurringItems(
       continue;
     }
 
-    if (waitsForRates(item)) {
+    if (!settlesFirst && waitsForRates(item)) {
       summary.waitingForRates.push({ id: item.id, name: item.name, nextDate: toISODate(item.nextDate) });
       continue;
     }
@@ -563,6 +636,14 @@ export async function postDueRecurringItems(
         i < MAX_OCCURRENCES_PER_ITEM && occurrence.getTime() <= today.getTime();
         i += 1
       ) {
+        // A reached goal's contribution: only what a hand-logged
+        // contribution paid is claimed; the rest waits, as the
+        // goal_achieved skip leaves it.
+        if (settlesFirst && !plan.settledBy.has(recurringExternalId(item.id, occurrence))) {
+          summary.itemsSkipped += 1;
+          summary.skipped.push({ id: item.id, name: item.name, kind: item.kind, nextDate: toISODate(occurrence), reason: "goal_achieved" });
+          break;
+        }
         const outcome = await postOccurrence(
           item,
           item.accountId,
@@ -576,8 +657,10 @@ export async function postDueRecurringItems(
         // Someone else (an overlapping run) owns this item now; leave the
         // rest of its backlog to them rather than racing for each occurrence.
         // The same when the charge planned for this occurrence was paired
-        // elsewhere first: the next run plans it again from what is left.
-        if (!outcome || outcome.result === "settlement_lost") break;
+        // elsewhere first: the next run plans it again from what is left -
+        // and when the item was edited since this run loaded it: the next run
+        // loads it as it is now.
+        if (!outcome || outcome.result === "settlement_lost" || outcome.result === "item_changed") break;
         // The goal was reached part-way through the backlog: the rest waits,
         // unclaimed, exactly as an item skipped for goal_achieved does.
         if (outcome.result === "goal_achieved") {

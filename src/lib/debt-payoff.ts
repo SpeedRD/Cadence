@@ -76,7 +76,7 @@ export interface DebtPayoff {
 
 export interface DebtPayoffResult<T extends DebtInput = DebtInput> {
   strategy: DebtStrategy;
-  /** The debts in the order this strategy directs the extra to them (the very rows given, so a caller's extra fields ride along); debts already at zero are left out. */
+  /** The debts in the order this strategy directs the extra to them (the very rows given, so a caller's extra fields ride along); debts already at zero are left out, except one period 1's payment cleared (paid off in period 1). */
   order: T[];
   /** Each debt's payoff, in the order they happened (ties in period order). Only the debts that finished within MAX_DEBT_PERIODS. */
   payoffs: DebtPayoff[];
@@ -97,11 +97,13 @@ function toCents(amount: number): number {
 
 /**
  * The strategy's order: largest balance first for avalanche, smallest first
- * for snowball. A stable sort, so equal balances keep the input order, and a
- * debt with nothing left is not a debt to order.
+ * for snowball. A stable sort, so equal balances keep the input order. A
+ * debt with nothing left is not a debt to order - unless what went into it
+ * in period 1 is what cleared it: that one is paid off in period 1, and its
+ * minimum is freed from period 2 on.
  */
 export function orderDebts<T extends DebtInput>(debts: readonly T[], strategy: DebtStrategy): T[] {
-  const open = debts.filter((debt) => toCents(debt.balance) > 0);
+  const open = debts.filter((debt) => toCents(debt.balance) > 0 || toCents(debt.paidThisPeriod ?? 0) > 0);
   return open.sort((a, b) =>
     strategy === "avalanche" ? toCents(b.balance) - toCents(a.balance) : toCents(a.balance) - toCents(b.balance),
   );

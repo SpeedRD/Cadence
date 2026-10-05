@@ -66,6 +66,14 @@ export interface GoalPeriodPlan extends GoalPeriodFigures {
   /** `pace` and `byHand` in the goal's own currency, from the same figures. */
   nativePace: number;
   nativeByHand: number;
+  /**
+   * What is left to save once every contribution dated before the period's
+   * funding window closes is counted - `contributed` included, dated ahead
+   * of today or not: the balance on the same basis as `contributed`, so a
+   * payment dated inside the window counts once in both (the debt
+   * comparator's period 1).
+   */
+  remainingAfterPeriod: number;
 }
 
 export type GoalRow = Awaited<ReturnType<typeof loadGoalRows>>[number];
@@ -201,6 +209,14 @@ export function goalPeriodPlan(
         context.rates,
       ),
   );
+  const savedThroughWindow = round2(
+    num(goal.savedAmount) -
+      savedFromContributions(
+        goal.contributions.filter((contribution) => contribution.date.getTime() >= window.until.getTime()),
+        goal.currency,
+        context.rates,
+      ),
+  );
   const contributedNative = savedFromContributions(
     goal.contributions.filter(
       (contribution) =>
@@ -231,13 +247,18 @@ export function goalPeriodPlan(
   // the goal planned 0 for it.
   let planned: number | null = null;
   let recommended: number | null = null;
+  // The same rows in the goal's own currency, unrounded, for the
+  // follow-through statement (judged there, see followThroughShortfall).
+  let nativePlanned: number | null = null;
   if (allocations) {
     planned = 0;
     recommended = 0;
+    nativePlanned = 0;
     for (const allocation of allocations) {
       if (allocation.goalId !== goal.id) continue;
       planned = round2(planned + toDisplay(num(allocation.plannedAmount as never), allocation.currency));
       recommended = round2(recommended + toDisplay(num(allocation.recommendedAmount as never), allocation.currency));
+      nativePlanned += convert(num(allocation.plannedAmount as never), allocation.currency, goal.currency, context.rates);
     }
   }
 
@@ -248,6 +269,12 @@ export function goalPeriodPlan(
     planned,
     recommended,
     contributed: round2(toDisplay(contributedNative, goal.currency)),
+    native: {
+      planned: nativePlanned,
+      scheduled: sumOccurrences(whole(mine), goal.currency, context.rates, wholeAmount),
+      outstandingScheduled: sumOccurrences(outstanding(mine), goal.currency, context.rates, outstandingAmount),
+      contributed: contributedNative,
+    },
   });
   return {
     ...figures,
@@ -263,6 +290,7 @@ export function goalPeriodPlan(
     periodsLeft: goal.targetDate ? periodsRemaining(pacePeriod.start, goal.targetDate) : null,
     nativePace,
     nativeByHand: round2(Math.max(0, nativePace - nativeScheduled)),
+    remainingAfterPeriod: round2(toDisplay(Math.max(0, round2(target - savedThroughWindow)), goal.currency)),
   };
 }
 
