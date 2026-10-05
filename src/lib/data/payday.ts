@@ -54,8 +54,13 @@ import {
   type PeriodInfo,
   type PeriodRef,
 } from "@/lib/period";
-import { carryoverIsProvisional, PROVISIONAL_CARRYOVER_BASIS } from "@/lib/flexible-room";
-import { ledgerDepositsIssue } from "@/lib/period-income";
+import {
+  carryoverIncluded as carryoverRowIncluded,
+  carryoverIsProvisional,
+  INCLUDED_AT_ZERO_CARRYOVER_BASIS,
+  PROVISIONAL_CARRYOVER_BASIS,
+} from "@/lib/flexible-room";
+import { ledgerDepositsIssue, paycheckNow } from "@/lib/period-income";
 import { prisma } from "@/lib/prisma";
 import type { OccurrenceEarmark } from "@/lib/earmarks";
 import type { RecurringSkipReason } from "@/lib/recurring";
@@ -64,7 +69,7 @@ import type { z } from "zod";
 
 import { getAccountBalances, ledgerAt } from "@/lib/data/accounts";
 import { loadPayLanded } from "@/lib/data/pay-landed";
-import { ledgerDepositsTotal, loadLedgerDeposits, type LedgerDeposit } from "@/lib/data/period-income";
+import { ledgerDepositsTotal, ledgerDepositsVersion, loadLedgerDeposits, type LedgerDeposit } from "@/lib/data/period-income";
 import { goalPeriodPlans, loadGoalPeriodPlans, type GoalPeriodPlan } from "@/lib/data/goal-plan";
 import { loadBudgetSpent } from "@/lib/data/budget-spending";
 import { loadHistoryBounds } from "@/lib/data/history-window";
@@ -73,6 +78,7 @@ import {
   periodLeftover,
   settleCarryovers,
   type CarryoverAdjustment,
+  type IncomeAdjustment,
 } from "@/lib/data/flexible-room";
 import { getPeriodSummary } from "@/lib/data/period-summary";
 import { listGoals } from "@/lib/data/goals";
@@ -301,7 +307,11 @@ export interface PaydayCheckinDraft {
   periodRef: PeriodRef;
   /** The plan period; its text label is formatPeriodLong (src/lib/date-format.ts), in the app's language. */
   period: PeriodInfo;
-  /** The day Step 1's ledger balances are as of: the day before this period's pay landed (K8). */
+  /**
+   * The day Step 1's ledger balances are as of: the day before this period's
+   * pay landed (K8). The balances leave out the deposits Step 2 lists (S6),
+   * so they hold none of the period's income.
+   */
   ledgerDate: Date;
   isEditingConfirmed: boolean;
   checkinId: string | null;
@@ -337,6 +347,15 @@ export interface PaydayCheckinDraft {
   carryoverBasis: CarryoverBasis;
   includedCarryover: number;
   /**
+   * The carryover is taken into the plan, whatever it stands at: on a
+   * confirmed check-in, its CARRYOVER row is one the user included
+   * (carryoverIncluded in src/lib/flexible-room.ts) - a carryover that
+   * settled at 0 is still included, and keeps following the period it comes
+   * from (S5); on a fresh one, Settings' default. Step 3's switch shows it
+   * and confirming sends it.
+   */
+  carryoverIncluded: boolean;
+  /**
    * The period the carryover comes from has not ended (decision 3): the
    * amount can still shrink, so the plan shows it as provisional and counts
    * none of it until that period's last day is over, when it settles.
@@ -350,6 +369,20 @@ export interface PaydayCheckinDraft {
    * beside it. Null when it never moved, and on a fresh check-in.
    */
   carryoverAdjustment: CarryoverAdjustment | null;
+  /**
+   * The confirmed plan's income moved since it was confirmed, because a
+   * deposit a paycheck adopted is no longer the same pay (S7) - what the
+   * confirmed card shows beside the income. Null when it did not, and on a
+   * fresh check-in.
+   */
+  incomeAdjustment: IncomeAdjustment | null;
+  /**
+   * The deposits Step 2 lists, as a version (ledgerDepositsVersion):
+   * confirming sends it back and is refused when they changed since - one
+   * earmarked, edited, deleted, marked one-off or added in another tab
+   * (S2) - rather than recording the difference as a paycheck row.
+   */
+  depositsVersion: string;
   /**
    * The confirmed check-in this draft was built from, as a version: its
    * updatedAt as an ISO string, null when there was none. Confirming sends it
@@ -630,15 +663,43 @@ export async function getAvailableCarryover(
  * before this period's income, and a check-in opened days after payday is
  * measured against that same day. The same figure on a first confirm and a
  * re-confirm, which only adds rows after it.
+ *
+ * Nor is any of the period's income (S6): the deposits Step 2 lists - the
+ * ones the check-in adopts on active accounts, `deposits` (loaded when
+ * absent) - are left out of it like the check-in's own paycheck, whatever
+ * day they landed. A small transfer landing in the lead days, before the
+ * pay opens the funding window, is this period's income; inside the
+ * balance it would also fill a hole the reconciliation cap measures, and
+ * the plan would count it twice. Everything else up to that day stays in,
+ * the lead days' spending included, on every account.
  */
 export async function reconciliationLedger(
   planRef: PeriodRef,
-  context: Pick<AppContext, "rates">,
-  options: { paycheckIds?: readonly string[]; client?: Prisma.TransactionClient } = {},
+  context: Pick<AppContext, "rates" | "today">,
+  options: {
+    paycheckIds?: readonly string[];
+    client?: Prisma.TransactionClient;
+    deposits?: ReadonlyMap<string, readonly LedgerDeposit[]>;
+  } = {},
 ): Promise<{ date: Date; byAccount: Map<string, number> }> {
-  const payLanded = await loadPayLanded([planRef], context);
+  const client = options.client ?? prisma;
+  const [payLanded, deposits] = await Promise.all([
+    loadPayLanded([planRef], context),
+    options.deposits ??
+      (async () => {
+        const [listed, active] = await Promise.all([
+          loadLedgerDeposits(planRef, context, { client }),
+          client.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } }),
+        ]);
+        return new Map(active.map((account) => [account.id, listed.byAccount.get(account.id) ?? []]));
+      })(),
+  ]);
   const date = addDays(fundingWindow(planRef, payLanded).from, -1);
-  const byAccount = await ledgerAt(date, context, { excludeIds: options.paycheckIds, client: options.client });
+  const adoptedIds = [...deposits.values()].flat().map((deposit) => deposit.transactionId);
+  const byAccount = await ledgerAt(date, context, {
+    excludeIds: [...(options.paycheckIds ?? []), ...adoptedIds],
+    client: options.client,
+  });
   return { date, byAccount };
 }
 
@@ -915,10 +976,16 @@ export async function getPaydayCheckinDraft(
   );
 
   const existingSnapshotByAccount = new Map((existing?.snapshots ?? []).map((s) => [s.accountId, s]));
+  // The deposits Step 2 lists: those on active accounts (an archived one is
+  // not edited).
+  const activeAccountIds = accounts.filter((account) => account.status === "ACTIVE").map((account) => account.id);
+  const listedDeposits = new Map(activeAccountIds.map((id) => [id, ledgerDeposits.byAccount.get(id) ?? []]));
   // Step 1's ledger (K8): each account as of the day before this period's pay
-  // landed, without this check-in's own paychecks.
+  // landed, without this check-in's own paychecks or the deposits Step 2
+  // lists (S6).
   const ledger = await reconciliationLedger(planRef, context, {
     paycheckIds: (existing?.snapshots ?? []).flatMap((s) => (s.incomeTransactionId ? [s.incomeTransactionId] : [])),
+    deposits: listedDeposits,
   });
   const existingAllocationByKey = new Map(
     (existing?.allocations ?? []).map((a) => [
@@ -1107,11 +1174,31 @@ export async function getPaydayCheckinDraft(
     : settings.carryoverIncludedByDefault
       ? carryover.amount
       : 0;
-  const carryoverAdjustment = carryoverAdjustmentFor(
-    existing?.allocations.find((allocation) => allocation.type === "CARRYOVER"),
-    planRef,
-    context,
+  const carryoverRow = existing?.allocations.find((allocation) => allocation.type === "CARRYOVER");
+  const carryoverIncluded = existing
+    ? carryoverRow
+      ? carryoverRowIncluded({ basis: carryoverRow.basis, plannedAmount: num(carryoverRow.plannedAmount) })
+      : includedCarryover > 0
+    : settings.carryoverIncludedByDefault && carryover.basis === "prior_period_budget";
+  const carryoverAdjustment = carryoverAdjustmentFor(carryoverRow, planRef, context);
+
+  // The confirmed plan's income as it stands (S7): each paycheck moved by
+  // what the deposits it adopted are as pay now - the figure the confirmed
+  // card shows, with this line beside it when it moved.
+  const incomeMoved = round2(
+    (existing?.snapshots ?? []).reduce((sum, snapshot) => {
+      const now = paycheckNow(
+        { incomeEntered: num(snapshot.incomeEntered), adoptedIncome: num(snapshot.adoptedIncome ?? 0), adoptedTransactionIds: snapshot.adoptedTransactionIds },
+        (id) => ledgerDeposits.byAccount.get(snapshot.accountId)?.find((deposit) => deposit.transactionId === id)?.amount ?? 0,
+      );
+      return sum + convert(now - num(snapshot.incomeEntered), snapshot.currency, context.displayCurrency, context.rates);
+    }, 0),
   );
+  const confirmedIncome = existing ? round2(convert(num(existing.totalIncome), existing.currency, context.displayCurrency, context.rates)) : 0;
+  const incomeAdjustment: IncomeAdjustment | null =
+    existing && Math.abs(incomeMoved) >= 0.005
+      ? { confirmed: confirmedIncome, current: round2(confirmedIncome + incomeMoved), by: incomeMoved }
+      : null;
 
   // Raw suggestions, deliberately not scaled to what the plan has available:
   // on a fresh check-in no income has been entered yet, so that figure is at
@@ -1159,9 +1246,12 @@ export async function getPaydayCheckinDraft(
     availableCarryover: carryover.amount,
     carryoverBasis: carryover.basis,
     includedCarryover,
+    carryoverIncluded,
     carryoverProvisional: carryover.provisional,
     carryoverSettlesAfter: carryover.settlesAfter,
     carryoverAdjustment,
+    incomeAdjustment,
+    depositsVersion: ledgerDepositsVersion(ledgerDeposits.byAccount, activeAccountIds),
     checkinVersion: existing ? existing.updatedAt.toISOString() : null,
     today: context.today,
   };
@@ -1230,6 +1320,13 @@ export type ConfirmPaydayCheckinResult =
    * Nothing was written; the user reloads to see that plan.
    */
   | { ok: false; reason: "changed_since_loaded" }
+  /**
+   * The deposits Step 2 listed are not the ones the ledger holds now
+   * (input.depositsVersion, S2): one was earmarked, edited, deleted, marked
+   * one-off or added since the wizard was opened. Nothing was written; the
+   * user reloads to see them.
+   */
+  | { ok: false; reason: "deposits_changed" }
   /**
    * A paycheck was typed below what the ledger already holds for the period
    * on that account (R1): the check-in adopts those deposits and never edits
@@ -1308,7 +1405,9 @@ export async function confirmPaydayCheckin(
         id: true,
         updatedAt: true,
         status: true,
-        snapshots: { select: { accountId: true, incomeEntered: true, reportedBalance: true, currency: true } },
+        snapshots: {
+          select: { accountId: true, incomeEntered: true, reportedBalance: true, currency: true, adoptedIncome: true, adoptedTransactionIds: true },
+        },
         allocations: {
           where: { OR: [{ type: "GOAL", goalId: { not: null } }, { type: "BUFFER" }] },
           select: { type: true, goalId: true, accountId: true, plannedAmount: true, recommendedAmount: true, currency: true },
@@ -1345,7 +1444,13 @@ export async function confirmPaydayCheckin(
       const account = liveAccountById.get(a.accountId)!;
       return [{ accountId: account.id, name: account.name, currency: account.currency, incomeEntered: a.incomeEntered, inLedger }];
     });
-  const refusedForLedger = belowLedger((await loadLedgerDeposits(planRef, context)).byAccount);
+  // S2: the deposits are the ones Step 2 listed, or nothing is written -
+  // checked here and again under the lock below.
+  const depositsChanged = (deposits: ReadonlyMap<string, LedgerDeposit[]>) =>
+    input.depositsVersion !== undefined && input.depositsVersion !== ledgerDepositsVersion(deposits, liveAccountById.keys());
+  const depositsBefore = (await loadLedgerDeposits(planRef, context)).byAccount;
+  if (depositsChanged(depositsBefore)) return { ok: false, reason: "deposits_changed" };
+  const refusedForLedger = belowLedger(depositsBefore);
   if (refusedForLedger.length > 0) return { ok: false, reason: "below_ledger_deposits", accounts: refusedForLedger };
 
   // Income recorded against an account that has since been archived. Its
@@ -1358,6 +1463,19 @@ export async function confirmPaydayCheckin(
         sum + convert(num(snapshot.incomeEntered), snapshot.currency, context.displayCurrency, context.rates),
       0,
     );
+  // What such a paycheck moved since, by the deposits it adopted (S7): the
+  // confirmed room counts it, so the deficit check below does too. The
+  // stored totalIncome keeps the paychecks as entered, which is what the
+  // room moves from.
+  const archivedIncomeMoved = (existingCheckin?.snapshots ?? [])
+    .filter((snapshot) => !liveAccountById.has(snapshot.accountId))
+    .reduce((sum, snapshot) => {
+      const now = paycheckNow(
+        { incomeEntered: num(snapshot.incomeEntered), adoptedIncome: num(snapshot.adoptedIncome ?? 0), adoptedTransactionIds: snapshot.adoptedTransactionIds },
+        (id) => depositsBefore.get(snapshot.accountId)?.find((deposit) => deposit.transactionId === id)?.amount ?? 0,
+      );
+      return sum + convert(now - num(snapshot.incomeEntered), snapshot.currency, context.displayCurrency, context.rates);
+    }, 0);
   const totalIncome = round2(
     accountInputs.reduce((sum, a) => {
       const account = liveAccountById.get(a.accountId)!;
@@ -1520,16 +1638,26 @@ export async function confirmPaydayCheckin(
   // The wizard only ever offers "all of it" or "none of it", so anything else -
   // most realistically a draft left open while the previous period kept moving -
   // is clamped to what this run actually measured before it is used or stored.
-  const includedCarryover = round2(
-    Math.min(Math.max(0, input.includedCarryover), carryover.amount),
-  );
+  // Whether it is taken at all is the switch (input.carryoverIncluded); a
+  // caller that does not send it takes a carryover above 0.
+  const carryoverTaken = input.carryoverIncluded ?? input.includedCarryover > 0;
+  const includedCarryover = carryoverTaken
+    ? round2(Math.min(Math.max(0, input.includedCarryover), carryover.amount))
+    : 0;
   // Taken before the period it comes from has ended, it is provisional
   // (decision 3): stored as chosen, counted as 0 until that period is over
   // and its final leftover settles it (src/lib/data/flexible-room.ts).
-  const carryoverProvisional = carryover.provisional && includedCarryover > 0;
+  const carryoverProvisional = carryover.provisional && carryoverTaken;
+  // Taken at 0 after that period ended, it is still taken (S5): its basis
+  // says so, and it follows what that period leaves.
+  const carryoverBasis = carryoverProvisional
+    ? PROVISIONAL_CARRYOVER_BASIS
+    : carryoverTaken && includedCarryover === 0
+      ? INCLUDED_AT_ZERO_CARRYOVER_BASIS
+      : carryover.basis;
 
   const available = availableForFlexibleCategories({
-    income: totalIncome,
+    income: round2(totalIncome + archivedIncomeMoved),
     includedCarryover: carryoverProvisional ? 0 : includedCarryover,
     subscriptions: subscriptionsTotal,
     recurringContributions: contributionsTotal,
@@ -1582,7 +1710,7 @@ export async function confirmPaydayCheckin(
   }
 
   const readBeforeWriting = existingCheckin;
-  const written = await prisma.$transaction(async (tx): Promise<true | "changed" | "changed_since_loaded" | BelowLedgerAccount[]> => {
+  const written = await prisma.$transaction(async (tx): Promise<true | "changed" | "changed_since_loaded" | "deposits_changed" | BelowLedgerAccount[]> => {
     // One confirmation of a period at a time (B37): a double submit or a
     // second window waits here for the first to commit. It then finds the
     // check-in changed since it read it and writes nothing - it planned
@@ -1604,8 +1732,10 @@ export async function confirmPaydayCheckin(
     if ((existingCheckin?.updatedAt.getTime() ?? null) !== (readBeforeWriting?.updatedAt.getTime() ?? null)) {
       return "changed";
     }
-    // R1: the deposits each paycheck adopts, read under the lock.
+    // R1: the deposits each paycheck adopts, read under the lock - the ones
+    // Step 2 listed (S2), or nothing is written.
     const deposits = (await loadLedgerDeposits(planRef, context, { client: tx })).byAccount;
+    if (depositsChanged(deposits)) return "deposits_changed";
     const refused = belowLedger(deposits);
     if (refused.length > 0) return refused;
     // The balances each snapshot reconciles against (K8), read under the lock
@@ -1619,6 +1749,7 @@ export async function confirmPaydayCheckin(
     const ledger = await reconciliationLedger(planRef, context, {
       paycheckIds: recorded.map((snapshot) => snapshot.incomeTransactionId as string),
       client: tx,
+      deposits: new Map([...liveAccountById.keys()].map((id) => [id, deposits.get(id) ?? []])),
     });
     // The check-in's date is set once, when the row is first created, and a
     // re-confirm keeps it: reopening the wizard days later to adjust one
@@ -1679,6 +1810,9 @@ export async function confirmPaydayCheckin(
       // The deposits the ledger already holds for this paycheck are adopted
       // as they are (R1): the check-in's own row records only the rest.
       const adoptedIncome = ledgerDepositsTotal(deposits.get(account.id));
+      // Which deposits, so the confirmed plan's income follows them as they
+      // are from now on (paycheckNow, S7).
+      const adoptedTransactionIds = (deposits.get(account.id) ?? []).map((deposit) => deposit.transactionId);
       const ownIncome = round2(accountInput.incomeEntered - adoptedIncome);
       let incomeTransactionId = existingSnapshot?.incomeTransactionId ?? null;
       if (ownIncome > 0) {
@@ -1717,6 +1851,7 @@ export async function confirmPaydayCheckin(
         incomeEntered: accountInput.incomeEntered,
         oneOffIncome: Math.min(accountInput.oneOffIncome ?? 0, accountInput.incomeEntered),
         adoptedIncome,
+        adoptedTransactionIds,
         incomeNote: accountInput.incomeNote,
         incomeTransactionId,
         currency: account.currency,
@@ -1812,7 +1947,7 @@ export async function confirmPaydayCheckin(
         recommendedAmount: carryover.amount,
         plannedAmount: includedCarryover,
         currency: context.displayCurrency,
-        basis: carryoverProvisional ? PROVISIONAL_CARRYOVER_BASIS : carryover.basis,
+        basis: carryoverBasis,
       },
     ];
     await tx.paydayPlanAllocation.createMany({ data: allocationRows });
@@ -1865,6 +2000,7 @@ export async function confirmPaydayCheckin(
   }, { maxWait: 10_000, timeout: 30_000 });
   if (written === "changed") return { ok: false, reason: "confirmed_meanwhile" };
   if (written === "changed_since_loaded") return { ok: false, reason: "changed_since_loaded" };
+  if (written === "deposits_changed") return { ok: false, reason: "deposits_changed" };
   if (Array.isArray(written)) return { ok: false, reason: "below_ledger_deposits", accounts: written };
 
   return { ok: true, flexibleScaled };

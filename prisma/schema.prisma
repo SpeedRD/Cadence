@@ -629,6 +629,14 @@ model PaydayAccountSnapshot {
   /// and the snapshot for that rest, so the money is counted once. Null on
   /// snapshots written before it existed, read as 0.
   adoptedIncome         Decimal? @db.Decimal(14, 2)
+  /// The deposits adoptedIncome is made of: the Transaction ids Step 2 listed
+  /// and confirm adopted. The confirmed plan's income follows them as they
+  /// are now - each one's pay part (amount less what an earmark still
+  /// covers), 0 once it is deleted, marked one-off or moved out of the
+  /// period - plus the check-in's own row (paycheckNow in
+  /// src/lib/period-income.ts). Null (read as empty) on snapshots written
+  /// before it existed: those keep incomeEntered as confirmed.
+  adoptedTransactionIds String[]
   incomeNote            String?
   /// The actual INCOME Transaction created for the part of incomeEntered the
   /// ledger did not already hold (incomeEntered - adoptedIncome > 0), if any -

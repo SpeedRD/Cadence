@@ -4,11 +4,14 @@
  * check-in read; `estimate` is what Afford's history walk averages (and so the
  * subscription-room check, the From Afford tracker and the goal forecast).
  */
+import { createHash } from "node:crypto";
+
 import { accountAmount, moneyRow } from "@/lib/account-money";
 import { convert } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import { incomeWindow, periodInfo, type PeriodRef } from "@/lib/period";
 import {
+  adoptedWithoutIds,
   incomePeriodFor,
   rowCountsAsIncome,
   rowIncome,
@@ -233,19 +236,67 @@ export async function loadLedgerDeposits(
 }
 
 /**
- * Every adoption window of a confirmed check-in (AdoptedWindow): the income
- * window of its period on each account its snapshot adopted deposits for.
- * A deposit in one (isAdoptedDeposit) is that check-in's pay.
+ * The adoption window (AdoptedWindow) of every confirmed check-in that
+ * adopted deposits without recording which (adoptedWithoutIds): the income
+ * window of its period on each such account. A deposit in one
+ * (isAdoptedDeposit) is pay that check-in froze, and cannot be earmarked. A
+ * check-in that recorded its deposits follows them (paycheckNow) and has
+ * none.
  */
 export async function loadAdoptedWindows(): Promise<AdoptedWindow[]> {
   const snapshots = await prisma.paydayAccountSnapshot.findMany({
     where: { adoptedIncome: { gt: 0 }, checkin: { status: "CONFIRMED" } },
-    select: { accountId: true, checkin: { select: { year: true, month: true, period: true, updatedAt: true } } },
+    select: {
+      accountId: true,
+      adoptedIncome: true,
+      adoptedTransactionIds: true,
+      checkin: { select: { year: true, month: true, period: true, updatedAt: true } },
+    },
   });
-  return snapshots.map((snapshot) => {
-    const window = incomeWindow(snapshot.checkin);
-    return { accountId: snapshot.accountId, from: window.from, until: window.until, confirmedAt: snapshot.checkin.updatedAt };
-  });
+  return snapshots
+    .filter((snapshot) => adoptedWithoutIds({ incomeEntered: 0, adoptedIncome: num(snapshot.adoptedIncome), adoptedTransactionIds: snapshot.adoptedTransactionIds }))
+    .map((snapshot) => {
+      const window = incomeWindow(snapshot.checkin);
+      return { accountId: snapshot.accountId, from: window.from, until: window.until, confirmedAt: snapshot.checkin.updatedAt };
+    });
+}
+
+/**
+ * A fingerprint of the deposits Step 2 lists on `accountIds` (S2): each
+ * one's id and its pay, the amount confirm adopts. The draft carries it
+ * (PaydayCheckinDraft.depositsVersion) and confirm recomputes it under its
+ * lock: a deposit earmarked, edited, deleted, marked one-off or added in
+ * between changes it, and the confirm is refused rather than recording the
+ * difference as the check-in's own paycheck row.
+ */
+export function ledgerDepositsVersion(
+  byAccount: ReadonlyMap<string, readonly LedgerDeposit[]>,
+  accountIds: Iterable<string>,
+): string {
+  const lines = [...new Set(accountIds)]
+    .flatMap((accountId) => (byAccount.get(accountId) ?? []).map((deposit) => `${accountId}:${deposit.transactionId}:${deposit.amount.toFixed(2)}`))
+    .sort();
+  return createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 32);
+}
+
+/**
+ * What each deposit the ledger holds for `periods` is as pay now, keyed by
+ * period key, account and transaction id, in the account's currency - the
+ * `payNow` paycheckNow (src/lib/period-income.ts) reads a confirmed
+ * snapshot's adopted deposits through. One loadLedgerDeposits per period.
+ */
+export async function loadPayNow(
+  periods: readonly PeriodRef[],
+  context: Pick<AppContext, "rates" | "today">,
+  options: { client?: Prisma.TransactionClient } = {},
+): Promise<(period: PeriodRef, accountId: string, transactionId: string) => number> {
+  const byPeriod = new Map<string, Map<string, LedgerDeposit[]>>();
+  for (const period of periods) {
+    const key = periodInfo(period).key;
+    if (!byPeriod.has(key)) byPeriod.set(key, (await loadLedgerDeposits(period, context, options)).byAccount);
+  }
+  return (period, accountId, transactionId) =>
+    byPeriod.get(periodInfo(period).key)?.get(accountId)?.find((deposit) => deposit.transactionId === transactionId)?.amount ?? 0;
 }
 
 /** What `deposits` hold together, rounded to the cent. */

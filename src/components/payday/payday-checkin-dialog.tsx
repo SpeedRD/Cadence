@@ -366,9 +366,11 @@ export function PaydayCheckinDialog({
       plannedAmount: c.plannedAmount,
     })),
     includedCarryover: plan.includedCarryover,
+    carryoverIncluded: plan.carryoverIncluded,
     acknowledgedDeficit,
     acknowledgedZeroBuffer,
     checkinVersion: plan.checkinVersion,
+    depositsVersion: plan.depositsVersion,
   });
 
   return (
@@ -467,7 +469,9 @@ export function PaydayCheckinDialog({
                 carryoverBasis={plan.carryoverBasis}
                 carryoverProvisional={plan.carryoverProvisional}
                 carryoverAdjustment={plan.carryoverAdjustment}
+                incomeAdjustment={plan.incomeAdjustment}
                 includedCarryover={plan.includedCarryover}
+                carryoverIncluded={plan.carryoverIncluded}
                 room={room}
                 totalIncome={totalIncome}
                 subscriptionsTotal={plan.subscriptionsTotal}
@@ -480,8 +484,12 @@ export function PaydayCheckinDialog({
                 coverShortfallByAccount={coverShortfallByAccount}
                 onCoverShortfall={setCoverTransfer}
                 onEssentialChange={updateEssential}
-                onCarryoverChange={(value) =>
-                  setPlan((prev) => ({ ...prev, includedCarryover: value }))
+                onCarryoverChange={(included) =>
+                  setPlan((prev) => ({
+                    ...prev,
+                    carryoverIncluded: included,
+                    includedCarryover: included ? prev.availableCarryover : 0,
+                  }))
                 }
                 pickAnAccountLabel={common.pickAnAccount}
                 t={t}

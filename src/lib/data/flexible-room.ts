@@ -5,7 +5,11 @@
  * data rebuilt into a new draft:
  *
  *   income      the check-in's totalIncome (the paychecks typed, converted
- *               once, when confirmed)
+ *               once, when confirmed), moved by what the deposits each
+ *               paycheck adopted are as pay now (paycheckNow, S7): an
+ *               earmark raised or lowered on one, or the payment it covers
+ *               changed, moves money between income and commitments and
+ *               leaves the room as it was
  *   buffer      its protectedBuffer, whatever the buffer setting says now
  *   carryover   its includedCarryover - 0 while provisional (see below)
  *   goal plan   its GOAL rows, every one of them: a goal reached since keeps
@@ -36,19 +40,24 @@
  * (basis ADJUSTED_CARRYOVER_BASIS, recommendedAmount kept as the amount it
  * settled at), guarded on the amount it read, so each change is written
  * once. A carryover included after that period had already ended is
- * reconciled the same way. Once the check-in's own period ends it stays as
- * it last stood.
+ * reconciled the same way, and so is one that settled, or was included, at
+ * 0 (INCLUDED_AT_ZERO_CARRYOVER_BASIS, S5): a declined carryover is never.
+ * Once the check-in's own period ends it stays as it last stood.
  */
 import { roomFromProjection } from "@/lib/afford";
 import { convert } from "@/lib/currency";
 import { periodBudgetFrom } from "@/lib/budget-spending";
+import { contributionWindow } from "@/lib/goal-plan";
 import {
   ADJUSTED_CARRYOVER_BASIS,
   carryoverAdjustmentOf,
+  carryoverIncluded,
   carryoverIsProvisional,
   carryoverReconciles,
   cushionFrom,
   flexibleRoomFrom,
+  goalMoneyOutsidePlan,
+  INCLUDED_AT_ZERO_CARRYOVER_BASIS,
   leftoverFrom,
   PROVISIONAL_CARRYOVER_BASIS,
   unallocatedRoom,
@@ -58,10 +67,14 @@ import {
 import { num, round2 } from "@/lib/money";
 import { periodInfo, previousPeriod, type PeriodInfo, type PeriodRef } from "@/lib/period";
 import { byItem, sumOccurrences, whole, wholeAmount, type CommitmentOccurrence } from "@/lib/period-commitments";
+import { paycheckNow } from "@/lib/period-income";
 import { prisma } from "@/lib/prisma";
+import { MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX, manualContributionIdFromTransaction } from "@/lib/transactions";
 
 import { loadBudgetSpent } from "@/lib/data/budget-spending";
+import { loadPayLanded } from "@/lib/data/pay-landed";
 import { loadCommitments } from "@/lib/data/period-commitments";
+import { loadPayNow } from "@/lib/data/period-income";
 
 import type { AppContext } from "@/lib/data/context";
 import type { Prisma } from "@/generated/prisma/client";
@@ -71,7 +84,7 @@ import type { ConfirmPaydayCheckinContext } from "@/lib/data/payday";
 export interface ConfirmedAccountRoom {
   accountId: string;
   currency: string;
-  /** The income entered for it. */
+  /** Its paycheck as it stands now (paycheckNow): the income entered for it, moved by what the deposits it adopted are as pay today. */
   income: number;
   /** Its BUFFER row; null when the check-in kept none on it (no income there). */
   buffer: number | null;
@@ -99,6 +112,26 @@ export interface ConfirmedRoom extends FlexibleRoom {
    * now, display currency. Null when it never moved.
    */
   carryoverAdjustment: CarryoverAdjustment | null;
+  /**
+   * The income moved since the check-in was confirmed, because a deposit a
+   * paycheck adopted is no longer the same pay (S7): earmarked or its
+   * earmark changed, edited, marked one-off or removed. Null when it did
+   * not move.
+   */
+  incomeAdjustment: IncomeAdjustment | null;
+  /**
+   * Goal money that left in the period's funding window outside the plan
+   * (goalMoneyOutsidePlan, S8): taken off what the period leaves the next
+   * one (leftoverFrom), not off its room.
+   */
+  goalMoneyOutside: number;
+}
+
+/** How far a confirmed plan's income moved since it was confirmed, display currency: what was confirmed, what it is now, and the difference. */
+export interface IncomeAdjustment {
+  confirmed: number;
+  current: number;
+  by: number;
 }
 
 /** A settled carryover that has since moved (carryoverAdjustmentOf), in the display currency, with the period it comes from. */
@@ -130,7 +163,9 @@ async function readCheckins(periods: readonly PeriodInfo[]) {
       totalIncome: true,
       includedCarryover: true,
       protectedBuffer: true,
-      snapshots: { select: { accountId: true, currency: true, incomeEntered: true, reportedBalance: true } },
+      snapshots: {
+        select: { accountId: true, currency: true, incomeEntered: true, reportedBalance: true, adoptedIncome: true, adoptedTransactionIds: true },
+      },
       allocations: {
         where: { type: { in: ["GOAL", "BUFFER", "ESSENTIAL_CATEGORY", "FLEXIBLE_CATEGORY", "CARRYOVER"] } },
         select: { id: true, type: true, goalId: true, categoryId: true, accountId: true, plannedAmount: true, recommendedAmount: true, currency: true, basis: true },
@@ -147,13 +182,14 @@ function provisionalRow(checkin: CheckinRow) {
 
 /**
  * The check-in's settled CARRYOVER row while it is still kept in step with
- * the period it comes from (carryoverReconciles): one the user included, or
- * one already adjusted (it may have gone to 0). Null otherwise.
+ * the period it comes from (carryoverReconciles): one the user included
+ * (carryoverIncluded) - above 0, already adjusted, or standing at 0 after it
+ * settled there (S5) - never one declined. Null otherwise.
  */
 function reconcilingRow(checkin: CheckinRow, today: Date) {
   const row = checkin.allocations.find((allocation) => allocation.type === "CARRYOVER") ?? null;
   if (!row || row.basis === PROVISIONAL_CARRYOVER_BASIS) return null;
-  if (!(num(row.plannedAmount) > 0 || row.basis === ADJUSTED_CARRYOVER_BASIS)) return null;
+  if (!carryoverIncluded({ basis: row.basis, plannedAmount: num(row.plannedAmount) })) return null;
   return carryoverReconciles(periodInfo(previousPeriod(checkin)).end, periodInfo(checkin).end, today) ? row : null;
 }
 
@@ -224,10 +260,13 @@ async function settleCarryover(checkin: CheckinRow, context: RoomContext, depth:
   if (!row) return;
   const settled = await periodLeftover(previousPeriod(checkin), context, depth + 1);
   const amount = round2(convert(settled.amount, context.displayCurrency, checkin.currency, context.rates));
+  // Settled at 0, it is still a carryover the user took, not one declined:
+  // its basis says so, and it keeps reconciling (S5).
+  const basis = amount > 0 ? settled.basis : INCLUDED_AT_ZERO_CARRYOVER_BASIS;
   await prisma.$transaction(async (tx) => {
     const moved = await tx.paydayPlanAllocation.updateMany({
       where: { id: row.id, basis: PROVISIONAL_CARRYOVER_BASIS },
-      data: { basis: settled.basis, recommendedAmount: amount, plannedAmount: amount, currency: checkin.currency },
+      data: { basis, recommendedAmount: amount, plannedAmount: amount, currency: checkin.currency },
     });
     if (moved.count === 1) await storeCarryover(tx, checkin.id, amount);
   });
@@ -315,14 +354,46 @@ export async function loadConfirmedRooms(
   if (checkins.length === 0) return result;
 
   const confirmed = infos.filter((info) => checkins.some((checkin) => periodInfo(checkin).key === info.key));
-  const [budgets, commitments] = await Promise.all([
+  const [budgets, commitments, payNow, payLanded] = await Promise.all([
     prisma.budget.findMany({
       where: { OR: confirmed.map((info) => ({ year: info.year, month: info.month, period: info.period })) },
       select: { year: true, month: true, period: true, categoryId: true, amount: true, currency: true },
     }),
     options.commitments ?? loadCommitments(confirmed, context),
+    // What the deposits each paycheck adopted are as pay now (S7), for the
+    // periods with a paycheck that recorded them.
+    loadPayNow(
+      checkins.filter((checkin) => checkin.snapshots.some((snapshot) => snapshot.adoptedTransactionIds.length > 0)).map(periodInfo),
+      context,
+    ),
+    // Each period's funding window, which the goal money it moved is dated in (S8).
+    loadPayLanded(confirmed, context),
   ]);
   const toDisplay = (amount: number, currency: string) => convert(amount, currency, context.displayCurrency, context.rates);
+
+  // Hand-logged contributions' own expenses dated in a confirmed period's
+  // funding window that no settlement row pairs with an occurrence (S8).
+  const windows = confirmed.map((info) => ({ key: info.key, ...contributionWindow(info, payLanded) }));
+  const twins = windows.length === 0
+    ? []
+    : await prisma.transaction.findMany({
+        where: {
+          type: "EXPENSE",
+          source: "MANUAL",
+          externalId: { startsWith: MANUAL_CONTRIBUTION_EXTERNAL_ID_PREFIX },
+          recurringSettlement: { is: null },
+          OR: windows.map((window) => ({ date: { gte: window.from, lt: window.until } })),
+        },
+        select: { id: true, date: true, amount: true, currency: true, source: true, externalId: true },
+      });
+  const goalOfContribution = new Map(
+    (
+      await prisma.goalContribution.findMany({
+        where: { id: { in: twins.map((twin) => manualContributionIdFromTransaction(twin) as string) } },
+        select: { id: true, goalId: true },
+      })
+    ).map((contribution) => [contribution.id, contribution.goalId]),
+  );
 
   for (const checkin of checkins) {
     const period = periodInfo(checkin);
@@ -377,8 +448,41 @@ export async function loadConfirmedRooms(
     const provisionalCarryover =
       provisional && depth < MAX_SETTLE_DEPTH ? (await periodLeftover(previous, context, depth + 1)).amount : 0;
 
+    // Each paycheck as it stands now (S7): what moved since the confirm, by
+    // the deposits it adopted, is added to the income confirmed.
+    const paychecks = checkin.snapshots.map((snapshot) => ({
+      snapshot,
+      now: paycheckNow(
+        {
+          incomeEntered: num(snapshot.incomeEntered),
+          adoptedIncome: snapshot.adoptedIncome === null ? null : num(snapshot.adoptedIncome),
+          adoptedTransactionIds: snapshot.adoptedTransactionIds,
+        },
+        (transactionId) => payNow(checkin, snapshot.accountId, transactionId),
+      ),
+    }));
+    const confirmedIncome = round2(toDisplay(num(checkin.totalIncome), checkin.currency));
+    const incomeMoved = round2(
+      paychecks.reduce((sum, paycheck) => sum + toDisplay(paycheck.now - num(paycheck.snapshot.incomeEntered), paycheck.snapshot.currency), 0),
+    );
+    const income = round2(confirmedIncome + incomeMoved);
+
+    // Goal money that left outside the plan: settled occurrences' charges
+    // are commitments already, and a goal's GOAL rows hold what it planned.
+    const paired = new Set(occurrences.flatMap((occurrence) => (occurrence.settledBy ? [occurrence.settledBy.transactionId] : [])));
+    const window = windows.find((entry) => entry.key === period.key)!;
+    const goalMoneyOutside = goalMoneyOutsidePlan(
+      twins
+        .filter((twin) => !paired.has(twin.id) && twin.date.getTime() >= window.from.getTime() && twin.date.getTime() < window.until.getTime())
+        .map((twin) => {
+          const contributionId = manualContributionIdFromTransaction(twin) as string;
+          return { goalKey: goalOfContribution.get(contributionId) ?? `row:${twin.id}`, amount: toDisplay(num(twin.amount), twin.currency) };
+        }),
+      goalTotals,
+    );
+
     const room = flexibleRoomFrom("confirmed", {
-      income: round2(toDisplay(num(checkin.totalIncome), checkin.currency)),
+      income,
       carryover: provisional ? 0 : round2(toDisplay(num(checkin.includedCarryover), checkin.currency)),
       provisionalCarryover,
       subscriptions: commitmentTotal("SUBSCRIPTION"),
@@ -402,10 +506,10 @@ export async function loadConfirmedRooms(
       basis: "confirmed",
       period,
       checkinId: checkin.id,
-      accounts: checkin.snapshots.map((snapshot) => ({
+      accounts: paychecks.map(({ snapshot, now }) => ({
         accountId: snapshot.accountId,
         currency: snapshot.currency,
-        income: num(snapshot.incomeEntered),
+        income: now,
         buffer: bufferByAccount.get(snapshot.accountId) ?? null,
         reportedBalance: num(snapshot.reportedBalance),
       })),
@@ -418,6 +522,8 @@ export async function loadConfirmedRooms(
         checkin,
         context,
       ),
+      incomeAdjustment: Math.abs(incomeMoved) >= 0.005 ? { confirmed: confirmedIncome, current: income, by: incomeMoved } : null,
+      goalMoneyOutside,
     });
   }
   return result;

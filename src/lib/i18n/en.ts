@@ -1687,6 +1687,8 @@ export const en = {
     summaryCarryoverProvisional: (amount: string) => `${amount} provisional - counted once last period ends`,
     carryoverAdjusted: (by: string, period: string) =>
       `Carryover adjusted by ${by} since it settled: what ${period} left changed after it ended, for example spending dated in it that was recorded later.`,
+    incomeAdjusted: (by: string) =>
+      `Income adjusted by ${by} since you confirmed: a deposit this plan counts as pay changed - part of it set aside for a payment or that amount changed, or it was edited, marked one-off or deleted.`,
     summaryCushion: "Already in your accounts",
     summaryCushionHint: "What your accounts held before this pay. Kept as a cushion - not counted in this plan.",
     summarySubscriptions: "Subscriptions",
@@ -1763,6 +1765,8 @@ export const en = {
     acknowledgeZeroBufferFirst: "Acknowledge the zero-buffer warning before confirming",
     changedSinceLoaded:
       "This check-in was changed in another tab or window after you opened it, so nothing was saved. Reload the page to see the plan as it is now, then make your changes again.",
+    depositsChangedSinceLoaded:
+      "The deposits changed since you opened this check-in, so nothing was saved. Reload the page to see them as they are now, then confirm again.",
   },
 };
 

@@ -127,10 +127,49 @@ export function snapshotIncome(snapshot: IncomeSnapshot, basis: IncomeBasis): nu
   return Math.max(-adopted, own - (snapshot.oneOffIncome ?? 0));
 }
 
+/** A confirmed snapshot's paycheck as paycheckNow reads it, amounts in the account's currency. */
+export interface ConfirmedPaycheck {
+  incomeEntered: number;
+  /** Null or absent reads as 0. */
+  adoptedIncome?: number | null;
+  /** PaydayAccountSnapshot.adoptedTransactionIds; empty on a snapshot written before it was kept. */
+  adoptedTransactionIds?: readonly string[] | null;
+}
+
+/**
+ * Whether a snapshot adopted deposits without recording which (written
+ * before PaydayAccountSnapshot.adoptedTransactionIds): its paycheck cannot
+ * follow them, so it stays as confirmed.
+ */
+export function adoptedWithoutIds(snapshot: ConfirmedPaycheck): boolean {
+  return (snapshot.adoptedIncome ?? 0) > 0 && (snapshot.adoptedTransactionIds ?? []).length === 0;
+}
+
+/**
+ * What a confirmed check-in's paycheck on one account stands at now (S7): the
+ * part it recorded as its own row (incomeEntered - adoptedIncome), plus what
+ * each deposit it adopted is as pay today - `payNow(id)`, the deposit as
+ * Step 2 would list it now (loadLedgerDeposits): its amount less what an
+ * earmark still covers, and 0 once it is deleted, marked one-off, fully
+ * earmarked or moved out of the period or the account. So an earmark raised
+ * or lowered on an adopted deposit, or a payment it covers changed, moves
+ * money between the plan's income and its commitments and leaves its room
+ * as it was. A deposit that arrived after the confirmation is not in it
+ * until the check-in is confirmed again. A snapshot that adopted nothing, or
+ * did without recording which deposits (adoptedWithoutIds), is as confirmed.
+ */
+export function paycheckNow(snapshot: ConfirmedPaycheck, payNow: (transactionId: string) => number): number {
+  const ids = snapshot.adoptedTransactionIds ?? [];
+  if (ids.length === 0) return snapshot.incomeEntered;
+  const own = snapshot.incomeEntered - Math.max(0, snapshot.adoptedIncome ?? 0);
+  return Math.round((own + ids.reduce((sum, id) => sum + payNow(id), 0)) * 100) / 100;
+}
+
 /**
  * A confirmed check-in's adoption on one account: the income window of the
  * period it planned, on an account whose snapshot adopted deposits the
- * ledger already held (PaydayAccountSnapshot.adoptedIncome > 0).
+ * ledger already held (PaydayAccountSnapshot.adoptedIncome > 0) without
+ * recording which (adoptedWithoutIds).
  */
 export interface AdoptedWindow {
   accountId: string;
@@ -146,16 +185,20 @@ export interface AdoptedWindow {
 }
 
 /**
- * Whether a deposit is one a confirmed check-in adopted as pay: an ordinary
- * INCOME row - not a check-in's own paycheck row, not one-off income, not a
- * payback of a shared expense, the rows Step 2 lists - dated in an adoption
- * window on its account, and already in the ledger when that check-in was
- * last confirmed. Like a check-in's own paycheck, it is the plan's income, so
- * it cannot also be earmarked for a recurring payment (src/lib/earmarks.ts) -
- * that would count the money twice. A deposit that arrived after the
- * confirmation (a family transfer toward an installment) is not in the
- * paycheck the check-in recorded, and can be. `createdAt` null is a deposit
- * not written yet: it arrives after every confirmation.
+ * Whether a deposit may be pay a confirmed check-in adopted with its income
+ * frozen: an ordinary INCOME row - not a check-in's own paycheck row, not
+ * one-off income, not a payback of a shared expense, the rows Step 2 lists -
+ * dated in an adoption window on its account (a snapshot that adopted
+ * deposits without recording which, adoptedWithoutIds), and already in the
+ * ledger when that check-in was last confirmed. That plan's income cannot
+ * follow the deposit (paycheckNow), so earmarking it for a recurring payment
+ * (src/lib/earmarks.ts) would lower the payment while the plan still counts
+ * the money as income - twice. A check-in that recorded its deposits follows
+ * them instead: an earmark on one moves the money from the plan's income to
+ * the payment, so those are never refused (S18). A deposit that arrived
+ * after the confirmation (a family transfer toward an installment) is not in
+ * the paycheck the check-in recorded, and can be. `createdAt` null is a
+ * deposit not written yet: it arrives after every confirmation.
  */
 export function isAdoptedDeposit(
   row: {

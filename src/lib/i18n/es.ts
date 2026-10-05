@@ -1671,6 +1671,8 @@ export const es = {
     summaryCarryoverProvisional: (amount: string) => `${amount} provisional - se cuenta cuando termine el periodo anterior`,
     carryoverAdjusted: (by: string, period: string) =>
       `Remanente ajustado en ${by} desde que se asentó: lo que dejó ${period} cambió después de terminar, por ejemplo gastos con fecha en ese periodo que se registraron más tarde.`,
+    incomeAdjusted: (by: string) =>
+      `Ingreso ajustado en ${by} desde que confirmaste: cambió un depósito que este plan cuenta como pago: se apartó parte para un pago o cambió ese monto, o se editó, se marcó como único o se eliminó.`,
     summaryCushion: "Ya en tus cuentas",
     summaryCushionHint: "Lo que tus cuentas tenían antes de este pago. Se guarda como reserva: no cuenta en este plan.",
     summarySubscriptions: "Suscripciones",
@@ -1747,5 +1749,7 @@ export const es = {
     acknowledgeZeroBufferFirst: "Reconoce la advertencia de colchón en cero antes de confirmar",
     changedSinceLoaded:
       "Este chequeo se cambió en otra pestaña o ventana después de que lo abriste, así que no se guardó nada. Recarga la página para ver el plan como está ahora y vuelve a hacer tus cambios.",
+    depositsChangedSinceLoaded:
+      "Los depósitos cambiaron desde que abriste este chequeo, así que no se guardó nada. Recarga la página para verlos como están ahora y vuelve a confirmar.",
   },
 } as const satisfies Dictionary;

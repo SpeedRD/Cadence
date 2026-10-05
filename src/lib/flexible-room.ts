@@ -136,22 +136,47 @@ export function unallocatedRoom(room: Pick<FlexibleRoom, "essential" | "availabl
 /**
  * What a period leaves the next one as carryover (decision 2). With a
  * confirmed plan, the plan's room - its essential budgets and what it left
- * flexible categories, budgeted or not - less its budget spending (K6),
- * never below 0: an unallocated amount reaches the next period once, and a
+ * flexible categories, budgeted or not - less its budget spending (K6) and
+ * the goal money that left outside the plan (`goalMoneyOutside`, S8), never
+ * below 0: an unallocated amount reaches the next period once, and a
  * budget raised later on the Budgets page only moves money between the
  * budgeted and unallocated parts. A budget set above the plan is not money
  * the period had (R7), so it adds nothing. essential + available does not
  * move with the essential budgets either, since available is what the plan
- * left after them. Without a confirmed plan, the period's budget less its
- * spending; with neither, there is nothing to measure against.
+ * left after them. Goal money is outside budget spending (a contribution's
+ * own expense is savings), and the plan counts it only as a commitment it
+ * settled or within its GOAL rows; what left beyond them - a hand-logged
+ * contribution that filled a goal, so the automatic one it was meant to pay
+ * no longer posts, or one nobody planned - left the account all the same,
+ * so it is not left over. Without a confirmed plan, the period's budget
+ * less its spending: a budget holds no goal money either; with neither,
+ * there is nothing to measure against.
  */
 export function leftoverFrom(
   period: { periodBudget: number; hasBudget: boolean; spent: number },
-  room: Pick<FlexibleRoom, "essential" | "available"> | null,
+  room: (Pick<FlexibleRoom, "essential" | "available"> & { goalMoneyOutside?: number }) | null,
 ): { amount: number; basis: "prior_period_budget" | "no_prior_budget" } {
   if (!period.hasBudget && !room) return { amount: 0, basis: "no_prior_budget" };
-  const planned = room ? round2(room.essential + room.available) : period.periodBudget;
+  const planned = room ? round2(room.essential + room.available - Math.max(0, room.goalMoneyOutside ?? 0)) : period.periodBudget;
   return { amount: Math.max(0, round2(planned - period.spent)), basis: "prior_period_budget" };
+}
+
+/**
+ * Goal money that left a period outside its plan (S8), in the display
+ * currency: per goal, what its hand-logged contributions' own expenses
+ * dated in the period's funding window took out beyond the period's GOAL
+ * rows for it. `contributions` holds only the ones no commitment already
+ * counts - a contribution's expense that paid an automatic occurrence is
+ * that occurrence, settled, and never counted again. Within a goal's GOAL
+ * rows it is the plan being carried out, already out of the room.
+ */
+export function goalMoneyOutsidePlan(
+  contributions: readonly { goalKey: string; amount: number }[],
+  goalRows: ReadonlyMap<string, number>,
+): number {
+  const byGoal = new Map<string, number>();
+  for (const contribution of contributions) byGoal.set(contribution.goalKey, (byGoal.get(contribution.goalKey) ?? 0) + contribution.amount);
+  return round2([...byGoal].reduce((sum, [goalKey, amount]) => sum + Math.max(0, round2(amount - (goalRows.get(goalKey) ?? 0))), 0));
 }
 
 /** The CARRYOVER allocation basis of a carryover included before the period it comes from ended. */
@@ -175,6 +200,32 @@ export function carryoverIsProvisional(previousEnd: Date, today: Date): boolean 
  * and the check-in's includedCarryover follow the period's leftover.
  */
 export const ADJUSTED_CARRYOVER_BASIS = "adjusted";
+
+/**
+ * The CARRYOVER allocation basis of a carryover the user included that
+ * stands at 0 (S5): it settled at 0, the period it comes from having left
+ * nothing, or was included at 0 after that period ended. A declined
+ * carryover is plannedAmount 0 under the leftover's own basis; this one is
+ * kept in step with the period it comes from like any other the user took
+ * (carryoverReconciles), so spending corrected there later still reaches
+ * the plan.
+ */
+export const INCLUDED_AT_ZERO_CARRYOVER_BASIS = "included_at_zero";
+
+/**
+ * Whether a CARRYOVER allocation is a carryover the user included rather
+ * than declined: one still provisional, one standing above 0, one adjusted
+ * since it settled (it may have gone to 0) or one included at 0
+ * (INCLUDED_AT_ZERO_CARRYOVER_BASIS).
+ */
+export function carryoverIncluded(row: { basis: string | null; plannedAmount: number }): boolean {
+  return (
+    row.plannedAmount > 0 ||
+    row.basis === PROVISIONAL_CARRYOVER_BASIS ||
+    row.basis === ADJUSTED_CARRYOVER_BASIS ||
+    row.basis === INCLUDED_AT_ZERO_CARRYOVER_BASIS
+  );
+}
 
 /**
  * Whether a settled carryover is still kept in step with what the period it

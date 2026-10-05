@@ -60,7 +60,11 @@
  *           and no occurrence may be covered beyond its cost nor any deposit
  *           beyond its amount. What the check-in lists and adopts as a
  *           deposit's pay plus what it lowers its payments by is the whole
- *           deposit: no part counted in neither place, or in both.
+ *           deposit: no part counted in neither place, or in both. And a
+ *           confirmed paycheck that recorded the deposits it adopted counts
+ *           them in the plan's income (the confirmed room) at what of them
+ *           no payment's cover takes, however their earmarks changed since
+ *           the confirm or a re-confirm: its own row plus that, once.
  *
  *   DATABASE_URL="postgres://.../any_db" npx tsx scripts/verify-no-double-counting.ts
  *
@@ -1436,9 +1440,24 @@ async function main(): Promise<number> {
     // (a refund or interest the check-in did not take in).
     const { snapshotIncome } = await import("../src/lib/period-income");
     const { loadPeriodIncome } = await import("../src/lib/data/period-income");
-    const paydaySnapshots = await prisma.paydayAccountSnapshot.findMany({
+    // A paycheck that recorded which deposits it adopted
+    // (adoptedTransactionIds) is not judged here: its plan's income follows
+    // those deposits as they are now, so a deposit it did not adopt is by
+    // definition not in it - one fully earmarked at the confirm and freed
+    // later is pay the plan does not count yet, not pay counted twice. Pair
+    // 5 checks that its adopted deposits are counted once. Read with raw SQL
+    // so this script runs on a client generated before the column existed.
+    const recordedAdoptions = new Set(
+      (
+        await prisma.$queryRaw<{ id: string }[]>`
+          SELECT s.id FROM "PaydayAccountSnapshot" s
+          WHERE cardinality(coalesce(s."adoptedTransactionIds", ARRAY[]::text[])) > 0`
+      ).map((row) => row.id),
+    );
+    const paydaySnapshots = (await prisma.paydayAccountSnapshot.findMany({
       where: { checkin: { status: "CONFIRMED" }, incomeEntered: { gt: 0 } },
       select: {
+        id: true,
         accountId: true,
         incomeEntered: true,
         oneOffIncome: true,
@@ -1447,7 +1466,7 @@ async function main(): Promise<number> {
         account: { select: { name: true, currency: true } },
         checkin: { select: { year: true, month: true, period: true, updatedAt: true, allocations: { select: { createdAt: true } } } },
       },
-    });
+    })).filter((snapshot) => !recordedAdoptions.has(snapshot.id));
     const firstDayOf = (year: number, month: number, period: string) => civilDate(year, month, period === "A" ? 1 : 16);
     const firstDayAfter = (year: number, month: number, period: string) =>
       period === "A" ? civilDate(year, month, 16) : month === 12 ? civilDate(year + 1, 1, 1) : civilDate(year, month + 1, 1);
@@ -1499,7 +1518,7 @@ async function main(): Promise<number> {
       GROUP BY 1, 2 ORDER BY 1, 2`;
     info(`settled and posted: ${settledAndPosted} of ${settlements.length} settlement${settlements.length === 1 ? "" : "s"} name an occurrence that also has a RECURRING row`);
     info(`slots: ${slotsChecked} consumed occurrence${slotsChecked === 1 ? "" : "s"} of ${byItem.size} item${byItem.size === 1 ? "" : "s"} checked for one slot paid twice`);
-    info(`paychecks: ${paychecksChecked} confirmed check-in paycheck${paychecksChecked === 1 ? "" : "s"} checked against the deposits the ledger held for them when confirmed`);
+    info(`paychecks: ${paychecksChecked} confirmed check-in paycheck${paychecksChecked === 1 ? "" : "s"} checked against the deposits the ledger held for them when confirmed (${recordedAdoptions.size} that recorded their deposits are checked in pair 5)`);
     info(
       `existing pairs: ${doubles + possibles} (${doubles} double, ${possibles} possible) from ${candidates.length} candidate pair${candidates.length === 1 ? "" : "s"} against ${written.map((group) => `${group.n} ${group.source} ${group.currency}`).join(", ") || "no written rows"}`,
     );
@@ -1705,9 +1724,83 @@ async function main(): Promise<number> {
         gap > 0 ? "the rest lowers no payment and is not the plan's pay" : "part of it both lowers a payment and is the plan's pay",
       ]);
     }
+    // The plan's side (S7, S18): a confirmed paycheck that recorded the
+    // deposits it adopted counts, in the confirmed room's income for its
+    // account, its own row (incomeEntered - adoptedIncome, the PAYDAY_CHECKIN
+    // row it wrote) plus each of those deposits less what the period
+    // commitments apply of its earmarks - however they changed since the
+    // confirm, and whatever a re-confirm adopted since. Computed here from
+    // the rows: a deposit still counts while it exists on that account as
+    // ordinary income dated in the period's income window (five days before
+    // the period's first day to five days before the next one's). More in
+    // the room than that is money counted both as the plan's pay and as a
+    // payment's cover (or a deposit that is gone, still counted); less is
+    // pay counted nowhere.
+    const recordedPaychecks = await prisma.$queryRaw<
+      { id: string; accountId: string; currency: string; incomeEntered: string; adoptedIncome: string | null; ids: string[]; incomeTransactionId: string | null; year: number; month: number; period: string }[]
+    >`
+      SELECT s.id, s."accountId", s.currency, s."incomeEntered"::text AS "incomeEntered", s."adoptedIncome"::text AS "adoptedIncome",
+             s."adoptedTransactionIds" AS ids, s."incomeTransactionId", c.year, c.month, c.period::text AS period
+      FROM "PaydayAccountSnapshot" s JOIN "PaydayCheckin" c ON c.id = s."paydayCheckinId"
+      WHERE c.status = 'CONFIRMED' AND cardinality(coalesce(s."adoptedTransactionIds", ARRAY[]::text[])) > 0`;
+    let paychecksFollowed = 0;
+    if (recordedPaychecks.length > 0) {
+      const { loadConfirmedRooms } = await import("../src/lib/data/flexible-room");
+      const refs = new Map(recordedPaychecks.map((row) => [`${row.year}-${row.month}-${row.period}`, { year: row.year, month: row.month, period: row.period as "A" | "B" }]));
+      const rooms = await loadConfirmedRooms([...refs.values()], context);
+      for (const snapshot of recordedPaychecks) {
+        const ref = refs.get(`${snapshot.year}-${snapshot.month}-${snapshot.period}`)!;
+        const key = `${ref.year}-${String(ref.month).padStart(2, "0")}-${ref.period}`;
+        const own = round2(Number(snapshot.incomeEntered) - Number(snapshot.adoptedIncome ?? 0));
+        const ownRow = snapshot.incomeTransactionId
+          ? await prisma.transaction.findUnique({ where: { id: snapshot.incomeTransactionId }, select: { amount: true, source: true } })
+          : null;
+        const rowAmount = ownRow ? num(ownRow.amount) : 0;
+        if (Math.abs(rowAmount - Math.max(0, own)) > 0.01) {
+          flag(5, rowAmount > own ? "DOUBLE" : "DROP", `check-in ${key}'s own paycheck row on account ${snapshot.accountId} is not the part beyond the deposits it adopted`, [
+            `paycheck ${Number(snapshot.incomeEntered).toFixed(2)}, adopted ${Number(snapshot.adoptedIncome ?? 0).toFixed(2)}: its own row should hold ${Math.max(0, own).toFixed(2)}`,
+            `its own row (${snapshot.incomeTransactionId ?? "none"}) holds ${rowAmount.toFixed(2)}`,
+          ]);
+        }
+        const from = addDays(civilDate(ref.year, ref.month, ref.period === "A" ? 1 : 16), -5);
+        const until = addDays(ref.period === "A" ? civilDate(ref.year, ref.month, 16) : ref.month === 12 ? civilDate(ref.year + 1, 1, 1) : civilDate(ref.year, ref.month + 1, 1), -5);
+        const adopted = await prisma.transaction.findMany({
+          where: { id: { in: snapshot.ids } },
+          select: { id: true, accountId: true, type: true, source: true, isOneOffIncome: true, reimbursesTransactionId: true, date: true, amount: true, currency: true },
+        });
+        const parts = adopted
+          .filter(
+            (row) =>
+              row.accountId === snapshot.accountId &&
+              row.type === "INCOME" &&
+              row.source !== "PAYDAY_CHECKIN" &&
+              !row.isOneOffIncome &&
+              row.reimbursesTransactionId === null &&
+              row.date.getTime() >= from.getTime() &&
+              row.date.getTime() < until.getTime(),
+          )
+          .map((row) => {
+            const whole = convert(num(row.amount), row.currency, snapshot.currency, rates);
+            const cover = Math.min(whole, convert(appliedByDeposit.get(row.id) ?? 0, row.currency, snapshot.currency, rates));
+            return { row, whole, cover, pay: round2(whole - cover) };
+          });
+        const expected = round2(own + parts.reduce((sum, part) => sum + part.pay, 0));
+        const counted = rooms.get(key)?.accounts.find((account) => account.accountId === snapshot.accountId)?.income ?? 0;
+        paychecksFollowed += 1;
+        if (Math.abs(counted - expected) <= 0.01) continue;
+        flag(5, counted > expected ? "DOUBLE" : "DROP", `check-in ${key} counts ${round2(Math.abs(counted - expected)).toFixed(2)} ${counted > expected ? "more" : "less"} pay on account ${snapshot.accountId} than its own row and the deposits it adopted hold`, [
+          `confirmed room income for the account: ${round2(counted).toFixed(2)} ${snapshot.currency}`,
+          `own row ${own.toFixed(2)} + adopted deposits less their applied cover ${round2(expected - own).toFixed(2)} = ${expected.toFixed(2)}`,
+          ...parts.map((part) => `adopted: Transaction ${part.row.id} (${toISODate(part.row.date)}) ${part.whole.toFixed(2)}, of it covering payments ${round2(part.cover).toFixed(2)}`),
+          ...snapshot.ids.filter((id) => !parts.some((part) => part.row.id === id)).map((id) => `adopted: Transaction ${id} - gone, or no longer ordinary income in the window on that account: counts 0`),
+          counted > expected ? "part of it is counted both as the plan's pay and as a payment's cover, or a deposit no longer there still counts" : "part of the adopted pay is counted nowhere",
+        ]);
+      }
+    }
+
     const unapplied = [...new Set(earmarks.map((earmark) => earmark.occurrenceKey))].filter((key) => !appliedKeys.has(key));
     info(
-      `earmarks: ${earmarks.length} on ${deposits.size} deposit${deposits.size === 1 ? "" : "s"}; ${covered} occurrence${covered === 1 ? "" : "s"} covered in the period commitments${unapplied.length ? `; ${unapplied.length} not applied (posting skips the item, or the item is gone): ${unapplied.join(", ")}` : ""}; ${required.size} period/account income figure${required.size === 1 ? "" : "s"} checked; ${depositsChecked} deposit${depositsChecked === 1 ? "" : "s"} checked against what Step 2 lists`,
+      `earmarks: ${earmarks.length} on ${deposits.size} deposit${deposits.size === 1 ? "" : "s"}; ${covered} occurrence${covered === 1 ? "" : "s"} covered in the period commitments${unapplied.length ? `; ${unapplied.length} not applied (posting skips the item, or the item is gone): ${unapplied.join(", ")}` : ""}; ${required.size} period/account income figure${required.size === 1 ? "" : "s"} checked; ${depositsChecked} deposit${depositsChecked === 1 ? "" : "s"} checked against what Step 2 lists; ${paychecksFollowed} paycheck${paychecksFollowed === 1 ? "" : "s"} that recorded their deposits checked against the confirmed room`,
     );
     sectionResult(5);
   }

@@ -24,7 +24,7 @@ import { round2 } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type { Dictionary } from "@/lib/i18n";
 import type { FlexibleRoom } from "@/lib/flexible-room";
-import type { CarryoverAdjustment } from "@/lib/data/flexible-room";
+import type { CarryoverAdjustment, IncomeAdjustment } from "@/lib/data/flexible-room";
 import type {
   AccountBufferBreakdown,
   CoverShortfallSuggestion,
@@ -256,7 +256,9 @@ export function StepCommitments({
   carryoverBasis,
   carryoverProvisional,
   carryoverAdjustment,
+  incomeAdjustment,
   includedCarryover,
+  carryoverIncluded,
   room,
   totalIncome,
   subscriptionsTotal,
@@ -296,7 +298,11 @@ export function StepCommitments({
   carryoverProvisional: boolean;
   /** The confirmed carryover moved after it settled (R8): said once, under the summary's carryover line. */
   carryoverAdjustment: CarryoverAdjustment | null;
+  /** The confirmed plan's income moved since it was confirmed (S7): said once, under the summary's income line. */
+  incomeAdjustment: IncomeAdjustment | null;
   includedCarryover: number;
+  /** The carryover is taken, whatever it stands at (S5): the switch. */
+  carryoverIncluded: boolean;
   /** K4 over the plan being drafted: the summary's carryover line, the provisional amount and the cushion come from it. */
   room: FlexibleRoom;
   totalIncome: number;
@@ -314,7 +320,7 @@ export function StepCommitments({
   /** Opens the Transfer dialog pre-filled with the suggestion; nothing here creates a transfer. */
   onCoverShortfall: (suggestion: CoverShortfallSuggestion) => void;
   onEssentialChange: (categoryId: string, plannedAmount: number) => void;
-  onCarryoverChange: (value: number) => void;
+  onCarryoverChange: (included: boolean) => void;
   pickAnAccountLabel: string;
   t: Dictionary["payday"];
 }) {
@@ -688,10 +694,7 @@ export function StepCommitments({
               : t.carryoverUnavailable}
           </p>
           <label className="flex items-center gap-2.5 text-sm">
-            <Switch
-              checked={includedCarryover > 0}
-              onCheckedChange={(checked) => onCarryoverChange(checked ? availableCarryover : 0)}
-            />
+            <Switch checked={carryoverIncluded} onCheckedChange={onCarryoverChange} />
             {t.carryoverIncluded}
           </label>
         </CardContent>
@@ -703,6 +706,11 @@ export function StepCommitments({
             <span>{t.summaryIncome}</span>
             <span className="figure">{formatMoney(totalIncome, displayCurrency)}</span>
           </div>
+          {incomeAdjustment && Math.abs(totalIncome - incomeAdjustment.current) < 0.005 ? (
+            <p className="text-xs text-muted-foreground">
+              {t.incomeAdjusted(formatMoney(incomeAdjustment.by, displayCurrency, { signDisplay: "always" }))}
+            </p>
+          ) : null}
           <div className="flex justify-between">
             <span>{t.summaryCarryover}</span>
             <span className="figure">{formatMoney(room.carryover, displayCurrency)}</span>

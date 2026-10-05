@@ -707,6 +707,12 @@ export const paydayConfirmSchema = z.object({
   // .checkinVersion), null for a fresh one: confirm refuses when the stored
   // check-in is another. The wizard always sends it; absent skips the check.
   checkinVersion: z.string().max(40).nullable().optional(),
+  // The deposits Step 2 listed (PaydayCheckinDraft.depositsVersion): confirm
+  // refuses when they changed since (S2). Absent skips the check.
+  depositsVersion: z.string().max(64).optional(),
+  // Step 3's carryover switch (PaydayCheckinDraft.carryoverIncluded): taken
+  // even when it stands at 0 (S5). Absent: taken when includedCarryover > 0.
+  carryoverIncluded: z.boolean().optional(),
 });
 
 const INSTALLMENT_COUNT_MESSAGE = `Use between 1 and ${MAX_INSTALLMENTS} installments`;

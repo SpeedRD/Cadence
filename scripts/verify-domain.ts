@@ -15445,12 +15445,17 @@ async function main() {
           reimbursesTransactionId: null,
         });
         const earmarkContext = { today: sep30, rates: pRates(), currentPeriod: periodForDate(sep30) };
+        // Flipped by S18 (second review): the check-in recorded which deposits
+        // it adopted, so its income follows them - an earmark on the salary
+        // moves the money from the plan's income to the installment and is
+        // accepted. Removed again so the checks below keep their fixture.
         const refused = await pSaveEarmarks(depositOf(salaryRow), [{ occurrenceKey: installmentKey, amount: 3000 }], earmarkContext);
         eq(
-          "R1 follow-up: earmarking 3,000 of the adopted salary for an installment is refused, and nothing is written (was accepted)",
+          "R1 follow-up, flipped by S18: earmarking 3,000 of the adopted salary for an installment is accepted - the plan's income follows it (was refused as adopted_paycheck)",
           `${refused.ok ? "ok" : refused.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: salaryRow.id } })}`,
-          "adopted_paycheck | 0",
+          "ok | 1",
         );
+        await prisma.recurringEarmark.deleteMany({ where: { transactionId: salaryRow.id } });
         const bonusSaved = await pSaveEarmarks(depositOf(bonus), [{ occurrenceKey: installmentKey, amount: 3000 }], earmarkContext);
         eq("R1 follow-up guard: the one-off bonus, not adopted, can still be earmarked", `${bonusSaved.ok ? "ok" : bonusSaved.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: bonus.id } })}`, "ok | 1");
         // A deposit that lands after the check-in was confirmed - a family
@@ -15467,7 +15472,13 @@ async function main() {
           "ok | 1",
         );
         const salaryAgain = await pSaveEarmarks(depositOf(salaryRow), [{ occurrenceKey: installmentKey, amount: 1000 }], earmarkContext);
-        eq("R1 second follow-up: the salary the check-in adopted still cannot", `${salaryAgain.ok ? "ok" : salaryAgain.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: salaryRow.id } })}`, "adopted_paycheck | 0");
+        // Flipped by S18: no longer refused as adopted pay; the 5,000
+        // installment is now fully covered by the bonus and the transfer.
+        eq(
+          "R1 second follow-up, flipped by S18: the adopted salary is refused only because the installment is already covered (was adopted_paycheck)",
+          `${salaryAgain.ok ? "ok" : salaryAgain.issue} | ${await prisma.recurringEarmark.count({ where: { transactionId: salaryRow.id } })}`,
+          "over_occurrence | 0",
+        );
         const issues = (dictionary: Record<string, unknown>) => ((dictionary.earmarkIssues ?? {}) as Record<string, string>).adopted_paycheck ?? "absent";
         eq("R1 follow-up: the refusal, in English", issues(pDictionary("en").transactions as unknown as Record<string, unknown>), "This deposit is part of a confirmed payday check-in's paycheck: the plan already counts it as income, so it can't be set aside for a payment too");
         eq("R1 follow-up: and in Spanish", issues(pDictionary("es").transactions as unknown as Record<string, unknown>), "Este depósito es parte del pago de un chequeo de pago confirmado: el plan ya lo cuenta como ingreso, así que no puede apartarse también para un pago");
@@ -16763,6 +16774,574 @@ async function main() {
       await wipe();
       await restoreRates();
       await prisma.recurringItem.updateMany({ where: { id: { in: hPaused } }, data: { active: true } });
+    }
+  }
+
+  console.log("\n== second adversarial review: the check-in (S2 S5 S6 S7 S18, S8's carryover half) ==");
+  {
+    // Public APIs only, every new field reached through `?.` or passed where
+    // the tree before ignores it, so this block also runs against the code
+    // before the fixes and fails there on each finding. The review's rates
+    // (USD 1 = DOP 63.10, EUR 1 = DOP 73.20), display DOP; buffer 10% with no
+    // floor unless a scenario says otherwise. Fixtures `Verify Rev2 ...`;
+    // every other active item is paused, open goal parked and active account
+    // archived meanwhile, and the Sep-Nov 2026 budgets set aside, all
+    // restored in the finally.
+    const vPayday = await import("../src/lib/data/payday");
+    const vIncome = await import("../src/lib/data/period-income");
+    const vRoom = await import("../src/lib/data/flexible-room");
+    const { saveEarmarks: vSaveEarmarks } = await import("../src/lib/data/earmark-targets");
+    const { logManualContribution: vLogContribution } = await import("../src/lib/goals");
+    const { formatMoney: vMoney } = await import("../src/lib/currency");
+    const { getDictionary: vDictionary } = await import("../src/lib/i18n");
+    const vRates = (): RateTable => ({ rates: { USD: 1, DOP: 63.1, EUR: 63.1 / 73.2 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() });
+    type VBuffer = { percent: number; floor: number };
+    const tenPercent: VBuffer = { percent: 10, floor: 0 };
+    const vContext = (today: Date, buffer: VBuffer = tenPercent) => ({
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: vRates(),
+      today,
+      currentPeriod: periodForDate(today),
+      bufferPercent: buffer.percent,
+      bufferFloorAmount: buffer.floor,
+      bufferFloorCurrency: "DOP",
+    });
+    const vDay = (month: number, day: number) => civilDate(2026, month, day);
+    type VRef = { year: number; month: number; period: "A" | "B" };
+    const octA: VRef = { year: 2026, month: 10, period: "A" };
+    const octB: VRef = { year: 2026, month: 10, period: "B" };
+    const novA: VRef = { year: 2026, month: 11, period: "A" };
+    const vPeriods = { year: 2026, month: { in: [9, 10, 11] } };
+    const vWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Rev2 " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: vPeriods });
+      await prisma.budget.deleteMany({ where: vPeriods });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify Rev2 " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify Rev2 " } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Rev2 " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    const vAccount = (name: string) => prisma.account.create({ data: { name: `Verify Rev2 ${name}`, currency: "DOP", type: "CHECKING" } });
+    const vDeposit = (accountId: string, date: Date, amount: number, note: string, source: "CSV" | "MANUAL" = "CSV") =>
+      prisma.transaction.create({
+        data: { accountId, date, amount, currency: "DOP", type: "INCOME", source, note, externalId: source === "CSV" ? `verify-rev2:${note}:${toISODate(date)}` : null },
+      });
+    const vItem = (name: string, accountId: string, amount: number, nextDate: Date, currency = "DOP") =>
+      prisma.recurringItem.create({
+        data: { name: `Verify Rev2 ${name}`, amount, currency, frequency: "MONTHLY", anchorDay: nextDate.getUTCDate(), nextDate, active: true, kind: "SUBSCRIPTION", accountId },
+      });
+    type VAccountInput = { accountId: string; incomeEntered: number; reportedBalance?: number; oneOffIncome?: number };
+    const vInput = (ref: VRef, accounts: VAccountInput[], extra: Record<string, unknown> = {}) => ({
+      ...ref,
+      accounts: accounts.map((a) => ({ accountId: a.accountId, reportedBalance: a.reportedBalance ?? 0, incomeEntered: a.incomeEntered, oneOffIncome: a.oneOffIncome ?? 0, incomeNote: null })),
+      goals: [] as { goalId: string; funding: { accountId: string; plannedAmount: number }[] }[],
+      essentialCategories: [],
+      flexibleCategories: [] as { categoryId: string; plannedAmount: number }[],
+      includedCarryover: 0,
+      acknowledgedDeficit: true,
+      acknowledgedZeroBuffer: true,
+      ...extra,
+    });
+    const vConfirm = async (input: ReturnType<typeof vInput>, today: Date, buffer: VBuffer = tenPercent) => {
+      const result = (await vPayday.confirmPaydayCheckin(input as Parameters<typeof vPayday.confirmPaydayCheckin>[0], vContext(today, buffer))) as { ok: boolean; reason?: string };
+      return result.ok ? "ok" : String(result.reason);
+    };
+    type VDraft = {
+      ledgerDate: Date;
+      accounts: { accountId: string; incomeEntered: number; expectedLedgerBalance: number; ledgerDeposits: { transactionId: string; amount: number }[] }[];
+      checkinVersion: string | null;
+      depositsVersion?: string;
+      includedCarryover: number;
+      carryoverIncluded?: boolean;
+      incomeAdjustment?: { confirmed: number; current: number; by: number } | null;
+    };
+    const vDraft = async (ref: VRef, today: Date) => (await vPayday.getPaydayCheckinDraft(vContext(today), ref)) as unknown as VDraft;
+    // What the wizard sends back: the versions it was opened on.
+    const vVersions = (draft: VDraft) => ({
+      checkinVersion: draft.checkinVersion,
+      ...(draft.depositsVersion === undefined ? {} : { depositsVersion: draft.depositsVersion }),
+    });
+    type VRoomRead = {
+      income: number;
+      commitments: number;
+      available: number;
+      carryover: number;
+      cap: number;
+      goalPlan: number;
+      accounts: { accountId: string; income: number }[];
+      incomeAdjustment?: { confirmed: number; current: number; by: number } | null;
+      carryoverAdjustment?: { by: number } | null;
+    };
+    const vRoomOf = async (ref: VRef, today: Date, buffer: VBuffer = tenPercent) =>
+      (await vRoom.loadConfirmedRooms([ref], vContext(today, buffer))).get(periodInfo(ref).key) as unknown as VRoomRead;
+    const vAdjusted = (room: VRoomRead) => (room.incomeAdjustment ? `${room.incomeAdjustment.by >= 0 ? "+" : ""}${room.incomeAdjustment.by}` : "none");
+    const vIncomeRows = async (accountId: string) =>
+      (await prisma.transaction.findMany({ where: { accountId, type: "INCOME" }, orderBy: [{ date: "asc" }, { createdAt: "asc" }] }))
+        .map((row) => `${toISODate(row.date)} ${num(row.amount)} ${row.source}`)
+        .join(", ");
+    const vDepositOf = (row: { id: string; accountId: string; amount: unknown; date: Date; createdAt: Date; isOneOffIncome: boolean; source: string }) => ({
+      id: row.id,
+      accountId: row.accountId,
+      amount: num(row.amount as never),
+      type: "INCOME",
+      source: row.source,
+      transferDirection: null,
+      date: row.date,
+      createdAt: row.createdAt,
+      isOneOffIncome: row.isOneOffIncome,
+      reimbursesTransactionId: null,
+    });
+    const vEarmark = async (depositId: string, key: string, amount: number, today: Date) => {
+      const row = await prisma.transaction.findUniqueOrThrow({ where: { id: depositId } });
+      const saved = await vSaveEarmarks(vDepositOf(row), [{ occurrenceKey: key, amount }], { today, rates: vRates(), currentPeriod: periodForDate(today) });
+      return saved.ok ? "ok" : saved.issue;
+    };
+    const en = vDictionary("en").payday as unknown as Record<string, unknown>;
+    const es = vDictionary("es").payday as unknown as Record<string, unknown>;
+    const vLine = (dictionary: Record<string, unknown>, key: string, ...args: string[]) =>
+      typeof dictionary[key] === "function" ? (dictionary[key] as (...a: string[]) => string)(...args) : String(dictionary[key] ?? "absent");
+
+    check("rev2: no check-in for Sep-Nov 2026 is left over from an earlier section", (await prisma.paydayCheckin.count({ where: vPeriods })) === 0);
+    const vPaused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const vParked = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const vArchived = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    const vStashedBudgets = await prisma.budget.findMany({ where: vPeriods });
+    await prisma.recurringItem.updateMany({ where: { id: { in: vPaused } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: vParked } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: vArchived } }, data: { status: "ARCHIVED" } });
+    await prisma.budget.deleteMany({ where: vPeriods });
+    const vGroceries = await prisma.category.create({ data: { name: "Verify Rev2 Groceries", kind: "EXPENSE", color: "#888888" } });
+    const vSpend = (accountId: string, date: Date, amount: number, note: string) =>
+      prisma.transaction.create({ data: { accountId, date, amount, currency: "DOP", type: "EXPENSE", source: "MANUAL", note, categoryId: vGroceries.id } });
+    try {
+      // ---------------------------------------------------------------------
+      console.log("\n-- S2: a deposit that changes between opening the check-in and confirming it --");
+      {
+        // Oct 30, plan period Nov A: Main holds the 20,191 salary (Oct 30)
+        // and a 5,000 family transfer (Oct 28); a 163.71 EUR installment is
+        // due Nov 5 on Main.
+        const oct30 = vDay(10, 30);
+        const setUp = async () => {
+          const main = await vAccount("Main");
+          const salary = await vDeposit(main.id, oct30, 20191, "NOMINA");
+          const family = await vDeposit(main.id, vDay(10, 28), 5000, "FAMILIA", "MANUAL");
+          const klarna = await vItem("PS5 Klarna", main.id, 163.71, vDay(11, 5), "EUR");
+          const opened = await vDraft(novA, oct30);
+          const typed = opened.accounts.find((a) => a.accountId === main.id)?.incomeEntered ?? 0;
+          return { main, salary, family, key: `${klarna.id}:2026-11-05`, opened, typed };
+        };
+        const confirmAsLoaded = async (s: Awaited<ReturnType<typeof setUp>>) =>
+          vConfirm(vInput(novA, [{ accountId: s.main.id, incomeEntered: s.typed }], vVersions(s.opened)), oct30);
+
+        const review = await setUp();
+        eq("S2: Step 2 lists both deposits and prefills 25,191", `${review.opened.accounts.find((a) => a.accountId === review.main.id)?.ledgerDeposits.map((d) => d.amount).join(" + ")} = ${review.typed}`, "5000 + 20191 = 25191");
+        eq("S2: another tab earmarks the whole transfer for the Nov 5 installment", await vEarmark(review.family.id, review.key, 5000, oct30), "ok");
+        eq("S2, the review's case: confirming the wizard as loaded is refused, deposits_changed (was ok)", await confirmAsLoaded(review), "deposits_changed");
+        eq(
+          "S2: and nothing was written: no check-in, the ledger holds the two deposits only, Nov A's income is the 25,191 that arrived (was a 5,000 PAYDAY_CHECKIN row, 30,191)",
+          `${await prisma.paydayCheckin.count({ where: { ...novA } })} | ${await vIncomeRows(review.main.id)} | ${(await vIncome.loadPeriodIncome([novA], "fact", vContext(oct30))).get(periodInfo(novA).key)?.total}`,
+          "0 | 2026-10-28 5000 MANUAL, 2026-10-30 20191 CSV | 25191",
+        );
+        const reloaded = await vDraft(novA, oct30);
+        const reloadedTyped = reloaded.accounts.find((a) => a.accountId === review.main.id)?.incomeEntered ?? 0;
+        eq(
+          "S2: after reloading, Step 2 lists the salary alone (20,191) and that confirms with no row of its own",
+          `${reloadedTyped} | ${await vConfirm(vInput(novA, [{ accountId: review.main.id, incomeEntered: reloadedTyped }], vVersions(reloaded)), oct30)} | ${await vIncomeRows(review.main.id)}`,
+          "20191 | ok | 2026-10-28 5000 MANUAL, 2026-10-30 20191 CSV",
+        );
+        eq("S2: the message says the deposits changed and to reload, in English", vLine(en, "depositsChangedSinceLoaded"), "The deposits changed since you opened this check-in, so nothing was saved. Reload the page to see them as they are now, then confirm again.");
+        eq("S2: and in Spanish", vLine(es, "depositsChangedSinceLoaded"), "Los depósitos cambiaron desde que abriste este chequeo, así que no se guardó nada. Recarga la página para verlos como están ahora y vuelve a confirmar.");
+        await vWipe();
+
+        // The coverage gap the review names: every way a listed deposit can
+        // change between draft and confirm.
+        const route = async (label: string, change: (s: Awaited<ReturnType<typeof setUp>>) => Promise<unknown>, was: string) => {
+          const s = await setUp();
+          await change(s);
+          eq(
+            `S2, ${label} between draft and confirm: refused and nothing written (was ${was})`,
+            `${await confirmAsLoaded(s)} | ${await prisma.paydayCheckin.count({ where: { ...novA } })} | ${await prisma.transaction.count({ where: { accountId: s.main.id, source: "PAYDAY_CHECKIN" } })}`,
+            "deposits_changed | 0 | 0",
+          );
+          await vWipe();
+        };
+        await route("the transfer deleted", (s) => prisma.transaction.delete({ where: { id: s.family.id } }), "ok with a 5,000 PAYDAY_CHECKIN row");
+        await route("the transfer marked one-off", (s) => prisma.transaction.update({ where: { id: s.family.id }, data: { isOneOffIncome: true } }), "ok with a 5,000 PAYDAY_CHECKIN row");
+        await route("the salary edited to 20,000", (s) => prisma.transaction.update({ where: { id: s.salary.id }, data: { amount: 20000 } }), "ok with a 191 PAYDAY_CHECKIN row");
+        await route("2,000 of the transfer earmarked", (s) => vEarmark(s.family.id, s.key, 2000, oct30), "ok with a 2,000 PAYDAY_CHECKIN row");
+        const added = await setUp();
+        await vDeposit(added.main.id, vDay(10, 29), 1000, "OTRO", "MANUAL");
+        eq("S2, a deposit added between draft and confirm: refused as deposits_changed (was below_ledger_deposits)", await confirmAsLoaded(added), "deposits_changed");
+        await vWipe();
+        const unchanged = await setUp();
+        eq(
+          "S2 guard: nothing changed, the wizard as loaded confirms and adopts both deposits with no row of its own",
+          `${await confirmAsLoaded(unchanged)} | ${await prisma.transaction.count({ where: { accountId: unchanged.main.id, source: "PAYDAY_CHECKIN" } })}`,
+          "ok | 0",
+        );
+        await vWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S7: a confirmed plan's income follows the earmark cover of the deposits it adopted --");
+      {
+        // A 25,000 salary on Oct 15 with 3,000 earmarked for the Oct 28 TV
+        // installment (3,000, earmarked while it asks 3,000); Oct B confirmed
+        // with what Step 2 prefills.
+        const oct15 = vDay(10, 15);
+        const scenario = async (atConfirm: number, after: number) => {
+          const main = await vAccount("Main");
+          const salary = await vDeposit(main.id, oct15, 25000, "NOMINA");
+          const tv = await vItem("TV", main.id, 3000, vDay(10, 28));
+          await vEarmark(salary.id, `${tv.id}:2026-10-28`, 3000, oct15);
+          await prisma.recurringItem.update({ where: { id: tv.id }, data: { amount: atConfirm } });
+          const opened = await vDraft(octB, oct15);
+          const typed = opened.accounts.find((a) => a.accountId === main.id)?.incomeEntered ?? 0;
+          const verdict = await vConfirm(vInput(octB, [{ accountId: main.id, incomeEntered: typed }], vVersions(opened)), oct15);
+          const confirmed = await vRoomOf(octB, oct15);
+          await prisma.recurringItem.update({ where: { id: tv.id }, data: { amount: after } });
+          return { main, salary, tv, typed, verdict, confirmed, moved: await vRoomOf(octB, vDay(10, 16)) };
+        };
+        const lowered = await scenario(3000, 1500);
+        eq("S7: confirmed at the 22,000 Step 2 adopts, income 22,000", `${lowered.typed} ${lowered.verdict} ${lowered.confirmed.income} ${vAdjusted(lowered.confirmed)}`, "22000 ok 22000 none");
+        const snapshot = (await prisma.paydayAccountSnapshot.findFirstOrThrow({ where: { accountId: lowered.main.id } })) as { adoptedTransactionIds?: string[] };
+        eq("S7: the snapshot records the deposit it adopted", (snapshot.adoptedTransactionIds ?? []).join(","), lowered.salary.id);
+        eq(
+          "S7, the review's case: the installment lowered to 1,500 drops the cover to 1,500: income 23,500, adjusted by +1,500, available 21,300 (was 22,000, none, 19,800)",
+          `${lowered.moved.income} ${vAdjusted(lowered.moved)} ${lowered.moved.available}`,
+          "23500 +1500 21300",
+        );
+        eq("S7: the account's paycheck reads 23,500 too (Afford's per-account figure; was 22,000)", lowered.moved.accounts.find((a) => a.accountId === lowered.main.id)?.income, 23500);
+        const reopened = await vDraft(octB, vDay(10, 16));
+        eq(
+          "S7: Step 3's draft carries the same adjustment and prefills 23,500 (was none)",
+          `${reopened.incomeAdjustment ? reopened.incomeAdjustment.by : "none"} ${reopened.accounts.find((a) => a.accountId === lowered.main.id)?.incomeEntered}`,
+          "1500 23500",
+        );
+        eq(
+          "S7: re-confirming what reopening shows writes no row of its own, and the line goes (income 23,500, none)",
+          `${await vConfirm(vInput(octB, [{ accountId: lowered.main.id, incomeEntered: 23500 }], vVersions(reopened)), vDay(10, 16))} | ${await vIncomeRows(lowered.main.id)} | ${(await vRoomOf(octB, vDay(10, 16))).income} ${vAdjusted(await vRoomOf(octB, vDay(10, 16)))}`,
+          "ok | 2026-10-15 25000 CSV | 23500 none",
+        );
+        await vWipe();
+        const raised = await scenario(1500, 3000);
+        eq("S7, the reverse: confirmed at 23,500 with the installment at 1,500", `${raised.typed} ${raised.verdict} ${raised.confirmed.income}`, "23500 ok 23500");
+        eq(
+          "S7: the installment raised back to 3,000 raises the cover: income 22,000, adjusted by -1,500, available 19,650 (was 23,500, none, 21,150 - the room overstated by 1,500)",
+          `${raised.moved.income} ${vAdjusted(raised.moved)} ${raised.moved.available}`,
+          "22000 -1500 19650",
+        );
+        const by = (value: number) => vMoney(value, "DOP", { signDisplay: "always" });
+        eq(
+          "S7: the line says by how much and why, in English",
+          vLine(en, "incomeAdjusted", by(1500)),
+          `Income adjusted by ${by(1500)} since you confirmed: a deposit this plan counts as pay changed - part of it set aside for a payment or that amount changed, or it was edited, marked one-off or deleted.`,
+        );
+        eq(
+          "S7: and in Spanish",
+          vLine(es, "incomeAdjusted", by(-1500)),
+          `Ingreso ajustado en ${by(-1500)} desde que confirmaste: cambió un depósito que este plan cuenta como pago: se apartó parte para un pago o cambió ese monto, o se editó, se marcó como único o se eliminó.`,
+        );
+        await prisma.transaction.delete({ where: { id: raised.salary.id } });
+        const deleted = await vRoomOf(octB, vDay(10, 16));
+        eq("S7: the adopted deposit deleted, the plan's income is the check-in's own part, 0, adjusted by -23,500 (was 23,500)", `${deleted.income} ${vAdjusted(deleted)}`, "0 -23500");
+        await vWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S18: earmarking a deposit a confirmed check-in adopted --");
+      {
+        const oct30 = vDay(10, 30);
+        const main = await vAccount("Main");
+        const salary = await vDeposit(main.id, oct30, 20191, "NOMINA");
+        const transfer = await vDeposit(main.id, vDay(10, 28), 5000, "FAMILIA", "MANUAL");
+        const tv = await vItem("TV", main.id, 6000, vDay(11, 5));
+        const key = `${tv.id}:2026-11-05`;
+        eq("S18: the 5,000 transfer fully earmarked for the Nov 5 TV (6,000) before the check-in", await vEarmark(transfer.id, key, 5000, oct30), "ok");
+        const opened = await vDraft(novA, oct30);
+        eq(
+          "S18: Step 2 adopts only the salary, and Nov A confirms",
+          `${opened.accounts.find((a) => a.accountId === main.id)?.incomeEntered} ${await vConfirm(vInput(novA, [{ accountId: main.id, incomeEntered: 20191 }], vVersions(opened)), oct30)}`,
+          "20191 ok",
+        );
+        const before = await vRoomOf(novA, oct30);
+        eq(
+          "S18, the review's case: lowering the transfer's earmark to 4,000 after the confirm is accepted (was adopted_paycheck)",
+          `${await vEarmark(transfer.id, key, 4000, oct30)} ${num((await prisma.recurringEarmark.findFirstOrThrow({ where: { transactionId: transfer.id } })).amount)}`,
+          "ok 4000",
+        );
+        const lowered = await vRoomOf(novA, oct30);
+        eq(
+          "S18: the transfer was not adopted, so the 1,000 it frees is not the plan's income until the check-in is confirmed again: income 20,191, the TV asks 1,000 more",
+          `${before.income}/${before.commitments}/${before.available} -> ${lowered.income}/${lowered.commitments}/${lowered.available}`,
+          "20191/1000/17171.9 -> 20191/2000/16171.9",
+        );
+        eq(
+          "S18: earmarking 1,000 of the adopted salary for the TV is accepted (was adopted_paycheck)",
+          await vEarmark(salary.id, key, 1000, oct30),
+          "ok",
+        );
+        const moved = await vRoomOf(novA, oct30);
+        eq(
+          "S18: it moves 1,000 from the plan's income to the TV and leaves the room as it was: income 19,191, commitments 1,000, available 16,171.90, adjusted by -1,000",
+          `${moved.income} ${moved.commitments} ${moved.available} ${vAdjusted(moved)}`,
+          "19191 1000 16171.9 -1000",
+        );
+        eq(
+          "S18: income is counted once: the 1,000 is in the TV's cover, not in the plan's income nor its estimate (Nov A estimate 19,191 + 4,000 transfer pay... = fact 25,191 less 5,000 earmarked)",
+          `${(await vIncome.loadPeriodIncome([novA], "estimate", vContext(oct30))).get(periodInfo(novA).key)?.total} ${(await vIncome.loadPeriodIncome([novA], "fact", vContext(oct30))).get(periodInfo(novA).key)?.total}`,
+          "20191 25191",
+        );
+        // A check-in that adopted deposits before they were recorded keeps
+        // its income as confirmed, so its deposits are still refused: an
+        // earmark would lower the payment while the plan counts the money.
+        await prisma.recurringEarmark.deleteMany({ where: { transactionId: salary.id } });
+        await prisma.$executeRaw`UPDATE "PaydayAccountSnapshot" SET "adoptedTransactionIds" = NULL WHERE "accountId" = ${main.id}`;
+        const legacy = await vRoomOf(novA, oct30);
+        eq(
+          "S18 guard: a snapshot that adopted the salary without recording it keeps its 20,191, and earmarking the salary is still refused (as before)",
+          `${legacy.income} ${await vEarmark(salary.id, key, 1000, oct30)}`,
+          "20191 adopted_paycheck",
+        );
+        // How a paycheck confirmed before the ids were kept is told from one
+        // that adopted nothing: Prisma reads a NULL list as [], so the ids
+        // alone cannot say; adoptedIncome does. A paycheck that adopted
+        // anything always records at least one id (adoptedIncome is the sum
+        // of the listed deposits, each above 0), so adoptedIncome > 0 with
+        // no ids is a paycheck from before them, and adoptedIncome null or
+        // 0 is one that adopted nothing - whatever the list holds.
+        const snapshotState = async () => {
+          const row = (await prisma.paydayAccountSnapshot.findFirstOrThrow({ where: { accountId: main.id } })) as { adoptedIncome: unknown; adoptedTransactionIds?: string[] };
+          const raw = await prisma.$queryRaw<{ ids: string[] | null }[]>`SELECT "adoptedTransactionIds" AS ids FROM "PaydayAccountSnapshot" WHERE "accountId" = ${main.id}`;
+          const windows = (await vIncome.loadAdoptedWindows()).filter((window) => window.accountId === main.id).length;
+          return `stored ${raw[0].ids === null ? "NULL" : `[${raw[0].ids.length}]`}, read ${JSON.stringify(row.adoptedTransactionIds ?? "absent")}, adopted ${row.adoptedIncome === null ? "null" : num(row.adoptedIncome as never)}, windows ${windows}`;
+        };
+        const classify = async () => {
+          const state = await snapshotState();
+          const income = (await vRoomOf(novA, oct30)).income;
+          const verdict = await vEarmark(salary.id, key, 1000, oct30);
+          await prisma.recurringEarmark.deleteMany({ where: { transactionId: salary.id } });
+          return `${state} | income ${income} | earmark ${verdict}`;
+        };
+        eq(
+          "S18 legacy vs none: adoptedIncome 20,191 with NULL ids (Prisma reads []) is a paycheck from before the ids: one adoption window, income as confirmed, earmark refused",
+          await classify(),
+          "stored NULL, read [], adopted 20191, windows 1 | income 20191 | earmark adopted_paycheck",
+        );
+        await prisma.$executeRaw`UPDATE "PaydayAccountSnapshot" SET "adoptedTransactionIds" = ARRAY[${salary.id}]::text[] WHERE "accountId" = ${main.id}`;
+        eq(
+          "S18 legacy vs none: with its id recorded it is not legacy: no window, and the earmark is accepted",
+          await classify(),
+          `stored [1], read ["${salary.id}"], adopted 20191, windows 0 | income 20191 | earmark ok`,
+        );
+        await prisma.$executeRaw`UPDATE "PaydayAccountSnapshot" SET "adoptedIncome" = NULL, "adoptedTransactionIds" = NULL WHERE "accountId" = ${main.id}`;
+        eq(
+          "S18 legacy vs none: adoptedIncome null and NULL ids adopted nothing: neither legacy (earmark accepted) nor following deposits (income as entered)",
+          await classify(),
+          "stored NULL, read [], adopted null, windows 0 | income 20191 | earmark ok",
+        );
+        await prisma.$executeRaw`UPDATE "PaydayAccountSnapshot" SET "adoptedIncome" = 0 WHERE "accountId" = ${main.id}`;
+        eq(
+          "S18 legacy vs none: adoptedIncome 0 and NULL ids: the same",
+          await classify(),
+          "stored NULL, read [], adopted 0, windows 0 | income 20191 | earmark ok",
+        );
+        await vWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S5: a carryover that settles at exactly 0, corrected later --");
+      {
+        // Buffer 0: Oct B's room is its 10,000 income. Nov A is confirmed on
+        // Oct 30 (its payday) with Oct B's carryover, still provisional.
+        const zero: VBuffer = { percent: 0, floor: 0 };
+        const scenario = async (lastSpend: number, include: boolean) => {
+          const main = await vAccount("Main");
+          await vConfirm(vInput(octB, [{ accountId: main.id, incomeEntered: 10000 }]), vDay(10, 15), zero);
+          await vSpend(main.id, vDay(10, 20), 7000, "SUPER");
+          const offered = await vPayday.getAvailableCarryover(novA, vContext(vDay(10, 30), zero));
+          const verdict = await vConfirm(
+            vInput(novA, [{ accountId: main.id, incomeEntered: 10000 }], include ? { includedCarryover: offered.amount, carryoverIncluded: true } : { carryoverIncluded: false }),
+            vDay(10, 30),
+            zero,
+          );
+          const last = await vSpend(main.id, vDay(10, 31), lastSpend, "LAST");
+          const nov1 = await vRoomOf(novA, vDay(11, 1), zero);
+          const row = await prisma.paydayPlanAllocation.findFirstOrThrow({ where: { type: "CARRYOVER", checkin: { ...novA } } });
+          await prisma.transaction.update({ where: { id: last.id }, data: { amount: lastSpend - 3000 } });
+          const nov3 = await vRoomOf(novA, vDay(11, 3), zero);
+          return { main, offered, verdict, nov1, row, nov3 };
+        };
+        const atZero = await scenario(5000, true);
+        eq("S5: Nov A confirmed Oct 30 with the 3,000 Oct B leaves so far, provisional", `${atZero.offered.amount} ${atZero.offered.provisional} ${atZero.verdict}`, "3000 true ok");
+        eq("S5: Oct B ends overspent (12,000 of 10,000): on Nov 1 the carryover settles at 0, as a carryover taken at 0 (was prior_period_budget, read as declined)", `${atZero.nov1.carryover} ${atZero.row.basis}`, "0 included_at_zero");
+        eq(
+          "S5, the review's case: on Nov 3 an Oct B expense is corrected by -3,000 and Oct B leaves 1,000: the carryover follows to 1,000, adjusted by +1,000 (was 0, none)",
+          `${atZero.nov3.carryover} ${atZero.nov3.carryoverAdjustment ? atZero.nov3.carryoverAdjustment.by : "none"}`,
+          "1000 1000",
+        );
+        const draft = await vDraft(novA, vDay(11, 3));
+        eq("S5: reopening, Step 3 shows it taken at 1,000", `${draft.carryoverIncluded ?? "absent"} ${draft.includedCarryover}`, "true 1000");
+        await vWipe();
+        const atOne = await scenario(2999, true);
+        eq("S5 guard: the same history leaving 1 settles at 1 and reconciles to 3,001 (as before)", `${atOne.nov1.carryover} ${atOne.nov3.carryover}`, "1 3001");
+        await vWipe();
+        const declined = await scenario(5000, false);
+        eq("S5 guard: a carryover declined stays 0 after the correction, and is not taken", `${declined.nov1.carryover} ${declined.row.basis} ${declined.nov3.carryover} ${(await vDraft(novA, vDay(11, 3))).carryoverIncluded ?? "absent"}`, "0 prior_period_budget 0 false");
+        await vWipe();
+        // Reopened while it stands at 0 and confirmed again as shown: still
+        // taken, so a later correction still reaches it.
+        const kept = await scenario(5000, true);
+        await prisma.transaction.updateMany({ where: { accountId: kept.main.id, note: "LAST" }, data: { amount: 5000 } });
+        const atZeroAgain = await vRoomOf(novA, vDay(11, 4), zero);
+        const reopened = await vDraft(novA, vDay(11, 4));
+        const reconfirmed = await vConfirm(
+          vInput(novA, [{ accountId: kept.main.id, incomeEntered: 10000 }], {
+            includedCarryover: reopened.includedCarryover,
+            ...(reopened.carryoverIncluded === undefined ? {} : { carryoverIncluded: reopened.carryoverIncluded }),
+            ...vVersions(reopened),
+          }),
+          vDay(11, 4),
+          zero,
+        );
+        const rowAgain = await prisma.paydayPlanAllocation.findFirstOrThrow({ where: { type: "CARRYOVER", checkin: { ...novA } } });
+        await prisma.transaction.updateMany({ where: { accountId: kept.main.id, note: "LAST" }, data: { amount: 1000 } });
+        eq(
+          "S5: back at 0 on Nov 4, re-confirming the reopened wizard keeps it taken (included_at_zero), and a correction to 2,000 left still reaches it (was prior_period_budget and 0)",
+          `${atZeroAgain.carryover} ${reconfirmed} ${rowAgain.basis} ${(await vRoomOf(novA, vDay(11, 5), zero)).carryover}`,
+          "0 ok included_at_zero 2000",
+        );
+        await vWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S6: a small deposit in the lead days and Step 1's balance --");
+      {
+        // Oct A paid 23,191 (the reference for the 50% rule) and Main is at
+        // -2,000 by Oct 12; a 3,000 extra lands Oct 13 (under half the
+        // paycheck), the 20,191 salary Oct 15.
+        const main = await vAccount("Main");
+        await vConfirm(vInput(octA, [{ accountId: main.id, incomeEntered: 23191 }]), vDay(9, 30));
+        await vSpend(main.id, vDay(10, 5), 25191, "RENT");
+        await vDeposit(main.id, vDay(10, 13), 3000, "EXTRA");
+        await vDeposit(main.id, vDay(10, 15), 20191, "NOMINA");
+        const oct15 = vDay(10, 15);
+        // A second account with no income this period spends in the lead
+        // days, from money it already held.
+        const savings = await vAccount("Savings");
+        await vDeposit(savings.id, vDay(10, 1), 5000, "SAVINGS IN", "MANUAL");
+        await vSpend(savings.id, vDay(10, 13), 1200, "PHARMACY");
+        await vSpend(savings.id, vDay(10, 14), 300, "TAXI");
+        const opened = await vDraft(octB, oct15);
+        const account = opened.accounts.find((a) => a.accountId === main.id);
+        eq("S6: Step 2 adopts both, 23,191", `${account?.ledgerDeposits.map((d) => d.amount).join(" + ")} = ${account?.incomeEntered}`, "3000 + 20191 = 23191");
+        eq(
+          "S6, the review's case: Step 1 is read the day before the pay (Oct 14), without the deposits Step 2 adopts: -2,000 (was 1,000, the extra inside it)",
+          `${toISODate(opened.ledgerDate)} ${account?.expectedLedgerBalance}`,
+          "2026-10-14 -2000",
+        );
+        eq(
+          "S6: the second account's Oct 13-14 spending stays in its Step 1 balance: 5,000 - 1,200 - 300 = 3,500",
+          opened.accounts.find((a) => a.accountId === savings.id)?.expectedLedgerBalance,
+          3500,
+        );
+        const ledger = await vPayday.reconciliationLedger(octB, vContext(oct15));
+        eq(
+          "S6: reconciliationLedger reads the same day and balances on its own (was 2026-10-14 1000 for Main)",
+          `${toISODate(ledger.date)} ${ledger.byAccount.get(main.id)} ${ledger.byAccount.get(savings.id)}`,
+          "2026-10-14 -2000 3500",
+        );
+        await vConfirm(vInput(octB, [{ accountId: main.id, incomeEntered: 23191, reportedBalance: account?.expectedLedgerBalance ?? 0 }], vVersions(opened)), oct15);
+        const room = await vRoomOf(octB, oct15);
+        eq("S6: confirmed with the prefilled balance, the cap is 2,000 and available 18,871.90 (was 0 and 20,871.90)", `${room.cap} ${room.available}`, "2000 18871.9");
+        const snapshot = await prisma.paydayAccountSnapshot.findFirstOrThrow({ where: { accountId: main.id, checkin: { ...octB } } });
+        eq("S6: the snapshot reconciles against the same -2,000", `${num(snapshot.expectedLedgerBalance)} ${num(snapshot.reportedBalance)} ${num(snapshot.difference)}`, "-2000 -2000 0");
+        await vWipe();
+      }
+
+      // ---------------------------------------------------------------------
+      console.log("\n-- S8 (carryover half): goal money that leaves without pairing with a recurring occurrence --");
+      {
+        // Banco is paid 30,000 on Oct 15 (buffer 5%, no floor: Oct B's room
+        // is 28,500 with nothing committed). Fondo: target 10,000, 7,000
+        // saved, a 4,000 automatic contribution due Oct 15. Read on Oct 20,
+        // before posting runs.
+        const fivePercent: VBuffer = { percent: 5, floor: 0 };
+        const oct20 = vDay(10, 20);
+        const scenario = async (options: { logged: number; target?: number; goalRow?: number; automatic?: boolean }) => {
+          const banco = await vAccount("Banco");
+          await vDeposit(banco.id, vDay(10, 15), 30000, "NOMINA");
+          const target = options.target ?? 10000;
+          const fondo = await prisma.goal.create({ data: { name: "Verify Rev2 Fondo", targetAmount: target, currency: "DOP", savedAmount: 7000, targetDate: vDay(12, 31) } });
+          await prisma.goalContribution.create({ data: { goalId: fondo.id, amount: 7000, currency: "DOP", date: vDay(8, 1) } });
+          if (options.automatic !== false) {
+            await prisma.recurringItem.create({
+              data: { name: "Verify Rev2 Fondo auto", amount: 4000, currency: "DOP", frequency: "MONTHLY", anchorDay: 15, nextDate: vDay(10, 15), active: true, kind: "CONTRIBUTION", goalId: fondo.id, accountId: banco.id },
+            });
+          }
+          const opened = await vDraft(octB, vDay(10, 15));
+          await vConfirm(
+            vInput(octB, [{ accountId: banco.id, incomeEntered: 30000 }], {
+              ...vVersions(opened),
+              goals: options.goalRow ? [{ goalId: fondo.id, funding: [{ accountId: banco.id, plannedAmount: options.goalRow }] }] : [],
+            }),
+            vDay(10, 15),
+            fivePercent,
+          );
+          if (options.logged > 0) {
+            await vLogContribution({ goalId: fondo.id, accountId: banco.id, amount: options.logged, date: vDay(10, 15), note: null } as Parameters<typeof vLogContribution>[0], vRates());
+            const saved = num((await prisma.goalContribution.aggregate({ where: { goalId: fondo.id }, _sum: { amount: true } }))._sum.amount as never);
+            await prisma.goal.update({ where: { id: fondo.id }, data: { savedAmount: saved, achievedAt: saved >= target ? vDay(10, 15) : null } });
+          }
+          const room = await vRoomOf(octB, oct20, fivePercent);
+          const leftover = (await vRoom.periodLeftover(octB, vContext(oct20, fivePercent))).amount;
+          await vWipe();
+          return `${room.commitments} ${room.goalPlan} ${room.available} ${leftover}`;
+        };
+        eq("S8 guard: nothing logged, the 4,000 automatic contribution is a commitment: available and leftover 24,500", await scenario({ logged: 0 }), "4000 0 24500 24500");
+        eq(
+          "S8, the review's case: 4,000 logged by hand on Oct 15 fills the goal, the automatic one won't post: the room is 28,500 but the 4,000 left Banco, so Oct B leaves 24,500 (was 28,500)",
+          await scenario({ logged: 4000 }),
+          "0 0 28500 24500",
+        );
+        eq(
+          "S8 guard: 4,000 logged toward a 20,000 target pairs with the automatic one - a settled commitment - and is not counted again: 24,500 (as before)",
+          await scenario({ logged: 4000, target: 20000 }),
+          "4000 0 24500 24500",
+        );
+        eq(
+          "S8 guard: 3,000 planned as a GOAL row and logged by hand is the plan carried out, not taken off twice: 25,500 (as before)",
+          await scenario({ logged: 3000, goalRow: 3000 }),
+          "0 3000 25500 25500",
+        );
+        eq("S8: 5,000 logged against a 3,000 GOAL row takes the 2,000 beyond it: 23,500 (was 25,500)", await scenario({ logged: 5000, goalRow: 3000, target: 20000, automatic: false }), "0 3000 25500 23500");
+
+        // Reproduction 2: an unplanned 1,500 contribution from a 23,191 pay
+        // (buffer 10%: available 20,871.90).
+        const main = await vAccount("Main");
+        await vDeposit(main.id, vDay(10, 15), 20191, "NOMINA");
+        const debt = await prisma.goal.create({ data: { name: "Verify Rev2 Debt", targetAmount: 100000, currency: "DOP", savedAmount: 0 } });
+        const opened = await vDraft(octB, vDay(10, 15));
+        await vConfirm(vInput(octB, [{ accountId: main.id, incomeEntered: 23191, oneOffIncome: 3000 }], vVersions(opened)), vDay(10, 15));
+        await vLogContribution({ goalId: debt.id, accountId: main.id, amount: 1500, date: vDay(10, 20), note: null } as Parameters<typeof vLogContribution>[0], vRates());
+        const room = await vRoomOf(octB, vDay(11, 1));
+        eq(
+          "S8, the review's second case: an unplanned 1,500 contribution leaves 19,371.90, not the room's 20,871.90 (was 20,871.90)",
+          `${room.available} ${(await vRoom.periodLeftover(octB, vContext(vDay(11, 1)))).amount}`,
+          "20871.9 19371.9",
+        );
+        eq("S8: and that is the carryover Nov A is offered (was 20,871.90)", (await vPayday.getAvailableCarryover(novA, vContext(vDay(11, 1)))).amount, 19371.9);
+        await vWipe();
+      }
+    } finally {
+      await vWipe();
+      await prisma.category.deleteMany({ where: { id: vGroceries.id } });
+      if (vStashedBudgets.length > 0) await prisma.budget.createMany({ data: vStashedBudgets });
+      await prisma.account.updateMany({ where: { id: { in: vArchived } }, data: { status: "ACTIVE" } });
+      await prisma.goal.updateMany({ where: { id: { in: vParked } }, data: { achievedAt: null } });
+      await prisma.recurringItem.updateMany({ where: { id: { in: vPaused } }, data: { active: true } });
     }
   }
 
