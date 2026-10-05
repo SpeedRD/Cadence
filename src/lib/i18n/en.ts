@@ -1029,6 +1029,37 @@ export const en = {
       count === 1
         ? "1 pay period would fall short with this purchase in it."
         : `${count} pay periods would fall short with this purchase in it.`,
+    summaryTitle: "After this purchase",
+    summaryViable: (left: string, perDay: string, days: number) =>
+      `Viable. After this purchase you would still have about ${left} to spend until the next check-in (about ${perDay} a day for ${days} ${days === 1 ? "day" : "days"}).`,
+    summaryViableFuture: (period: string, left: string, perDay: string, days: number) =>
+      `Viable. In ${period}, after this payment you would have about ${left} to spend (about ${perDay} a day for ${days} ${days === 1 ? "day" : "days"}).`,
+    summaryViableOver: (over: string, period: string | null) =>
+      period === null
+        ? `Viable for the plan, but with what you have already spent this period you would be about ${over} over until the next check-in.`
+        : `Viable for the plan, but ${period} would be about ${over} over after this payment.`,
+    summaryNotViable: (period: string, short: string, fit: string, payments: number) =>
+      `Not viable. ${period} would be ${short} short. The largest ${payments === 1 ? "payment" : "first payment"} that would still fit is ${fit}${payments === 1 ? "" : `, each of the ${payments} the same`}.`,
+    summaryNotViableNoFit: (period: string, short: string) =>
+      `Not viable. ${period} would be ${short} short, and no payment would fit: the room is already used up before this purchase.`,
+    summaryFirstPayment: "First payment",
+    summaryConverted: (amount: string, converted: string, rate: string) => `${amount} = about ${converted} at ${rate}`,
+    summaryLeftThisPeriod: "Left to spend this period",
+    summaryLeftInPeriod: (period: string) => `Left to spend in ${period}`,
+    summaryLeftHint: (projected: boolean, spentSoFar: boolean) =>
+      `Before / after. ${projected ? "The period's projected room (no check-in is confirmed for it yet)" : "The room its check-in planned"}${spentSoFar ? ", less your budget spending so far." : "."}`,
+    summaryOver: (amount: string) => `${amount} over`,
+    summarySpentSoFar: "Spent so far",
+    summarySplit: (inBudgets: string, noBudget: string) => `After: ${inBudgets} in your budgets, ${noBudget} in no budget.`,
+    summaryPerDay: "Per day",
+    summaryPerDayHint: (days: number, future: boolean) =>
+      future ? `Before / after, over its ${days} ${days === 1 ? "day" : "days"}` : `Before / after, ${days} ${days === 1 ? "day" : "days"} left including today`,
+    summaryAccount: (account: string) => `${account} balance`,
+    summaryAccountHint: (payments: number) =>
+      `Now / after ${payments === 1 ? "this payment" : `these ${payments} payments`}. Includes your cushion and assumes nothing else is spent.`,
+    summaryAccountBuffer: (amount: string) => `Buffer kept there: ${amount}`,
+    summaryTightest: (period: string, amount: string) =>
+      `Tightest period: ${period}, with ${amount} above the buffer after its payment.`,
     columnPayment: "Payment",
     columnDate: "Date",
     columnPeriod: "Pay period",

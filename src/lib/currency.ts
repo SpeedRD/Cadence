@@ -204,6 +204,6 @@ export function formatMoneyCompact(amount: number, currency: string): string {
   return formatMoney(amount, currency, { maximumFractionDigits: 0 });
 }
 
-export function formatRate(rate: number): string {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 }).format(rate);
+export function formatRate(rate: number, options: { minimumFractionDigits?: number } = {}): string {
+  return new Intl.NumberFormat("en-US", { minimumFractionDigits: options.minimumFractionDigits ?? 0, maximumFractionDigits: 4 }).format(rate);
 }

@@ -1016,6 +1016,37 @@ export const es = {
       count === 1
         ? "1 período de pago se quedaría corto con esta compra."
         : `${count} períodos de pago se quedarían cortos con esta compra.`,
+    summaryTitle: "Después de esta compra",
+    summaryViable: (left: string, perDay: string, days: number) =>
+      `Viable. Después de esta compra aún tendrías unos ${left} para gastar hasta el próximo check-in (unos ${perDay} al día durante ${days} ${days === 1 ? "día" : "días"}).`,
+    summaryViableFuture: (period: string, left: string, perDay: string, days: number) =>
+      `Viable. En ${period}, después de este pago tendrías unos ${left} para gastar (unos ${perDay} al día durante ${days} ${days === 1 ? "día" : "días"}).`,
+    summaryViableOver: (over: string, period: string | null) =>
+      period === null
+        ? `Viable para el plan, pero con lo que ya gastaste este período te pasarías unos ${over} hasta el próximo check-in.`
+        : `Viable para el plan, pero ${period} se pasaría unos ${over} después de este pago.`,
+    summaryNotViable: (period: string, short: string, fit: string, payments: number) =>
+      `No viable. A ${period} le faltarían ${short}. El ${payments === 1 ? "pago" : "primer pago"} más grande que aún cabría es de ${fit}${payments === 1 ? "" : `, igual en los ${payments}`}.`,
+    summaryNotViableNoFit: (period: string, short: string) =>
+      `No viable. A ${period} le faltarían ${short}, y no cabría ningún pago: el margen ya se agotó antes de esta compra.`,
+    summaryFirstPayment: "Primer pago",
+    summaryConverted: (amount: string, converted: string, rate: string) => `${amount} = unos ${converted} a ${rate}`,
+    summaryLeftThisPeriod: "Te queda para gastar este período",
+    summaryLeftInPeriod: (period: string) => `Te queda para gastar en ${period}`,
+    summaryLeftHint: (projected: boolean, spentSoFar: boolean) =>
+      `Antes / después. ${projected ? "El margen proyectado del período (aún no hay check-in confirmado para él)" : "El margen que planeó su check-in"}${spentSoFar ? ", menos lo gastado de tus presupuestos hasta ahora." : "."}`,
+    summaryOver: (amount: string) => `${amount} de más`,
+    summarySpentSoFar: "Gastado hasta ahora",
+    summarySplit: (inBudgets: string, noBudget: string) => `Después: ${inBudgets} en tus presupuestos, ${noBudget} sin presupuesto.`,
+    summaryPerDay: "Por día",
+    summaryPerDayHint: (days: number, future: boolean) =>
+      future ? `Antes / después, en sus ${days} ${days === 1 ? "día" : "días"}` : `Antes / después, ${days} ${days === 1 ? "día" : "días"} restantes contando hoy`,
+    summaryAccount: (account: string) => `Saldo de ${account}`,
+    summaryAccountHint: (payments: number) =>
+      `Ahora / después de ${payments === 1 ? "este pago" : `estos ${payments} pagos`}. Incluye tu reserva y supone que no gastas nada más.`,
+    summaryAccountBuffer: (amount: string) => `Colchón que se mantiene: ${amount}`,
+    summaryTightest: (period: string, amount: string) =>
+      `Período más ajustado: ${period}, con ${amount} por encima del colchón después de su pago.`,
     columnPayment: "Pago",
     columnDate: "Fecha",
     columnPeriod: "Período de pago",

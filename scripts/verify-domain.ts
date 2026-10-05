@@ -18564,6 +18564,198 @@ async function main() {
     }
   }
 
+  console.log("\n== Afford: after this purchase - left to spend, per day, the account, the tightest period ==");
+  {
+    // The summary under the Afford verdict (summarizeAfford, attached to the
+    // verdict by evaluateAffordRequest). Fictional figures only. Display DOP;
+    // rates USD 1 / DOP 63 / EUR 0.9, so EUR 1 = DOP 70. Settings keep a 10%
+    // buffer with a 2,000 DOP floor. Today is Jul 21, 2027: Jul 16-31 has 11
+    // days left counting today. One account, `Verify Summary Popular`, got
+    // 17,000 on Jul 2; Jul 16-31 is confirmed with a 17,000 paycheck, a 2,000
+    // buffer and an 8,000 Groceries budget, so its "Available for flexible
+    // categories" is 15,000; 6,000 of Groceries was spent on Jul 18. Every
+    // other active item is paused, every open goal parked, every other active
+    // account archived and every essential category unmarked meanwhile, all
+    // restored in the finally. On the code before, the verdict carries no
+    // summary and summarizeAfford does not exist, so every check fails there.
+    const sAfford = await import("../src/lib/data/afford");
+    const sAffordLib = (await import("../src/lib/afford")) as unknown as Record<string, unknown>;
+    const sPayday = await import("../src/lib/data/payday");
+    const sRoom = await import("../src/lib/data/flexible-room");
+    const { getDictionary: sDictionary } = await import("../src/lib/i18n");
+    const { formatMoney: sMoney, formatMoneyCompact: sCompact, formatRate: sRate } = await import("../src/lib/currency");
+    type SSummary = import("../src/lib/afford").AffordSummary;
+    type SVerdict = import("../src/lib/afford").AffordVerdict;
+    const sRates: RateTable = { rates: { USD: 1, DOP: 63, EUR: 0.9 }, fetchedAt: new Date(), stale: false, source: "bpd", asOf: new Date() };
+    const sToday = civilDate(2027, 7, 21);
+    const sContext = {
+      displayCurrency: "DOP" as const,
+      language: "en" as const,
+      rates: sRates,
+      today: sToday,
+      currentPeriod: periodForDate(sToday),
+      bufferPercent: 10,
+      bufferFloorAmount: 2000,
+      bufferFloorCurrency: "DOP",
+    };
+    const julB = { year: 2027, month: 7, period: "B" as const };
+    const en = sDictionary("en").afford as unknown as Record<string, (...args: unknown[]) => string>;
+    const es = sDictionary("es").afford as unknown as Record<string, (...args: unknown[]) => string>;
+    // Intl writes a no-break space after a currency code; the expected strings use a plain one.
+    const say = (dictionary: Record<string, (...args: unknown[]) => string>, key: string, ...args: unknown[]) =>
+      typeof dictionary[key] === "function" ? dictionary[key](...args).replace(/\u00a0/g, " ") : "(no such copy)";
+    const summaryOf = (verdict: SVerdict | undefined): SSummary | undefined => (verdict as { summary?: SSummary } | undefined)?.summary;
+
+    const sWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify Summary " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.paydayCheckin.deleteMany({ where: { year: 2027, month: { in: [7, 8, 9] } } });
+      await prisma.budget.deleteMany({ where: { year: 2027, month: { in: [7, 8, 9] } } });
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify Summary " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    if ((await prisma.paydayCheckin.count({ where: { year: 2027, month: { in: [7, 8, 9] } } })) > 0) {
+      throw new Error("Afford summary: a check-in for Jul-Sep 2027 is left over from an earlier section");
+    }
+    const pausedForSummary = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    const parkedGoalsForSummary = (await prisma.goal.findMany({ where: { achievedAt: null }, select: { id: true } })).map((row) => row.id);
+    const archivedForSummary = (await prisma.account.findMany({ where: { status: "ACTIVE" }, select: { id: true } })).map((row) => row.id);
+    const essentialForSummary = (await prisma.category.findMany({ where: { isEssentialFixed: true }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: pausedForSummary } }, data: { active: false } });
+    await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForSummary } }, data: { achievedAt: civilDate(2000, 1, 1) } });
+    await prisma.account.updateMany({ where: { id: { in: archivedForSummary } }, data: { status: "ARCHIVED" } });
+    await prisma.category.updateMany({ where: { id: { in: essentialForSummary } }, data: { isEssentialFixed: false } });
+    try {
+      const groceries = (await prisma.category.findFirstOrThrow({ where: { name: "Groceries" } })).id;
+      const popular = await prisma.account.create({ data: { name: "Verify Summary Popular", currency: "DOP", type: "CHECKING" } });
+      await prisma.transaction.create({ data: { date: civilDate(2027, 7, 2), amount: 17000, currency: "DOP", type: "INCOME", accountId: popular.id, note: "Verify Summary pay", source: "MANUAL" } });
+      const draft = await sPayday.getPaydayCheckinDraft(sContext, julB);
+      const confirmed = await sPayday.confirmPaydayCheckin(
+        {
+          ...julB,
+          accounts: draft.accounts
+            .filter((a) => !a.readOnly)
+            .map((a) => ({ accountId: a.accountId, reportedBalance: a.expectedLedgerBalance, incomeEntered: a.accountId === popular.id ? 17000 : 0, incomeNote: null })),
+          goals: [],
+          essentialCategories: [],
+          flexibleCategories: [{ categoryId: groceries, plannedAmount: 8000 }],
+          includedCarryover: 0,
+          acknowledgedDeficit: true,
+          acknowledgedZeroBuffer: true,
+        },
+        sContext,
+      );
+      if (!confirmed.ok) throw new Error(`Afford summary: the Jul 16-31 check-in did not confirm: ${JSON.stringify(confirmed)}`);
+      await prisma.transaction.create({ data: { date: civilDate(2027, 7, 18), amount: 6000, currency: "DOP", type: "EXPENSE", accountId: popular.id, categoryId: groceries, note: "Verify Summary groceries", source: "MANUAL" } });
+
+      const evaluate = async (input: { totalAmount: number; installments: number; firstDate: Date; frequency?: "MONTHLY" | "BIWEEKLY" }) => {
+        const result = await sAfford.evaluateAffordRequest(
+          { name: "Verify Summary purchase", currency: "EUR", frequency: input.frequency ?? "MONTHLY", firstDate: input.firstDate, accountId: popular.id, totalAmount: input.totalAmount, installments: input.installments, acknowledged: false },
+          sContext,
+        );
+        if (!result.ok) throw new Error(`Afford summary: evaluation refused: ${result.reason}`);
+        return result.verdict;
+      };
+
+      console.log("-- the example: 15,000 available, 6,000 spent, one payment of EUR 75 at 70.00 today, 11 days left --");
+      {
+        const verdict = await evaluate({ totalAmount: 75, installments: 1, firstDate: sToday });
+        const summary = summaryOf(verdict);
+        const period = verdict.periods[0];
+        eq("example: Viable, Jul 16-31 confirmed at 15,000 -> 9,750 in the table, and the summary's left to spend 9,000 -> 3,750 (was: no summary)", `${verdict.viable}:${period.flexible.availableBefore}:${period.flexible.availableAfter}:${summary?.left.before}:${summary?.left.after}`, "true:15000:9750:9000:3750");
+        eq("example: 6,000 spent so far, 11 days left counting today, per day 818.18 -> 340.91, about 340 a day", `${summary?.spent}:${summary?.days}:${summary?.perDay.before}:${summary?.perDay.after}:${summary?.about.perDay}:${summary?.about.left}`, "6000:11:818.18:340.91:340:3750");
+        eq("example: the headline, in English", summary ? say(en, "summaryViable", sCompact(summary.about.left, "DOP"), sCompact(summary.about.perDay, "DOP"), summary.days) : "(no summary)", "Viable. After this purchase you would still have about DOP 3,750 to spend until the next check-in (about DOP 340 a day for 11 days).");
+        eq("example: the headline, in Spanish", summary ? say(es, "summaryViable", sCompact(summary.about.left, "DOP"), sCompact(summary.about.perDay, "DOP"), summary.days) : "(no summary)", "Viable. Después de esta compra aún tendrías unos DOP 3,750 para gastar hasta el próximo check-in (unos DOP 340 al día durante 11 días).");
+        eq(
+          "example: the first payment in the account's currency at the rate the evaluation used: EUR 75.00 = about DOP 5,250.00 at 70.00",
+          summary?.firstPayment.rate != null ? say(en, "summaryConverted", sMoney(summary.firstPayment.amount, summary.firstPayment.currency), sMoney(summary.firstPayment.accountAmount, summary.firstPayment.accountCurrency), sRate(summary.firstPayment.rate, { minimumFractionDigits: 2 })) : "(no summary)",
+          "€75.00 = about DOP 5,250.00 at 70.00",
+        );
+        eq("example: of the 3,750 left, 2,000 stays in the Groceries budget (8,000 - 6,000) and 1,750 is in no budget (Dashboard's recommendation 15,000 - 5,250 - 8,000); before: 2,000 and 7,000", summary ? `${summary.split.after.inBudgets}:${summary.split.after.noBudget}:${summary.split.before.inBudgets}:${summary.split.before.noBudget}` : "(no summary)", "2000:1750:2000:7000");
+        eq("example: a single payment in the current period names no tightest period, no shortfall and no largest fit", summary ? `${summary.tightest}:${summary.shortfall}:${summary.largestFit}:${summary.timing}:${summary.basis}` : "(no summary)", "null:null:null:current:confirmed");
+        // The consistency the summary owes the rest of the app.
+        const leftover = await sRoom.periodLeftover(julB, sContext);
+        eq("consistency: left to spend before the purchase (9,000) is the carryover the next check-in would offer from Jul 16-31 (plan room less budget spending)", `${summary?.left.before}`, `${leftover.amount}`);
+        eq("consistency: left to spend after the purchase is the table's Available after (9,750) less the spending so far (6,000)", `${summary?.left.after}`, `${Math.round((period.flexible.availableAfter - (summary?.spent ?? NaN)) * 100) / 100}`);
+      }
+
+      console.log("-- the account view: ledger balance now and after, its buffer --");
+      {
+        const verdict = await evaluate({ totalAmount: 75, installments: 1, firstDate: sToday });
+        const summary = summaryOf(verdict);
+        eq("account: Verify Summary Popular's ledger holds 28,000 now (17,000 on Jul 2, the 17,000 paycheck the check-in recorded, less 6,000), 22,750 after the DOP 5,250 payment, with its 2,000 buffer", summary ? `${summary.account.name}:${summary.account.currency}:${summary.account.balance}:${summary.account.balanceAfter}:${summary.account.buffer}:${summary.account.payments}` : "(no summary)", "Verify Summary Popular:DOP:28000:22750:2000:1");
+        eq("account: the line says it includes the cushion and assumes nothing else is spent", say(en, "summaryAccountHint", 1), "Now / after this payment. Includes your cushion and assumes nothing else is spent.");
+      }
+
+      console.log("-- not viable: one payment of EUR 250 (DOP 17,500) against 15,000 --");
+      {
+        const verdict = await evaluate({ totalAmount: 250, installments: 1, firstDate: sToday });
+        const summary = summaryOf(verdict);
+        eq("not viable: Jul 16-31 would be 2,500 short, and EUR 214.28 is the largest payment that still fits (DOP 14,999.60)", summary ? `${verdict.viable}:${toISODate(summary.shortfall?.period.start ?? new Date(0))}:${summary.shortfall?.amount}:${summary.shortfall?.currency}:${summary.largestFit?.amount}:${summary.largestFit?.currency}` : "(no summary)", "false:2027-07-16:2500:DOP:214.28:EUR");
+        eq("not viable: a cent more than the largest fit no longer fits", summary?.largestFit ? Math.round(summary.largestFit.amount * 100 + 1) / 100 * 70 > 15000 : "(no summary)", true);
+        eq("not viable: the headline, in English", summary?.shortfall && summary.largestFit ? say(en, "summaryNotViable", "Jul 16-31", sMoney(summary.shortfall.amount, summary.shortfall.currency), sMoney(summary.largestFit.amount, summary.largestFit.currency), summary.payments) : "(no summary)", "Not viable. Jul 16-31 would be DOP 2,500.00 short. The largest payment that would still fit is €214.28.");
+        eq("not viable: left to spend goes 9,000 -> 8,500 over", `${summary?.left.before}:${summary?.left.after}:${summary ? say(en, "summaryOver", sMoney(-summary.left.after, "DOP")) : ""}`, "9000:-8500:DOP 8,500.00 over");
+      }
+
+      console.log("-- several payments: EUR 50 every 2 weeks, twice, the second in Aug 1-15 after a DOP 1,000 gym on Aug 3 --");
+      {
+        await prisma.recurringItem.create({ data: { name: "Verify Summary Gym", amount: 1000, currency: "DOP", frequency: "MONTHLY", anchorDay: 3, nextDate: civilDate(2027, 8, 3), kind: "SUBSCRIPTION", active: true, accountId: popular.id } });
+        const verdict = await evaluate({ totalAmount: 100, installments: 2, firstDate: sToday, frequency: "BIWEEKLY" });
+        const summary = summaryOf(verdict);
+        eq("several: Jul 16-31 keeps 11,500 above the buffer, Aug 1-15 10,500 (17,000 - 1,000 - 2,000 - 3,500): Aug 1-15 is the tightest", summary?.tightest ? `${verdict.periods.map((p) => p.account.headroomAfter).join(",")}:${toISODate(summary.tightest.period.start)}:${summary.tightest.aboveBuffer}:${summary.tightest.currency}` : "(no summary)", "11500,10500:2027-08-01:10500:DOP");
+        eq("several: the line, in English", summary?.tightest ? say(en, "summaryTightest", "Aug 1-15", sMoney(summary.tightest.aboveBuffer, summary.tightest.currency)) : "(no summary)", "Tightest period: Aug 1-15, with DOP 10,500.00 above the buffer after its payment.");
+        eq("several: the first period's left to spend takes only its own payment: 9,000 -> 5,500, two payments in the plan, one in Jul 16-31", summary ? `${summary.left.before}:${summary.left.after}:${summary.payments}:${summary.account.payments}` : "(no summary)", "9000:5500:2:1");
+        await prisma.recurringItem.deleteMany({ where: { name: "Verify Summary Gym" } });
+      }
+
+      console.log("-- a first payment in a future period: EUR 75 on Aug 5 --");
+      {
+        const verdict = await evaluate({ totalAmount: 75, installments: 1, firstDate: civilDate(2027, 8, 5) });
+        const summary = summaryOf(verdict);
+        eq("future: Aug 1-15's projected room 15,000 -> 9,750, nothing spent so far, 15 days, about 650 a day", summary ? `${summary.timing}:${summary.basis}:${summary.spent}:${summary.left.before}:${summary.left.after}:${summary.days}:${summary.about.perDay}` : "(no summary)", "future:projected:null:15000:9750:15:650");
+        eq("future: with no budget for Aug 1-15 all of it is in no budget", summary ? `${summary.split.after.inBudgets}:${summary.split.after.noBudget}` : "(no summary)", "0:9750");
+        eq("future: the headline, in English", summary ? say(en, "summaryViableFuture", "Aug 1-15", sCompact(summary.about.left, "DOP"), sCompact(summary.about.perDay, "DOP"), summary.days) : "(no summary)", "Viable. In Aug 1-15, after this payment you would have about DOP 9,750 to spend (about DOP 650 a day for 15 days).");
+      }
+
+      console.log("-- pure: essentials stay in the room, and a plan that fits with more already spent than is left --");
+      {
+        const summarize = sAffordLib.summarizeAfford as ((verdict: SVerdict, inputs: unknown) => SSummary) | undefined;
+        const evaluateAffordability = sAffordLib.evaluateAffordability as (input: unknown) => SVerdict;
+        const buildInstallments = sAffordLib.buildInstallments as (dates: Date[], amount: number) => unknown[];
+        const period = periodInfo(julB);
+        const projection = (essentialFixed: number) => ({
+          period,
+          confirmed: true,
+          account: { accountId: "a", name: "Verify Summary Pure", currency: "DOP", income: 20000, committed: 0, buffer: 2000, essentialFixed, basis: "confirmed", incomePeriods: 1, estimatedGoalFunding: 0 },
+          flexible: { currency: "DOP", income: 20000, committed: 0, buffer: 2000, estimatedGoalFunding: 0, essentialFixed, incomePeriods: 1, carryover: 0, cap: 0 },
+          essentialFixedBasis: essentialFixed > 0 ? "budget" : "unset",
+          estimatedGoals: [],
+          goalPlans: [],
+          historyPeriods: 1,
+        });
+        const run = (essentialFixed: number, spent: number) => {
+          if (!summarize) return undefined;
+          const verdict = evaluateAffordability({ installments: buildInstallments([sToday], 75), currency: "EUR", projections: new Map([[period.key, projection(essentialFixed)]]), rates: sRates });
+          return { verdict, summary: summarize(verdict, { today: sToday, rates: sRates, budget: { overallBudget: null, hasBudget: true, periodBudget: 3000 + 8000 }, spent: { total: spent, outsideBudgets: 0 }, balance: 0 }) };
+        };
+        const withEssential = run(3000, 6000);
+        // available = 20,000 - 3,000 essential - 2,000 buffer = 15,000; the plan's room is 18,000.
+        eq("pure: with 3,000 of essential budgets, left before is the carryover's own figure, 18,000 - 6,000 = 12,000 (leftoverFrom)", withEssential ? `${withEssential.summary.left.before}` : "(no summarizeAfford)", "12000");
+        eq("pure: ... and after is the table's Available after plus the essential budgets less spending: 9,750 + 3,000 - 6,000 = 6,750", withEssential ? `${withEssential.verdict.periods[0].flexible.availableAfter}:${withEssential.summary.left.after}` : "(no summarizeAfford)", "9750:6750");
+        const over = run(0, 14000);
+        eq("pure: viable for the plan (18,000 -> 12,750) but 14,000 already spent: 4,000 -> 1,250 over, about 1,250 over", over ? `${over.verdict.viable}:${over.summary.left.before}:${over.summary.left.after}:${over.summary.about.left}` : "(no summarizeAfford)", "true:4000:-1250:-1250");
+        eq("pure: the over headline, in English", over ? say(en, "summaryViableOver", sCompact(-over.summary.about.left, "DOP"), null) : "(no summarizeAfford)", "Viable for the plan, but with what you have already spent this period you would be about DOP 1,250 over until the next check-in.");
+      }
+    } finally {
+      await sWipe();
+      await prisma.recurringItem.updateMany({ where: { id: { in: pausedForSummary } }, data: { active: true } });
+      await prisma.goal.updateMany({ where: { id: { in: parkedGoalsForSummary } }, data: { achievedAt: null } });
+      await prisma.account.updateMany({ where: { id: { in: archivedForSummary } }, data: { status: "ACTIVE" } });
+      await prisma.category.updateMany({ where: { id: { in: essentialForSummary } }, data: { isEssentialFixed: true } });
+    }
+  }
+
   console.log("\n== cleanup ==");
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });

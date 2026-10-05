@@ -17,12 +17,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { checkInCoverage, MIN_INCOME_HISTORY_PERIODS, showsEssentialFixed } from "@/lib/afford";
-import { formatMoney } from "@/lib/currency";
+import { formatMoney, formatMoneyCompact, formatRate } from "@/lib/currency";
 import { formatDate, formatPeriodShort } from "@/lib/date-format";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-import type { AffordVerdict, PeriodVerdict } from "@/lib/afford";
+import type { AffordSummary, AffordVerdict, PeriodVerdict } from "@/lib/afford";
 import type { AffordRecordedPlan } from "@/lib/data/afford";
 
 /** "before / after" pair: the before muted, the after coloured by whether it stayed on the right side of zero. Shared with the Recurring form's subscription room panel. */
@@ -31,19 +31,22 @@ export function BeforeAfter({
   after,
   currency,
   passes,
+  format = formatMoney,
 }: {
   before: number;
   after: number;
   currency: string;
   passes: boolean;
+  /** How each figure is written; formatMoney unless the caller words it (Afford's summary writes a negative as "over"). */
+  format?: (amount: number, currency: string) => string;
 }) {
   return (
     <span className="flex flex-col items-end leading-tight">
       <span className="figure figure-sm text-hint text-muted-foreground">
-        {formatMoney(before, currency)}
+        {format(before, currency)}
       </span>
       <span className={cn("figure", passes ? "text-[var(--good)]" : "text-[var(--critical)]")}>
-        {formatMoney(after, currency)}
+        {format(after, currency)}
       </span>
     </span>
   );
@@ -100,6 +103,155 @@ function ScrollFade({ children }: { children: ReactNode }) {
     >
       {children}
     </div>
+  );
+}
+
+/**
+ * One labelled line of the summary: the label and its hint on the left, the
+ * figures on the right. `wraps` is for a value that is a phrase rather than a
+ * figure: the label keeps its width and the value wraps beside it.
+ */
+function SummaryRow({ label, hint, wraps = false, children }: { label: string; hint?: ReactNode; wraps?: boolean; children: ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className={cn("text-sm", wraps ? "shrink-0" : "min-w-0")}>
+        {label}
+        {hint ? <span className="block text-badge text-muted-foreground">{hint}</span> : null}
+      </dt>
+      <dd className={cn("text-right", wraps ? "min-w-0" : "shrink-0")}>{children}</dd>
+    </div>
+  );
+}
+
+/**
+ * The verdict in plain words, directly under it: what is left to spend
+ * until the next check-in once the purchase is in, per day, and the paying
+ * account's own view. Every figure is the verdict's summary
+ * (summarizeAfford); nothing is computed here but its wording.
+ */
+function AffordSummaryCard({
+  summary,
+  viable,
+  locale,
+  className,
+}: {
+  summary: AffordSummary;
+  viable: boolean;
+  locale: Locale;
+  className?: string;
+}) {
+  const t = getDictionary(locale).afford;
+  const future = summary.timing === "future";
+  const periodLabel = formatPeriodShort(summary.period, locale);
+  // A negative "left" is money spent over the plan, written as such.
+  const left = (amount: number, currency: string) =>
+    amount < 0 ? t.summaryOver(formatMoney(-amount, currency)) : formatMoney(amount, currency);
+
+  let headline: string;
+  if (!viable && summary.shortfall && summary.largestFit) {
+    const shortPeriod = formatPeriodShort(summary.shortfall.period, locale);
+    const short = formatMoney(summary.shortfall.amount, summary.shortfall.currency);
+    headline =
+      summary.largestFit.amount > 0
+        ? t.summaryNotViable(shortPeriod, short, formatMoney(summary.largestFit.amount, summary.largestFit.currency), summary.payments)
+        : t.summaryNotViableNoFit(shortPeriod, short);
+  } else if (summary.about.left < 0) {
+    headline = t.summaryViableOver(formatMoneyCompact(-summary.about.left, summary.currency), future ? periodLabel : null);
+  } else {
+    const about = formatMoneyCompact(summary.about.left, summary.currency);
+    const perDay = formatMoneyCompact(summary.about.perDay, summary.currency);
+    headline = future
+      ? t.summaryViableFuture(periodLabel, about, perDay, summary.days)
+      : t.summaryViable(about, perDay, summary.days);
+  }
+
+  const payment = summary.firstPayment;
+  return (
+    <Card size="sm" className={className}>
+      <CardHeader>
+        <CardTitle>{t.summaryTitle}</CardTitle>
+        <CardDescription className="text-foreground">{headline}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid gap-3 sm:grid-cols-2 sm:gap-x-8">
+          <SummaryRow label={t.summaryFirstPayment} wraps>
+            <span className="figure text-sm">
+              {payment.rate === null
+                ? formatMoney(payment.accountAmount, payment.accountCurrency)
+                : t.summaryConverted(
+                    formatMoney(payment.amount, payment.currency),
+                    formatMoney(payment.accountAmount, payment.accountCurrency),
+                    formatRate(payment.rate, { minimumFractionDigits: 2 }),
+                  )}
+            </span>
+          </SummaryRow>
+          {summary.spent !== null ? (
+            <SummaryRow label={t.summarySpentSoFar}>
+              <span className="figure text-sm">{formatMoney(summary.spent, summary.currency)}</span>
+            </SummaryRow>
+          ) : null}
+          <SummaryRow
+            label={future ? t.summaryLeftInPeriod(periodLabel) : t.summaryLeftThisPeriod}
+            hint={
+              <>
+                {t.summaryLeftHint(summary.basis === "projected", summary.spent !== null)}
+                {summary.left.after > 0 ? (
+                  <span className="block">
+                    {t.summarySplit(
+                      formatMoney(summary.split.after.inBudgets, summary.currency),
+                      formatMoney(summary.split.after.noBudget, summary.currency),
+                    )}
+                  </span>
+                ) : null}
+              </>
+            }
+          >
+            <BeforeAfter
+              before={summary.left.before}
+              after={summary.left.after}
+              currency={summary.currency}
+              passes={summary.left.after >= 0}
+              format={left}
+            />
+          </SummaryRow>
+          <SummaryRow label={t.summaryPerDay} hint={t.summaryPerDayHint(summary.days, future)}>
+            <BeforeAfter
+              before={summary.perDay.before}
+              after={summary.perDay.after}
+              currency={summary.currency}
+              passes={summary.perDay.after >= 0}
+              format={left}
+            />
+          </SummaryRow>
+          <SummaryRow
+            label={t.summaryAccount(summary.account.name)}
+            hint={
+              <>
+                {t.summaryAccountHint(summary.account.payments)}
+                <span className="block">
+                  {t.summaryAccountBuffer(formatMoney(summary.account.buffer, summary.account.currency))}
+                </span>
+              </>
+            }
+          >
+            <BeforeAfter
+              before={summary.account.balance}
+              after={summary.account.balanceAfter}
+              currency={summary.account.currency}
+              passes={summary.account.balanceAfter >= summary.account.buffer}
+            />
+          </SummaryRow>
+        </dl>
+        {summary.tightest ? (
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t.summaryTightest(
+              formatPeriodShort(summary.tightest.period, locale),
+              formatMoney(summary.tightest.aboveBuffer, summary.tightest.currency),
+            )}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -331,6 +483,10 @@ export function AffordResults({
             {stale ? <p className="text-[var(--warning)]">{t.resultsStale}</p> : null}
           </AlertDescription>
         </Alert>
+
+        {verdict.summary ? (
+          <AffordSummaryCard summary={verdict.summary} viable={verdict.viable} locale={locale} className="mt-5" />
+        ) : null}
 
         <RecordCard {...recordProps} variant="phone" className="mt-5 sm:hidden" />
       </div>

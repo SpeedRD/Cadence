@@ -83,6 +83,7 @@ import {
   evaluateAffordability,
   installmentDates,
   splitPaidInstallments,
+  summarizeAfford,
   type AffordVerdict,
   type EssentialFixedBasis,
   type EstimatedGoalFunding,
@@ -91,6 +92,7 @@ import {
 } from "@/lib/afford";
 import { remainingInstallments, type AffordTrackedItem } from "@/lib/afford-tracking";
 import { getSettings } from "@/lib/auth";
+import { periodBudgetFrom, spentOutsideBudgets } from "@/lib/budget-spending";
 import { convert } from "@/lib/currency";
 import { num, round2 } from "@/lib/money";
 import { comparableHistory as historyWalk } from "@/lib/history-window";
@@ -100,6 +102,7 @@ import {
   nextPeriod,
   parsePeriodKey,
   periodClock,
+  periodForDate,
   periodInfo,
   type PeriodInfo,
   type PeriodRef,
@@ -111,6 +114,8 @@ import { recurringExternalId } from "@/lib/recurring-settlement";
 import type { affordInputSchema } from "@/lib/validation";
 import type { z } from "zod";
 
+import { getAccountBalances } from "@/lib/data/accounts";
+import { loadBudgetSpent } from "@/lib/data/budget-spending";
 import { getAppContext } from "@/lib/data/context";
 import { loadGoalPeriodPlans } from "@/lib/data/goal-plan";
 import { loadConfirmedRooms, type ConfirmedRoom } from "@/lib/data/flexible-room";
@@ -749,6 +754,7 @@ export async function projectPeriods(
             goalPlan: room.goalPlan,
             carryover: room.carryover,
             cap: room.cap,
+            goalMoneyOutside: room.goalMoneyOutside,
           }
         : {
             currency: context.displayCurrency,
@@ -807,6 +813,43 @@ async function loadActiveAccounts(): Promise<ActiveAccount[]> {
 }
 
 /**
+ * The verdict in plain words (summarizeAfford) for its first payment's
+ * period: that period's budget (periodBudgetFrom), its budget spending so
+ * far (K6, loadBudgetSpent) when it is today's period, and the paying
+ * account's ledger balance as Step 1 and Accounts read it
+ * (getAccountBalances). Reads only.
+ */
+async function loadAffordSummary(
+  verdict: AffordVerdict,
+  chosen: ActiveAccount,
+  context: AffordContext,
+): Promise<AffordVerdict["summary"]> {
+  const period = verdict.periods[0]?.period;
+  if (!period) return undefined;
+  const current = period.key === periodForDate(context.today).key;
+  const [budgets, spent, balances] = await Promise.all([
+    prisma.budget.findMany({
+      where: { year: period.year, month: period.month, period: period.period },
+      select: { categoryId: true, amount: true, currency: true },
+    }),
+    current ? loadBudgetSpent([period], context) : Promise.resolve(null),
+    getAccountBalances(context, { status: "ACTIVE" }),
+  ]);
+  const budget = periodBudgetFrom(
+    budgets.map((row) => ({ categoryId: row.categoryId, amount: num(row.amount), currency: row.currency })),
+    (amount, currency) => convert(amount, currency, context.displayCurrency, context.rates),
+  );
+  const periodSpent = spent?.get(period.key) ?? null;
+  return summarizeAfford(verdict, {
+    today: context.today,
+    rates: context.rates,
+    budget,
+    spent: periodSpent ? { total: periodSpent.total, outsideBudgets: spentOutsideBudgets(periodSpent, budget) } : null,
+    balance: balances.find((account) => account.id === chosen.id)?.balance ?? 0,
+  });
+}
+
+/**
  * Evaluates a purchase without writing anything. Plain function (no
  * requireAuth()/cookies()) so scripts/verify-domain.ts can drive it the same
  * way the server action does.
@@ -841,6 +884,7 @@ export async function evaluateAffordRequest(
     projections,
     rates: context.rates,
   });
+  verdict.summary = await loadAffordSummary(verdict, chosen, context);
   return {
     ok: true,
     verdict,

@@ -157,8 +157,24 @@ export function leftoverFrom(
   room: (Pick<FlexibleRoom, "essential" | "available"> & { goalMoneyOutside?: number }) | null,
 ): { amount: number; basis: "prior_period_budget" | "no_prior_budget" } {
   if (!period.hasBudget && !room) return { amount: 0, basis: "no_prior_budget" };
-  const planned = room ? round2(room.essential + room.available - Math.max(0, room.goalMoneyOutside ?? 0)) : period.periodBudget;
-  return { amount: Math.max(0, round2(planned - period.spent)), basis: "prior_period_budget" };
+  const left = room ? roomLeftAfterSpending(room, period.spent) : round2(period.periodBudget - period.spent);
+  return { amount: Math.max(0, left), basis: "prior_period_budget" };
+}
+
+/**
+ * What a period's plan has left after its budget spending (K6), not floored:
+ * the plan's room - its essential budgets and what it left flexible
+ * categories - less the goal money that left outside the plan and `spent`.
+ * The carryover (leftoverFrom) is this, never below 0; Afford's "left to
+ * spend" is this as it stands, a negative figure being money spent over the
+ * plan.
+ */
+export function roomLeftAfterSpending(
+  room: Pick<FlexibleRoom, "essential" | "available"> & { goalMoneyOutside?: number },
+  spent: number,
+): number {
+  const planned = round2(room.essential + room.available - Math.max(0, room.goalMoneyOutside ?? 0));
+  return round2(planned - spent);
 }
 
 /**

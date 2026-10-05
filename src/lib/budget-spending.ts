@@ -175,3 +175,19 @@ export function periodBudgetFrom(
     hasBudget: overallBudget !== null || categoryBudgetTotal > 0,
   };
 }
+
+/**
+ * The part of `spent` in lines the period budgets nothing for: the
+ * uncategorized line and every category without a category budget above 0.
+ * It is what spending has taken out of the money the plan leaves in no
+ * budget (unallocatedRoom). With an overall budget every line is in it, so
+ * nothing is outside.
+ */
+export function spentOutsideBudgets(spent: BudgetSpent, budget: Pick<PeriodBudget, "overallBudget" | "byCategory">): number {
+  if (budget.overallBudget !== null) return 0;
+  let total = 0;
+  for (const [categoryId, line] of spent.byCategory) {
+    if (categoryId === null || (budget.byCategory.get(categoryId) ?? 0) <= 0) total += line.spent;
+  }
+  return round2(total);
+}

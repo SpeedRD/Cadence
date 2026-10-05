@@ -268,6 +268,17 @@ of each dated goal's pace, marked as such. Installments dated before today count
 paid. Nothing is written until **I bought this**, which records one self-limiting
 subscription for the schedule shown.
 
+Under the verdict, **After this purchase** says it in plain words: about how much is
+left to spend until the next check-in once the first payment is in, and per day for
+the days left. That figure is the period's room less your budget spending so far, the
+same amount the next check-in would offer as carryover, and it shows as "over" when
+negative. The summary also shows the first payment converted at the rate the check
+used, how much of what is left sits in your budgets and how much in no budget, and the
+paying account's balance now and after the payment. With several payments it names
+the tightest period. When the plan does not fit, it says how much the tightest period
+is short and the largest payment that would still fit. If the first payment falls in
+a later period, the figures use that period's projected room.
+
 ### Goals
 
 ![Goals page: one goal reached and fully funded, one in progress with its per-pay-period roadmap amount](screenshots/goals.png)

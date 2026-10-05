@@ -30,9 +30,17 @@
 import { convert, type RateTable } from "@/lib/currency";
 import { startOfDay } from "@/lib/date";
 import { round2 } from "@/lib/money";
-import { flexibleRoomFrom, type FlexibleRoom } from "@/lib/flexible-room";
+import {
+  flexibleRoomFrom,
+  recommendationFor,
+  roomLeftAfterSpending,
+  unallocatedRoom,
+  type FlexibleRoom,
+  type FlexibleRoomBasis,
+} from "@/lib/flexible-room";
+import type { PeriodBudget } from "@/lib/budget-spending";
 import type { GoalFundingDraw } from "@/lib/payday";
-import { periodForDate, type PeriodInfo } from "@/lib/period";
+import { daysRemainingInPeriod, periodForDate, type PeriodInfo } from "@/lib/period";
 import { advanceDate } from "@/lib/recurring";
 
 import type { RecurringFrequency } from "@/generated/prisma/enums";
@@ -255,6 +263,13 @@ export interface PeriodProjection {
      */
     carryover?: number;
     cap?: number;
+    /**
+     * For a period whose check-in is confirmed, the goal money that left it
+     * outside its plan (S8, ConfirmedRoom.goalMoneyOutside): not in the room,
+     * but no longer there to spend either, so the carryover and Afford's
+     * "left to spend" take it off. Absent reads as 0.
+     */
+    goalMoneyOutside?: number;
   };
   /** Where `flexible.essentialFixed` came from, so the results page can say what was assumed. */
   essentialFixedBasis: EssentialFixedBasis;
@@ -327,6 +342,8 @@ export interface FlexibleCheck {
   /** The confirmed plan's carryover and cap - see PeriodProjection.flexible; 0 for a projected period. */
   carryover: number;
   cap: number;
+  /** See PeriodProjection.flexible.goalMoneyOutside; 0 for a projected period. */
+  goalMoneyOutside: number;
   /** K4's `available` for the period (roomFromProjection): what the purchase is taken from. */
   availableBefore: number;
   /** In the display currency. */
@@ -379,6 +396,12 @@ export interface AffordVerdict {
   periods: PeriodVerdict[];
   /** The periods that fail either check, earliest first. */
   failing: PeriodVerdict[];
+  /**
+   * The verdict in plain words (summarizeAfford): what is left to spend
+   * after the purchase. Present on the verdict the results page shows
+   * (evaluateAffordRequest); absent where only the checks are needed.
+   */
+  summary?: AffordSummary;
 }
 
 /**
@@ -496,6 +519,7 @@ export function evaluateAffordability(input: {
       incomePeriods: projection.flexible.incomePeriods,
       carryover: projection.flexible.carryover ?? 0,
       cap: projection.flexible.cap ?? 0,
+      goalMoneyOutside: projection.flexible.goalMoneyOutside ?? 0,
       availableBefore,
       installment: flexibleInstallment,
       availableAfter,
@@ -529,3 +553,203 @@ export function evaluateAffordability(input: {
   };
 }
 
+
+/** What is left of a period's room, split the way the Dashboard's "Recommended" splits it. */
+export interface BudgetSplit {
+  /** What stays with the period's budgets. */
+  inBudgets: number;
+  /** What the plan leaves in no budget (recommendationFor's unallocated), less the spending already taken from it. */
+  noBudget: number;
+}
+
+/**
+ * The verdict said in plain words, for the payment's first period: how much
+ * is left to spend until the next check-in once the purchase is in, per day,
+ * and from the paying account's own point of view. Every figure comes from
+ * the verdict's own periods - nothing is projected a second time. Amounts in
+ * the display currency unless a field says otherwise.
+ */
+export interface AffordSummary {
+  /** The pay period the first payment lands in. */
+  period: PeriodInfo;
+  /** How many payments the plan has still ahead (the verdict's installments). */
+  payments: number;
+  /** "current" when it is today's period, "future" when it lies ahead (no spending yet). */
+  timing: "current" | "future";
+  /** K4's basis for that period's room: what its check-in confirmed, or the projection. */
+  basis: FlexibleRoomBasis;
+  currency: string;
+  /** The days the figures are spread over: daysRemainingInPeriod, the Dashboard hero's count (the whole period when it lies ahead). */
+  days: number;
+  /** The first payment, and what it is in the paying account's currency at the rate the evaluation used (null when the two currencies are one). */
+  firstPayment: { amount: number; currency: string; accountAmount: number; accountCurrency: string; rate: number | null };
+  /** K6's budget spending so far in the period; null for a period that has not started. */
+  spent: number | null;
+  /**
+   * The period's room (K4: essential budgets and the flexible room, less
+   * goal money that left outside the plan) less `spent`, before and after
+   * the purchase's payments in the period - roomLeftAfterSpending, the
+   * carryover's own figure, not floored: below 0 is money spent over.
+   */
+  left: { before: number; after: number };
+  /** `left` over `days`, to the cent. */
+  perDay: { before: number; after: number };
+  split: { before: BudgetSplit; after: BudgetSplit };
+  /** The headline's "about" figures, in whole units rounded toward zero, so it never says there is more than there is. */
+  about: { left: number; perDay: number };
+  /** The paying account's ledger, in its own currency: before and after the payments due in the period, and the buffer kept there. Includes the cushion; assumes nothing else is spent. */
+  account: { name: string; currency: string; balance: number; balanceAfter: number; buffer: number; payments: number };
+  /** With payments in more than one period: the one left with the least room above the account's buffer after its payments. */
+  tightest: { period: PeriodInfo; aboveBuffer: number; currency: string } | null;
+  /** Not viable: the failing period that would be short the most, and by how much (the larger of its two checks, in the display currency). */
+  shortfall: { period: PeriodInfo; amount: number; currency: string } | null;
+  /** Not viable: the largest equal payment, in the purchase's currency, every period could carry (0 when none could). */
+  largestFit: { amount: number; currency: string } | null;
+}
+
+export interface AffordSummaryInputs {
+  today: Date;
+  rates: RateTable;
+  /** The first payment's period's budget (periodBudgetFrom). */
+  budget: Pick<PeriodBudget, "overallBudget" | "hasBudget" | "periodBudget">;
+  /**
+   * That period's budget spending so far (K6) and the part of it outside
+   * budgets (spentOutsideBudgets). Read only when the period is today's;
+   * null or ignored for one ahead.
+   */
+  spent: { total: number; outsideBudgets: number } | null;
+  /** The paying account's ledger balance today, in its own currency (getAccountBalances). */
+  balance: number;
+}
+
+/**
+ * Splits `left` with the Dashboard's recommendationFor: the money the plan
+ * leaves in no budget (unallocatedRoom), less what spending outside budgets
+ * already took from it, never more than is left; the rest stays with the
+ * budgets.
+ */
+function splitLeft(
+  room: { essential: number; available: number },
+  left: number,
+  budget: AffordSummaryInputs["budget"],
+  outsideBudgets: number,
+): BudgetSplit {
+  const recommended = recommendationFor(budget, {
+    available: room.available,
+    unallocated: unallocatedRoom(room, budget.periodBudget),
+  });
+  const noBudget = left > 0 ? Math.min(left, Math.max(0, round2((recommended?.unallocated ?? 0) - outsideBudgets))) : 0;
+  return { inBudgets: round2(left - noBudget), noBudget: round2(noBudget) };
+}
+
+/** Whole units toward zero. */
+function aboutAmount(amount: number): number {
+  return Math.trunc(amount + (amount >= 0 ? 1e-9 : -1e-9)) || 0;
+}
+
+/**
+ * The largest equal payment, in the purchase's currency, that would pass
+ * both checks in every period: each period's room before the purchase
+ * shared between the payments it holds, the smallest of them, floored to
+ * the cent and stepped down until the checks' own rounding passes it.
+ */
+function largestFittingPayment(verdict: Pick<AffordVerdict, "currency" | "periods">, rates: RateTable): number {
+  let limit = Infinity;
+  for (const period of verdict.periods) {
+    const count = period.installments.length;
+    limit = Math.min(
+      limit,
+      convert(period.account.headroomBefore / count, period.account.currency, verdict.currency, rates),
+      convert(period.flexible.availableBefore / count, period.flexible.currency, verdict.currency, rates),
+    );
+  }
+  if (!(limit > 0) || !Number.isFinite(limit)) return 0;
+  const fits = (amount: number) =>
+    verdict.periods.every((period) => {
+      const total = round2(amount * period.installments.length);
+      return (
+        round2(convert(total, verdict.currency, period.account.currency, rates)) <= period.account.headroomBefore &&
+        round2(convert(total, verdict.currency, period.flexible.currency, rates)) <= period.flexible.availableBefore
+      );
+    });
+  let amount = Math.floor(limit * 100 + 1e-6) / 100;
+  while (amount > 0 && !fits(amount)) amount = round2(amount - 0.01);
+  return Math.max(0, amount);
+}
+
+/**
+ * The summary under the verdict (AffordSummary), from the verdict and the
+ * few figures it does not hold: the period's budget, its spending so far and
+ * the account's ledger balance. Pure; the loader is evaluateAffordRequest.
+ */
+export function summarizeAfford(verdict: AffordVerdict, inputs: AffordSummaryInputs): AffordSummary {
+  const first = verdict.periods[0];
+  if (!first) throw new Error("A verdict with no period has nothing to summarize");
+  const timing = first.key === periodForDate(inputs.today).key ? "current" : "future";
+  const spent = timing === "current" ? round2(inputs.spent?.total ?? 0) : null;
+  const outsideBudgets = timing === "current" ? (inputs.spent?.outsideBudgets ?? 0) : 0;
+  const days = Math.max(1, daysRemainingInPeriod(inputs.today, first.period));
+  const room = { essential: first.flexible.essentialFixed, goalMoneyOutside: first.flexible.goalMoneyOutside };
+  const left = {
+    before: roomLeftAfterSpending({ ...room, available: first.flexible.availableBefore }, spent ?? 0),
+    after: roomLeftAfterSpending({ ...room, available: first.flexible.availableAfter }, spent ?? 0),
+  };
+
+  const payment = verdict.installments[0];
+  const accountCurrency = first.account.currency;
+  const sameCurrency = verdict.currency === accountCurrency;
+
+  let tightest: AffordSummary["tightest"] = null;
+  if (verdict.periods.length > 1) {
+    const period = verdict.periods.reduce((least, candidate) =>
+      candidate.account.headroomAfter < least.account.headroomAfter ? candidate : least,
+    );
+    tightest = { period: period.period, aboveBuffer: period.account.headroomAfter, currency: period.account.currency };
+  }
+
+  let shortfall: AffordSummary["shortfall"] = null;
+  for (const period of verdict.failing) {
+    const amount = round2(
+      Math.max(
+        period.flexible.shortfall,
+        convert(period.account.shortfall, period.account.currency, period.flexible.currency, inputs.rates),
+      ),
+    );
+    if (!shortfall || amount > shortfall.amount) shortfall = { period: period.period, amount, currency: period.flexible.currency };
+  }
+
+  return {
+    period: first.period,
+    payments: verdict.installments.length,
+    timing,
+    basis: first.confirmed ? "confirmed" : "projected",
+    currency: first.flexible.currency,
+    days,
+    firstPayment: {
+      amount: payment.amount,
+      currency: verdict.currency,
+      accountAmount: round2(convert(payment.amount, verdict.currency, accountCurrency, inputs.rates)),
+      accountCurrency,
+      rate: sameCurrency ? null : convert(1, verdict.currency, accountCurrency, inputs.rates),
+    },
+    spent,
+    left,
+    perDay: { before: round2(left.before / days), after: round2(left.after / days) },
+    split: {
+      before: splitLeft({ essential: room.essential, available: first.flexible.availableBefore }, left.before, inputs.budget, outsideBudgets),
+      after: splitLeft({ essential: room.essential, available: first.flexible.availableAfter }, left.after, inputs.budget, outsideBudgets),
+    },
+    about: { left: aboutAmount(left.after), perDay: aboutAmount(left.after / days) },
+    account: {
+      name: first.account.name,
+      currency: accountCurrency,
+      balance: round2(inputs.balance),
+      balanceAfter: round2(inputs.balance - first.account.installment),
+      buffer: first.account.buffer,
+      payments: first.installments.length,
+    },
+    tightest,
+    shortfall,
+    largestFit: verdict.viable ? null : { amount: largestFittingPayment(verdict, inputs.rates), currency: verdict.currency },
+  };
+}
