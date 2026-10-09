@@ -499,7 +499,7 @@ async function postOccurrence(
     // The cache rebuild reads through the shared client, so it runs after the
     // rows above are committed and visible - the same order as the manual flow.
     if (outcome && "goalContribution" in outcome && outcome.goalContribution && goalId) {
-      await recomputeGoalSaved(goalId);
+      await recomputeGoalSaved(goalId, today);
     }
     return outcome;
   } catch (error) {
