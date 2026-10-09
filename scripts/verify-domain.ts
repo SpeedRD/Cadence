@@ -17624,7 +17624,10 @@ async function main() {
         const card = await prisma.goal.create({ data: { name: "Verify Rev2P Card", targetAmount: 4491.32, currency: "DOP", targetDate: pDay(11, 30), isDebt: true } });
         await prisma.goal.create({ data: { name: "Verify Rev2P Loan", targetAmount: 20000, currency: "DOP", isDebt: true } });
         await prisma.goalContribution.create({ data: { goalId: card.id, amount: 4491.32, currency: "DOP", date: pDay(10, 8), note: "Card payment" } });
-        await pGoals.recomputeGoalSaved(card.id);
+        // recomputeGoalSaved reads the real clock unless it is given a day: on
+        // the real Oct 9 or later the Oct 8 payment is in the past, the card is
+        // reached and drops out of the open debts. Pin it to the block's today.
+        await pGoals.recomputeGoalSaved(card.id, pDay(10, 4));
         const debts = async () => (await pDebts.listDebtGoals(pContext(pDay(10, 4)) as never)).filter((debt) => debt.name.startsWith("Verify Rev2P "));
         const payoffs = async () => {
           const compared = pCompare(await debts(), 0);
@@ -17635,7 +17638,7 @@ async function main() {
         eq("S16: Card is paid off in period 1 and its minimum frees for the loan (was Card 5, Loan 28)", await payoffs(), "Card 1, Loan 24 | Card 1, Loan 24");
         // Guard: a payment dated after the plan period's window is not counted in period 1.
         await prisma.goalContribution.updateMany({ where: { goalId: card.id }, data: { date: pDay(11, 20) } });
-        await pGoals.recomputeGoalSaved(card.id);
+        await pGoals.recomputeGoalSaved(card.id, pDay(10, 4));
         const later = (await debts()).find((debt) => debt.goalId === card.id);
         eq("S16 guard: dated Nov 20, past the plan window, the payment is in neither (balance 4,491.32, paid 0)", `${later?.balance} ${later?.paidThisPeriod}`, "4491.32 0");
         await pWipe();

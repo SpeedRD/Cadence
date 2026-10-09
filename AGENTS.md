@@ -108,9 +108,13 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   in ways Chromium never shows: it forces date inputs to
   `box-sizing: content-box` unless their width is a fixed length. Against a
   scratch-DB dev server on port 3100:
-  `xcrun simctl boot 61EA45F3-2C16-4BEB-B403-EE1E183E9D51` (iPhone 17 Pro Max)
-  and `xcrun simctl boot E6C81B96-8727-49C8-8580-EDDABA0E349F` (iPad Air 11",
-  which is above `sm` and must keep the desktop presentation), then
+  find an iPhone 17 Pro Max and an iPad Air 11" (which is above `sm` and must
+  keep the desktop presentation) with `xcrun simctl list devices available`;
+  if either is missing, create it with `xcrun simctl create "<name>"
+  com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max <runtime>` or
+  `...SimDeviceType.iPad-Air-11-inch-M4 <runtime>` (device types from
+  `xcrun simctl list devicetypes`, runtime from `xcrun simctl list runtimes`;
+  it prints the new udid). Boot each with `xcrun simctl boot <udid>`, then
   `xcrun simctl bootstatus <udid> -b`. Drive Safari through `safaridriver -p 4444`
   with WebDriver capabilities `{"browserName":"Safari","platformName":"iOS",
   "safari:useSimulator":true,"safari:deviceUDID":"<udid>"}`. Add the minted
