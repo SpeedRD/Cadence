@@ -13546,7 +13546,8 @@ async function main() {
         const goal = await kGoal("Dollar Goal", "USD");
         await kItem({ name: "Dollar Goal", amount: 100, currency: "USD", nextDate: oct(10), accountId: payer.id, kind: "CONTRIBUTION", goalId: goal.id });
         await kGoals.logManualContribution({ goalId: goal.id, accountId: payer.id, amount: 100, date: oct(8), note: null }, kRates(60));
-        await kGoals.rebuildGoalSaved(goal.id);
+        // Pinned to the posting run's day: with no day it reads the real clock, and the Oct 8 contribution is ahead of it before Oct 8.
+        await kGoals.rebuildGoalSaved(goal.id, oct(10));
         await kPostAt(oct(10), 60);
         eq(
           "D39: a 100 USD contribution logged by hand from a DOP account on Oct 8 settles the Oct 10 occurrence: the goal saves 100 USD and the ledger holds 6,000 DOP once (was 200 USD, and 6,000 DOP plus 100 USD)",
@@ -17657,7 +17658,8 @@ async function main() {
           await pItem({ name: "USD Fund auto", amount: 50, currency: "EUR", nextDate: pDay(10, 20), accountId: a.id, kind: "CONTRIBUTION", goalId: goal.id });
           await pPosting.postDueRecurringItems(pDay(10, 20));
           await pGoals.logManualContribution({ goalId: goal.id, accountId: a.id, amount: byHand, date: pDay(10, 21), note: null } as Parameters<typeof pGoals.logManualContribution>[0], pRates());
-          await pGoals.recomputeGoalSaved(goal.id);
+          // Pinned to the first day read below: the contributions are dated Oct 20 and 21, ahead of the real clock until then.
+          await pGoals.recomputeGoalSaved(goal.id, pDay(10, 30));
           const checkin = await prisma.paydayCheckin.create({
             data: { year: 2026, month: 10, period: "B", checkinDate: pDay(10, 15), currency: "DOP", status: "CONFIRMED", allocations: { create: [{ type: "GOAL", goalId: goal.id, accountId: a.id, recommendedAmount: 2982.11, plannedAmount: 2982.11, currency: "DOP" }] } },
           });
@@ -17693,7 +17695,8 @@ async function main() {
           } else {
             await pGoals.logManualContribution({ goalId: fondo.id, accountId: banco.id, amount: 4000, date: pDay(10, 15), note: null } as Parameters<typeof pGoals.logManualContribution>[0], pRates());
           }
-          await pGoals.recomputeGoalSaved(fondo.id);
+          // Pinned to the posting run's day: the 4,000 dated Oct 15 fills the goal on that day, not on whatever day the harness runs.
+          await pGoals.recomputeGoalSaved(fondo.id, pDay(10, 15));
           const summary = await pPosting.postDueRecurringItems(pDay(10, 15));
           const now = await prisma.recurringItem.findUniqueOrThrow({ where: { id: item.id } });
           const settlements = await prisma.recurringSettlement.count({ where: { recurringItemId: item.id } });
