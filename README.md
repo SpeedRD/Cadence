@@ -5,7 +5,7 @@ cycle instead of the calendar month. Budgets, safe-to-spend, goal roadmaps and t
 affordability check are all computed per pay period — **Period A: 1st–15th** and
 **Period B: 16th–end of month** — so the numbers match how you actually get paid.
 
-![Cadence dashboard: payday check-in prompt, the current pay period's safe-to-spend per day, spending against budget, and monthly spending pace](screenshots/dashboard.png)
+![Cadence dashboard: an alert for a recurring item that cannot post, an alert for an Afford plan that no longer fits, the payday check-in prompt, and the current pay period's safe-to-spend per day beside spending against budget, what is committed and income](screenshots/dashboard.png)
 
 *Every screenshot and example in this README comes from a throwaway database seeded
 with fictional data, shown in USD.*
@@ -58,9 +58,11 @@ Budgets, the check-in, Afford, Goals and Reports never disagree.
   expense, at your share when it was shared. The category rows add up to the total.
 - **One history window.** Every average over past periods — Afford's income
   projection, the check-in's category suggestions, Reports' per-period average, the
-  monthly pace — reads complete periods only, from your first recorded spending (a
+  monthly pace — reads complete periods only and, if set, starts at Settings' **Count
+  history from** date. Spending averages start at your first recorded spending (a
   partial first period is skipped; payments posted in one go for past dates do not
-  move it back) and, if set, from Settings' **Count history from** date.
+  move it back); income averages start at the first period with income, and a period
+  counts for income once its check-in is confirmed.
 - **Money in the account's currency.** A transaction is stored in its account's
   currency. An amount entered, imported, approved or posted in another currency is
   converted once, at that day's rate, with the entered amount and the rate kept beside
@@ -68,57 +70,75 @@ Budgets, the check-in, Afford, Goals and Reports never disagree.
 - **Rate fitness.** A conversion is only written down with a rate fit for it: USD needs
   none; DOP needs Banco Popular's published sell rate from the last seven days; EUR
   takes the bank's EUR rate or a market rate fetched within the last day. When no fit
-  rate exists the write is refused with nothing saved, and the form says so. Screens still show estimated totals on an older
-  table, and a notice says so only when the table is not fit for the currencies you
-  actually hold.
+  rate exists the write is refused with nothing saved, and the form says so. Screens
+  still show estimated totals on an older table, and a notice says so only when the
+  table is not fit for the currencies you actually hold.
 
 ## Features
 
 ### Dashboard
 
-The period hero shows safe-to-spend per day, spending against the period budget, what
-is still committed, and income so far. Below it: the monthly spending pace against
-your own average, active goals, and everything due in the next seven days. A recurring
-item that cannot post, or an Afford plan that stopped fitting, raises an alert here.
+The period hero shows safe-to-spend per day, spending against the period budget (and,
+apart, what subscriptions and savings took), what is still committed, and income so
+far. When a confirmed check-in left part of the period's room in no category budget,
+the hero says how much, with a **budget it here** link to that period's category
+budgets. Below it: the monthly spending pace against your own average, active goals,
+and everything due in the next seven days.
+
+Alerts sit above the hero: the last recurring posting run failed, a recurring item
+cannot post, payments in another currency are waiting for exchange rates, or an Afford
+plan stopped fitting. From payday to the end of the period the check-in prompt leads
+the page until it is confirmed ("Not now" holds it off for the day); once confirmed,
+its card shows the plan, what was already in your accounts before the pay (kept as a
+cushion, never counted in the plan), and an "Income adjusted" or "Carryover adjusted"
+line if a deposit or the previous period changed after you confirmed.
 
 ### Inbox
 
-Every standing signal in one place: a recurring item that cannot post, an Afford plan
-whose remaining payments no longer fit, a charge pattern that looks like an untracked
-bill (with "May repeat ..." when an existing item may already cover it), a goal whose
-confirmed plan is behind its roadmap, and a dated goal whose pace the projected room
-cannot carry before its target date. Each detector in `src/lib/insights.ts` is a pure
-function that re-presents a result the app already computes, so the Inbox can never
-disagree with the surface it links to.
+![Inbox: under Needs attention, a recurring item that is not posting; under Advisory, an Afford plan that no longer fits, two charges that look recurring (one marked "May repeat Music streaming"), and a goal at risk before its target date, each with its figures, a link and Dismiss](screenshots/inbox.png)
+
+Every standing signal in one place: a recurring posting run that failed, a recurring
+item that cannot post, an Afford plan whose remaining payments no longer fit, a charge
+pattern that looks like an untracked bill (with "May repeat ..." when an existing item
+may already cover it), a goal whose confirmed plan is behind its roadmap or not yet
+contributed, and a dated goal whose pace the projected room cannot carry before its
+target date. Each detector in `src/lib/insights.ts` is a pure function that
+re-presents a result the app already computes, so the Inbox can never disagree with
+the surface it links to.
 
 Items are grouped as **Needs attention** (money already committed is not where the plan
 says it is) and **Advisory** (nothing is blocked yet). Each carries the figures behind
-it, a link to where it is resolved, and **Dismiss**, keyed by what the item was made
-of — the period for a goal or an Afford plan, the reason for an item not posting — so a
-later or different problem shows up as a new item rather than staying hidden. Dismissing
-changes nothing else, and the nav badge always counts exactly what the page lists.
+it and a link to where it is resolved. All but a failed posting run have **Dismiss**,
+keyed by what the item was made of — the period for a goal or an Afford plan, the
+reason for an item not posting, the merchant and account for a charge that looks
+recurring — so a later or different problem shows up as a new item rather than staying
+hidden. Dismissing only hides the item in the Inbox and the nav badge, and a dismissal
+is cleared after 120 days, so a signal that still holds comes back. The nav badge
+always counts exactly what the page lists.
 
 ### Payday check-in
 
 A five-step planner: **confirm balances → record income → commitments and goals →
 flexible categories → confirm.** Every recommended figure is recomputed on the server
-when you confirm, and a second tab that changed the plan in between is caught rather
-than overwritten. The wizard opens from the Budgets page for any period, so a missed
-period can be planned late and a confirmed one revisited.
+when you confirm. If the plan was changed in another tab, or the deposits changed
+since you opened the check-in, nothing is saved and you are asked to reload rather
+than having anything overwritten. A toast confirms the plan once it is saved. The
+wizard opens from the Dashboard prompt and from the Budgets page for any period, so a
+missed period can be planned late and a confirmed one revisited.
 
-![Payday check-in step 1: reconcile each account's reported balance against the ledger](screenshots/payday-step-balances.png)
+![Payday check-in step 1: each account's ledger balance on the day before the pay, with a reported balance that matches it](screenshots/payday-step-balances.png)
 
 **Step 1** asks for each account's balance *before* this period's pay landed; the
 ledger figure is usually the right answer. **Step 2** records the income per account,
 with an optional one-off part (a bonus) that counts now but is never projected. Pay
 that is already in the ledger — a CSV import of the salary, a deposit typed by hand —
 is listed and **adopted**: the check-in records only what is not there yet, so the
-paycheck is never counted twice. Deposits set aside for an upcoming payment (see
-Transactions) are not pay and are listed apart.
+paycheck is never counted twice. Deposits marked one-off or set aside for an upcoming
+payment (see Transactions) are not pay and are listed apart.
 
-![Payday check-in step 2: record the income received into each account](screenshots/payday-step-income.png)
+![Payday check-in step 2: the income received into each account, with the salary already in the ledger listed under the checking account and counted as it is, and a freelance payment typed in for savings](screenshots/payday-step-income.png)
 
-![Payday check-in step 3: protected buffer per account, with the subscriptions each account has to cover and a picker to move one to another account, then the goal roadmap funded from each account's room in proportion to how much it has to spare](screenshots/payday-step-buffer.png)
+![Payday check-in step 3: protected buffer per account, with the subscriptions each account has to cover (already-paid ones marked) and a picker to move one to another account, the recurring contributions due, an item posting will skip, and the start of the goal roadmap](screenshots/payday-step-buffer.png)
 
 **Step 3** works per account. Each account that received income keeps its own
 protected buffer (a percentage of its income or a fixed minimum, whichever is larger)
@@ -128,17 +148,20 @@ subscription to the account with the most room. Each dated goal's roadmap amount
 then recommended from the accounts' remaining room, in proportion to how much each has
 spare, oldest goal first; every share is editable. Essential fixed categories and last
 period's carryover are set aside too, and what is left is available for flexible
-categories in **Step 4**.
+categories in **Step 4**. Items that cannot post are listed as not counted. Under the
+total, "Already in your accounts" shows what the accounts held before the pay: a
+cushion, never counted in the plan.
 
 When an account's reported balance was already negative before the pay — money that
 left after the last payday — its row shows what it really **supports** and warns about
-the gap. That gap caps "Available for flexible categories", and if Step 4 still adds up
-to more, confirming scales the flexible budgets down proportionally and says so, e.g.
-"scaled down from $995.00 to $342.43".
+the gap, and **Cover it** opens a transfer from the account with the most room. The
+gap caps "Available for flexible categories", and if Step 4 still adds up to more,
+confirming scales the flexible budgets down proportionally and says so, e.g. "scaled
+down from $1,390.00 to $861.57".
 
-![Payday check-in step 3's buffer card showing the balance reconciliation warning: one account with a reported balance already negative, its "Supports" figure lower than its income-only figures and an inline warning naming the gap, next to a second account with a clean "Supports" line and no warning](screenshots/payday-step-buffer-reconciliation.png)
+![Payday check-in step 3's buffer card showing the balance reconciliation warning: a checking account reported $180 below zero before the pay, its "Supports" figure lower than its income-only figures, a warning naming the gap and a "Cover it" suggestion to move money from savings, next to a savings account with a clean "Supports" line and no warning](screenshots/payday-step-buffer-reconciliation.png)
 
-![Payday check-in step 3's summary showing the "Capped by your reported balance" line that lowers "Available for flexible categories" by the exact reconciliation gap](screenshots/payday-step-summary-capped.png)
+![Payday check-in step 3's summary showing the "Capped by your reported balance" line that lowers "Available for flexible categories" by the exact reconciliation gap, and the "Already in your accounts" cushion below it](screenshots/payday-step-summary-capped.png)
 
 ![Payday check-in confirm toast showing a scaled-down allocation: flexible budgets reduced from the submitted total to what the reported balance actually supports](screenshots/payday-confirm-scaled-toast.png)
 
@@ -149,7 +172,7 @@ after an explicit acknowledgement.
 
 ### Budgets and safe-to-spend
 
-![Budgets page: overall period budget, committed and safe-to-spend figures, and a per-category table with progress meters](screenshots/budgets.png)
+![Budgets page for the current period: no overall budget set, so the category budgets' total is used, the committed and safe-to-spend figures, and a per-category table with progress meters](screenshots/budgets.png)
 
 Set an overall budget per period or let it be the sum of the category budgets.
 Safe-to-spend is the budget minus budget spending so far, divided by the days left.
@@ -183,16 +206,21 @@ A few flags change how a row is averaged, never what it is:
   income linked to the expense, which shows what has come back.
 - **One-off income** — a gift or a refund counts as income but is never projected.
 - **Set aside for an upcoming payment** — a deposit (say USD 200 from a relative
-  toward a laptop installment) can be earmarked for one or more upcoming recurring
+  toward a laptop installment) can be earmarked for one or more upcoming subscription
   payments on the same account. Each payment then asks that much less of the plan
   everywhere its cost is read — the check-in, Afford, the From Afford tracker, the
-  room check — while the posted charge keeps the full bank amount, and the earmarked
-  part is not income. Lowering or pausing the payment hands the rest back as income.
+  room check — while the posted charge keeps the full bank amount. The deposit still
+  shows as money received, but the earmarked part is left out of the income estimates
+  and is not adopted as pay. Lowering or pausing the payment hands the rest back as
+  income.
 
 When a charge you enter (or import, or approve from a receipt) looks like a recurring
-payment that already posted, or one about to post, Cadence asks rather than guessing:
-"It's that payment" records the charge as that occurrence, so it never posts again;
-"It's a different charge" keeps both. Nothing is matched silently.
+payment Cadence already holds, it asks rather than guessing. For a payment that
+already posted: "It's the posted charge" keeps the posted row (a manual entry you just
+saved is removed), "It's a different charge" keeps both. For one about to post: "It's
+that payment" records the charge as that occurrence, so it never posts again. A deposit
+that looks like a check-in's paycheck is asked about the same way. A CSV row that
+exactly matches a posted charge starts out skipped, and you can import it anyway.
 
 ### Review queue
 
@@ -212,7 +240,7 @@ history; archiving keeps its history.
 
 ### Recurring
 
-![Recurring page: subscriptions and recurring contributions, one item tagged "4 payments left"](screenshots/recurring.png)
+![Recurring page: two charge patterns under Looks recurring (one marked "May repeat Music streaming"), then subscriptions, one tagged "needs an account" and one "4 payments left", beside the recurring contributions](screenshots/recurring.png)
 
 Subscriptions (bills going out) and recurring contributions (money into a goal on a
 schedule), weekly, every two weeks, twice a month on two days, monthly or yearly. Both
@@ -220,7 +248,8 @@ schedule), weekly, every two weeks, twice a month on two days, monthly or yearly
 (`/api/cron/recurring`) runs it and so does opening the app, so a missed day is never
 lost. A subscription becomes an expense on its account; a contribution becomes that
 expense plus a contribution to its goal. A charge you already entered for an
-occurrence — up to five days before it is due — pays it, and nothing is posted twice.
+occurrence — anywhere in its pay period, from five days before the due date when that
+is earlier, and up to four days after it — pays it, and nothing is posted twice.
 
 A due date typed in the past counts the dates before today as already paid unless you
 choose to post them. An item that could not post (no account, an archived account) is
@@ -232,30 +261,34 @@ that charge is changed or deleted.
 
 Plans recorded from Afford's **I bought this** have their own **From Afford** section
 and are re-checked on every visit against today's projections: **Still on track**, or
-the first period that no longer fits and by how much ("Short by $360.00 in Nov 1-15").
+the first period that no longer fits and by how much ("Short by $198.10 in Nov 1-15").
 The Dashboard and the Inbox list them while it lasts. Advisory only: posting is
 untouched.
 
 ![Recurring page's From Afford section: one plan still on track, another short by a named amount in a named pay period, with the nav's red count badge visible in the sidebar](screenshots/recurring-from-afford.png)
 
-![Dashboard alert for a no-longer-viable Afford plan, naming the plan and the shortfall and linking back to the Recurring page](screenshots/dashboard-afford-alert.png)
+![The whole Dashboard with the alert for a no-longer-viable Afford plan, naming the plan and the shortfall and linking back to the Recurring page, above the hero, the monthly spending pace, goals and the next seven days](screenshots/dashboard-afford-alert.png)
 
-A **large subscription** (about USD 165 a charge or more; the threshold is DOP 10,000,
-converted) gets a room check in the form for the period its next due date lands in:
-each account's headroom before and after the charge, which keep their buffer, and the
-one with the most room. It never blocks saving.
+A **large subscription** gets a room check in the form when one charge, or its total
+for a month, comes to DOP 10,000 or more (about USD 165, converted); twice-a-month
+items and contributions are not checked. It covers the pay period the next due date
+lands in: each account's headroom before and after the charges due there, which keep
+their buffer, and the one with the most room. It never blocks saving.
 
 ![Large-subscription room check in the Recurring form: each account's headroom before and after the charge, with the one that keeps its buffer recommended](screenshots/recurring-large-subscription.png)
 
-**Looks recurring** finds bills you pay but never set up: a merchant charged the same
-amount (within 10%) on a schedule at least three times. Nothing is created until you
-click **Add as recurring**; **Dismiss** is permanent for that merchant on that account.
+**Looks recurring** finds bills you pay but never set up: a merchant in your manual or
+CSV-imported spending charged about the same amount (within 10% or 1.00, whichever is
+wider) on a schedule at least three times. Nothing is created until you click **Add as
+recurring**. **Dismiss** here is permanent for that merchant on that account and takes
+it out of the Inbox too; dismissing the same suggestion in the Inbox only hides it
+there, for up to 120 days.
 
 ### Afford
 
 ![Afford calculator with a purchase filled in: name, total price, four monthly installments, first payment date, and the account each installment is charged to, plus the equal-installment schedule](screenshots/afford-calculator.png)
 
-![Afford result: a "Viable" verdict, each installment checked against its pay period's account buffer and available-for-flexible figure, the projection table behind those figures, and the "I bought this" action](screenshots/afford-result.png)
+![Afford result: a "Viable" verdict, the After this purchase summary under it, each installment checked against its pay period's account buffer and available-for-flexible figure, the projection table behind those figures, and the "I bought this" action](screenshots/afford-result.png)
 
 Enter a purchase, its price, the installments, how often, the first payment date and
 the account. Cadence places each installment on its pay period and runs two checks per
@@ -276,10 +309,10 @@ negative. The summary also shows the first payment converted at the rate the che
 used, how much of what is left sits in your budgets and how much in no budget (the
 per-day figure counts the no-budget money too, so it can differ from the Dashboard's
 safe to spend a day, which counts only your budgets), and the paying account's
-balance now and after the payment. With several payments it names
-the tightest period. When the plan does not fit, it says how much the tightest period
-is short and the largest payment that would still fit. If the first payment falls in
-a later period, the figures use that period's projected room.
+balance now and after the payment. With several payments it names the tightest
+period. When the plan does not fit, it says how much the tightest period is short and
+the largest payment that would still fit. If the first payment falls in a later
+period, the figures use that period's projected room.
 
 ### Goals
 
@@ -303,10 +336,11 @@ each debt finishes. It is exploratory and feeds nothing else.
 
 ### Reports
 
-![Reports page: spending by category for the current period, the last six pay periods as bars, average monthly lifestyle spending by category, and the last four completed months](screenshots/reports.png)
+![Reports page: spending by category for the current period, the last six pay periods as bars, this period's spending and income, average monthly lifestyle spending by category, the last five completed months, and the monthly committed, savings and outflow averages](screenshots/reports.png)
 
 Current-period spending by category, a six-pay-period trend (the period in progress
-marked "so far" and left out of the average), and a calendar-month view: lifestyle
+marked "so far" and left out of the average), this period's income, and a
+calendar-month view (from three completed months, using up to six): lifestyle
 spending by category, committed spending, savings and investing, and total outflow,
 averaged over completed months from the history window. A recurring occurrence counts
 in the month it was due, whatever day the charge that paid it is dated, and a yearly
@@ -314,14 +348,15 @@ item counts a twelfth of its price every month.
 
 ### Settings
 
-![Settings page: display currency, cached exchange rates, planning preferences (buffer percentage and floor, and a Count history from date), essential fixed categories, goal recalculation, categorization, email connections, and session](screenshots/settings.png)
+![Settings page: display currency, exchange rates and their source, planning preferences (buffer percentage and floor, carryover default and a Count history from date), categories, PIN, essential fixed categories, goal recalculation, categorization, data export, email connections, and session](screenshots/settings.png)
 
 Display currency; the exchange-rate table and which source is in use; buffer
 percentage and floor; carryover default; **Count history from** (for when your
-situation changed and older history would only skew the averages); essential fixed
-categories; category management; categorizing older imports; **Export all** (a ZIP of
-CSVs, with `transactions.csv` laid out for the importer); email connections; the PIN;
-and locking the app.
+situation changed and older history would only skew the averages); category
+management; the PIN; essential fixed categories; recalculating goal totals;
+categorizing older imports; **Export all** (a ZIP of CSVs, with `transactions.csv`
+laid out for the importer); email connections; and locking the app. On a phone,
+language and theme are set here too.
 
 ![PIN change form in Settings: current PIN, new PIN, and confirmation](screenshots/settings-pin-change.png)
 
@@ -329,8 +364,8 @@ and locking the app.
 
 Categories can be added, renamed and recolored. Removing one still in use first moves
 its transactions, recurring items and budgets to a category you pick (each budget is
-added to that category's for the same period), in one database transaction. Subscriptions and Savings/Investment can be renamed but never
-removed.
+added to that category's for the same period), in one database transaction.
+Subscriptions and Savings/Investment can be renamed but never removed.
 
 ![Category reassignment dialog mid-flow: a category's transactions, recurring items and period budgets about to move to another category](screenshots/settings-categories-reassign.png)
 
@@ -346,6 +381,43 @@ PIN-protected session; a forgotten PIN can be replaced by whoever holds the serv
 `RECOVERY_SECRET`, when it is set.
 
 ![Login screen with the PIN entry](screenshots/login.png)
+
+## On your phone and tablet
+
+On a phone the same app switches to a bottom tab bar, list layouts in place of wide
+tables, bottom-sheet dialogs, and a full-screen payday check-in; a form's error is
+scrolled into view above its buttons. A tablet keeps the desktop layout. Captured in
+Safari in the iOS Simulator.
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-dashboard.png" width="160" alt="Cadence dashboard on an iPhone: the period's safe-to-spend per day as the hero figure, spending against budget, committed and income figures, and the Next 7 days list above the bottom tab bar">
+      <br><sub>Dashboard: hero figure and Next 7 days</sub>
+    </td>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-transactions.png" width="160" alt="Transactions page on an iPhone: a search field beside a Filters button, and the ledger grouped by day with each row's category, account, source badge and amount">
+      <br><sub>Transactions: day-grouped list and Filters button</sub>
+    </td>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-payday-check-in.png" width="160" alt="Payday check-in step 3 on an iPhone, full screen: each account's buffer collapsed to a single line, the recurring contribution already paid, the item posting will skip, and the Available for flexible categories line pinned above the Back and Next buttons">
+      <br><sub>Payday check-in step 3: collapsed accounts, pinned Available line</sub>
+    </td>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-afford-verdict.png" width="160" alt="Afford on an iPhone after a check: the After this purchase summary opening with Viable, what is left to spend and per day, the account balance, and directly under it the Record it card with the I'll add it myself later and I bought this buttons">
+      <br><sub>Afford: the summary with the Record it card under it</sub>
+    </td>
+    <td align="center" valign="top" width="180">
+      <img src="screenshots/mobile-inbox.png" width="160" alt="Inbox on an iPhone: a recurring item that is not posting under Needs attention and an Afford plan that no longer fits under Advisory, each with its figures stacked, a link and a Dismiss button">
+      <br><sub>Inbox: rows with stacked figures</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="screenshots/tablet-dashboard.png" width="480" alt="Cadence dashboard on an iPad Air 11-inch in the desktop layout: the sidebar navigation with an Inbox count badge, the alerts for an item not posting and an Afford plan that no longer fits, the payday check-in prompt, and the period hero with safe-to-spend per day">
+  <br><sub>The same dashboard on an iPad Air 11-inch, in the desktop layout with the sidebar</sub>
+</p>
 
 ## How it works
 
@@ -372,12 +444,12 @@ PIN-protected session; a forgotten PIN can be replaced by whoever holds the serv
 
 ## Getting started
 
-Requires Node 20.19+ and a PostgreSQL database (Supabase works — use the direct or
-session-pooler connection string).
+Requires Node 20.19+, 22.12+ or 24+ (Prisma 7's range) and a PostgreSQL database
+(Supabase works — use the direct or session-pooler connection string).
 
 ```bash
 git clone <this-repository>
-cd FinanceApp
+cd Cadence
 npm install                 # runs `prisma generate` afterwards
 cp .env.example .env        # then fill in DATABASE_URL and SESSION_SECRET
 npm run db:migrate          # applies prisma/migrations to the database
@@ -417,12 +489,13 @@ pay-period boundaries.
 | `SESSION_SECRET` | Core app | Signs the session cookie |
 | `RECOVERY_SECRET` | Core app (optional) | Enables "Forgot your PIN?" on the unlock screen |
 | `APP_TIMEZONE` | Core app | IANA timezone for "today" and pay periods |
-| `CRON_SECRET` | Core app / Email automation | Bearer token for `/api/cron/recurring` and `/api/cron/ingest` |
+| `CRON_SECRET` | Core app / Email automation | Bearer token for `/api/cron/recurring`, `/api/cron/bpd-rate` and `/api/cron/ingest` |
 | `BPD_SCRAPE_INGEST_SECRET` | Banco Popular rate scraper | Bearer token for `/api/cron/bpd-rate/ingest`; the same value goes in the repository's Actions secrets (see [DEPLOY.md](./DEPLOY.md)) |
 | `OAUTH_ENCRYPTION_KEY` | Email automation | Encrypts stored OAuth tokens at rest |
 | `APP_URL` | Email automation (production) | Canonical origin for the Gmail OAuth redirect URI |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Email automation | Gmail OAuth |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | Email automation | Outlook OAuth |
+| `MICROSOFT_TENANT_ID` | Email automation (optional) | Outlook tenant; defaults to `common` |
 | `ANTHROPIC_API_KEY` | Email automation | Parses transactional emails into structured data |
 
 ## Deployment
@@ -430,54 +503,19 @@ pay-period boundaries.
 Production runs on Vercel with a Supabase PostgreSQL database: the app connects through
 the transaction pooler at runtime, and migrations go through the session pooler. The
 Vercel build does not run migrations, so apply a new one before deploying the code that
-needs it. `vercel.json` schedules email ingestion at 04:00 UTC and recurring posting at
-04:15 UTC. See [DEPLOY.md](./DEPLOY.md).
+needs it. `vercel.json` schedules a Banco Popular rate refresh at 01:00 UTC, email
+ingestion at 04:00 UTC and recurring posting at 04:15 UTC. See [DEPLOY.md](./DEPLOY.md).
 
 ## Current limitations
 
 - Email ingestion supports Gmail and Outlook only; email-derived transactions always go
   through review.
 - No direct bank synchronization.
-- Both crons run once a day; opening the app and "Sync now" cover the gaps.
-- A long recurring backlog catches up at most 24 occurrences per run.
-- Afford projects income from history, so an account with no comparable-period income
-  is judged on its buffer floor alone.
-
-### On your phone
-
-On a phone the same app switches to a bottom tab bar, list layouts in place of wide
-tables, bottom-sheet dialogs, and a full-screen payday check-in; a tablet keeps the
-desktop layout. Captured in the iOS Simulator.
-
-<table>
-  <tr>
-    <td align="center" valign="top" width="180">
-      <img src="screenshots/mobile-dashboard.png" width="160" alt="Cadence dashboard on an iPhone: the period's safe-to-spend per day as the hero figure, spending against budget, committed and income figures, and the Next 7 days list above the bottom tab bar">
-      <br><sub>Dashboard: hero figure and Next 7 days</sub>
-    </td>
-    <td align="center" valign="top" width="180">
-      <img src="screenshots/mobile-transactions.png" width="160" alt="Transactions page on an iPhone: a search field beside a Filters button, and the ledger grouped by day with each row's category, account, source badge and amount">
-      <br><sub>Transactions: day-grouped list and Filters button</sub>
-    </td>
-    <td align="center" valign="top" width="180">
-      <img src="screenshots/mobile-payday-check-in.png" width="160" alt="Payday check-in step 3 on an iPhone: the account buffer and each goal collapsed to a single line, with the Available for flexible categories line pinned above the Back and Next buttons">
-      <br><sub>Payday check-in step 3: collapsed blocks, pinned Available line</sub>
-    </td>
-    <td align="center" valign="top" width="180">
-      <img src="screenshots/mobile-afford-verdict.png" width="160" alt="Afford calculator on an iPhone: a Viable verdict, and directly under it the Record it card with the I'll add it myself later and I bought this buttons">
-      <br><sub>Afford: Viable verdict with the Record it card under it</sub>
-    </td>
-    <td align="center" valign="top" width="180">
-      <img src="screenshots/mobile-inbox.png" width="160" alt="Inbox on an iPhone: two advisory rows, each a charge that looks recurring, with its last amount, cadence and next expected date, a review link and a Dismiss button">
-      <br><sub>Inbox: two recurring-charge suggestions</sub>
-    </td>
-  </tr>
-</table>
-
-<p align="center">
-  <img src="screenshots/tablet-dashboard.png" width="480" alt="Cadence dashboard on an iPad Air 11-inch in the desktop layout: the sidebar navigation with an Inbox count badge, the payday check-in prompt, the period hero with safe-to-spend per day, and the monthly spending pace card">
-  <br><sub>The same dashboard on an iPad Air 11-inch, in the desktop layout with the sidebar</sub>
-</p>
+- The crons run once a day; opening the app and "Sync now" cover the gaps.
+- A long recurring backlog catches up at most 24 occurrences per item per run.
+- Afford projects income from history, not from balances: an account with no
+  comparable-period income is projected at zero income and keeps its buffer floor, so
+  a purchase charged to it fails the account check whatever the account holds.
 
 ## Project status
 

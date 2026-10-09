@@ -7451,7 +7451,7 @@ async function main() {
       const t = enDictionary.afford as Record<string, unknown>;
       const describe = t.projectionDescription as (...args: unknown[]) => string;
       check("B22: the results copy says \"the average of 1 comparable pay period\", never 6", describe("Verify Proj Fresh", verdictOf.flexible.incomePeriods).includes("the average of 1 comparable pay period ("), describe("Verify Proj Fresh", verdictOf.flexible.incomePeriods));
-      check("B22: the income basis names \"Count income history from\" as the manual override", describe("Verify Proj Fresh", 1).includes("\"Count income history from\""));
+      check("B22: the income basis names \"Count history from\" as the manual override", describe("Verify Proj Fresh", 1).includes("\"Count history from\""));
       const minimum = (affordLib as Record<string, unknown>).MIN_INCOME_HISTORY_PERIODS;
       eq("B22: below the documented minimum of 3 periods the low-history note applies", `${minimum}:${typeof minimum === "number" && verdictOf.flexible.incomePeriods < minimum}`, "3:true");
       const lowNote = t.lowIncomeHistory as ((periods: number) => string) | undefined;
