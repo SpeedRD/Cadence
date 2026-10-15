@@ -72,10 +72,17 @@ function SelectTrigger({
   )
 }
 
+/**
+ * Popper, not Radix's item-aligned default: item-aligned grows the list from
+ * the trigger on the first scroll gestures (scrollTop stays 0 while the box
+ * resizes and moves), so a long list in a dialog opens as a sliver and only
+ * partly scrolls. Popper anchors the list below (or above) the trigger at
+ * a fixed size capped to the available height, and it scrolls plainly.
+ */
 function SelectContent({
   className,
   children,
-  position = "item-aligned",
+  position = "popper",
   align = "center",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
