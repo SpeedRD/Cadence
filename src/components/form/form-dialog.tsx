@@ -64,6 +64,18 @@ export function FormDialog({
   const submit = useSubmitWithoutReset(formAction);
   const handled = useRef<number | undefined>(undefined);
 
+  // A long-lived dialog (a page's one "New" instance) keeps its action state
+  // after it closes, so an error from an earlier attempt would greet the
+  // fresh form the next time it opens. Only a result since this opening is
+  // shown: the one already there when it opened is set aside.
+  const [setAsideAt, setSetAsideAt] = useState<number | undefined>(undefined);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setSetAsideAt(state?.at);
+  }
+  const error = state?.error && state.at !== setAsideAt ? state.error : null;
+
   useEffect(() => {
     if (state?.ok && state.at !== handled.current) {
       handled.current = state.at;
@@ -107,9 +119,9 @@ export function FormDialog({
 
           <div className="grid gap-4">{children}</div>
 
-          {state?.error ? (
+          {error ? (
             <p ref={errorRef} className="text-sm text-destructive" role="alert">
-              {state.error}
+              {error}
             </p>
           ) : null}
 

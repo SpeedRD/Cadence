@@ -94,13 +94,24 @@ export function ReviewTable({
         ))}
       </ul>
 
+      {/* The dialog starts from the row's picks and saves them to the row, so
+          once it saves the picks have nothing left to say: they are dropped
+          and the row is read as saved. */}
       {editing ? (
         <ReviewEditDialog
           row={editing}
+          picks={picks[editing.id] ?? initialPicks(editing)}
           accounts={accounts}
           categories={categories}
           open
           onOpenChange={(next) => !next && setEditing(null)}
+          onSaved={() =>
+            setPicks((all) => {
+              const rest = { ...all };
+              delete rest[editing.id];
+              return rest;
+            })
+          }
           locale={locale}
         />
       ) : null}

@@ -17,17 +17,23 @@ import type { StagedRow } from "@/lib/data/staged";
 
 export function ReviewEditDialog({
   row,
+  picks,
   accounts,
   categories,
   open,
   onOpenChange,
+  onSaved,
   locale,
 }: {
   row: StagedRow;
+  /** The account and category the reviewer has picked on the row, which the dialog starts from. */
+  picks: { accountId: string; categoryId: string };
   accounts: Option[];
   categories: Option[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Runs once the edit is saved, so the row's picks give way to it. */
+  onSaved: () => void;
   locale: Locale;
 }) {
   const t = getDictionary(locale).review;
@@ -42,6 +48,7 @@ export function ReviewEditDialog({
       savedMessage={t.stagedSaved}
       open={open}
       onOpenChange={onOpenChange}
+      onSuccess={onSaved}
     >
       <input type="hidden" name="id" value={row.id} />
 
@@ -87,7 +94,7 @@ export function ReviewEditDialog({
           <AccountSelect
             name="accountId"
             accounts={accounts}
-            defaultValue={row.accountId ?? undefined}
+            defaultValue={picks.accountId || undefined}
             common={common}
           />
         </Field>
@@ -95,7 +102,7 @@ export function ReviewEditDialog({
           <CategorySelect
             name="categoryId"
             categories={categories}
-            defaultValue={row.suggestedCategoryId ?? "none"}
+            defaultValue={picks.categoryId}
             common={common}
           />
         </Field>

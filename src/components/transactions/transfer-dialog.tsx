@@ -31,7 +31,7 @@ export function TransferDialog({
   accounts,
   values,
   trigger,
-  open,
+  open: controlledOpen,
   onOpenChange,
   locale,
 }: {
@@ -49,14 +49,20 @@ export function TransferDialog({
 
   // Which accounts are picked decides whether the "actual amount received"
   // field shows: only when the two are in different currencies. The selects
-  // are uncontrolled and remount to their defaults each time a controlled
-  // dialog re-opens, so this state resets in step (see RecurringDialog).
+  // are uncontrolled and remount to their defaults each time the dialog
+  // re-opens, so this state resets in step (see RecurringDialog). The page's
+  // "Transfer" trigger passes no `open`, so the open state is resolved here
+  // the way FormDialog does - otherwise that long-lived instance would keep
+  // the accounts picked before it was last closed.
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = onOpenChange ?? setUncontrolledOpen;
   const initialFrom = values.fromAccountId ?? accounts[0]?.id;
   const initialTo = values.toAccountId ?? accounts[1]?.id;
   const [fromAccountId, setFromAccountId] = useState(initialFrom);
   const [toAccountId, setToAccountId] = useState(initialTo);
-  const [wasOpen, setWasOpen] = useState(open ?? false);
-  if (open !== undefined && open !== wasOpen) {
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
     setWasOpen(open);
     if (open) {
       setFromAccountId(initialFrom);
@@ -78,7 +84,7 @@ export function TransferDialog({
       savedMessage={editing ? t.transferUpdated : t.transferRecorded}
       trigger={trigger}
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={setOpen}
     >
       {values.transferId ? (
         <input type="hidden" name="transferId" value={values.transferId} />

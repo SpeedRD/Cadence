@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Field } from "@/components/form/field";
 import { CategorySelect } from "@/components/form/selects";
 import { SubmitButton } from "@/components/form/submit-button";
+import { useSubmitWithoutReset } from "@/components/form/use-submit-without-reset";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,6 +56,10 @@ export function CategoryDeleteDialog({
   // over, moving the dialog to the reassignment step.
   const usage: CategoryUsage = deleteState?.categoryUsage ?? category.usage;
   const reassigning = !isUnused(usage);
+  // Dispatched by hand, as FormDialog does, so a refused move does not reset
+  // the form and clear the category picked to move the rows to.
+  const submitDelete = useSubmitWithoutReset(deleteAction);
+  const submitReassign = useSubmitWithoutReset(reassignAction);
   const handledDelete = useRef<number | undefined>(undefined);
   const handledReassign = useRef<number | undefined>(undefined);
 
@@ -90,7 +95,11 @@ export function CategoryDeleteDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={reassigning ? "sm:max-w-md" : "sm:max-w-sm"}>
-        <form action={reassigning ? reassignAction : deleteAction} className="grid gap-5">
+        <form
+          action={reassigning ? reassignAction : deleteAction}
+          onSubmit={reassigning ? submitReassign : submitDelete}
+          className="grid gap-5"
+        >
           <input type="hidden" name="id" value={category.id} />
           <DialogHeader>
             <DialogTitle>

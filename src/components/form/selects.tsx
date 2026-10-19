@@ -176,6 +176,7 @@ export function EnumSelect({
   options,
   labels,
   defaultValue,
+  value,
   placeholder,
   onValueChange,
 }: {
@@ -184,11 +185,13 @@ export function EnumSelect({
   options: readonly string[];
   labels: Record<string, string>;
   defaultValue?: string;
+  /** Controlled: for a caller that resets the selection itself (the Afford calculator's reset); wins over defaultValue. */
+  value?: string;
   placeholder?: string;
   onValueChange?: (value: string) => void;
 }) {
   return (
-    <Select name={name} defaultValue={defaultValue} onValueChange={onValueChange}>
+    <Select name={name} defaultValue={defaultValue} value={value} onValueChange={onValueChange}>
       <SelectTrigger id={id} className="w-full">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>

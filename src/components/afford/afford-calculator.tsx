@@ -113,6 +113,7 @@ export function AffordCalculator({
   function resetAll() {
     setName("");
     setTotal(0);
+    setCurrency(defaultCurrency);
     setCountText("3");
     setFrequency("MONTHLY");
     setFirstDate(today);
@@ -197,7 +198,7 @@ export function AffordCalculator({
                 <CurrencySelect
                   id="afford-currency"
                   name="currency"
-                  defaultValue={currency}
+                  value={currency}
                   onValueChange={setCurrency}
                 />
               </Field>
@@ -223,7 +224,7 @@ export function AffordCalculator({
                   name="frequency"
                   options={AFFORD_FREQUENCIES}
                   labels={common.frequencyLabels}
-                  defaultValue={frequency}
+                  value={frequency}
                   onValueChange={setFrequency}
                 />
               </Field>

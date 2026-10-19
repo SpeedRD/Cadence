@@ -143,6 +143,11 @@ export function TransactionDialog({
     // direction picker.
     if (next === "EXTERNAL_TRANSFER") resetCategory();
     if (next !== "EXTERNAL_TRANSFER") setDirection(values.transferDirection ?? "OUT");
+    // The "Pays back" picker is unmounted for any type but income and comes
+    // back at its default, so the pick it mirrors goes back with it -
+    // otherwise a pick made before switching away would still hide the
+    // one-off switch and count as a link the form no longer shows.
+    setReimbursesId(values.reimbursesTransactionId ?? "none");
   };
   // An external transfer's direction, tracked only to tell an incoming one -
   // which can be set aside for a payment - from an outgoing one.
@@ -303,6 +308,7 @@ export function TransactionDialog({
       setCurrencyTouched(false);
       setChargedText("");
       setAmountText(values.amount === undefined ? "" : String(values.amount));
+      setDateText(values.date);
       setDirection(values.transferDirection ?? "OUT");
       setEarmarkOn((values.earmarks ?? []).length > 0);
       setEarmarkLines(linesFrom(values.earmarks));
@@ -312,6 +318,14 @@ export function TransactionDialog({
     }
   }
 
+  // What "Pays back" offers: expenses still owed something, plus the one this
+  // row already pays back. The page loads one list for every dialog on it,
+  // with each of its deposits' linked expenses kept even when settled, so
+  // those are dropped here for every dialog but their own deposit's.
+  const reimbursableExpenses = openSharedExpenses.filter(
+    (expense) => !expense.reimbursement.settled || expense.id === values.reimbursesTransactionId,
+  );
+
   // Picking the shared expense a new deposit pays back defaults the deposit to
   // that expense's account and category, each only while the user has not
   // chosen one themselves. An edit never prefills - a saved deposit's account
@@ -320,7 +334,7 @@ export function TransactionDialog({
   // does not offer) is skipped rather than set to a value the select cannot show.
   const prefillFromExpense = (expenseId: string) => {
     if (editing) return;
-    const expense = openSharedExpenses.find((candidate) => candidate.id === expenseId);
+    const expense = reimbursableExpenses.find((candidate) => candidate.id === expenseId);
     if (!expense) return;
     if (!accountTouched && accounts.some((account) => account.id === expense.accountId)) {
       setAccountId(expense.accountId);
@@ -571,7 +585,7 @@ export function TransactionDialog({
       {/* A deposit that pays back a shared expense. Offered only while there
           is something to pay back; with nothing to offer the field is absent
           and the row is ordinary income. */}
-      {type === "INCOME" && openSharedExpenses.length > 0 ? (
+      {type === "INCOME" && reimbursableExpenses.length > 0 ? (
         <Field label={t.reimbursesLabel} htmlFor="transaction-reimburses" hint={t.reimbursesHint}>
           <Select
             name="reimbursesTransactionId"
@@ -586,7 +600,7 @@ export function TransactionDialog({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="none">{t.reimbursesNone}</SelectItem>
-              {openSharedExpenses.map((expense) => (
+              {reimbursableExpenses.map((expense) => (
                 <SelectItem key={expense.id} value={expense.id}>
                   {t.reimbursesOption(
                     toISODate(expense.date),
