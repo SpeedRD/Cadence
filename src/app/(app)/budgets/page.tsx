@@ -293,6 +293,24 @@ export default async function BudgetsPage({
                 summary.safeToSpend < 0 ? "text-[var(--critical)]" : undefined
               }
             />
+            {/* The confirmed plan's room, the figures the Dashboard's check-in
+                card shows (K4); nothing without a confirmed check-in. */}
+            {room ? (
+              <>
+                <Stat
+                  label={paydayLabels.summaryAvailable}
+                  value={formatMoney(room.available, summary.currency)}
+                />
+                <Stat
+                  label={paydayLabels.flexibleAllocated}
+                  value={formatMoney(room.flexibleBudgeted, summary.currency)}
+                />
+                <Stat
+                  label={paydayLabels.flexibleUnallocated}
+                  value={formatMoney(room.unallocated, summary.currency)}
+                />
+              </>
+            ) : null}
           </div>
         </CardContent>
       </Card>
