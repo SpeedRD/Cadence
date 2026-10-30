@@ -19161,6 +19161,171 @@ async function main() {
     }
   }
 
+  console.log("\n== the card's rate (src/lib/card-rate.ts), fictional figures ==");
+  {
+    const cr = await import("../src/lib/card-rate");
+    const { atRate } = await import("../src/lib/account-money");
+    const zone = "America/Santo_Domingo"; // UTC-4 all year
+    const pub = (asOf: string, dollarSellRate: number, euroSellRate: number) => ({
+      asOf: new Date(asOf),
+      dollarSellRate,
+      euroSellRate,
+      dollarBuyRate: null,
+      euroBuyRate: null,
+    });
+    const near = (a: number, b: number) => Math.abs(a - b) < 1e-12;
+
+    console.log("-- the publication in force --");
+    const p1 = pub("2031-03-03T17:00:00Z", 50, 60);
+    const p2 = pub("2031-03-05T17:00:00Z", 51, 62);
+    // 22:00 on Mar 5 in Santo Domingo, already Mar 6 in UTC.
+    const p3 = pub("2031-03-06T02:00:00Z", 52, 64);
+    const pubs = [p3, p1, p2];
+    eq("a charge the day after a publication uses it", cr.publicationInForce(pubs, civilDate(2031, 3, 4), zone), p1);
+    eq("a publication of the charge's own day is not used: the one before is", cr.publicationInForce(pubs, civilDate(2031, 3, 5), zone), p1);
+    eq(
+      "the latest before the day began wins, read on the app's civil day (an evening publication whose UTC date is the charge's day is in force)",
+      cr.publicationInForce(pubs, civilDate(2031, 3, 6), zone),
+      p3,
+    );
+    eq("...while in UTC that evening publication is the charge's own day, so the one before is used", cr.publicationInForce(pubs, civilDate(2031, 3, 6), "UTC"), p2);
+    eq("a charge on the first publication's own day has none in force", cr.publicationInForce(pubs, civilDate(2031, 3, 3), zone), null);
+    eq("a charge before any publication has none in force", cr.publicationInForce(pubs, civilDate(2031, 2, 20), zone), null);
+    eq("no publications, none in force", cr.publicationInForce([], civilDate(2031, 3, 4), zone), null);
+    eq("sell and buy are read per currency", `${cr.publishedSell(p2, "USD")}|${cr.publishedSell(p2, "EUR")}|${cr.publishedBuy(p2, "EUR")}`, "51|62|null");
+
+    let created = 0;
+    const charge = (date: Date, amount: number, originalAmount: number, overrides: Partial<import("../src/lib/card-rate").CardCharge> = {}) => ({
+      id: `card-${(created += 1)}`,
+      date,
+      createdAt: new Date(Date.UTC(2031, 0, 1, 0, 0, created)),
+      type: "EXPENSE",
+      isBankFigure: true,
+      amount,
+      currency: "DOP",
+      accountCurrency: "DOP",
+      originalAmount,
+      originalCurrency: "EUR",
+      ...overrides,
+    });
+
+    console.log("-- data points and the gap --");
+    {
+      const charges = [
+        charge(civilDate(2031, 3, 4), 5940, 100), // P1 (60): 59.4 per euro, 1% below
+        charge(civilDate(2031, 3, 5), 2976, 50), // same-day P2 not used: P1 (60), 59.52, 0.8% below
+        charge(civilDate(2031, 3, 6), 6336, 100), // P3 (64): 63.36, 1% below
+        charge(civilDate(2031, 3, 3), 6000, 100), // nothing in force: skipped
+        charge(civilDate(2031, 3, 1), 6000, 100), // before any publication: skipped
+      ];
+      const points = cr.cardDataPoints(charges, pubs, "EUR", zone);
+      eq("charges with no publication in force are not data points", points.length, 3);
+      eq("most recent first", points.map((point) => toISODate(point.date)).join(","), "2031-03-06,2031-03-05,2031-03-04");
+      eq("each is compared with the sell rate in force for its day", points.map((point) => point.publishedSell).join(","), "64,60,60");
+      check("gap = (amount / originalAmount) / sell - 1: 59.40 at 60 is -1%", near(points[2].gap, -0.01), points[2].gap);
+      check("...the same-day charge is judged at the day before's 60, not 62: -0.8%", near(points[1].gap, -0.008), points[1].gap);
+      check("...an evening publication in force overnight: 63.36 at 64 is -1%", near(points[0].gap, -0.01), points[0].gap);
+      const above = cr.cardDataPoints([charge(civilDate(2031, 3, 4), 6030, 100)], pubs, "EUR", zone);
+      check("a charge above the published rate has a positive gap (+0.5%)", near(above[0].gap, 0.005), above[0].gap);
+      eq("a USD reading takes none of the EUR charges", cr.cardDataPoints(charges, pubs, "USD", zone).length, 0);
+    }
+
+    console.log("-- which rows are data points --");
+    {
+      const day = civilDate(2031, 3, 4);
+      const kept = charge(day, 5940, 100);
+      const rows = [
+        kept,
+        charge(day, 5940, 100, { isBankFigure: false }),
+        charge(day, 5940, 100, { type: "INCOME" }),
+        charge(day, 5940, 100, { type: "EXTERNAL_TRANSFER" }),
+        charge(day, 99, 100, { accountCurrency: "USD", currency: "USD" }),
+        charge(day, 5940, 100, { currency: "EUR" }),
+        charge(day, 5940, 100, { originalCurrency: "USD" }),
+        charge(day, 5940, 100, { originalCurrency: null, originalAmount: null }),
+        charge(day, 5940, 0),
+      ];
+      eq(
+        "only a bank-figure EXPENSE in EUR on a DOP account counts for EUR",
+        cr.cardDataPoints(rows, pubs, "EUR", zone).map((point) => point.id).join(","),
+        kept.id,
+      );
+      eq("isCardCharge: a row that is not the bank's figure is ignored", cr.isCardCharge(rows[1], "EUR"), false);
+      eq("isCardCharge: income is ignored", cr.isCardCharge(rows[2], "EUR"), false);
+      eq("isCardCharge: a charge on a USD account is ignored", cr.isCardCharge(rows[4], "EUR"), false);
+      eq("the USD-original row counts for USD instead", cr.cardDataPoints(rows, pubs, "USD", zone).map((point) => point.id).join(","), rows[6].id);
+    }
+
+    console.log("-- the learned gap: median of the 12 most recent, at least 3 --");
+    {
+      const p0 = pub("2031-01-01T17:00:00Z", 45, 50);
+      // Twelve recent charges, 0.2% to 1.3% below 50 a euro, dated Jan 4-15
+      // out of amount order; two older ones far above it on Jan 2 and 3.
+      const recentAmounts = [4960, 4990, 4935, 4975, 4950, 4985, 4945, 4970, 4940, 4980, 4955, 4965];
+      const recent = recentAmounts.map((amount, index) => charge(civilDate(2031, 1, 4 + index), amount, 100));
+      const old = [charge(civilDate(2031, 1, 2), 5500, 100), charge(civilDate(2031, 1, 3), 5400, 100)];
+      const points = cr.cardDataPoints([...old, ...recent], [p0], "EUR", zone);
+      eq("fourteen data points", points.length, 14);
+      const learned = cr.learnedGap(points);
+      eq("learned from the 12 most recent", learned.learned ? learned.count : "not learned", 12);
+      check("median of an even dozen: the mean of the 6th and 7th (-0.8% and -0.7%)", learned.learned && near(learned.gap, -0.0075), learned);
+      check("min and max are the window's, not the older outliers' (+10%)", learned.learned && near(learned.min, -0.013) && near(learned.max, -0.002), learned);
+      const all = cr.learnedGap(points.slice(0, 13));
+      check("thirteen points: still only the 12 most recent", all.learned && near(all.gap, -0.0075) && all.count === 12, all);
+      const three = cr.learnedGap(cr.cardDataPoints(recent.slice(0, 3), [p0], "EUR", zone));
+      check("three points: the middle one (4960 of 4960/4990/4935 -> -0.8%)", three.learned && near(three.gap, -0.008) && three.count === 3, three);
+      eq("two points: nothing learned, and it says there are two", JSON.stringify(cr.learnedGap(points.slice(0, 2))), JSON.stringify({ learned: false, count: 2 }));
+      eq("no points: nothing learned, count 0", JSON.stringify(cr.learnedGap([])), JSON.stringify({ learned: false, count: 0 }));
+      const sameDay = cr.cardDataPoints(
+        [charge(civilDate(2031, 1, 20), 4900, 100), charge(civilDate(2031, 1, 20), 4800, 100)],
+        [p0],
+        "EUR",
+        zone,
+      );
+      eq("two charges on one day: the one written later is the more recent", sameDay[0].amount, 4800);
+    }
+
+    console.log("-- the estimate and its range, to the cent --");
+    {
+      const learned = { learned: true as const, gap: -0.0075, min: -0.013, max: -0.002, count: 12 };
+      eq("the card's rate: sell x (1 + gap), at Transaction.rate's scale", cr.cardRate(60, -0.0075), 59.55);
+      eq(
+        "12.34 EUR at 60 less 0.75%: 734.85 DOP, between 730.77 and 738.92",
+        JSON.stringify(cr.estimateFromForeign(12.34, "EUR", 60, learned)),
+        JSON.stringify({ foreign: 12.34, charge: 734.85, low: 730.77, high: 738.92 }),
+      );
+      eq("a half cent rounds up, as account-money rounds euros (12.50 x 59.55 = 744.375)", cr.estimateFromForeign(12.5, "EUR", 60, learned).charge, 744.38);
+      eq(
+        "typing 744.38 DOP: 12.50 EUR, the charge as typed, the range from that euro amount",
+        JSON.stringify(cr.estimateFromPesos(744.38, "EUR", 60, learned)),
+        JSON.stringify({ foreign: 12.5, charge: 744.38, low: 740.25, high: 748.51 }),
+      );
+      const usd = { learned: true as const, gap: -0.01, min: -0.015, max: -0.002, count: 5 };
+      eq(
+        "20 USD at 50 less 1%: 990.00, between 985.00 and 998.00",
+        JSON.stringify(cr.estimateFromForeign(20, "USD", 50, usd)),
+        JSON.stringify({ foreign: 20, charge: 990, low: 985, high: 998 }),
+      );
+      const usdAmounts = [0.15, 3.33, 19.99, 123.45, 1000.01];
+      eq(
+        "USD rounds as account-money's atRate does",
+        usdAmounts.map((amount) => cr.estimateFromForeign(amount, "USD", 50, usd).charge).join(","),
+        usdAmounts.map((amount) => atRate(amount, cr.cardRate(50, -0.01))).join(","),
+      );
+      eq("1,000 DOP at 49.50 is 20.20 USD", cr.estimateFromPesos(1000, "USD", 50, usd).foreign, 20.2);
+      eq(
+        "nothing learned: the published sell rate, no range",
+        JSON.stringify(cr.estimateFromForeign(12.34, "EUR", 60, { learned: false, count: 2 })),
+        JSON.stringify({ foreign: 12.34, charge: 740.4, low: null, high: null }),
+      );
+      eq(
+        "nothing learned, typed in pesos: 740.40 DOP is 12.34 EUR at 60",
+        JSON.stringify(cr.estimateFromPesos(740.4, "EUR", 60, { learned: false, count: 0 })),
+        JSON.stringify({ foreign: 12.34, charge: 740.4, low: null, high: null }),
+      );
+    }
+  }
+
   console.log("\n== cleanup ==");
   // History rows any section stored through storeBpdRates during this run.
   await prisma.bpdRatePublication.deleteMany({ where: { capturedAt: { gte: harnessStartedAt } } });

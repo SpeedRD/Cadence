@@ -117,7 +117,8 @@ function isBankQuotePair(from: string, to: string): boolean {
   return (from === "EUR" && to === "DOP") || (from === "DOP" && to === "EUR");
 }
 
-function atRateFor(amount: number, from: string, to: string, rate: number): number {
+/** `amount` converted from `from` to `to` at `rate`, to the cent, as every conversion here rounds it. */
+export function atRateFor(amount: number, from: string, to: string, rate: number): number {
   if (!isBankQuotePair(from, to)) return atRate(amount, rate);
   const cents = Number((amount * rate * 100).toPrecision(15));
   return (Math.sign(cents) * Math.round(Math.abs(cents))) / 100;

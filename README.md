@@ -346,6 +346,17 @@ averaged over completed months from the history window. A recurring occurrence c
 in the month it was due, whatever day the charge that paid it is dated, and a yearly
 item counts a twelfth of its price every month.
 
+### Converter
+
+What your card will likely charge in pesos for an amount in dollars or euros: type in
+either field and the other follows. It starts from Banco Popular's published sell rate
+and learns, from your own charges whose pesos are the bank's figure, how far the card
+sits from it: each charge is compared with the publication in force for its day (the
+latest published before that day began), and the card's gap is the median of your 12
+most recent, shown with their range. With fewer than three it uses the published rate
+and says so. The bank's sell and buy rates are listed beside it, and rates older than
+seven days are called out as not current. Nothing on the page is saved.
+
 ### Settings
 
 ![Settings page: display currency, exchange rates and their source, planning preferences (buffer percentage and floor, carryover default and a Count history from date), categories, PIN, essential fixed categories, goal recalculation, categorization, data export, email connections, and session](screenshots/settings.png)

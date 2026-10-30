@@ -12,10 +12,11 @@ import { getDictionary } from "@/lib/i18n";
 export const metadata = { title: "More - Cadence" };
 
 /**
- * The phone tab bar's More tab: a plain list of the four occasional pages
- * (Accounts, Reports, Review, Settings), each row the same destination the
- * desktop sidebar links to. Reachable by URL at any width; from md up the
- * sidebar already lists these, so the page is only ever opened from the bar.
+ * The phone tab bar's More tab: a plain list of the five occasional pages
+ * (Accounts, Reports, Converter, Review, Settings), each row the same
+ * destination the desktop sidebar links to. Reachable by URL at any width;
+ * from md up the sidebar already lists these, so the page is only ever
+ * opened from the bar.
  */
 export default async function MorePage() {
   const [context, insights] = await Promise.all([getAppContext(), getInsights()]);

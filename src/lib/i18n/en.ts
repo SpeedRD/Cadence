@@ -185,11 +185,12 @@ export const en = {
     afford: "Afford",
     goals: "Goals",
     reports: "Reports",
+    converter: "Converter",
     settings: "Settings",
     inbox: "Inbox",
     /** Phone tab bar only: the hub tab over Budgets, Recurring, Goals and Afford. */
     plan: "Plan",
-    /** Phone tab bar only: the list tab over Accounts, Reports, Review and Settings. */
+    /** Phone tab bar only: the list tab over Accounts, Reports, Converter, Review and Settings. */
     more: "More",
     /** aria-label of the phone tab bar, which sits apart from the page's own navs. */
     tabBarLabel: "Main navigation",
@@ -1142,6 +1143,38 @@ export const en = {
       MONTHLY: "every month",
       YEARLY: "every year",
     } as Record<string, string>,
+  },
+  converter: {
+    title: "Converter",
+    description: "What your card will likely charge in pesos for an amount in dollars or euros. Nothing here is saved.",
+    calculatorHeading: "Amount",
+    currency: "Currency",
+    amountIn: (currency: string) => `Amount in ${currency}`,
+    amountHint: "Type in either field; the other follows.",
+    likelyCharge: "Your card will likely charge",
+    likelyRange: (low: string, high: string) => `Between ${low} and ${high}`,
+    learnedFrom: (count: number, min: string, max: string) => `Learned from ${count} of your charges (${min} to ${max})`,
+    cardRate: (rate: string, currency: string) => `About ${rate} DOP per ${currency}`,
+    publishedRateLabel: "The bank's published rate",
+    notEnoughCharges: (count: number, needed: number) =>
+      `Not enough of your charges yet to learn your card's rate (${count} of ${needed})`,
+    enterAmount: "Enter an amount to see the charge.",
+    referenceHeading: "Banco Popular's published rates",
+    publishedOn: (date: string) => `Published ${date}`,
+    lastPublishedOn: (date: string) => `Last published ${date}`,
+    sell: "Sell",
+    sellHint: "What the bank charges you.",
+    buy: "Buy",
+    buyHint: "What the bank pays you.",
+    notPublished: "not published",
+    perUnit: (rate: string, currency: string) => `${rate} DOP per ${currency}`,
+    newerPublication: (date: string) =>
+      `The bank published new rates on ${date}. Card charges use them from the next day, so the figures here still use the ones before.`,
+    staleTitle: "These rates are not current",
+    staleDescription: (date: string, days: number, window: number) =>
+      `The bank's latest published rates are from ${date}, ${days} days ago, older than the ${window}-day window. Your card may charge at a different rate today.`,
+    noRatesTitle: "No published rates yet",
+    noRatesDescription: "Banco Popular's rates show here once the first publication has been captured.",
   },
   goals: {
     title: "Goals",

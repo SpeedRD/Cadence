@@ -1,4 +1,5 @@
 import {
+  ArrowLeftRight,
   Bell,
   Calculator,
   CalendarDays,
@@ -55,6 +56,9 @@ export function buildNav(t: Dictionary["nav"]): NavItem[] {
     { href: "/afford", label: t.afford, icon: Calculator },
     { href: "/goals", label: t.goals, icon: Flag },
     { href: "/reports", label: t.reports, icon: Coins },
+    // What the card will charge for an amount in another currency
+    // (src/lib/card-rate.ts); occasional, so it sits behind More on a phone.
+    { href: "/converter", label: t.converter, icon: ArrowLeftRight },
     { href: "/settings", label: t.settings, icon: Settings },
   ];
 }
@@ -63,11 +67,11 @@ export function buildNav(t: Dictionary["nav"]): NavItem[] {
  * How the phone tab bar folds the flat list, by how often each page is
  * opened: daily pages get a tab each; the four "plan the period" pages sit
  * behind one Plan hub tab (a segmented control over them, plan-segments.tsx);
- * the four occasional pages sit behind a More tab that opens a plain list
+ * the five occasional pages sit behind a More tab that opens a plain list
  * (/more). Order within each group is the sidebar's.
  */
 export const PLAN_HREFS = ["/budgets", "/recurring", "/goals", "/afford"] as const;
-export const MORE_HREFS = ["/accounts", "/reports", "/review", "/settings"] as const;
+export const MORE_HREFS = ["/accounts", "/reports", "/converter", "/review", "/settings"] as const;
 /** The More tab's own list screen, active alongside the pages it lists. */
 export const MORE_HUB_HREF = "/more";
 
