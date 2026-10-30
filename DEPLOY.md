@@ -127,7 +127,10 @@ normally, so `.github/workflows/scrape-bpd-rate.yml` runs
 `scripts/scrape-bpd-rate.ts` once a day (22:00 UTC, 18:00 in Santo Domingo)
 in headed Chromium on a GitHub runner and posts the captured rate to
 `/api/cron/bpd-rate/ingest`, which re-validates it and stores it exactly as
-the on-demand path would have.
+the on-demand path would have. The bank's buy rates travel with it and are
+recorded beside the sell rates when plausible; a missing or implausible buy
+side is stored as null and never fails the run. Each publication is also
+kept, once, in `BpdRatePublication` (the rate history).
 
 In the GitHub repository → Settings → Secrets and variables → Actions:
 
@@ -146,6 +149,18 @@ A red run means nothing was written - read its log: `feed not ready` /
 `failed validation` is a dollar sell rate outside the 55-75 DOP band, a euro
 sell rate whose EUR/USD against it is outside 0.8-1.6, or missing fields, `HTTP 401` is a secret mismatch, and `outside the 7-day freshness
 window` means the bank has not published for over a week.
+
+Publications captured before `BpdRatePublication` existed are only in the
+workflow's run logs (kept 90 days). After the migration that adds the table
+is deployed, copy them in once with the gh CLI signed in to this repository:
+
+```bash
+DATABASE_URL="<the DIRECT_URL value>" npx tsx scripts/backfill-bpd-rate-history.ts           # dry run: lists what it would insert
+DATABASE_URL="<the DIRECT_URL value>" npx tsx scripts/backfill-bpd-rate-history.ts --apply   # inserts, in one transaction
+```
+
+It stores the sell rates only (the logs have no buy rates), never changes a
+publication already stored, and a second run inserts nothing.
 
 ## Applying a new migration later
 

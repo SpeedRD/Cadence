@@ -17,6 +17,7 @@
  */
 import {
   chargedInAccount,
+  keepsBankFigure,
   needsConversion,
   refuseZeroAmount,
   shareInAccountCurrency,
@@ -46,8 +47,12 @@ import type { transactionSchema } from "@/lib/validation";
 
 export type ManualTransactionValues = Omit<z.infer<typeof transactionSchema>, "id">;
 
-/** The form's values as the row stores them: amount and share in the account's currency, with the entered figure kept beside them. */
-export type StoredTransactionValues = Omit<ManualTransactionValues, "currency"> & StoredMoney;
+/**
+ * The form's values as the row stores them: amount and share in the account's
+ * currency, with the entered figure kept beside them, and whether the amount
+ * is the bank's own figure (Transaction.isBankFigure).
+ */
+export type StoredTransactionValues = Omit<ManualTransactionValues, "currency"> & StoredMoney & { isBankFigure: boolean };
 
 /**
  * K7 for the transaction form (src/lib/account-money.ts): the entered amount
@@ -58,7 +63,9 @@ export type StoredTransactionValues = Omit<ManualTransactionValues, "currency"> 
  * amount in the same currency is converted at the rate stored with it.
  * `chargedAmount` is the bank's own figure in the account's currency, when
  * the form has one: it is stored as typed, with the entered amount kept and
- * the rate the two imply (chargedInAccount). Rates are asked for only when a
+ * the rate the two imply (chargedInAccount), and marked as the bank's figure;
+ * any other conversion is not, unless it keeps an edited row's bank figure
+ * exactly as stored (keepsBankFigure). Rates are asked for only when a
  * conversion is needed, and only rates fit to be written down are used: with
  * none, the conversion throws RatesUnavailableError and the form asks for the
  * amount in the account's currency instead (R20). An entry that comes to
@@ -67,16 +74,17 @@ export type StoredTransactionValues = Omit<ManualTransactionValues, "currency"> 
 export async function storedTransactionValues(
   values: ManualTransactionValues,
   getRates: () => Promise<RateTable>,
-  previous?: { row: MoneyRow & { yourShare: number | null }; accountCurrency: string } | null,
+  previous?: { row: MoneyRow & { yourShare: number | null; isBankFigure?: boolean }; accountCurrency: string } | null,
   chargedAmount: number | null = null,
 ): Promise<StoredTransactionValues> {
   const account = await prisma.account.findUniqueOrThrow({ where: { id: values.accountId }, select: { currency: true } });
   const entered = { amount: values.amount, currency: values.currency };
   // The bank's own figure, when the form has one, is the stored amount as
   // typed; otherwise the entry is converted (or keeps its stored conversion).
+  const fromBank = chargedAmount != null && needsConversion(values.currency, account.currency);
   const stored = refuseZeroAmount(
     entered,
-    chargedAmount != null && needsConversion(values.currency, account.currency)
+    fromBank
       ? chargedInAccount(entered, account.currency, chargedAmount)
       : toAccountMoney(
           entered,
@@ -92,6 +100,7 @@ export async function storedTransactionValues(
     originalAmount: stored.originalAmount,
     originalCurrency: stored.originalCurrency,
     rate: stored.rate,
+    isBankFigure: fromBank ? stored.originalCurrency !== null : keepsBankFigure(stored, previous?.row),
     // undefined stays undefined: the form did not offer the share, and the
     // stored one is left as it is (see transactionSchema).
     yourShare:
@@ -178,6 +187,7 @@ export async function createManualTransaction(
               originalAmount: created.originalAmount === null ? null : num(created.originalAmount),
               originalCurrency: created.originalCurrency,
               rate: created.rate === null ? null : num(created.rate),
+              isBankFigure: created.isBankFigure,
               note: created.note,
               categoryId: created.categoryId,
             },

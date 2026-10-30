@@ -217,6 +217,14 @@ model Transaction {
   originalAmount          Decimal?           @db.Decimal(14, 2)
   originalCurrency        String?
   rate                    Decimal?           @db.Decimal(20, 10)
+  /// Whether `amount` is the bank's own figure in the account's currency for
+  /// money entered in another currency - "Amount charged in <account
+  /// currency>" on the transaction form, or the figure "It's the posted
+  /// charge" took from the row brought in - rather than Cadence's conversion
+  /// at a rate (src/lib/account-money.ts, keepsBankFigure). False on a row in
+  /// the account's own currency, and set back to false by any edit that
+  /// converts the amount again. Read by nothing in the app's arithmetic yet.
+  isBankFigure            Boolean            @default(false)
   createdAt               DateTime           @default(now())
 
   account             Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
@@ -569,6 +577,31 @@ model ExchangeRate {
   asOf           DateTime?
 
   @@unique([baseCurrency, targetCurrency, source])
+}
+
+/// One row per Banco Popular Dominicano publication (its BuySellRatesAsOf),
+/// with the dollar and euro rates in DOP as the bank published them. Written
+/// by storeBpdRates (src/lib/bpd-rates.ts) in the same database transaction
+/// as the source="bpd" ExchangeRate rows, and by
+/// scripts/backfill-bpd-rate-history.ts from the scraper's run logs, which
+/// hold the sell rates only - so the buy rates are nullable. The first
+/// capture of a publication is kept: a repeat of the same asOf writes
+/// nothing. A record only; nothing in the app converts with it yet.
+model BpdRatePublication {
+  id             String   @id @default(cuid())
+  /// The bank's BuySellRatesAsOf.
+  asOf           DateTime @unique
+  /// DOP per 1 USD the bank buys from a customer ("Compramos").
+  dollarBuyRate  Decimal? @db.Decimal(20, 10)
+  /// DOP per 1 USD the bank sells to a customer ("Vendemos").
+  dollarSellRate Decimal  @db.Decimal(20, 10)
+  /// DOP per 1 EUR the bank buys from a customer.
+  euroBuyRate    Decimal? @db.Decimal(20, 10)
+  /// DOP per 1 EUR the bank sells to a customer.
+  euroSellRate   Decimal  @db.Decimal(20, 10)
+  /// When this publication was captured (for a backfilled row, when the
+  /// scraper logged it).
+  capturedAt     DateTime
 }
 
 enum PaydayCheckinStatus {

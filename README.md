@@ -475,6 +475,7 @@ Email automation is optional — see [PHASE2.md](./PHASE2.md).
 | `npx tsx scripts/verify-no-double-counting.ts` | Integrity audit over real data for five pairs of mechanisms that could count one commitment twice or drop it. Read-only at the database level, so it can be pointed at any database; exit 1 means something to investigate |
 | `npx tsx scripts/backfill-account-currency.ts` | Stores older rows that were written in another currency than their account's in the account's currency (dry run by default; refuses rates not fit for writing) |
 | `npx tsx scripts/scrape-bpd-rate.ts` | Captures Banco Popular's published rate with a real (headed) Chromium and posts it to the app; `--dry-run` only prints. Run daily by GitHub Actions |
+| `npx tsx scripts/backfill-bpd-rate-history.ts` | Copies the Banco Popular sell rates the scraper logged before the rate history existed from the workflow's run logs (gh CLI) into `BpdRatePublication` (dry run by default; `--apply` inserts, never overwrites) |
 
 ## Environment variables
 

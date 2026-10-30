@@ -43,6 +43,7 @@ import {
   type BpdRates,
   isWithinFreshnessWindow,
   parseBpdPayload,
+  scraperCaptureLine,
 } from "../src/lib/bpd-rate-payload";
 
 /** The page a visitor would land on; the feed is read from inside it. */
@@ -168,6 +169,8 @@ async function post(target: { url: string; secret: string }, rates: BpdRates): P
     body: JSON.stringify({
       dollarSellRate: rates.dollarSellRate,
       euroSellRate: rates.euroSellRate,
+      dollarBuyRate: rates.dollarBuyRate ?? null,
+      euroBuyRate: rates.euroBuyRate ?? null,
       asOf: rates.asOf.toISOString(),
     }),
     signal: AbortSignal.timeout(POST_TIMEOUT_MS),
@@ -183,8 +186,13 @@ async function main(): Promise<void> {
   const target = resolveTarget();
 
   const rates = await scrape();
+  console.log(scraperCaptureLine(rates));
+  // On a line of its own: the one above is read back, as every run so far
+  // has written it, by scripts/backfill-bpd-rate-history.ts.
   console.log(
-    `[scrape-bpd-rate] captured USD sell ${rates.dollarSellRate}, EUR sell ${rates.euroSellRate}, as of ${rates.asOf.toISOString()}`,
+    rates.dollarBuyRate != null && rates.euroBuyRate != null
+      ? `[scrape-bpd-rate] captured USD buy ${rates.dollarBuyRate}, EUR buy ${rates.euroBuyRate}`
+      : "[scrape-bpd-rate] no plausible buy rates in the feed: posting the sell rates alone",
   );
 
   if (!isWithinFreshnessWindow(rates.asOf, new Date())) {

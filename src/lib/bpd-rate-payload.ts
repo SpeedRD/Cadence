@@ -60,6 +60,14 @@ export interface BpdRates {
   dollarSellRate: number;
   /** DOP paid per 1 EUR sold to a customer ("Vendemos"). */
   euroSellRate: number;
+  /**
+   * DOP paid per 1 USD and per 1 EUR bought from a customer ("Compramos"),
+   * when the bank published a plausible pair (bpdBuyRates); null - or absent,
+   * on rates read back from ExchangeRate, which keeps the sell rates only -
+   * otherwise. Recorded in BpdRatePublication only: no conversion reads them.
+   */
+  dollarBuyRate?: number | null;
+  euroBuyRate?: number | null;
   /** The calendar day BPD says these rates are published for. */
   asOf: Date;
 }
@@ -84,6 +92,32 @@ export function isPlausibleBpdRates(dollarSellRate: unknown, euroSellRate: unkno
   if (typeof euroSellRate !== "number" || !Number.isFinite(euroSellRate)) return false;
   const eurUsd = euroSellRate / dollarSellRate;
   return eurUsd >= MIN_PLAUSIBLE_EUR_USD && eurUsd <= MAX_PLAUSIBLE_EUR_USD;
+}
+
+/**
+ * The buy rates the bank published beside `dollarSellRate` and
+ * `euroSellRate`, when they are plausible together and with those sell rates
+ * - the dollar's inside the same peso band, the euro's inside the same
+ * EUR/USD band against it (isPlausibleBpdRates), and each below its own sell
+ * rate, since the bank buys for less than it sells - and both null
+ * otherwise. Judged as a pair, like the sell rates. Never a reason to refuse
+ * the sell rates: a missing or implausible buy side only goes unrecorded.
+ * Every place that accepts a Banco Popular rate asks this, as it asks
+ * isPlausibleBpdRates.
+ */
+export function bpdBuyRates(
+  dollarBuyRate: unknown,
+  euroBuyRate: unknown,
+  dollarSellRate: number,
+  euroSellRate: number,
+): { dollarBuyRate: number | null; euroBuyRate: number | null } {
+  const plausible =
+    isPlausibleBpdRates(dollarBuyRate, euroBuyRate) &&
+    (dollarBuyRate as number) < dollarSellRate &&
+    (euroBuyRate as number) < euroSellRate;
+  return plausible
+    ? { dollarBuyRate: dollarBuyRate as number, euroBuyRate: euroBuyRate as number }
+    : { dollarBuyRate: null, euroBuyRate: null };
 }
 
 /** Same calendar day in UTC - BuySellRatesAsOf and "today" are both compared this way throughout this module. */
@@ -118,9 +152,11 @@ export function isWithinFreshnessWindow(asOf: Date, now: Date, timeZone: string 
 
 /**
  * Validates and extracts the fields this app uses from BPD's SharePoint list
- * response. Pure and network-free so it can be exercised directly against a
- * fabricated payload; the network fetch itself lives in `fetchBpdRates`, and
- * the browser-driven capture in scripts/scrape-bpd-rate.ts.
+ * response: the sell rates and their date, which must be valid, and the buy
+ * rates, kept only when plausible (bpdBuyRates). Pure and network-free so it
+ * can be exercised directly against a fabricated payload; the network fetch
+ * itself lives in `fetchBpdRates`, and the browser-driven capture in
+ * scripts/scrape-bpd-rate.ts.
  */
 export function parseBpdPayload(payload: unknown): BpdRates | null {
   if (typeof payload !== "object" || payload === null) return null;
@@ -140,7 +176,62 @@ export function parseBpdPayload(payload: unknown): BpdRates | null {
   const asOf = new Date(asOfRaw);
   if (Number.isNaN(asOf.getTime())) return null;
 
-  return { dollarSellRate: dollarSellRate as number, euroSellRate: euroSellRate as number, asOf };
+  return {
+    dollarSellRate: dollarSellRate as number,
+    euroSellRate: euroSellRate as number,
+    ...bpdBuyRates(item.DollarBuyRate, item.EuroBuyRate, dollarSellRate as number, euroSellRate as number),
+    asOf,
+  };
+}
+
+/**
+ * The line scripts/scrape-bpd-rate.ts logs for every rate it captures, and
+ * capturesFromScraperLog reads back from the workflow's run logs - the only
+ * record of the sell rates captured before BpdRatePublication existed (see
+ * scripts/backfill-bpd-rate-history.ts). One definition, so the two cannot
+ * drift apart; runs already logged used exactly this wording.
+ */
+export function scraperCaptureLine(rates: BpdRates): string {
+  return `[scrape-bpd-rate] captured USD sell ${rates.dollarSellRate}, EUR sell ${rates.euroSellRate}, as of ${rates.asOf.toISOString()}`;
+}
+
+/** One capture line found in a run log, as logged - not yet judged plausible. */
+export interface ScraperLogCapture {
+  /** The timestamp GitHub Actions put before the line: when the run logged it. */
+  loggedAt: Date;
+  dollarSellRate: number;
+  euroSellRate: number;
+  asOf: Date;
+}
+
+const CAPTURE_LINE =
+  /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) \[scrape-bpd-rate\] captured USD sell (\S+), EUR sell (\S+), as of (\S+)\s*$/;
+
+/**
+ * Every capture line (scraperCaptureLine) in a run log as `gh run view --log`
+ * prints it, each prefixed by GitHub's own timestamp. A line whose figures or
+ * dates do not parse is skipped; plausibility is the caller's to judge.
+ */
+export function capturesFromScraperLog(log: string): ScraperLogCapture[] {
+  const captures: ScraperLogCapture[] = [];
+  for (const line of log.split(/\r?\n/)) {
+    const match = CAPTURE_LINE.exec(line);
+    if (!match) continue;
+    const loggedAt = new Date(match[1]);
+    const dollarSellRate = Number(match[2]);
+    const euroSellRate = Number(match[3]);
+    const asOf = new Date(match[4]);
+    if (
+      Number.isNaN(loggedAt.getTime()) ||
+      Number.isNaN(asOf.getTime()) ||
+      !Number.isFinite(dollarSellRate) ||
+      !Number.isFinite(euroSellRate)
+    ) {
+      continue;
+    }
+    captures.push({ loggedAt, dollarSellRate, euroSellRate, asOf });
+  }
+  return captures;
 }
 
 /**

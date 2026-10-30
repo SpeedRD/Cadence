@@ -1,5 +1,6 @@
 import {
   inAccountCurrency,
+  keepsBankFigure,
   moneyRow,
   refuseZeroAmount,
   roundRate,
@@ -151,7 +152,7 @@ function recurringContributionTwin(key: string) {
         { recurringSettlement: { is: { occurrenceKey: key } } },
       ],
     },
-    select: { id: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true },
+    select: { id: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, isBankFigure: true },
   });
 }
 
@@ -263,7 +264,8 @@ export async function updateRecurringContributionAmount(
     if (twin && stored) {
       await tx.transaction.update({
         where: { id: twin.id },
-        data: stored,
+        // A corrected amount is Cadence's figure, not the bank's (keepsBankFigure).
+        data: { ...stored, isBankFigure: keepsBankFigure(stored, { ...moneyRow(twin), isBankFigure: twin.isBankFigure }) },
       });
     }
   });
@@ -305,7 +307,7 @@ export async function updateManualContribution(
 
   const twin = await prisma.transaction.findFirst({
     where: { source: "MANUAL", externalId: manualContributionExternalId(contribution.id) },
-    select: { id: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, accountId: true },
+    select: { id: true, amount: true, currency: true, originalAmount: true, originalCurrency: true, rate: true, isBankFigure: true, accountId: true },
   });
 
   let account: { id: string; currency: string } | null = null;
@@ -343,6 +345,8 @@ export async function updateManualContribution(
         where: { id: twin.id },
         data: {
           ...stored,
+          // Kept only while the twin's stored money is (keepsBankFigure).
+          isBankFigure: keepsBankFigure(stored, { ...moneyRow(twin), isBankFigure: twin.isBankFigure }),
           date: input.date,
           accountId: account.id,
         },

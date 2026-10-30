@@ -135,6 +135,7 @@ async function seedStoredRates(table: Record<string, number>): Promise<() => Pro
 }
 
 async function main() {
+  const harnessStartedAt = new Date();
   console.log("\n== APP_TIMEZONE / business date ==");
   const SD = "America/Santo_Domingo";
   eq(
@@ -5488,7 +5489,9 @@ async function main() {
       eq(
         "1,580 DOP (1.4% off) is a possible match that would put the bank's figure on the posted row",
         `${num(postedRow.amount)}:${postedRow.currency}|${inside?.possible}:${JSON.stringify(inside?.rewrite)}`,
-        `1558.8:DOP|true:${JSON.stringify({ amount: 1580, currency: "DOP", originalAmount: 12.99, originalCurrency: "EUR", rate: Number((1580 / 12.99).toFixed(10)) })}`,
+        // Flipped deliberately with Transaction.isBankFigure: the bank's DOP
+        // figure on a row converted from EUR marks the row as holding it.
+        `1558.8:DOP|true:${JSON.stringify({ amount: 1580, currency: "DOP", originalAmount: 12.99, originalCurrency: "EUR", rate: Number((1580 / 12.99).toFixed(10)), isBankFigure: true })}`,
       );
       eq("1,700 DOP (9% off) is not a match", (await findCsvPostedDuplicates({ accountId: dop.id, currency: "DOP", rows: [outside], skip: new Set(), rates }))?.size, 0);
       const warned = await findCsvPostedDuplicates({ accountId: dop.id, currency: "DOP", rows: [within], skip: new Set(), rates });
@@ -18842,7 +18845,325 @@ async function main() {
     }
   }
 
+  console.log("\n== Banco Popular rate history (BpdRatePublication) and buy rates ==");
+  {
+    const hPayload = await import("../src/lib/bpd-rate-payload");
+    const hBpd = await import("../src/lib/bpd-rates");
+    const { POST: hIngest } = await import("../src/app/api/cron/bpd-rate/ingest/route");
+    const { NextRequest: HNextRequest } = await import("next/server");
+    // Fictional rates throughout: none of these figures is the bank's.
+    const feed = (item: Record<string, unknown>) => ({ d: { results: [{ BuySellRatesAsOf: "2026-10-20T14:00:00Z", ...item }] } });
+    const buys = (item: Record<string, unknown>) => {
+      const parsed = hPayload.parseBpdPayload(feed(item));
+      return parsed ? `${parsed.dollarSellRate}/${parsed.euroSellRate}|${parsed.dollarBuyRate}/${parsed.euroBuyRate}` : "refused";
+    };
+
+    console.log("-- the buy rates: kept when plausible, never a reason to refuse the sell rates (pure) --");
+    eq("a plausible pair below the sell rates is kept", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9, DollarBuyRate: 57.1, EuroBuyRate: 64.3 }), "58.4/66.9|57.1/64.3");
+    eq("missing buy rates leave the sell rates as they were, buy null", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9 }), "58.4/66.9|null/null");
+    eq("a dollar buy above its sell rate drops the buy side only", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9, DollarBuyRate: 58.9, EuroBuyRate: 64.3 }), "58.4/66.9|null/null");
+    eq("a euro buy above its sell rate drops the buy side only", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9, DollarBuyRate: 57.1, EuroBuyRate: 67.2 }), "58.4/66.9|null/null");
+    eq("a buy equal to its sell rate is not below it", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9, DollarBuyRate: 58.4, EuroBuyRate: 64.3 }), "58.4/66.9|null/null");
+    eq("a dollar buy outside the peso band is dropped", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9, DollarBuyRate: 5.71, EuroBuyRate: 64.3 }), "58.4/66.9|null/null");
+    eq("a euro buy implying an impossible EUR/USD (0.5) is dropped", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9, DollarBuyRate: 57.1, EuroBuyRate: 28.5 }), "58.4/66.9|null/null");
+    eq("a buy rate sent as text is dropped", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9, DollarBuyRate: "57.1", EuroBuyRate: 64.3 }), "58.4/66.9|null/null");
+    eq("only one buy rate published: neither is kept (judged as a pair)", buys({ DollarSellRate: 58.4, EuroSellRate: 66.9, DollarBuyRate: 57.1 }), "58.4/66.9|null/null");
+    eq("a bad sell rate is still refused, whatever the buy side", buys({ DollarSellRate: 5, EuroSellRate: 66.9, DollarBuyRate: 57.1, EuroBuyRate: 64.3 }), "refused");
+    eq(
+      "bpdBuyRates is the one judge: the same pair through it directly",
+      JSON.stringify(hPayload.bpdBuyRates(57.1, 64.3, 58.4, 66.9)),
+      JSON.stringify({ dollarBuyRate: 57.1, euroBuyRate: 64.3 }),
+    );
+
+    console.log("-- the scraper's capture line, read back from a run log (pure) --");
+    {
+      const line = hPayload.scraperCaptureLine({ dollarSellRate: 58.4, euroSellRate: 66.9, asOf: new Date("2026-10-20T14:00:00Z") });
+      eq("the line is the wording every run has logged", line, "[scrape-bpd-rate] captured USD sell 58.4, EUR sell 66.9, as of 2026-10-20T14:00:00.000Z");
+      const log = [
+        "scrape\tUNKNOWN STEP\t2026-10-20T22:01:05.1000000Z [scrape-bpd-rate] loading https://example.invalid/",
+        `scrape\tUNKNOWN STEP\t2026-10-20T22:01:12.5974054Z ${line}`,
+        "scrape\tUNKNOWN STEP\t2026-10-21T22:01:12.0000000Z [scrape-bpd-rate] captured USD sell 58.55, EUR sell 67, as of 2026-10-21T13:30:00.000Z\r",
+        "scrape\tUNKNOWN STEP\t2026-10-22T22:01:12.0000000Z [scrape-bpd-rate] captured USD sell abc, EUR sell 67, as of 2026-10-22T13:30:00.000Z",
+        "scrape\tUNKNOWN STEP\t2026-10-22T22:01:13.0000000Z [scrape-bpd-rate] captured USD sell 58.6, EUR sell 67, as of not-a-date",
+      ].join("\n");
+      eq(
+        "two captures are read with GitHub's own timestamp; unparseable figures or dates are skipped",
+        hPayload
+          .capturesFromScraperLog(log)
+          .map((c) => `${c.loggedAt.toISOString()}:${c.dollarSellRate}/${c.euroSellRate}@${c.asOf.toISOString()}`)
+          .join(","),
+        "2026-10-20T22:01:12.597Z:58.4/66.9@2026-10-20T14:00:00.000Z,2026-10-21T22:01:12.000Z:58.55/67@2026-10-21T13:30:00.000Z",
+      );
+    }
+
+    console.log("-- storeBpdRates(): one history row per publication, in the same write as the latest rates --");
+    const hRatesBefore = await prisma.exchangeRate.findMany();
+    const hNow = new Date();
+    // Distinct instants of this run, so nothing stored earlier shares an asOf.
+    const hAsOf = (days: number, minutes: number) => new Date(hNow.getTime() - days * 24 * 60 * 60 * 1000 - minutes * 60 * 1000 - (hNow.getTime() % 1000) - 7);
+    const hDates: Date[] = [];
+    const hRow = async (asOf: Date) => {
+      const row = await prisma.bpdRatePublication.findUnique({ where: { asOf } });
+      return row
+        ? `${num(row.dollarSellRate)}/${num(row.euroSellRate)}|${row.dollarBuyRate === null ? "null" : num(row.dollarBuyRate)}/${row.euroBuyRate === null ? "null" : num(row.euroBuyRate)}`
+        : "none";
+    };
+    const hCount = (asOf: Date) => prisma.bpdRatePublication.count({ where: { asOf } });
+    const hLatestDop = async () => {
+      const row = await prisma.exchangeRate.findFirst({ where: { baseCurrency: "USD", targetCurrency: "DOP", source: BPD_SOURCE } });
+      return row ? `${num(row.rate)}@${row.asOf?.toISOString()}` : "none";
+    };
+    try {
+      await prisma.exchangeRate.deleteMany({ where: { source: BPD_SOURCE } });
+      const first = hAsOf(3, 0);
+      hDates.push(first);
+      eq(
+        "a publication with plausible buy rates is stored as before",
+        JSON.stringify(await hBpd.storeBpdRates({ dollarSellRate: 58.1, euroSellRate: 66.4, dollarBuyRate: 57.2, euroBuyRate: 64.9, asOf: first })),
+        JSON.stringify({ ok: true }),
+      );
+      eq("...with one history row carrying all four rates", `${await hCount(first)}|${await hRow(first)}`, "1|58.1/66.4|57.2/64.9");
+      eq("...and the latest DOP row the same publication", await hLatestDop(), `58.1@${first.toISOString()}`);
+      const capturedFirst = (await prisma.bpdRatePublication.findUniqueOrThrow({ where: { asOf: first } })).capturedAt.getTime();
+      check("...captured just now", Math.abs(capturedFirst - Date.now()) < 60_000, new Date(capturedFirst).toISOString());
+
+      eq(
+        "a repeat capture of the same asOf, with other figures, is accepted as before",
+        JSON.stringify(await hBpd.storeBpdRates({ dollarSellRate: 58.3, euroSellRate: 66.7, dollarBuyRate: 57.4, euroBuyRate: 65, asOf: first })),
+        JSON.stringify({ ok: true }),
+      );
+      const afterRepeat = await prisma.bpdRatePublication.findUniqueOrThrow({ where: { asOf: first } });
+      eq(
+        "...and changes nothing in the history: still one row, the first capture's figures and time",
+        `${await hCount(first)}|${await hRow(first)}|${afterRepeat.capturedAt.getTime() === capturedFirst}`,
+        "1|58.1/66.4|57.2/64.9|true",
+      );
+      eq("...while ExchangeRate takes the repeat, exactly as it did before history existed", await hLatestDop(), `58.3@${first.toISOString()}`);
+
+      const noBuy = hAsOf(2, 0);
+      hDates.push(noBuy);
+      eq("a publication with no buy rates is stored", JSON.stringify(await hBpd.storeBpdRates({ dollarSellRate: 58.5, euroSellRate: 67.1, asOf: noBuy })), JSON.stringify({ ok: true }));
+      eq("...with buy null in the history", await hRow(noBuy), "58.5/67.1|null/null");
+
+      const buyAbove = hAsOf(1, 0);
+      hDates.push(buyAbove);
+      eq(
+        "a dollar buy above the sell rate does not refuse the publication",
+        JSON.stringify(await hBpd.storeBpdRates({ dollarSellRate: 58.6, euroSellRate: 67.2, dollarBuyRate: 59.2, euroBuyRate: 65.1, asOf: buyAbove })),
+        JSON.stringify({ ok: true }),
+      );
+      eq("...the sell rates are stored, the buy side rejected as null", `${await hRow(buyAbove)}|${await hLatestDop()}`, `58.6/67.2|null/null|58.6@${buyAbove.toISOString()}`);
+
+      const older = hAsOf(4, 0);
+      hDates.push(older);
+      eq(
+        "an older publication than the stored one keeps the newer latest rate, as before",
+        JSON.stringify(await hBpd.storeBpdRates({ dollarSellRate: 57.9, euroSellRate: 66.2, dollarBuyRate: 56.8, euroBuyRate: 64.1, asOf: older })),
+        JSON.stringify({ ok: true, note: "kept_newer_rate" }),
+      );
+      eq("...ExchangeRate unchanged, the older publication recorded in the history", `${await hLatestDop()}|${await hRow(older)}`, `58.6@${buyAbove.toISOString()}|57.9/66.2|56.8/64.1`);
+
+      const refusedAt = hAsOf(1, 30);
+      hDates.push(refusedAt);
+      eq(
+        "an implausible sell rate is refused, as before",
+        JSON.stringify(await hBpd.storeBpdRates({ dollarSellRate: 5.86, euroSellRate: 67.2, dollarBuyRate: 5.7, euroBuyRate: 65.1, asOf: refusedAt })),
+        JSON.stringify({ ok: false, reason: "out_of_range" }),
+      );
+      eq("...and writes no history row", await hCount(refusedAt), 0);
+      const stale = hAsOf(9, 0);
+      hDates.push(stale);
+      eq("a publication outside the freshness window is refused and writes no history row", `${JSON.stringify(await hBpd.storeBpdRates({ dollarSellRate: 58, euroSellRate: 66, asOf: stale }))}|${await hCount(stale)}`, `${JSON.stringify({ ok: false, reason: "outside_freshness_window" })}|0`);
+
+      const newest = await prisma.bpdRatePublication.findFirstOrThrow({ where: { asOf: { in: hDates } }, orderBy: { asOf: "desc" } });
+      eq("the newest history row is the publication ExchangeRate holds", `${num(newest.dollarSellRate)}@${newest.asOf.toISOString()}`, await hLatestDop());
+
+      console.log("-- the ingestion endpoint carries the buy rates and never refuses a sell rate over them --");
+      const previousSecret = process.env.BPD_SCRAPE_INGEST_SECRET;
+      process.env.BPD_SCRAPE_INGEST_SECRET = "verify-history-secret";
+      try {
+        const ingest = async (body: Record<string, unknown>) => {
+          const response = await hIngest(
+            new HNextRequest("http://localhost/api/cron/bpd-rate/ingest", {
+              method: "POST",
+              headers: { "content-type": "application/json", authorization: "Bearer verify-history-secret" },
+              body: JSON.stringify(body),
+            }),
+          );
+          return { status: response.status, json: (await response.json()) as Record<string, unknown> };
+        };
+        const withBuy = hAsOf(0, 30);
+        const textBuy = hAsOf(0, 20);
+        const noBuyBody = hAsOf(0, 10);
+        hDates.push(withBuy, textBuy, noBuyBody);
+        const a = await ingest({ dollarSellRate: 58.7, euroSellRate: 67.3, dollarBuyRate: 57.5, euroBuyRate: 65.2, asOf: withBuy.toISOString() });
+        eq("a body with buy rates is stored and echoes them", `${a.status}:${a.json.stored}:${a.json.dollarBuyRate}:${a.json.euroBuyRate}`, "200:true:57.5:65.2");
+        eq("...into the history row", await hRow(withBuy), "58.7/67.3|57.5/65.2");
+        const b = await ingest({ dollarSellRate: 58.8, euroSellRate: 67.4, dollarBuyRate: "57.6", euroBuyRate: { bad: true }, asOf: textBuy.toISOString() });
+        eq("malformed buy rates still store the sell rates (200), buy null", `${b.status}:${b.json.stored}:${b.json.dollarBuyRate}:${b.json.euroBuyRate}|${await hRow(textBuy)}`, "200:true:null:null|58.8/67.4|null/null");
+        const c = await ingest({ dollarSellRate: 58.9, euroSellRate: 67.5, asOf: noBuyBody.toISOString() });
+        eq("a body without buy rates (an older scraper) is stored as before", `${c.status}:${c.json.stored}|${await hRow(noBuyBody)}`, "200:true|58.9/67.5|null/null");
+        const d = await ingest({ dollarSellRate: 58.9, euroSellRate: 67.5, dollarBuyRate: 59.5, euroBuyRate: 65, asOf: noBuyBody.toISOString() });
+        eq("the same asOf again, now with buy rates, changes nothing in the history", `${d.status}|${await hCount(noBuyBody)}|${await hRow(noBuyBody)}`, "200|1|58.9/67.5|null/null");
+      } finally {
+        if (previousSecret === undefined) delete process.env.BPD_SCRAPE_INGEST_SECRET;
+        else process.env.BPD_SCRAPE_INGEST_SECRET = previousSecret;
+      }
+    } finally {
+      await prisma.bpdRatePublication.deleteMany({ where: { asOf: { in: hDates } } });
+      await prisma.exchangeRate.deleteMany();
+      if (hRatesBefore.length > 0) await prisma.exchangeRate.createMany({ data: hRatesBefore });
+    }
+  }
+
+  console.log("\n== the bank's figure (Transaction.isBankFigure) ==");
+  {
+    const bMoney = await import("../src/lib/account-money");
+    const bManual = await import("../src/lib/data/manual-transaction");
+    const bDuplicates = await import("../src/lib/data/posted-duplicates");
+    const bGoals = await import("../src/lib/goals");
+    const { importCsvTransactions: bImport } = await import("../src/lib/data/import");
+    const { postDueRecurringItems: bPost } = await import("../src/lib/recurring-posting");
+    const { transactionSchema: bSchema } = await import("../src/lib/validation");
+
+    console.log("-- keepsBankFigure (pure) --");
+    {
+      const bank = { amount: 762.5, currency: "DOP", originalAmount: 10, originalCurrency: "EUR", rate: 76.25, isBankFigure: true };
+      const same = { amount: 762.5, currency: "DOP", originalAmount: 10, originalCurrency: "EUR", rate: 76.25 };
+      eq("the bank's figure kept exactly stays the bank's", bMoney.keepsBankFigure(same, bank), true);
+      eq("a new amount at the stored rate is Cadence's", bMoney.keepsBankFigure({ ...same, amount: 915, originalAmount: 12 }, bank), false);
+      eq("the same original at the table's rate is Cadence's", bMoney.keepsBankFigure({ ...same, amount: 750, rate: 75 }, bank), false);
+      eq("money in the account's own currency is never marked", bMoney.keepsBankFigure({ amount: 762.5, currency: "DOP", originalAmount: null, originalCurrency: null, rate: null }, bank), false);
+      eq("a row that was not the bank's stays not", bMoney.keepsBankFigure(same, { ...bank, isBankFigure: false }), false);
+      eq("a new row has nothing to keep", bMoney.keepsBankFigure(same, null), false);
+    }
+
+    const bPaused = (await prisma.recurringItem.findMany({ where: { active: true }, select: { id: true } })).map((row) => row.id);
+    await prisma.recurringItem.updateMany({ where: { id: { in: bPaused } }, data: { active: false } });
+    // 1 USD = 60 DOP = 0.8 EUR, so 1 EUR is 75 DOP. Fictional.
+    const bRestoreRates = await seedStoredRates({ USD: 1, DOP: 60, EUR: 0.8 });
+    const bWipe = async () => {
+      const accounts = (await prisma.account.findMany({ where: { name: { startsWith: "Verify BankFig " } }, select: { id: true } })).map((a) => a.id);
+      await prisma.recurringSettlement.deleteMany({ where: { transaction: { accountId: { in: accounts } } } });
+      await prisma.goalContribution.deleteMany({ where: { goal: { name: { startsWith: "Verify BankFig " } } } });
+      await prisma.transaction.deleteMany({ where: { accountId: { in: accounts } } });
+      await prisma.recurringItem.deleteMany({ where: { name: { startsWith: "Verify BankFig " } } });
+      await prisma.goal.deleteMany({ where: { name: { startsWith: "Verify BankFig " } } });
+      await prisma.account.deleteMany({ where: { id: { in: accounts } } });
+    };
+    try {
+      const bRates = await getRateTable();
+      const bAccount = (name: string) => prisma.account.create({ data: { name: `Verify BankFig ${name}`, currency: "DOP", type: "CHECKING" } });
+      const bValues = (accountId: string, amount: string, currency: string, note: string, date = "2026-10-12") => {
+        const { id: _id, ...values } = bSchema.parse({ type: "EXPENSE", date, amount, currency, accountId, categoryId: "none", note });
+        return values;
+      };
+      const bCreate = (values: ReturnType<typeof bValues>, chargedAmount: number | null = null) =>
+        bManual.createManualTransaction(values, { getContext: async () => { throw new Error("no context needed"); }, getRates: async () => bRates, chargedAmount });
+      const bMarked = async (id: string) => {
+        const row = await prisma.transaction.findUniqueOrThrow({ where: { id } });
+        return `${num(row.amount)}:${row.currency}|${row.originalAmount === null ? "-" : num(row.originalAmount)}:${row.originalCurrency ?? "-"}|${row.isBankFigure}`;
+      };
+      // What saveTransactionAction does on an edit: the row as stored, then the update.
+      const bEdit = async (id: string, values: ReturnType<typeof bValues>, chargedAmount: number | null = null) => {
+        const existing = await prisma.transaction.findUniqueOrThrow({ where: { id } });
+        const stored = await bManual.storedTransactionValues(
+          values,
+          async () => bRates,
+          { row: { ...bMoney.moneyRow(existing), yourShare: null, isBankFigure: existing.isBankFigure }, accountCurrency: "DOP" },
+          chargedAmount,
+        );
+        await prisma.transaction.update({ where: { id }, data: stored });
+        return bMarked(id);
+      };
+
+      console.log("-- a manual entry and its edits --");
+      const card = await bAccount("Card");
+      const charged = await bCreate(bValues(card.id, "10", "EUR", "Verify BankFig hotel"), 762.5);
+      eq("10 EUR with \"Amount charged in DOP\" 762.50 is the bank's figure", await bMarked(charged.id), "762.5:DOP|10:EUR|true");
+      const estimated = await bCreate(bValues(card.id, "20", "EUR", "Verify BankFig museum"));
+      eq("20 EUR left to the table's rate (1,500 DOP) is not", await bMarked(estimated.id), "1500:DOP|20:EUR|false");
+      const local = await bCreate(bValues(card.id, "500", "DOP", "Verify BankFig taxi"), 999);
+      eq("500 DOP with a charged figure filled in: the account's own currency, not marked (and the figure unused)", await bMarked(local.id), "500:DOP|-:-|false");
+      eq("the note edited, the same 10 EUR re-saved: the bank's figure is kept", await bEdit(charged.id, bValues(card.id, "10", "EUR", "Verify BankFig hotel (2 nights)")), "762.5:DOP|10:EUR|true");
+      eq("the date edited, the same 10 EUR re-saved: still kept", await bEdit(charged.id, bValues(card.id, "10", "EUR", "Verify BankFig hotel (2 nights)", "2026-10-13")), "762.5:DOP|10:EUR|true");
+      eq("the amount edited to 12 EUR with no charged figure: recomputed at the stored rate, no longer the bank's", await bEdit(charged.id, bValues(card.id, "12", "EUR", "Verify BankFig hotel (2 nights)")), "915:DOP|12:EUR|false");
+      eq("re-saved again as it now stands, it stays Cadence's", await bEdit(charged.id, bValues(card.id, "12", "EUR", "Verify BankFig hotel (2 nights)")), "915:DOP|12:EUR|false");
+      eq("the estimated 20 EUR edited with the bank's 1,490 DOP becomes the bank's figure", await bEdit(estimated.id, bValues(card.id, "20", "EUR", "Verify BankFig museum"), 1490), "1490:DOP|20:EUR|true");
+      eq("...then edited into 25 USD with no charged figure: recomputed at the table's rate, not the bank's", await bEdit(estimated.id, bValues(card.id, "25", "USD", "Verify BankFig museum")), "1500:DOP|25:USD|false");
+      await bEdit(estimated.id, bValues(card.id, "20", "EUR", "Verify BankFig museum"), 1490);
+      eq("a bank's figure edited into the account's own currency is not marked", await bEdit(estimated.id, bValues(card.id, "1490", "DOP", "Verify BankFig museum")), "1490:DOP|-:-|false");
+
+      console.log("-- \"It's the posted charge\" --");
+      const stream = await bAccount("Stream");
+      const item = await prisma.recurringItem.create({
+        data: { name: "Verify BankFig Stream", amount: 12.99, currency: "EUR", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 12), anchorDay: 12, accountId: stream.id },
+      });
+      await bPost(civilDate(2026, 10, 12));
+      const posted = await prisma.transaction.findFirstOrThrow({ where: { accountId: stream.id, source: "RECURRING" } });
+      eq("posting converts 12.99 EUR at the table's rate: 974.25 DOP, Cadence's figure", await bMarked(posted.id), "974.25:DOP|12.99:EUR|false");
+      const asPosted = { amount: 974.25, currency: "DOP", originalAmount: 12.99, originalCurrency: "EUR", rate: 75, isBankFigure: false };
+      const reset = (data: Record<string, unknown> = asPosted) => prisma.transaction.update({ where: { id: posted.id }, data });
+
+      const csv = { date: "2026-10-13", amount: 990, type: "EXPENSE" as const, transferDirection: null, note: "Verify BankFig Stream 4411", categoryId: null, importAnyway: false, isExtraordinary: false, yourShare: null, reimburses: null };
+      const imported = await bImport({ accountId: stream.id, currency: "DOP", rows: [{ ...csv, postedCharge: true }] }, bRates);
+      eq("a CSV row of 990 DOP answered \"It's the posted charge\": the posted row takes the bank's figure and is marked", `${imported.ok && imported.updatedPosted}|${await bMarked(posted.id)}`, "1|990:DOP|12.99:EUR|true");
+
+      await reset();
+      const withCharged = await bCreate(bValues(stream.id, "12.99", "EUR", "Verify BankFig Stream"), 985);
+      eq("a hand entry of 12.99 EUR charged as 985 DOP is asked about the posted charge", withCharged.posted?.match.posted.id ?? null, posted.id);
+      const keptCharged = withCharged.posted
+        ? await bDuplicates.keepPostedInsteadOfEntry({ transactionId: withCharged.id, savedDigest: withCharged.posted.savedDigest, postedId: posted.id }, bRates)
+        : null;
+      eq("...answered \"It's the posted charge\": the posted row takes 985 DOP, marked as the bank's", `${keptCharged?.ok && keptCharged.updated}|${await bMarked(posted.id)}`, "true|985:DOP|12.99:EUR|true");
+
+      await reset({ amount: 990, currency: "DOP", originalAmount: 12.99, originalCurrency: "EUR", rate: Number((990 / 12.99).toFixed(10)), isBankFigure: true });
+      const estimate = await bCreate(bValues(stream.id, "12.99", "EUR", "Verify BankFig Stream"));
+      const keptEstimate = estimate.posted
+        ? await bDuplicates.keepPostedInsteadOfEntry({ transactionId: estimate.id, savedDigest: estimate.posted.savedDigest, postedId: posted.id }, bRates)
+        : null;
+      eq(
+        "a hand entry of 12.99 EUR at the table's rate taken over a bank's figure: 974.25 DOP, no longer marked",
+        `${keptEstimate?.ok && keptEstimate.updated}|${await bMarked(posted.id)}`,
+        "true|974.25:DOP|12.99:EUR|false",
+      );
+
+      const gym = await prisma.recurringItem.create({
+        data: { name: "Verify BankFig Gym", amount: 2500, currency: "DOP", frequency: "MONTHLY", kind: "SUBSCRIPTION", nextDate: civilDate(2026, 10, 12), anchorDay: 12, accountId: stream.id },
+      });
+      await bPost(civilDate(2026, 10, 12));
+      const gymRow = await prisma.transaction.findFirstOrThrow({ where: { accountId: stream.id, source: "RECURRING", externalId: { startsWith: gym.id } } });
+      // In one currency only the exact amount matches, so the rewrite there is
+      // a charge on another account: the posted row moves to it.
+      const other = await bAccount("Other Card");
+      const gymImport = await bImport({ accountId: other.id, currency: "DOP", rows: [{ ...csv, amount: 2500, note: "Verify BankFig Gym 0042", postedCharge: true }] }, bRates);
+      const movedTo = (await prisma.transaction.findUniqueOrThrow({ where: { id: gymRow.id } })).accountId === other.id;
+      eq(
+        "a DOP charge on another card taken over a DOP posted row: moved there, never marked (nothing was converted)",
+        `${gymImport.ok ? gymImport.updatedPosted : JSON.stringify(gymImport)}|${movedTo}|${await bMarked(gymRow.id)}`,
+        "1|true|2500:DOP|-:-|false",
+      );
+      await prisma.recurringItem.updateMany({ where: { id: { in: [item.id, gym.id] } }, data: { active: false } });
+
+      console.log("-- a goal contribution's ledger twin --");
+      const goal = await prisma.goal.create({ data: { name: "Verify BankFig Trip", targetAmount: 1000, currency: "EUR" } });
+      const logged = await bGoals.logManualContribution({ goalId: goal.id, accountId: card.id, amount: 40, date: civilDate(2026, 10, 14), note: null }, bRates);
+      eq("a 40 EUR contribution from a DOP account is converted at the table's rate, not marked", await bMarked(logged.transactionId), "3000:DOP|40:EUR|false");
+      await prisma.transaction.update({ where: { id: logged.transactionId }, data: { amount: 3020, rate: 75.5, isBankFigure: true } });
+      await bGoals.updateManualContribution(logged.contributionId, { amount: 40, date: civilDate(2026, 10, 15), accountId: card.id }, bRates);
+      eq("a twin holding the bank's figure keeps it when only the date changes", await bMarked(logged.transactionId), "3020:DOP|40:EUR|true");
+      await bGoals.updateManualContribution(logged.contributionId, { amount: 50, date: civilDate(2026, 10, 15), accountId: card.id }, bRates);
+      eq("...and loses it when the amount is corrected at the stored rate", await bMarked(logged.transactionId), "3775:DOP|50:EUR|false");
+    } finally {
+      await bWipe();
+      await bRestoreRates();
+      await prisma.recurringItem.updateMany({ where: { id: { in: bPaused } }, data: { active: true } });
+    }
+  }
+
   console.log("\n== cleanup ==");
+  // History rows any section stored through storeBpdRates during this run.
+  await prisma.bpdRatePublication.deleteMany({ where: { capturedAt: { gte: harnessStartedAt } } });
   await prisma.transaction.deleteMany({ where: { accountId: { in: [checking.id, savings.id] } } });
   await prisma.account.deleteMany({ where: { id: { in: [checking.id, savings.id] } } });
   await prisma.budget.deleteMany({ where: { year: 2026, month: { in: [8, 9] } } });

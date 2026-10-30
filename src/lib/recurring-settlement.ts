@@ -366,6 +366,8 @@ export interface IncomingEntry {
   originalAmount?: number | null;
   originalCurrency?: string | null;
   rate?: number | null;
+  /** Whether `amount` is the bank's own figure (Transaction.isBankFigure); absent reads as not. */
+  isBankFigure?: boolean;
   categoryId: string | null;
   note: string | null;
 }

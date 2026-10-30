@@ -215,6 +215,29 @@ export function chargedInAccount(entered: EnteredMoney, accountCurrency: string,
 }
 
 /**
+ * Transaction.isBankFigure for a row about to be stored as `stored`, written
+ * any other way than with the bank's own figure (chargedInAccount, or "It's
+ * the posted charge" taking one): true only when `previous` - the row as
+ * stored, on an edit - held the bank's figure and the write keeps its stored
+ * money exactly, as toAccountMoney does for the same money re-entered. Any
+ * write that converts again, at the table's rate or the stored one, is
+ * Cadence's figure, and a row in its account's own currency is never marked.
+ */
+export function keepsBankFigure(stored: StoredMoney, previous?: (MoneyRow & { isBankFigure?: boolean }) | null): boolean {
+  if (!previous?.isBankFigure || stored.originalCurrency === null) return false;
+  const kept = storedMoney(previous);
+  return (
+    kept.currency === stored.currency &&
+    toCents(kept.amount) === toCents(stored.amount) &&
+    kept.originalCurrency === stored.originalCurrency &&
+    kept.originalAmount !== null &&
+    stored.originalAmount !== null &&
+    toCents(kept.originalAmount) === toCents(stored.originalAmount) &&
+    kept.rate === stored.rate
+  );
+}
+
+/**
  * Refuses money entered above zero that is stored as 0.00 in the account's
  * currency (R29), returning `stored` otherwise.
  */

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { isPlausibleBpdRates } from "@/lib/bpd-rate-payload";
+import { bpdBuyRates, isPlausibleBpdRates } from "@/lib/bpd-rate-payload";
 import { storeBpdRates } from "@/lib/bpd-rates";
 
 /**
@@ -13,7 +13,8 @@ import { storeBpdRates } from "@/lib/bpd-rates";
  * client, so neither the on-demand fetch in src/lib/bpd-rates.ts nor the
  * Vercel cron at /api/cron/bpd-rate can read it from a server; a real
  * browser can. The scraper captures the payload in a browser and POSTs the
- * three fields this app uses here; this route re-validates them and hands
+ * fields this app uses here - the sell rates, their date and the buy rates;
+ * this route re-validates them and hands
  * them to storeBpdRates(), the same function the on-demand path writes
  * through - so the plausibility bounds and the freshness window are
  * enforced in one place regardless of which path found the rate.
@@ -24,17 +25,22 @@ import { storeBpdRates } from "@/lib/bpd-rates";
  *
  *   curl -X POST -H "Authorization: Bearer $BPD_SCRAPE_INGEST_SECRET" \
  *        -H "Content-Type: application/json" \
- *        -d '{"dollarSellRate":60.05,"euroSellRate":70.7,"asOf":"2026-09-18T00:00:00Z"}' \
+ *        -d '{"dollarSellRate":60.05,"euroSellRate":70.7,"dollarBuyRate":58.9,"euroBuyRate":66.2,"asOf":"2026-09-18T00:00:00Z"}' \
  *        https://your-app.vercel.app/api/cron/bpd-rate/ingest
  *
  * Every refusal is a 4xx with a `reason`, and writes nothing: the scraper
  * treats anything but a 200 as a failed run so it shows up in the Actions
- * tab rather than silently doing nothing.
+ * tab rather than silently doing nothing. The buy rates never cause one: a
+ * missing, malformed or implausible buy side is stored as null beside the
+ * sell rates (bpdBuyRates), so an older scraper that sends none still works.
  */
 
 const ingestBodySchema = z.object({
   dollarSellRate: z.number(),
   euroSellRate: z.number(),
+  /** Read by bpdBuyRates whatever they hold, so a bad buy side cannot refuse the body. */
+  dollarBuyRate: z.unknown().optional(),
+  euroBuyRate: z.unknown().optional(),
   /** The bank's own BuySellRatesAsOf, as an ISO-8601 timestamp. */
   asOf: z.string(),
 });
@@ -74,7 +80,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ stored: false, reason: "invalid_as_of" }, { status: 400 });
   }
 
-  const result = await storeBpdRates({ dollarSellRate, euroSellRate, asOf });
+  const buyRates = bpdBuyRates(parsed.data.dollarBuyRate, parsed.data.euroBuyRate, dollarSellRate, euroSellRate);
+  const result = await storeBpdRates({ dollarSellRate, euroSellRate, ...buyRates, asOf });
   if (!result.ok) {
     return NextResponse.json({ stored: false, reason: result.reason }, { status: 400 });
   }
@@ -89,12 +96,13 @@ export async function POST(request: NextRequest) {
   }
 
   console.log(
-    `[bpd-rate-ingest] stored Banco Popular rate (USD sell ${dollarSellRate}, EUR sell ${euroSellRate}, as of ${asOf.toISOString()})`,
+    `[bpd-rate-ingest] stored Banco Popular rate (USD sell ${dollarSellRate}, EUR sell ${euroSellRate}, USD buy ${buyRates.dollarBuyRate ?? "none"}, EUR buy ${buyRates.euroBuyRate ?? "none"}, as of ${asOf.toISOString()})`,
   );
   return NextResponse.json({
     stored: true,
     dollarSellRate,
     euroSellRate,
+    ...buyRates,
     asOf: asOf.toISOString(),
   });
 }

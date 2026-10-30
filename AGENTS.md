@@ -79,7 +79,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   written before that may still be foreign to their account; read them
   through `accountAmount` (today's rate for those, as before) and compare
   money with `exactAmountIn`/`sameMoneyExactly`, never by `currency ===`
-  against an item's currency. `scripts/backfill-account-currency.ts` (dry
+  against an item's currency. `Transaction.isBankFigure` says the stored
+  amount is the bank's own figure (the form's "Amount charged in ...", or
+  "It's the posted charge" taking one); any other write that sets a row's
+  money decides it through `keepsBankFigure`, so a re-conversion clears it. `scripts/backfill-account-currency.ts` (dry
   run by default) stores the old rows; never run it against production.
 - New `/api/cron/*` routes must be added to `BEARER_AUTH_PATHS` in
   `src/proxy.ts`, or the proxy redirects them to `/login` before the
@@ -87,7 +90,11 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - Banco Popular (`source: "bpd"`) ExchangeRate rows are validated and written
   in exactly one place, `storeBpdRates()` in `src/lib/bpd-rates.ts`, used by
   both the on-demand fetch and the scraper's `/api/cron/bpd-rate/ingest`
-  route. The bank's feed blocks every server-side client (Incapsula), so
+  route. It writes the publication's `BpdRatePublication` row (the rate
+  history: buy and sell, first capture of each asOf kept) in the same
+  database transaction; the only other writer is
+  `scripts/backfill-bpd-rate-history.ts`, from the scraper's run logs. Buy
+  rates are judged by `bpdBuyRates()` and never refuse a sell rate. The bank's feed blocks every server-side client (Incapsula), so
   the rows in practice come from `scripts/scrape-bpd-rate.ts` run by
   `.github/workflows/scrape-bpd-rate.yml` in a real headed browser; never
   add headers, proxies or fingerprint tweaks to that script - if a genuine

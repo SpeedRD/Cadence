@@ -90,8 +90,10 @@ export interface PostedMatch {
    * it), an ambiguous match (which row is meant is not known) and, on its
    * own account, a contribution's ledger half (its GoalContribution must stay
    * in step; on another account the match is exact, so the money is the same).
+   * `isBankFigure` is what the posted row's Transaction.isBankFigure becomes
+   * (rewriteFor).
    */
-  rewrite: (StoredMoney & { accountId?: string }) | null;
+  rewrite: (StoredMoney & { accountId?: string; isBankFigure: boolean }) | null;
 }
 
 type Client = Prisma.TransactionClient;
@@ -270,7 +272,7 @@ export async function findPostedDuplicates(
     const entry = incomingByKey.get(key) as IncomingEntry;
     const primary = viewById.get(verdict.postedId) as PostedMatchRow;
     const postedEntry = posted.find((row) => row.id === verdict.postedId) as PostedEntry;
-    const incomingMoney = rewriteFor(storedMoney(entry), postedEntry);
+    const incomingMoney = rewriteFor(entry, postedEntry);
     const otherAccount = postedEntry.accountId !== entry.accountId;
     const differs =
       otherAccount ||
@@ -304,17 +306,26 @@ export async function findPostedDuplicates(
  * row posting converted from the item's currency keeps what that row was
  * entered as - the item's amount - with the rate the bank's figure implies,
  * so the row still says what it was charged for.
+ *
+ * The row then holds the bank's figure (isBankFigure) in that case, and when
+ * the incoming row was itself entered in another currency with the bank's
+ * figure (its own isBankFigure); an incoming row Cadence converted at a rate
+ * is not the bank's figure, and money in the account's own currency on both
+ * sides converts nothing, so neither is marked.
  */
-function rewriteFor(incoming: StoredMoney, posted: PostedEntry): StoredMoney {
-  if (incoming.originalCurrency !== null || posted.originalCurrency == null || posted.originalAmount == null) return incoming;
+function rewriteFor(entry: IncomingEntry, posted: PostedEntry): StoredMoney & { isBankFigure: boolean } {
+  const incoming = storedMoney(entry);
+  if (incoming.originalCurrency !== null) return { ...incoming, isBankFigure: entry.isBankFigure === true };
+  if (posted.originalCurrency == null || posted.originalAmount == null) return { ...incoming, isBankFigure: false };
   if (posted.originalCurrency === incoming.currency || posted.currency !== incoming.currency || posted.originalAmount <= 0) {
-    return incoming;
+    return { ...incoming, isBankFigure: false };
   }
   return {
     ...incoming,
     originalAmount: posted.originalAmount,
     originalCurrency: posted.originalCurrency,
     rate: roundRate(incoming.amount / posted.originalAmount),
+    isBankFigure: true,
   };
 }
 
@@ -458,6 +469,7 @@ export async function applyPostedMatch(client: Client, match: PostedMatch): Prom
       originalAmount: match.rewrite.originalAmount,
       originalCurrency: match.rewrite.originalCurrency,
       rate: match.rewrite.rate,
+      isBankFigure: match.rewrite.isBankFigure,
     },
   });
   return updated.count > 0;
@@ -573,6 +585,7 @@ export async function keepPostedInsteadOfEntry(
         originalAmount: entry.originalAmount === null ? null : num(entry.originalAmount),
         originalCurrency: entry.originalCurrency,
         rate: entry.rate === null ? null : num(entry.rate),
+        isBankFigure: entry.isBankFigure,
         note: entry.note,
         categoryId: entry.categoryId,
       },

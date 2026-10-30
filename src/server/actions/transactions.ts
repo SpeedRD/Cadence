@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { enteredShare, moneyRow, transferLegsInAccounts } from "@/lib/account-money";
+import { enteredShare, keepsBankFigure, moneyRow, transferLegsInAccounts, type StoredMoney } from "@/lib/account-money";
 import { getSettings, requireAuth } from "@/lib/auth";
 import { backfillUncategorizedTransactions } from "@/lib/categorization";
 import { IDENTITY_RATES, formatMoney } from "@/lib/currency";
@@ -153,7 +153,11 @@ export async function saveTransactionAction(
     // share it does set.
     // The stored share is in the account's currency; the form's amount is as
     // entered, so the share is measured as the form shows it (enteredShare).
-    const previousRow = { ...moneyRow(existing), yourShare: existing.yourShare === null ? null : num(existing.yourShare) };
+    const previousRow = {
+      ...moneyRow(existing),
+      yourShare: existing.yourShare === null ? null : num(existing.yourShare),
+      isBankFigure: existing.isBankFigure,
+    };
     if (values.yourShare === undefined && existing.yourShare !== null) {
       const kept = enteredShare(previousRow) ?? num(existing.yourShare);
       const shareIssue = yourShareIssue(values.amount, kept);
@@ -539,15 +543,20 @@ export async function saveTransferAction(
     };
     const legs = legsOrRefused({ out: previousLeg("OUT"), in: previousLeg("IN") });
     if (typeof legs === "string") return fail(legs);
+    // A leg keeps Transaction.isBankFigure only while its stored money does.
+    const keptBankFigure = (direction: "OUT" | "IN", stored: StoredMoney) => {
+      const leg = existingLegs.find((row) => row.transferDirection === direction);
+      return keepsBankFigure(stored, leg ? { ...moneyRow(leg), isBankFigure: leg.isBankFigure } : null);
+    };
 
     await prisma.$transaction(async (tx) => {
       await tx.transaction.updateMany({
         where: { transferId, transferDirection: "OUT" },
-        data: { date, ...legs.out, note, accountId: fromAccountId },
+        data: { date, ...legs.out, isBankFigure: keptBankFigure("OUT", legs.out), note, accountId: fromAccountId },
       });
       await tx.transaction.updateMany({
         where: { transferId, transferDirection: "IN" },
-        data: { date, ...legs.in, note, accountId: toAccountId },
+        data: { date, ...legs.in, isBankFigure: keptBankFigure("IN", legs.in), note, accountId: toAccountId },
       });
     });
 

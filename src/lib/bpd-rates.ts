@@ -2,6 +2,7 @@ import {
   BPD_RATES_API_URL,
   BPD_SOURCE,
   type BpdRates,
+  bpdBuyRates,
   bpdRatesFromStored,
   isPlausibleBpdRates,
   isWithinFreshnessWindow,
@@ -18,6 +19,7 @@ export {
   BPD_RATE_MAX_AGE_DAYS,
   BPD_SOURCE,
   type BpdRates,
+  bpdBuyRates,
   isSameUtcDay,
   parseBpdPayload,
   toRateTableEntries,
@@ -86,18 +88,26 @@ export type StoreBpdRatesResult =
   | { ok: false; reason: "out_of_range" | "invalid_as_of" | "outside_freshness_window" };
 
 /**
- * The single place a source="bpd" ExchangeRate row is validated and written.
- * Both the on-demand fetch path (getBpdRates) and the scraper's ingestion
- * endpoint (/api/cron/bpd-rate/ingest) go through here, so the plausibility
- * bounds and the freshness window are enforced once, identically, no matter
- * where the rate came from. It re-checks the bounds itself even though every
- * caller already parsed the payload: a caller that trusted its own input is
- * exactly the drift this function exists to make impossible.
+ * The single place a source="bpd" ExchangeRate row is validated and written,
+ * and with it the publication's BpdRatePublication row. Both the on-demand
+ * fetch path (getBpdRates) and the scraper's ingestion endpoint
+ * (/api/cron/bpd-rate/ingest) go through here, so the plausibility bounds and
+ * the freshness window are enforced once, identically, no matter where the
+ * rate came from. It re-checks the bounds itself even though every caller
+ * already parsed the payload: a caller that trusted its own input is exactly
+ * the drift this function exists to make impossible.
  *
- * Writes nothing unless every check passes - a rejection leaves the table
- * exactly as it was. A rate is stored only if its `asOf` is on or after the
- * stored one's: an older one (a re-run, a slow scrape landing after a newer
- * one) returns ok with the note "kept_newer_rate" and writes nothing.
+ * Writes nothing unless every check passes - a rejection leaves both tables
+ * exactly as they were. The buy rates are re-judged here too (bpdBuyRates)
+ * and recorded as null when missing or implausible; they never refuse the
+ * sell rates. The latest rates are stored only if their `asOf` is on or after
+ * the stored one's: an older one (a re-run, a slow scrape landing after a
+ * newer one) returns ok with the note "kept_newer_rate" and leaves
+ * ExchangeRate as it was. Either way the publication is recorded in
+ * BpdRatePublication, in the same database transaction as the ExchangeRate
+ * rows, unless its `asOf` already is - a repeat capture of a publication
+ * changes nothing there, so the history keeps each publication's first
+ * capture.
  */
 export async function storeBpdRates(
   rates: BpdRates,
@@ -113,37 +123,51 @@ export async function storeBpdRates(
     return { ok: false, reason: "outside_freshness_window" };
   }
 
-  const storedRows = await prisma.exchangeRate.findMany({
-    where: { baseCurrency: BASE_CURRENCY, source: BPD_SOURCE },
-    select: { asOf: true },
-  });
-  if (storedRows.some((row) => row.asOf && row.asOf.getTime() > rates.asOf.getTime())) {
-    return { ok: true, note: "kept_newer_rate" };
-  }
-
+  const buyRates = bpdBuyRates(rates.dollarBuyRate, rates.euroBuyRate, rates.dollarSellRate, rates.euroSellRate);
   const entries = toRateTableEntries(rates);
   const fetchedAt = new Date();
-  for (const [targetCurrency, rate] of Object.entries(entries)) {
-    await prisma.exchangeRate.upsert({
-      where: {
-        baseCurrency_targetCurrency_source: {
-          baseCurrency: BASE_CURRENCY,
-          targetCurrency,
-          source: BPD_SOURCE,
-        },
-      },
-      update: { rate, fetchedAt, asOf: rates.asOf },
-      create: {
-        baseCurrency: BASE_CURRENCY,
-        targetCurrency,
-        source: BPD_SOURCE,
-        rate,
-        fetchedAt,
-        asOf: rates.asOf,
-      },
+  return prisma.$transaction(async (tx) => {
+    const storedRows = await tx.exchangeRate.findMany({
+      where: { baseCurrency: BASE_CURRENCY, source: BPD_SOURCE },
+      select: { asOf: true },
     });
-  }
-  return { ok: true };
+    const keptNewer = storedRows.some((row) => row.asOf && row.asOf.getTime() > rates.asOf.getTime());
+    if (!keptNewer) {
+      for (const [targetCurrency, rate] of Object.entries(entries)) {
+        await tx.exchangeRate.upsert({
+          where: {
+            baseCurrency_targetCurrency_source: {
+              baseCurrency: BASE_CURRENCY,
+              targetCurrency,
+              source: BPD_SOURCE,
+            },
+          },
+          update: { rate, fetchedAt, asOf: rates.asOf },
+          create: {
+            baseCurrency: BASE_CURRENCY,
+            targetCurrency,
+            source: BPD_SOURCE,
+            rate,
+            fetchedAt,
+            asOf: rates.asOf,
+          },
+        });
+      }
+    }
+    await tx.bpdRatePublication.createMany({
+      data: [
+        {
+          asOf: rates.asOf,
+          dollarSellRate: rates.dollarSellRate,
+          euroSellRate: rates.euroSellRate,
+          ...buyRates,
+          capturedAt: fetchedAt,
+        },
+      ],
+      skipDuplicates: true,
+    });
+    return keptNewer ? { ok: true, note: "kept_newer_rate" } : { ok: true };
+  });
 }
 
 /**
