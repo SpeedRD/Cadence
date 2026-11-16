@@ -82,7 +82,7 @@ export const es = {
       GMAIL: "Gmail",
       OUTLOOK: "Outlook",
       PAYPAL: "PayPal",
-      PAYDAY_CHECKIN: "Chequeo de pago",
+      PAYDAY_CHECKIN: "Chequeo del día de cobro",
       OPENING_BALANCE: "Saldo inicial",
       RECURRING: "Recurrente",
     } as Record<string, string>,
@@ -192,7 +192,7 @@ export const es = {
     description: "Mantén el libro, mira atrás y configura Cadence.",
   },
   shell: {
-    paidTwiceAMonth: (range: string) => `Pago dos veces al mes. Los presupuestos van del ${range}.`,
+    paidTwiceAMonth: (range: string) => `Cobras dos veces al mes. Los presupuestos van del ${range}.`,
     periodRangeFirstHalf: "1 al 15",
     periodRangeSecondHalf: "16 al final del mes",
     periodClosed: "Periodo cerrado",
@@ -276,7 +276,7 @@ export const es = {
     overdueNotPosted: "vencido, aún sin registrar",
     wontPostNotCounted: (reason: string) => `no se registrará: ${reason}`,
     plusOutsideBudget: (amount: string) =>
-      `más ${amount} en suscripciones y ahorro, que el presupuesto no cubre`,
+      `más ${amount} en pagos y ahorro, que el presupuesto no cubre`,
     allGoals: "Todas las metas",
     noGoalsTitle: "Aún no hay metas",
     noGoalsDescription:
@@ -295,13 +295,13 @@ export const es = {
       "Define un presupuesto para este periodo y Cadence calcula cuánto puedes gastar cada día: el presupuesto menos lo que has gastado, entre los días que quedan.",
     setPeriodBudget: "Definir el presupuesto de este periodo",
     recommendedBudget: (amount: string) =>
-      `Recomendado: ${amount} - lo que tu revisión de día de pago deja para categorías flexibles.`,
+      `Recomendado: ${amount} - lo que tu revisión del día de cobro deja para categorías flexibles.`,
     recommendedUnallocated: (available: string, unallocated: string) =>
-      `Recomendado: ${available} - lo que tu revisión de día de pago deja para categorías flexibles. ${unallocated} aún no está en ningún presupuesto:`,
+      `Recomendado: ${available} - lo que tu revisión del día de cobro deja para categorías flexibles. ${unallocated} aún no está en ningún presupuesto:`,
     recommendedBudgetItHere: "presupuéstalo aquí",
     recommendedUnallocatedRest: " o pasará al próximo periodo.",
     recommendedShortfall: (amount: string) =>
-      `Tu revisión de día de pago deja ${amount} para categorías flexibles - el plan está sobrecomprometido, así que aún no hay nada que presupuestar.`,
+      `Tu revisión del día de cobro deja ${amount} para categorías flexibles - el plan está sobrecomprometido, así que aún no hay nada que presupuestar.`,
     spent: "Gastado",
     percentOfBudget: (pct: number) => `${pct}% del presupuesto`,
     noBudget: "sin presupuesto",
@@ -505,10 +505,10 @@ export const es = {
     editOpeningBalanceFromAccounts:
       "Este es el saldo inicial de una cuenta: cámbialo desde la página de Cuentas para que se mantenga separado de ingresos y gastos",
     editPaycheckFromCheckin:
-      "Este es un sueldo registrado por un check-in de día de pago: cámbialo repitiendo el check-in de ese período para que sus cifras se mantengan al día",
+      "Este es un sueldo registrado por un check-in del día de cobro: cámbialo repitiendo el check-in de ese período para que sus cifras se mantengan al día",
     deletePaycheckFromCheckin:
-      "Este sueldo lo registró un check-in de día de pago: repite ese check-in con 0 de ingreso para quitarlo, así sus cifras se mantienen al día",
-    paycheckLocked: "Registrado por un check-in de día de pago",
+      "Este sueldo lo registró un check-in del día de cobro: repite ese check-in con 0 de ingreso para quitarlo, así sus cifras se mantienen al día",
+    paycheckLocked: "Registrado por un check-in del día de cobro",
     openingBalance: "Saldo inicial",
     externalTransferOut: "Transferencia externa saliente",
     externalTransferIn: "Transferencia externa entrante",
@@ -608,12 +608,12 @@ export const es = {
     extraordinaryNotApplicable: "Solo un gasto que registraste o importaste puede marcarse como único",
     extraordinaryPromptTitle: "¿Fue un gasto único?",
     extraordinaryPromptDescription: (amount: string, category: string, typical: string) =>
-      `${amount} está muy por encima de lo que sueles gastar en ${category} (normalmente alrededor de ${typical}). Un gasto único sigue contando como gasto, pero queda fuera de los promedios detrás de las sugerencias del día de pago y del ritmo mensual.`,
+      `${amount} está muy por encima de lo que sueles gastar en ${category} (normalmente alrededor de ${typical}). Un gasto único sigue contando como gasto, pero queda fuera de los promedios detrás de las sugerencias del día de cobro y del ritmo mensual.`,
     extraordinaryYes: "Sí, fue un gasto único",
     extraordinaryNo: "No, gasto normal",
     possibleExtraordinaryTitle: "Inusualmente grandes",
     possibleExtraordinaryDescription:
-      "Estas filas están muy por encima de lo que sueles gastar en su categoría. Se importan como gasto normal a menos que las marques como únicas, lo que las deja fuera de los promedios detrás de las sugerencias del día de pago y del ritmo mensual.",
+      "Estas filas están muy por encima de lo que sueles gastar en su categoría. Se importan como gasto normal a menos que las marques como únicas, lo que las deja fuera de los promedios detrás de las sugerencias del día de cobro y del ritmo mensual.",
     checkingExtraordinary: "Buscando filas inusualmente grandes...",
     typicalForCategory: (category: string, typical: string) =>
       `${category} · normalmente alrededor de ${typical}`,
@@ -629,7 +629,7 @@ export const es = {
     // Gastos compartidos y sus reembolsos - ver src/lib/shared-expense.ts.
     sharedExpenseLabel: "Fue un gasto compartido",
     sharedExpenseHint:
-      "Pagaste también por otras personas, que te devolverán su parte. El monto completo sigue saliendo de la cuenta; solo tu parte alimenta los promedios detrás de las sugerencias del día de pago y del ritmo mensual, y la revisión de gasto único.",
+      "Pagaste también por otras personas, que te devolverán su parte. El monto completo sigue saliendo de la cuenta; solo tu parte alimenta los promedios detrás de las sugerencias del día de cobro y del ritmo mensual, y la revisión de gasto único.",
     yourShareLabel: (code: string) => `Tu parte (${code})`,
     sharedBadge: "Compartido",
     yourShareOf: (share: string) => `tu parte ${share}`,
@@ -682,7 +682,7 @@ export const es = {
       over_occurrence: "Es más de lo que falta por ese pago",
       not_depositable: "Solo un ingreso o dinero que entra de fuera puede apartarse para un pago",
       adopted_paycheck:
-        "Este depósito es parte del pago de un chequeo de pago confirmado: el plan ya lo cuenta como ingreso, así que no puede apartarse también para un pago",
+        "Este depósito es parte del sueldo de un chequeo del día de cobro confirmado: el plan ya lo cuenta como ingreso, así que no puede apartarse también para un pago",
     },
     earmarkNotSavedWithDeposit: (reason: string) => `El depósito se guardó, pero no el pago para el que está apartado: ${reason}`,
     // Un cargo registrado antes de publicarse que puede ser un pago próximo en otra moneda.
@@ -797,7 +797,7 @@ export const es = {
       `${amount} del margen de este periodo aún no está en ningún presupuesto; presupuéstalo abajo o pasará al próximo periodo.`,
     clearToRemove: "Vacía el campo para eliminar el presupuesto general.",
     prefilledFromCheckin: (amount: string) =>
-      `${amount} viene prellenado de tu revisión de día de pago - no se guarda nada hasta que lo confirmes.`,
+      `${amount} viene prellenado de tu revisión del día de cobro - no se guarda nada hasta que lo confirmes.`,
     spentOf: (spent: string, total: string) => `${spent} gastado de ${total}`,
     committed: "Comprometido",
     recurringStillToCome: (n: number) =>
@@ -827,7 +827,7 @@ export const es = {
   recurring: {
     title: "Recurrentes",
     description:
-      "Todo lo que sale según un calendario, registrado automáticamente en tus cuentas al vencer. El check-in de pago aparta estos elementos antes del presupuesto que propone. Lo disponible para gastar es ese presupuesto menos lo que has gastado: los elementos que vencen no se restan de él, así que un presupuesto definido a mano debe dejarles margen.",
+      "Todo lo que sale según un calendario, registrado automáticamente en tus cuentas al vencer. El check-in del día de cobro aparta estos elementos antes del presupuesto que propone. Lo disponible para gastar es ese presupuesto menos lo que has gastado: los elementos que vencen no se restan de él, así que un presupuesto definido a mano debe dejarles margen.",
     newItem: "Nuevo elemento",
     subscriptions: "Pagos",
     monthlyAcrossActive: (amount: string, count: number) =>
@@ -1073,7 +1073,7 @@ export const es = {
       coverage: "all" | "none" | "some" = "none",
       confirmedPeriods: string[] = [],
     ) =>
-      `${coverage === "none" ? "Todavía no existe un check-in de pago para estos períodos. " : coverage === "some" ? `Hay un check-in de pago confirmado para ${confirmedPeriods.join(", ")}, pero no para los demás períodos. ` : ""}${coverage === "none" ? "" : `Para ${confirmedPeriods.join(", ")} las cifras son las que confirmó el check-in (el pago que registraste, el colchón que guardó, su remanente, sus esenciales y su aporte a metas), así que el margen es el mismo "Disponible para categorías flexibles" que muestra el check-in. `}${coverage === "all" ? "En los demás, el ingreso se proyecta como" : "El ingreso se proyecta como"} ${periods === null ? "el promedio de los períodos de pago comparables indicados bajo cada período" : incomeBasisEs(periods)} (la misma mitad del mes), contado en todas las cuentas desde el primer período con ingresos en cualquiera de ellas, así que un pago que pasó de una cuenta a otra no se cuenta en ambas. Si tus ingresos cambiaron (un trabajo nuevo, por ejemplo), "Contar historial desde" en Ajustes define dónde empieza ese historial. Los compromisos de ${account} son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí y, en el período actual, lo que ya se registró además de lo que falta, más lo que un check-in de pago confirmado haya planificado hacia tus metas para ese período.${coverage === "all" ? "" : " Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo."} El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
+      `${coverage === "none" ? "Todavía no existe un check-in del día de cobro para estos períodos. " : coverage === "some" ? `Hay un check-in del día de cobro confirmado para ${confirmedPeriods.join(", ")}, pero no para los demás períodos. ` : ""}${coverage === "none" ? "" : `Para ${confirmedPeriods.join(", ")} las cifras son las que confirmó el check-in (el sueldo que registraste, el colchón que guardó, su remanente, sus esenciales y su aporte a metas), así que el margen es el mismo "Disponible para categorías flexibles" que muestra el check-in. `}${coverage === "all" ? "En los demás, el ingreso se proyecta como" : "El ingreso se proyecta como"} ${periods === null ? "el promedio de los períodos de pago comparables indicados bajo cada período" : incomeBasisEs(periods)} (la misma mitad del mes), contado en todas las cuentas desde el primer período con ingresos en cualquiera de ellas, así que un sueldo que pasó de una cuenta a otra no se cuenta en ambas. Si tus ingresos cambiaron (un trabajo nuevo, por ejemplo), "Contar historial desde" en Ajustes define dónde empieza ese historial. Los compromisos de ${account} son exactos: cada elemento recurrente activo cargado a esa cuenta que vence en el período, calculado desde su propio calendario, incluida cualquier compra en cuotas ya registrada aquí y, en el período actual, lo que ya se registró además de lo que falta, más lo que un check-in del día de cobro confirmado haya planificado hacia tus metas para ese período.${coverage === "all" ? "" : " Donde todavía no hay un check-in confirmado, un estimado ocupa el lugar de ese aporte a metas: lo que seguirías aportando a cada meta a su ritmo actual, marcado con * y detallado abajo."} El colchón es la misma fórmula que el check-in aplica por cuenta, y las cifras del período suman todas las cuentas activas.`,
     projectionAccountColumns: (account: string) => `${account} (proyectado)`,
     projectionPeriodColumns: "Todas las cuentas (proyectado)",
     projectionIncome: "Ingreso",
@@ -1084,13 +1084,13 @@ export const es = {
     confirmedCarryoverLine: (period: string, amount: string) =>
       `${period} también cuenta ${amount} de remanente, como lo hace su check-in.`,
     confirmedCapLine: (period: string, amount: string) =>
-      `${period} descuenta ${amount} por cuentas que estaban por debajo de cero antes del pago, como lo hace su check-in.`,
+      `${period} descuenta ${amount} por cuentas que estaban por debajo de cero antes del sueldo, como lo hace su check-in.`,
     lowIncomeHistory: (periods: number) =>
       `Solo ${comparablePeriodsEs(periods)} de historial de ingresos ${periods === 1 ? "respalda" : "respaldan"} esta proyección, así que toma su ingreso como aproximado hasta que pasen más períodos de pago.`,
     projectionEssential: "Fijos esenciales",
     noEssentialFixed: "No hay presupuestos fijos esenciales definidos, así que no se asume ninguno en ninguna comprobación.",
     essentialFixedLine: (periods: string[]) =>
-      `Las categorías fijas esenciales se restan en ambas comprobaciones, como las resta el check-in de pago: ${periods.join("; ")}. Cada cuenta asume la parte que su ingreso proyectado representa del período.`,
+      `Las categorías fijas esenciales se restan en ambas comprobaciones, como las resta el check-in del día de cobro: ${periods.join("; ")}. Cada cuenta asume la parte que su ingreso proyectado representa del período.`,
     essentialFixedPeriod: (period: string, amount: string, basis: "budget" | "suggestion" | "none") =>
       basis === "budget"
         ? `${period} ${amount}, los presupuestos ya definidos para él`
@@ -1104,10 +1104,10 @@ export const es = {
     estimatedInCommitments: "incluye un aporte estimado a metas *",
     estimatedGoalItem: (amount: string, goal: string) => `${amount} hacia ${goal}`,
     estimatedGoalFunding: (period: string, goals: string[]) =>
-      `* ${period}: los compromisos incluyen un estimado de ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} y ${goals[goals.length - 1]}, cada una a su ritmo actual` : `${goals[0]} a su ritmo actual`} - todavía no confirmado por un check-in de pago, así que puede cambiar cuando hagas el check-in de ese período.`,
+      `* ${period}: los compromisos incluyen un estimado de ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} y ${goals[goals.length - 1]}, cada una a su ritmo actual` : `${goals[0]} a su ritmo actual`} - todavía no confirmado por un check-in del día de cobro, así que puede cambiar cuando hagas el check-in de ese período.`,
     recordHeading: "Registrarla",
     recordedNote: (amount: string, frequency: string, count: number, date: string, paid: number) =>
-      `Registra un pago de ${amount} ${frequency}, ${count} ${count === 1 ? "vez" : "veces"} a partir del ${date}.${paid > 0 ? (paid === 1 ? " El pago con fecha anterior a hoy cuenta como ya pagado y no se registra ni se contabiliza." : ` Los ${paid} pagos con fecha anterior a hoy cuentan como ya pagados y no se registran ni se contabilizan.`) : ""} Se apaga sola después del último pago y aparece en todo lo que muestra pagos: Recurrentes, el check-in de pago, la contabilización y los informes.`,
+      `Registra un pago de ${amount} ${frequency}, ${count} ${count === 1 ? "vez" : "veces"} a partir del ${date}.${paid > 0 ? (paid === 1 ? " El pago con fecha anterior a hoy cuenta como ya pagado y no se registra ni se contabiliza." : ` Los ${paid} pagos con fecha anterior a hoy cuentan como ya pagados y no se registran ni se contabilizan.`) : ""} Se apaga sola después del último pago y aparece en todo lo que muestra pagos: Recurrentes, el check-in del día de cobro, la contabilización y los informes.`,
     acknowledgeLabel:
       "Entiendo que esta compra deja al menos un período de pago por debajo de su colchón protegido o en déficit, y la registro de todos modos.",
     bought: "La compré",
@@ -1391,7 +1391,7 @@ export const es = {
       (accountsFailed > 0 || messagesFailed > 0 ? "." : ""),
     planningPreferencesTitle: "Preferencias de planificación",
     planningPreferencesDescription:
-      "Cómo el planificador de pago calcula tu colchón protegido y traslada dinero de un periodo a otro.",
+      "Cómo el planificador del día de cobro calcula tu colchón protegido y traslada dinero de un periodo a otro.",
     bufferPercentLabel: "Porcentaje de colchón",
     bufferPercentHint: "Porcentaje del ingreso de cada chequeo reservado como colchón por defecto.",
     bufferFloorLabel: "Colchón mínimo fijo",
@@ -1402,11 +1402,11 @@ export const es = {
       "Si está activo, el dinero sin gastar del presupuesto del periodo anterior se precarga como remanente incluido en cada chequeo nuevo.",
     historyStartLabel: "Contar historial desde",
     historyStartHint:
-      "Si tu situación cambió (un trabajo nuevo, una mudanza, un nuevo hogar), define esta fecha para que los promedios de Cadence lean solo lo que vino después: la proyección de ingresos de Cuotas, las sugerencias por categoría del chequeo de pago, el promedio por periodo de pago de Informes y el ritmo y los promedios de gasto mensual. El historial cuenta desde el primer periodo de pago que empieza en esta fecha o después, y las cifras mensuales desde el primer mes que lo hace. Déjala en blanco para usar todo tu historial.",
+      "Si tu situación cambió (un trabajo nuevo, una mudanza, un nuevo hogar), define esta fecha para que los promedios de Cadence lean solo lo que vino después: la proyección de ingresos de Cuotas, las sugerencias por categoría del chequeo del día de cobro, el promedio por periodo de pago de Informes y el ritmo y los promedios de gasto mensual. El historial cuenta desde el primer periodo de pago que empieza en esta fecha o después, y las cifras mensuales desde el primer mes que lo hace. Déjala en blanco para usar todo tu historial.",
     planningPreferencesSaved: "Preferencias de planificación guardadas",
     essentialCategoriesTitle: "Categorías fijas esenciales",
     essentialCategoriesDescription:
-      "Las categorías marcadas como fijas esenciales se reservan en el plan de pago antes de las sugerencias de categorías flexibles.",
+      "Las categorías marcadas como fijas esenciales se reservan en el plan del día de cobro antes de las sugerencias de categorías flexibles.",
     noEligibleCategories: "No hay categorías de gasto disponibles para configurar.",
     essentialToggleAria: (name: string) => `Marcar ${name} como fija esencial`,
     categoryNoLongerExists: "Esa categoría ya no existe",
@@ -1436,7 +1436,7 @@ export const es = {
     notInUse: "Sin uso",
     protectedBadge: "Protegida",
     protectedSubscriptionHint: (name: string) =>
-      `${name} no se puede eliminar: lo disponible para gastar y el presupuesto del período tratan su gasto como dinero que el plan de pago ya apartó.`,
+      `${name} no se puede eliminar: lo disponible para gastar y el presupuesto del período tratan su gasto como dinero que el plan del día de cobro ya apartó.`,
     protectedSavingsHint: (name: string) =>
       `${name} no se puede eliminar: el ritmo mensual archiva el ahorro aquí, y cada aporte a meta registrado a mano cae aquí.`,
     categoryActionsFor: (name: string) => `Acciones de ${name}`,
@@ -1597,16 +1597,16 @@ export const es = {
     forecastTarget: "Fecha objetivo",
   },
   payday: {
-    bannerTitle: "Chequeo de pago listo",
+    bannerTitle: "Chequeo del día de cobro listo",
     bannerDescription:
-      "Confirma saldos, registra el ingreso de este periodo y planifica hasta tu próximo pago.",
-    startCheckin: "Iniciar chequeo de pago",
+      "Confirma saldos, registra el ingreso de este periodo y planifica hasta tu próximo día de cobro.",
+    startCheckin: "Iniciar chequeo del día de cobro",
     planThisPeriod: "Planificar este periodo",
     checkInForPeriod: "Hacer el check-in de este periodo",
     dismissForToday: "Ahora no",
     reviewConfirmedPlan: "Revisar el plan de este periodo",
-    wizardName: "Chequeo de pago",
-    wizardTitle: (periodLabel: string) => `Chequeo de pago - ${periodLabel}`,
+    wizardName: "Chequeo del día de cobro",
+    wizardTitle: (periodLabel: string) => `Chequeo del día de cobro - ${periodLabel}`,
     stepOf: (step: number, total: number) => `Paso ${step} de ${total}`,
     back: "Atrás",
     next: "Siguiente",
@@ -1616,7 +1616,7 @@ export const es = {
     step1Description:
       "Esto es solo una verificación de conciliación - nunca crea ingresos ni gastos.",
     step1BalanceMeaning:
-      "El “saldo reportado” es lo que la cuenta tenía el día antes de que llegara el pago de este periodo - no lo que tiene ahora, con el pago y lo gastado desde entonces. El saldo según el libro que se muestra en cada cuenta es el libro de ese día (deja fuera el ingreso de este mismo chequeo y todo lo que tenga fecha posterior): parte de él y cámbialo solo si sabes que el libro está mal.",
+      "El “saldo reportado” es lo que la cuenta tenía el día antes de que llegara el sueldo de este periodo - no lo que tiene ahora, con el sueldo y lo gastado desde entonces. El saldo según el libro que se muestra en cada cuenta es el libro de ese día (deja fuera el ingreso de este mismo chequeo y todo lo que tenga fecha posterior): parte de él y cámbialo solo si sabes que el libro está mal.",
     balanceMeaningDisclosure: "¿Qué cuenta como saldo reportado?",
     ledgerBalance: "Saldo según el libro",
     ledgerBalanceOn: (date: string) => `Saldo según el libro al ${date}`,
@@ -1638,22 +1638,22 @@ export const es = {
     ledgerDepositEarmarked: (amount: string) => `menos ${amount} apartados para un pago recurrente`,
     ledgerDepositsSetAside: (count: number) =>
       count === 1
-        ? "1 depósito marcado como único o apartado para un pago no cuenta como pago"
-        : `${count} depósitos marcados como únicos o apartados para un pago no cuentan como pago`,
+        ? "1 depósito marcado como único o apartado para un pago no cuenta como sueldo"
+        : `${count} depósitos marcados como únicos o apartados para un pago no cuentan como sueldo`,
     ledgerDepositsHint:
-      "El monto empieza en su suma, y se quedan como están. Escribe más si parte de este pago aún no está en el libro: solo la diferencia se registra como una nueva transacción de ingreso.",
+      "El monto empieza en su suma, y se quedan como están. Escribe más si parte de este sueldo aún no está en el libro: solo la diferencia se registra como una nueva transacción de ingreso.",
     incomeBelowLedgerInline: (amount: string) =>
       `No puede ser menor que los ${amount} que ya están en tu libro para este periodo.`,
     incomeBelowLedger: (accounts: { name: string; inLedger: string }[]) =>
-      `No se guardó nada: el ingreso de ${accounts.map((a) => `${a.name} no puede ser menor que los ${a.inLedger}`).join(", y el de ")} que ya están en tu libro para este periodo. Esos depósitos son el pago de este periodo y se quedan como están.`,
+      `No se guardó nada: el ingreso de ${accounts.map((a) => `${a.name} no puede ser menor que los ${a.inLedger}`).join(", y el de ")} que ya están en tu libro para este periodo. Esos depósitos son el sueldo de este periodo y se quedan como están.`,
     incomeNotePlaceholder: "Salario, pago freelance, bono...",
     totalIncome: "Ingreso total",
 
     step3Title: "Revisa compromisos y metas",
-    subscriptionsDue: "Pagos que vencen antes del próximo pago",
-    contributionsDue: "Aportes recurrentes antes del próximo pago",
-    noSubscriptionsDue: "No hay pagos que venzan antes del próximo pago.",
-    noContributionsDue: "No hay aportes recurrentes antes del próximo pago.",
+    subscriptionsDue: "Pagos que vencen antes del próximo día de cobro",
+    contributionsDue: "Aportes recurrentes antes del próximo día de cobro",
+    noSubscriptionsDue: "No hay pagos que venzan antes del próximo día de cobro.",
+    noContributionsDue: "No hay aportes recurrentes antes del próximo día de cobro.",
     bufferByAccountHeading: "Colchón protegido por cuenta",
     bufferByAccountDescription:
       "Cada cuenta guarda su propio colchón del ingreso que recibió. Mueve un pago a otra cuenta para cambiar lo que tiene que cubrir.",
@@ -1666,7 +1666,7 @@ export const es = {
     accountReportedBelowProjection: (amount: string) =>
       `Tu saldo reportado alcanza para ${amount} menos de lo que proyecta el ingreso de este periodo - probablemente dinero que ya salió de esta cuenta antes de este chequeo.`,
     accountSuggestedBuffer: "Colchón sugerido",
-    accountNoSubscriptionsDue: "Nada por pagar desde esta cuenta antes del próximo pago.",
+    accountNoSubscriptionsDue: "Nada por pagar desde esta cuenta antes del próximo día de cobro.",
     accountAboveBuffer: (amount: string) => `${amount} por encima de su colchón`,
     accountBelowBuffer: (amount: string) =>
       `Pagar todo lo que vence aquí quedaría corto por ${amount}.`,
@@ -1680,7 +1680,7 @@ export const es = {
     subscriptionAccountLabel: (name: string) => `Cuenta para ${name}`,
     unfundedSubscriptionsHeading: "Sin una cuenta con ingreso que las cubra",
     unfundedSubscriptionsDescription:
-      "Vencen antes del próximo pago pero su cuenta no recibió ingreso en este chequeo. Muévelas a una que sí.",
+      "Vencen antes del próximo día de cobro pero su cuenta no recibió ingreso en este chequeo. Muévelas a una que sí.",
     alreadyPaidThisPeriod: "Ya pagado este período",
     wontPostHeading: "Sin contar: el registro automático las omite",
     wontPostDescription:
@@ -1741,9 +1741,9 @@ export const es = {
     carryoverAdjusted: (by: string, period: string) =>
       `Remanente ajustado en ${by} desde que se asentó: lo que dejó ${period} cambió después de terminar, por ejemplo gastos con fecha en ese periodo que se registraron más tarde.`,
     incomeAdjusted: (by: string) =>
-      `Ingreso ajustado en ${by} desde que confirmaste: cambió un depósito que este plan cuenta como pago: se apartó parte para un pago o cambió ese monto, o se editó, se marcó como único o se eliminó.`,
+      `Ingreso ajustado en ${by} desde que confirmaste: cambió un depósito que este plan cuenta como sueldo: se apartó parte para un pago o cambió ese monto, o se editó, se marcó como único o se eliminó.`,
     summaryCushion: "Ya en tus cuentas",
-    summaryCushionHint: "Lo que tus cuentas tenían antes de este pago. Se guarda como reserva: no cuenta en este plan.",
+    summaryCushionHint: "Lo que tus cuentas tenían antes de este sueldo. Se guarda como reserva: no cuenta en este plan.",
     summarySubscriptions: "Pagos",
     summaryContributions: "Aportes recurrentes",
     summaryGoals: "Plan de metas",
@@ -1793,7 +1793,7 @@ export const es = {
     confirmUnallocatedNote: (amount: string) =>
       `${amount} queda sin asignar: no se guarda como presupuesto y pasa al chequeo del próximo periodo junto con lo que los presupuestos no gasten.`,
     confirmCushionNote: (amount: string) =>
-      `${amount} ya estaba en tus cuentas antes de este pago. Se queda ahí como reserva y no cuenta en este plan.`,
+      `${amount} ya estaba en tus cuentas antes de este sueldo. Se queda ahí como reserva y no cuenta en este plan.`,
     confirmBudgetsNote: (count: number) =>
       `Se ${count === 1 ? "creará o actualizará" : "crearán o actualizarán"} ${count} presupuesto${count === 1 ? "" : "s"} de categoría para este periodo.`,
     confirmReservedNote:
@@ -1804,9 +1804,9 @@ export const es = {
     setBudgetsLink: "Definir presupuestos",
     acknowledgeZeroBufferLabel: "Entiendo que este plan no deja colchón protegido.",
     confirmPlan: "Confirmar plan",
-    checkinConfirmed: "Chequeo de pago confirmado",
+    checkinConfirmed: "Chequeo del día de cobro confirmado",
     checkinConfirmedScaled: (from: string, to: string) =>
-      `Chequeo de pago confirmado. Los presupuestos flexibles se redujeron de ${from} a ${to} - lo que alcanza tu saldo reportado.`,
+      `Chequeo del día de cobro confirmado. Los presupuestos flexibles se redujeron de ${from} a ${to} - lo que alcanza tu saldo reportado.`,
     editConfirmedPlanNote:
       "Ya confirmaste el chequeo de este periodo - guardar de nuevo lo actualiza en su lugar.",
 

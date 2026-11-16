@@ -287,7 +287,7 @@ export const en = {
     overdueNotPosted: "overdue, not posted yet",
     wontPostNotCounted: (reason: string) => `won't post: ${reason}`,
     plusOutsideBudget: (amount: string) =>
-      `plus ${amount} on subscriptions and savings, which the budget does not cover`,
+      `plus ${amount} on payments and savings, which the budget does not cover`,
     allGoals: "All goals",
     noGoalsTitle: "No goals yet",
     noGoalsDescription:
