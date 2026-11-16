@@ -98,7 +98,7 @@ export const es = {
       INCOME: "Ingreso",
     },
     recurringKindLabels: {
-      SUBSCRIPTION: "Suscripción",
+      SUBSCRIPTION: "Pago",
       CONTRIBUTION: "Aporte",
     } as Record<string, string>,
   },
@@ -829,11 +829,11 @@ export const es = {
     description:
       "Todo lo que sale según un calendario, registrado automáticamente en tus cuentas al vencer. El check-in de pago aparta estos elementos antes del presupuesto que propone. Lo disponible para gastar es ese presupuesto menos lo que has gastado: los elementos que vencen no se restan de él, así que un presupuesto definido a mano debe dejarles margen.",
     newItem: "Nuevo elemento",
-    subscriptions: "Suscripciones",
+    subscriptions: "Pagos",
     monthlyAcrossActive: (amount: string, count: number) =>
       `${amount} al mes entre ${count} elemento${count === 1 ? "" : "s"} activo${count === 1 ? "" : "s"}`,
-    noSubscriptionsTitle: "Sin suscripciones",
-    noSubscriptionsDescription: "Agrega las facturas que se repiten para que no te sorprendan a mitad de periodo.",
+    noSubscriptionsTitle: "Sin pagos",
+    noSubscriptionsDescription: "Agrega las facturas, suscripciones y pagos que se repiten para que no te sorprendan a mitad de periodo.",
     recurringContributions: "Aportes recurrentes",
     monthlyGoingInto: (amount: string) => `${amount} al mes destinado a algo`,
     noContributionsTitle: "Sin aportes recurrentes",
@@ -842,7 +842,7 @@ export const es = {
     editItem: "Editar elemento recurrente",
     newItemTitle: "Nuevo elemento recurrente",
     itemDescription:
-      "Las suscripciones son facturas que salen. Los aportes son dinero que destinas a algo. Ambos se registran automáticamente en su fecha de vencimiento.",
+      "Los pagos son cualquier dinero que sale según un calendario: facturas, suscripciones o dinero que le envías a alguien. Los aportes son dinero que destinas a una de tus metas. Ambos se registran automáticamente en su fecha de vencimiento.",
     saveChanges: "Guardar cambios",
     addItem: "Agregar elemento",
     namePlaceholder: "Netflix",
@@ -907,7 +907,7 @@ export const es = {
     coveredOn: (date: string, covered: string) => `${date}: ${covered}`,
     roomHeading: "¿Qué cuenta puede con esto?",
     roomDescription: (threshold: string, period: string, periods: number) =>
-      `Una suscripción se comprueba cuando un solo cobro llega a ${threshold} o cuando su total mensual lo alcanza. La comprobación funciona como ¿Me alcanza? con una compra: el ingreso de cada cuenta para ${period} se proyecta como ${incomeBasisEs(periods)} (la misma mitad del mes); se restan sus otros elementos recurrentes que vencen entonces, el aporte a metas de ese período (el de un check-in confirmado o, si no hay, un estimado al ritmo actual de cada meta) y su parte de tus categorías fijas esenciales; y se reserva su colchón protegido. Los elementos de dos veces al mes no se comprueban. Que haya margen significa que el margen habitual de la cuenta cubre el cobro, no una garantía para todos los períodos. Esto nunca impide guardar.`,
+      `Un pago se comprueba cuando un solo cobro llega a ${threshold} o cuando su total mensual lo alcanza. La comprobación funciona como ¿Me alcanza? con una compra: el ingreso de cada cuenta para ${period} se proyecta como ${incomeBasisEs(periods)} (la misma mitad del mes); se restan sus otros elementos recurrentes que vencen entonces, el aporte a metas de ese período (el de un check-in confirmado o, si no hay, un estimado al ritmo actual de cada meta) y su parte de tus categorías fijas esenciales; y se reserva su colchón protegido. Los elementos de dos veces al mes no se comprueban. Que haya margen significa que el margen habitual de la cuenta cubre el cobro, no una garantía para todos los períodos. Esto nunca impide guardar.`,
     roomLowHistory: (periods: number) =>
       `Solo ${comparablePeriodsEs(periods)} de historial de ingresos ${periods === 1 ? "respalda" : "respaldan"} estas cifras, así que tómalas como aproximadas hasta que pasen más períodos de pago.`,
     roomChecking: "Comprobando qué cuenta tiene margen...",
@@ -931,7 +931,7 @@ export const es = {
     roomNone: (period: string) =>
       `Ninguna cuenta puede sostener esto por sí sola: todas terminarían ${period} por debajo de su colchón protegido.`,
     roomNoneSuggestion:
-      "Aun así puedes guardarlo tal cual. Para repartir el costo, crea dos suscripciones más pequeñas, una por cuenta: una suscripción siempre se cobra a una sola cuenta.",
+      "Aun así puedes guardarlo tal cual. Para repartir el costo, crea dos pagos más pequeños, uno por cuenta: un pago siempre se cobra a una sola cuenta.",
     fromAfford: "Desde Cuotas",
     fromAffordDescription: (amount: string, count: number) =>
       `${amount} al mes entre ${count} plan${count === 1 ? "" : "es"} en curso, cada uno revisado contra las proyecciones de hoy`,
@@ -975,7 +975,7 @@ export const es = {
     dismissSuggestionHint: "No volver a sugerir esto",
     showCharges: (count: number) => `Ver ${count} cobros`,
     hideCharges: "Ocultar cobros",
-    suggestionAdded: (name: string) => `${name} agregado a tus suscripciones`,
+    suggestionAdded: (name: string) => `${name} agregado a tus pagos`,
     suggestionDismissed: "Descartado. No se volverá a sugerir.",
     suggestionGone: "Esa sugerencia ya no está. Recarga la página para ver lo actual.",
   },
@@ -1107,13 +1107,13 @@ export const es = {
       `* ${period}: los compromisos incluyen un estimado de ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} y ${goals[goals.length - 1]}, cada una a su ritmo actual` : `${goals[0]} a su ritmo actual`} - todavía no confirmado por un check-in de pago, así que puede cambiar cuando hagas el check-in de ese período.`,
     recordHeading: "Registrarla",
     recordedNote: (amount: string, frequency: string, count: number, date: string, paid: number) =>
-      `Registra una suscripción de ${amount} ${frequency}, ${count} ${count === 1 ? "vez" : "veces"} a partir del ${date}.${paid > 0 ? (paid === 1 ? " El pago con fecha anterior a hoy cuenta como ya pagado y no se registra ni se contabiliza." : ` Los ${paid} pagos con fecha anterior a hoy cuentan como ya pagados y no se registran ni se contabilizan.`) : ""} Se apaga sola después del último pago y aparece en todo lo que muestra suscripciones: Recurrentes, el check-in de pago, la contabilización y los informes.`,
+      `Registra un pago de ${amount} ${frequency}, ${count} ${count === 1 ? "vez" : "veces"} a partir del ${date}.${paid > 0 ? (paid === 1 ? " El pago con fecha anterior a hoy cuenta como ya pagado y no se registra ni se contabiliza." : ` Los ${paid} pagos con fecha anterior a hoy cuentan como ya pagados y no se registran ni se contabilizan.`) : ""} Se apaga sola después del último pago y aparece en todo lo que muestra pagos: Recurrentes, el check-in de pago, la contabilización y los informes.`,
     acknowledgeLabel:
       "Entiendo que esta compra deja al menos un período de pago por debajo de su colchón protegido o en déficit, y la registro de todos modos.",
     bought: "La compré",
     addLater: "La agrego yo más tarde",
-    boughtToast: "Compra registrada como suscripción",
-    recordedTitle: (name: string) => `${name} ya es una suscripción recurrente`,
+    boughtToast: "Compra registrada como pago",
+    recordedTitle: (name: string) => `${name} ya es un pago recurrente`,
     recordedDescription: "Se contabiliza en cada fecha de pago y se apaga sola después del último.",
     viewRecurring: "Verla en la página Recurrentes",
     noAccountsTitle: "No hay cuentas activas",
@@ -1239,9 +1239,9 @@ export const es = {
     plannedBehindRemaining: (amount: string) => `${amount} del saldo restante sin planificar`,
     notYetContributed: (amount: string, period: string) => `${amount} planificado para ${period} aún sin aportar`,
     roomShortfallThisPeriod: (amount: string, period: string) =>
-      `${amount} del monto de la hoja de ruta de ${period} no se pudo cubrir con lo que les sobraba a las cuentas tras sus suscripciones y colchón al confirmar el plan.`,
+      `${amount} del monto de la hoja de ruta de ${period} no se pudo cubrir con lo que les sobraba a las cuentas tras sus pagos y colchón al confirmar el plan.`,
     roomShortfallRemainingThisPeriod: (amount: string, period: string) =>
-      `${amount} del saldo restante no se pudo cubrir en ${period} con lo que les sobraba a las cuentas tras sus suscripciones y colchón al confirmar el plan.`,
+      `${amount} del saldo restante no se pudo cubrir en ${period} con lo que les sobraba a las cuentas tras sus pagos y colchón al confirmar el plan.`,
     contributionRemoved: "Aporte eliminado",
     contributionNoLongerExists: "Ese aporte ya no existe",
     editContributionAria: "Editar aporte",
@@ -1308,7 +1308,7 @@ export const es = {
     monthlyCategoryBreakdown: "Promedio mensual de gasto de estilo de vida por categoría",
     monthlyCommittedAverage: "Promedio mensual de gasto comprometido",
     monthlyCommittedHint:
-      "Suscripciones activas: cargos reales cuando Cadence puede identificarlos, su monto programado en caso contrario.",
+      "Pagos activos: cargos reales cuando Cadence puede identificarlos, su monto programado en caso contrario.",
     monthlySavingsAverage: "Promedio mensual de ahorros e inversión",
     monthlySavingsHint:
       "Aportes a metas, aportes recurrentes y gastos de Ahorro/Inversión: se mantienen aparte del gasto normal.",
@@ -1553,7 +1553,7 @@ export const es = {
     notPostingReason: "Motivo",
     notPostingDue: "Sigue pendiente",
     notPostingKind: "Tipo",
-    notPostingKindSubscription: "Suscripción",
+    notPostingKindSubscription: "Pago",
     notPostingKindContribution: "Aporte a meta",
     postingRunFailedTitle: "La última ejecución de registro de recurrentes falló",
     postingRunFailedEffect: "Efecto",
@@ -1650,18 +1650,18 @@ export const es = {
     totalIncome: "Ingreso total",
 
     step3Title: "Revisa compromisos y metas",
-    subscriptionsDue: "Suscripciones antes del próximo pago",
+    subscriptionsDue: "Pagos que vencen antes del próximo pago",
     contributionsDue: "Aportes recurrentes antes del próximo pago",
-    noSubscriptionsDue: "No hay suscripciones antes del próximo pago.",
+    noSubscriptionsDue: "No hay pagos que venzan antes del próximo pago.",
     noContributionsDue: "No hay aportes recurrentes antes del próximo pago.",
     bufferByAccountHeading: "Colchón protegido por cuenta",
     bufferByAccountDescription:
-      "Cada cuenta guarda su propio colchón del ingreso que recibió. Mueve una suscripción a otra cuenta para cambiar lo que tiene que cubrir.",
+      "Cada cuenta guarda su propio colchón del ingreso que recibió. Mueve un pago a otra cuenta para cambiar lo que tiene que cubrir.",
     noIncomeAccountsYet:
       "Aún no hay ingresos registrados - anota en el paso 2 lo que recibió cada cuenta para ver su colchón.",
     accountIncomeReceived: "Ingreso recibido",
-    accountSubscriptionsDue: "Suscripciones y aportes",
-    accountLeftAfterSubscriptions: "Queda tras suscripciones y aportes",
+    accountSubscriptionsDue: "Pagos y aportes",
+    accountLeftAfterSubscriptions: "Queda tras pagos y aportes",
     accountReportedSupports: "Alcanza (según tu saldo reportado)",
     accountReportedBelowProjection: (amount: string) =>
       `Tu saldo reportado alcanza para ${amount} menos de lo que proyecta el ingreso de este periodo - probablemente dinero que ya salió de esta cuenta antes de este chequeo.`,
@@ -1695,7 +1695,7 @@ export const es = {
     depositOf: (date: string) => `el depósito del ${date}`,
     goalsHeading: "Hoja de ruta de metas",
     goalsDescription:
-      "Cada meta se financia desde las cuentas a las que les sobra dinero tras sus suscripciones, aportes recurrentes y su colchón, en proporción al margen de cada una. Ajusta la parte de cualquier cuenta; el total de la meta es la suma.",
+      "Cada meta se financia desde las cuentas a las que les sobra dinero tras sus pagos, aportes recurrentes y su colchón, en proporción al margen de cada una. Ajusta la parte de cualquier cuenta; el total de la meta es la suma.",
     noGoalsToReserve: "No hay metas que reservar en este periodo.",
     roadmapAmount: "Monto de la hoja de ruta",
     roadmapScheduled: (amount: string) => `+ ${amount} de aportes recurrentes`,
@@ -1708,14 +1708,14 @@ export const es = {
     goalFundingAccountLabel: (goalName: string, accountName: string) =>
       `${goalName} desde ${accountName}`,
     goalFundingRoom: (amount: string, sharePercent: number) =>
-      `${amount} de sobra tras sus suscripciones, aportes y colchón · ${sharePercent}% del margen`,
+      `${amount} de sobra tras sus pagos, aportes y colchón · ${sharePercent}% del margen`,
     goalFundingRoomAfterEarlierGoals: (amount: string, sharePercent: number) =>
       `${amount} aún de sobra tras las metas de arriba · ${sharePercent}% del margen`,
     goalFundingNoRoomLeft: "No queda nada de sobra tras las metas de arriba",
     goalFundingLeadAccount: (accountName: string) =>
-      `${accountName} tiene más margen este periodo tras sus suscripciones, aportes y colchón, así que toma la parte mayor.`,
+      `${accountName} tiene más margen este periodo tras sus pagos, aportes y colchón, así que toma la parte mayor.`,
     goalFundingNoRoom:
-      "A ninguna cuenta le sobra dinero tras sus suscripciones, aportes y colchón este periodo, así que no se puede reservar nada para esta meta del excedente.",
+      "A ninguna cuenta le sobra dinero tras sus pagos, aportes y colchón este periodo, así que no se puede reservar nada para esta meta del excedente.",
     goalFundingShortfall: (free: string, short: string) =>
       `Solo sobran ${free} entre tus cuentas - ${short} del monto de la hoja de ruta de esta meta no se puede cubrir con el excedente este periodo.`,
     goalOnTrack: "Al día con la hoja de ruta",
@@ -1744,7 +1744,7 @@ export const es = {
       `Ingreso ajustado en ${by} desde que confirmaste: cambió un depósito que este plan cuenta como pago: se apartó parte para un pago o cambió ese monto, o se editó, se marcó como único o se eliminó.`,
     summaryCushion: "Ya en tus cuentas",
     summaryCushionHint: "Lo que tus cuentas tenían antes de este pago. Se guarda como reserva: no cuenta en este plan.",
-    summarySubscriptions: "Suscripciones",
+    summarySubscriptions: "Pagos",
     summaryContributions: "Aportes recurrentes",
     summaryGoals: "Plan de metas",
     summaryEssential: "Fijos esenciales",
@@ -1797,7 +1797,7 @@ export const es = {
     confirmBudgetsNote: (count: number) =>
       `Se ${count === 1 ? "creará o actualizará" : "crearán o actualizarán"} ${count} presupuesto${count === 1 ? "" : "s"} de categoría para este periodo.`,
     confirmReservedNote:
-      "Las suscripciones, los aportes recurrentes y los montos de metas quedan reservados en el plan, pero no se registran como transacciones o aportes reales.",
+      "Los pagos, los aportes recurrentes y los montos de metas quedan reservados en el plan, pero no se registran como transacciones o aportes reales.",
     confirmNoAllocationsNote:
       "Aún no hay montos asignados a categorías: puedes definir o cambiar los presupuestos por categoría en cualquier momento en Presupuestos.",
     noAllocationsSavedNote: "Aún no hay asignaciones por categoría guardadas.",

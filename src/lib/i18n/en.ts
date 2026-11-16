@@ -104,7 +104,7 @@ export const en = {
       INCOME: "Income",
     },
     recurringKindLabels: {
-      SUBSCRIPTION: "Subscription",
+      SUBSCRIPTION: "Payment",
       CONTRIBUTION: "Contribution",
     } as Record<string, string>,
   },
@@ -839,11 +839,11 @@ export const en = {
     description:
       "Everything that leaves on a schedule, posted to your accounts automatically when it comes due. The payday check-in sets these items aside before the budget it proposes. Safe to spend is that budget minus what you have spent: upcoming items are not subtracted from it, so a budget set by hand should leave room for them.",
     newItem: "New item",
-    subscriptions: "Subscriptions",
+    subscriptions: "Payments",
     monthlyAcrossActive: (amount: string, count: number) =>
       `${amount} a month across ${count} active item${count === 1 ? "" : "s"}`,
-    noSubscriptionsTitle: "No subscriptions",
-    noSubscriptionsDescription: "Add the bills that repeat so they stop surprising you mid-period.",
+    noSubscriptionsTitle: "No payments",
+    noSubscriptionsDescription: "Add the bills, subscriptions and payments that repeat so they stop surprising you mid-period.",
     recurringContributions: "Recurring contributions",
     monthlyGoingInto: (amount: string) => `${amount} a month going into something`,
     noContributionsTitle: "No recurring contributions",
@@ -852,7 +852,7 @@ export const en = {
     editItem: "Edit recurring item",
     newItemTitle: "New recurring item",
     itemDescription:
-      "Subscriptions are bills going out. Contributions are money you put into something. Both post automatically on their due date.",
+      "Payments are any money going out on a schedule: bills, subscriptions, or money you send someone. Contributions are money you put into one of your goals. Both post automatically on their due date.",
     saveChanges: "Save changes",
     addItem: "Add item",
     namePlaceholder: "Netflix",
@@ -919,7 +919,7 @@ export const en = {
     coveredOn: (date: string, covered: string) => `${date}: ${covered}`,
     roomHeading: "Which account can carry this?",
     roomDescription: (threshold: string, period: string, periods: number) =>
-      `A subscription is checked when one charge is ${threshold} or more, or when its monthly total reaches that. The check works the way Afford checks a purchase: each account's income for ${period} is projected as ${incomeBasisEn(periods)} (same half of the month); its other recurring items due then, the period's goal funding (a confirmed check-in's, or an estimate at each goal's current pace) and its share of your essential fixed categories are subtracted; and its protected buffer is kept back. Twice-a-month items are not checked. Room means the account's typical margin covers the charge - not a guarantee for every period. Saving is never blocked by this.`,
+      `A payment is checked when one charge is ${threshold} or more, or when its monthly total reaches that. The check works the way Afford checks a purchase: each account's income for ${period} is projected as ${incomeBasisEn(periods)} (same half of the month); its other recurring items due then, the period's goal funding (a confirmed check-in's, or an estimate at each goal's current pace) and its share of your essential fixed categories are subtracted; and its protected buffer is kept back. Twice-a-month items are not checked. Room means the account's typical margin covers the charge - not a guarantee for every period. Saving is never blocked by this.`,
     roomLowHistory: (periods: number) =>
       `Only ${comparablePeriodsEn(periods)} of income history ${periods === 1 ? "backs" : "back"} these figures, so treat them as rough until more pay periods have passed.`,
     roomChecking: "Checking which account has room...",
@@ -943,7 +943,7 @@ export const en = {
     roomNone: (period: string) =>
       `No account can sustain this on its own: each would end ${period} below its protected buffer.`,
     roomNoneSuggestion:
-      "You can still save it as is. To spread the cost, create two smaller subscriptions instead, one per account - a subscription is always charged to a single account.",
+      "You can still save it as is. To spread the cost, create two smaller payments instead, one per account - a payment is always charged to a single account.",
     fromAfford: "From Afford",
     fromAffordDescription: (amount: string, count: number) =>
       `${amount} a month across ${count} plan${count === 1 ? "" : "s"} still paying - each re-checked against today's projections`,
@@ -988,7 +988,7 @@ export const en = {
     dismissSuggestionHint: "Never suggest this again",
     showCharges: (count: number) => `Show ${count} charges`,
     hideCharges: "Hide charges",
-    suggestionAdded: (name: string) => `${name} added to your subscriptions`,
+    suggestionAdded: (name: string) => `${name} added to your payments`,
     suggestionDismissed: "Dismissed. It won't be suggested again.",
     suggestionGone: "That suggestion is no longer there. Reload the page to see what's current.",
   },
@@ -1120,13 +1120,13 @@ export const en = {
       `* ${period}: commitments include an estimated ${goals.length > 1 ? `${goals.slice(0, -1).join(", ")} and ${goals[goals.length - 1]}, each at its current pace` : `${goals[0]} at its current pace`} - not yet confirmed by a payday check-in, so it may change when you do that period's check-in.`,
     recordHeading: "Record it",
     recordedNote: (amount: string, frequency: string, count: number, date: string, paid: number) =>
-      `Records one subscription of ${amount} ${frequency}, ${count} ${count === 1 ? "time" : "times"} starting ${date}.${paid > 0 ? ` The ${paid === 1 ? "payment" : `${paid} payments`} dated before today ${paid === 1 ? "counts" : "count"} as already paid and ${paid === 1 ? "is" : "are"} not recorded or posted.` : ""} It stops on its own after the last payment and shows up everywhere a subscription does - Recurring, the payday check-in, posting, reports.`,
+      `Records one payment of ${amount} ${frequency}, ${count} ${count === 1 ? "time" : "times"} starting ${date}.${paid > 0 ? ` The ${paid === 1 ? "payment" : `${paid} payments`} dated before today ${paid === 1 ? "counts" : "count"} as already paid and ${paid === 1 ? "is" : "are"} not recorded or posted.` : ""} It stops on its own after the last payment and shows up everywhere a payment does - Recurring, the payday check-in, posting, reports.`,
     acknowledgeLabel:
       "I understand this purchase leaves at least one pay period below its protected buffer or in deficit, and I'm recording it anyway.",
     bought: "I bought this",
     addLater: "I'll add it myself later",
-    boughtToast: "Purchase recorded as a subscription",
-    recordedTitle: (name: string) => `${name} is now a recurring subscription`,
+    boughtToast: "Purchase recorded as a payment",
+    recordedTitle: (name: string) => `${name} is now a recurring payment`,
     recordedDescription: "It posts on each payment date and switches itself off after the last one.",
     viewRecurring: "See it on the Recurring page",
     noAccountsTitle: "No active accounts",
@@ -1254,9 +1254,9 @@ export const en = {
     plannedBehindRemaining: (amount: string) => `${amount} of the remaining balance not planned`,
     notYetContributed: (amount: string, period: string) => `${amount} planned for ${period} not yet contributed`,
     roomShortfallThisPeriod: (amount: string, period: string) =>
-      `${amount} of the roadmap amount for ${period} couldn't be covered by what the accounts had to spare after their subscriptions and buffer when the plan was confirmed.`,
+      `${amount} of the roadmap amount for ${period} couldn't be covered by what the accounts had to spare after their payments and buffer when the plan was confirmed.`,
     roomShortfallRemainingThisPeriod: (amount: string, period: string) =>
-      `${amount} of the remaining balance couldn't be covered in ${period} by what the accounts had to spare after their subscriptions and buffer when the plan was confirmed.`,
+      `${amount} of the remaining balance couldn't be covered in ${period} by what the accounts had to spare after their payments and buffer when the plan was confirmed.`,
     contributionRemoved: "Contribution removed",
     contributionNoLongerExists: "That contribution no longer exists",
     editContributionAria: "Edit contribution",
@@ -1322,7 +1322,7 @@ export const en = {
     monthlyCategoryBreakdown: "Average monthly lifestyle spending by category",
     monthlyCommittedAverage: "Average monthly committed spending",
     monthlyCommittedHint:
-      "Active subscriptions - actual charges when Cadence can match them, their scheduled amount otherwise.",
+      "Active payments - actual charges when Cadence can match them, their scheduled amount otherwise.",
     monthlySavingsAverage: "Average monthly savings & investing",
     monthlySavingsHint:
       "Goal contributions, recurring contributions and Savings/Investment spending - kept separate from normal spending.",
@@ -1570,7 +1570,7 @@ export const en = {
     notPostingReason: "Why",
     notPostingDue: "Still due",
     notPostingKind: "Kind",
-    notPostingKindSubscription: "Subscription",
+    notPostingKindSubscription: "Payment",
     notPostingKindContribution: "Goal contribution",
     postingRunFailedTitle: "The last recurring posting run failed",
     postingRunFailedEffect: "Effect",
@@ -1666,18 +1666,18 @@ export const en = {
     totalIncome: "Total income",
 
     step3Title: "Review commitments and goals",
-    subscriptionsDue: "Subscriptions due before next payday",
+    subscriptionsDue: "Payments due before next payday",
     contributionsDue: "Recurring contributions due before next payday",
-    noSubscriptionsDue: "No subscriptions due before next payday.",
+    noSubscriptionsDue: "No payments due before next payday.",
     noContributionsDue: "No recurring contributions due before next payday.",
     bufferByAccountHeading: "Protected buffer by account",
     bufferByAccountDescription:
-      "Each account keeps its own buffer out of the income it received. Move a subscription to another account to change what it has to cover.",
+      "Each account keeps its own buffer out of the income it received. Move a payment to another account to change what it has to cover.",
     noIncomeAccountsYet:
       "No income recorded yet - enter what each account received in step 2 to see its buffer.",
     accountIncomeReceived: "Income received",
-    accountSubscriptionsDue: "Subscriptions and contributions",
-    accountLeftAfterSubscriptions: "Left after subscriptions and contributions",
+    accountSubscriptionsDue: "Payments and contributions",
+    accountLeftAfterSubscriptions: "Left after payments and contributions",
     accountReportedSupports: "Supports (from your reported balance)",
     accountReportedBelowProjection: (amount: string) =>
       `Your reported balance supports ${amount} less than this period's income projection - likely money that already left this account before this check-in.`,
@@ -1711,7 +1711,7 @@ export const en = {
     depositOf: (date: string) => `the deposit of ${date}`,
     goalsHeading: "Goal roadmap",
     goalsDescription:
-      "Each goal is funded from the accounts with money to spare after their subscriptions, recurring contributions and buffer, in proportion to how much room each one has. Adjust any account's share; the goal's total is their sum.",
+      "Each goal is funded from the accounts with money to spare after their payments, recurring contributions and buffer, in proportion to how much room each one has. Adjust any account's share; the goal's total is their sum.",
     noGoalsToReserve: "No goals to reserve for this period.",
     roadmapAmount: "Roadmap amount",
     roadmapScheduled: (amount: string) => `+ ${amount} from recurring contributions`,
@@ -1724,14 +1724,14 @@ export const en = {
     goalFundingAccountLabel: (goalName: string, accountName: string) =>
       `${goalName} from ${accountName}`,
     goalFundingRoom: (amount: string, sharePercent: number) =>
-      `${amount} to spare after its subscriptions, contributions and buffer · ${sharePercent}% of the room`,
+      `${amount} to spare after its payments, contributions and buffer · ${sharePercent}% of the room`,
     goalFundingRoomAfterEarlierGoals: (amount: string, sharePercent: number) =>
       `${amount} still to spare after the goals above · ${sharePercent}% of the room`,
     goalFundingNoRoomLeft: "Nothing left to spare after the goals above",
     goalFundingLeadAccount: (accountName: string) =>
-      `${accountName} has more room this period after its subscriptions, contributions and buffer, so it takes the larger share.`,
+      `${accountName} has more room this period after its payments, contributions and buffer, so it takes the larger share.`,
     goalFundingNoRoom:
-      "No account has money to spare after its subscriptions, contributions and buffer this period, so nothing can be set aside for this goal from surplus.",
+      "No account has money to spare after its payments, contributions and buffer this period, so nothing can be set aside for this goal from surplus.",
     goalFundingShortfall: (free: string, short: string) =>
       `Only ${free} is to spare across your accounts - ${short} of this goal's roadmap amount can't be funded from surplus this period.`,
     goalOnTrack: "On track with the roadmap",
@@ -1760,7 +1760,7 @@ export const en = {
       `Income adjusted by ${by} since you confirmed: a deposit this plan counts as pay changed - part of it set aside for a payment or that amount changed, or it was edited, marked one-off or deleted.`,
     summaryCushion: "Already in your accounts",
     summaryCushionHint: "What your accounts held before this pay. Kept as a cushion - not counted in this plan.",
-    summarySubscriptions: "Subscriptions",
+    summarySubscriptions: "Payments",
     summaryContributions: "Recurring contributions",
     summaryGoals: "Goal plan",
     summaryEssential: "Essential fixed",
@@ -1813,7 +1813,7 @@ export const en = {
     confirmBudgetsNote: (count: number) =>
       `${count} category budget${count === 1 ? "" : "s"} will be created or updated for this period.`,
     confirmReservedNote:
-      "Subscriptions, recurring contributions, and goal amounts are reserved in the plan but not logged as actual transactions or contributions.",
+      "Payments, recurring contributions, and goal amounts are reserved in the plan but not logged as actual transactions or contributions.",
     confirmNoAllocationsNote:
       "No category amounts are allocated yet - you can set or change category budgets any time on the Budgets page.",
     noAllocationsSavedNote: "No category allocations saved yet.",
